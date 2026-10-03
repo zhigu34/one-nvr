@@ -30,7 +30,7 @@ M1 的录像不自动清理；界面明确显示此阶段限制，并在安全�
 | 单进程执行请求及全部后台任务 | 启动简单 | 请求重启与任务恢复耦合，不适合换源/归档的发展方向 |
 | 多个业务微服务 | 独立扩展 | 当前单站点规模增加部署与跨服务一致性成本 |
 
-建议实现基线：Go 1.27 系列、标准库 `net/http`、`pgx/v5`、显式 SQL；PostgreSQL 17 系列；前端直接引入 shadcn-admin，保留 React/TypeScript/Vite、TanStack Router/Query 和组件体系。开始实现时冻结受支持的补丁版本、上游导入 commit、镜像 digest、`go.sum` 和 `pnpm-lock.yaml`，不使用浮动 `latest`。
+实现基线：Go 1.27.1、标准库 `net/http`、`pgx/v5`、显式 SQL；PostgreSQL 17.11；前端直接引入 shadcn-admin，保留 React/TypeScript/Vite、TanStack Router/Query 和组件体系，使用 Node 24.21.0 构建。构建与运行镜像已在 [镜像版本基线](../../image-versions.md) 固定具体标签和 digest：应用运行基础为 Debian bookworm-20260918-slim，网关为 Nginx 1.30.5-alpine3.24，OpenList v4.2.6；ZLM、Frigate 0.17.2、Mosquitto 2.0.22 沿用 M0 构建。新镜像仅核对仓库元数据与 amd64 架构，正式链路尚未验证。导入时另固定上游 commit、包管理器版本、`go.sum` 和 `pnpm-lock.yaml`，发布构建固定额外系统包/仓库快照，不使用浮动 `latest`。
 
 不增加 Redis、消息队列业务中间层或 ORM。PostgreSQL 任务表承担业务队列；Mosquitto 仅在智能检测模块启用时承担 Frigate 消息集成。API 重启不重建 ZLM。业务配置保存在数据库，`.env` 承担模块开关、端口、路径、镜像、内部连接与部署约束，摄像头配置不再以 `.env` 为正式来源。
 
@@ -238,7 +238,7 @@ Frigate CPU/Intel 档案保留 M0 契约和独立数据目录；正式业务智�
 - [shadcn-admin 仓库与 MIT 许可](https://github.com/satnaing/shadcn-admin)：直接复用上游框架/组件，导入时固定 commit。
 - [上游 package.json](https://github.com/satnaing/shadcn-admin/blob/main/package.json)、[认证 store](https://github.com/satnaing/shadcn-admin/blob/main/src/stores/auth-store.ts)：需要替换的演示依赖与登录持久方式，不能默认视为 one-nvr 生产认证。
 - [ZLM REST API](https://docs.zlmediakit.com/guide/media_server/restful_api.html)、[Web Hook](https://docs.zlmediakit.com/guide/media_server/web_hook_api.html)：集成原语；实际固定镜像契约测试是放行依据。
-- [Go 发行与支持规则](https://go.dev/doc/devel/release)、[PostgreSQL 支持规则](https://www.postgresql.org/support/versioning/)：选择受支持版本，实施时固定补丁和镜像。
+- [Go 发行与支持规则](https://go.dev/doc/devel/release)、[PostgreSQL 支持规则](https://www.postgresql.org/support/versioning/)：具体镜像/补丁/digest 已见镜像版本基线，正式兼容性仍须验收。
 - [Docker Compose profiles](https://docs.docker.com/compose/how-tos/profiles/)：服务选择原语；显式指定服务可自动启用其 profile，关闭模块须由部署脚本和业务能力检查共同约束。
 - [OpenList Docker 部署](https://doc.oplist.org/guide/installation/docker)：固定镜像、运行用户/目录权限与独立数据持久化按实际版本验证。
 

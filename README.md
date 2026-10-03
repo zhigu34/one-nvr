@@ -8,6 +8,8 @@
 
 正式版采用模块化部署：基础看/录计划运行 5 个核心容器；`.env` 中 `ONE_NVR_FRIGATE_ENABLE=yes/no` 和 `ONE_NVR_OPENLIST_ENABLE=yes/no` 分别控制智能检测与云归档，默认关闭。智能检测增加 Frigate/MQTT，云归档增加自带 OpenList，全部开启共 8 个。面板检测自带 OpenList 的实际状态，同时支持添加其他 WebDAV；各目标独立验证。部署脚本按启用模块启动/检查服务；这些开关与自带 OpenList 尚未实现在现有 M0 实验包中。
 
+正式版构建与运行镜像的具体版本/digest 见 [镜像版本基线](docs/image-versions.md)，均已核对 Linux amd64 元数据；新版本的正式运行链路仍需验收。此次版本冻结不修改现有 M0 部署。
+
 ## 部署
 
 需要 Linux x86_64、Docker Engine 和 Docker Compose v2；宿主无需 Python 或 OpenSSL。
