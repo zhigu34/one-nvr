@@ -25,7 +25,9 @@ engine_arch="$(docker info --format '{{.Architecture}}')"
 # The context's built-in docker driver shares the Engine image store. An
 # isolated docker-container builder cannot rely on those local base images.
 builder="$(docker context show)"
-driver="$(docker buildx inspect "$builder" | awk '$1 == "Driver:" {print $2; exit}')"
+# Consume the complete output: an early awk exit can SIGPIPE buildx and make
+# this assignment fail with status 141 under pipefail, even for a valid driver.
+driver="$(docker buildx inspect "$builder" | awk '$1 == "Driver:" && !seen {print $2; seen=1}')"
 [[ "$driver" == docker ]] || fail '未找到当前 Docker context 的 docker 驱动构建器，请检查 docker buildx ls。'
 build_help="$(docker compose build --help)"
 [[ "$build_help" == *--builder* ]] || fail '请升级 Compose v2：当前版本不支持 build --builder。'

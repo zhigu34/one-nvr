@@ -15,7 +15,7 @@ class DeploymentTests(unittest.TestCase):
             (root / '.env').write_text("camera1='$(touch should-not-exist)'\n")
             fake = root / 'docker'
             fake.write_text('''#!/usr/bin/env python3
-import json, os, sys
+import json, os, signal, sys
 args = sys.argv[1:]
 with open(os.environ['DOCKER_CALLS'], 'a') as file:
     file.write(json.dumps(args) + '\\n')
@@ -25,7 +25,10 @@ if args[:2] == ['image', 'inspect']:
 elif args[:2] == ['context', 'show']: print('default')
 elif args[0] == 'info': print('x86_64')
 elif args[:2] == ['buildx', 'inspect']:
-    print('Name: default\\nDriver: ' + os.environ.get('BUILDER_DRIVER', 'docker'))
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    print('Name: default\\nDriver: ' + os.environ.get('BUILDER_DRIVER', 'docker'), flush=True)
+    if os.environ.get('LONG_INSPECT') == '1':
+        sys.stdout.write('Additional builder node metadata\\n' * 65536)
 elif args[:3] == ['compose', 'build', '--help']: print('--builder string')
 elif args[:2] == ['compose', 'build']:
     if os.environ.get('BUILD_FAIL') == '1': sys.exit(42)
@@ -64,6 +67,12 @@ elif args[:2] == ['compose', 'build']:
         result, commands = self.run_deployment(BUILD_FAIL='1')
         self.assertEqual(result.returncode, 42)
         self.assertFalse(any(call[:2] == ['compose', 'up'] for call in commands))
+
+    def test_long_builder_inspect_output_does_not_abort_with_sigpipe(self):
+        result, commands = self.run_deployment(LONG_INSPECT='1')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(['compose', 'build', '--builder', 'default', 'init'], commands)
+        self.assertIn(['compose', 'up', '-d', '--no-build', '--pull', 'never'], commands)
 
 
 if __name__ == '__main__':
