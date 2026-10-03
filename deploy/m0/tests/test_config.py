@@ -14,6 +14,26 @@ HEADER = 'channel_no,channel_name,ip,rtsp_port,username,password,main_path,sub_p
 
 
 class ConfigTests(unittest.TestCase):
+    def test_gateway_homepage_is_publicly_readable_with_restrictive_umask(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            page = root / 'state/web/index.html'
+            page.parent.mkdir(parents=True, mode=0o700)
+            page.write_text('old page')
+            page.chmod(0o700)
+            from common import parse_env_channels
+            previous = os.umask(0o077)
+            try:
+                initialize(root, None, 'epyc-cpu', '192.168.1.10', generate_cert=False,
+                           channels=parse_env_channels({'camera1': 'rtsp://camera.local/main'}))
+            finally:
+                os.umask(previous)
+            self.assertEqual(page.parent.stat().st_mode & 0o777, 0o755)
+            self.assertEqual(page.stat().st_mode & 0o777, 0o644)
+            self.assertIn('<title>one-nvr M0', page.read_text())
+            for name in ['secrets/web_password', 'operator.txt', 'probe/settings.json']:
+                self.assertEqual((root / 'state' / name).stat().st_mode & 0o777, 0o600)
+
     def test_env_urls_keep_credentials_query_and_fixed_channel_numbers(self):
         from common import parse_env_channels
         url = 'rtsp://admin:p%40ss%3A%24word@camera.local:8554/main?x=1&y=%2F'

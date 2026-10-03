@@ -94,6 +94,8 @@ docker compose up -d --no-build --pull never
 docker compose run --rm --no-deps --entrypoint cat init /workspace/state/operator.txt
 ```
 
+网页随工具镜像打包，`init` 将其更新到 `state/web/index.html`，明确设置网页目录 0755、文件 0644，网关只读挂载该目录。宿主 Git 检出或解压后的 `static` 权限不再影响首页访问；敏感配置仍为 0600。升级网页需要重新构建工具镜像并运行初始化，按现有维护流程执行 `docker compose down`、拉取更新、`bash ./deploy.sh`。
+
 测试页可查看组件/处理帧率/推理延迟，按通道与时间检索已完成分片，WebRTC 直播、播放/下载原片、查看人车 MQTT 事件、区域和关联录像/抓拍。事件窗口前 10 秒、后 20 秒按时间相交分片展示，点击原片播放；不是精确裁剪或完整无缝时间轴播放器。
 
 “结构可读”来自 ffprobe 容器/轨道检查，不代表每帧都完整。扫描恢复分片的时间标为 `filename-provisional`，需要与媒体/现场时钟核对，不能作为正式完整性认证。在线表的 `listed` 是 ZLM 流登记状态，媒体进展未知时不能用它推算摄像头可用率。
@@ -115,6 +117,7 @@ state/
   mqtt-data/           MQTT 持久数据
   mqtt-auth/           MQTT 密码哈希
   tls/                 HTTPS 测试证书
+  web/                 初始化生成的公开测试网页，供网关只读访问
 storage/
   m0-recordings/       ZLM 正式录像专属命名空间
 ```

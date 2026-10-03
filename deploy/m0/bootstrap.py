@@ -57,6 +57,13 @@ def initialize(directory, csv_file, hardware, media_host, generate_cert=True, st
     hashed = base64.b64encode(hashlib.sha1(web_password.encode()).digest()).decode()
     private_write(state / 'htpasswd', 'admin:{SHA}' + hashed + '\n')
 
+    # Serve a generated public copy rather than a host checkout whose umask or
+    # archive permissions may make the bind-mounted page unreadable to Nginx.
+    homepage = state / 'web/index.html'
+    private_write(homepage, (Path(__file__).resolve().parent / 'static/index.html').read_text(encoding='utf-8'))
+    homepage.parent.chmod(0o755)
+    homepage.chmod(0o644)
+
     conf = configparser.ConfigParser(interpolation=None)
     conf.optionxform = str
     conf.read_dict({

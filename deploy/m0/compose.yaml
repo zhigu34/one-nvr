@@ -118,7 +118,7 @@ services:
       - "${M0_HTTPS_PORT:-8443}:443"
     volumes:
       - ${M0_STATE_DIR:-./state}:/m0:ro
-      - ./static:/usr/share/nginx/html:ro
+      - ${M0_STATE_DIR:-./state}/web:/usr/share/nginx/html:ro
       - ${M0_STORAGE_ROOT:-./storage}:/storage:ro
     networks: [control]
 

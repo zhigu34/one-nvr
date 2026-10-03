@@ -46,4 +46,5 @@ RUN python -m pip install --disable-pip-version-check --no-cache-dir \
       --only-binary=:all: --require-hashes --retries 3 --timeout 20 \
       --index-url https://pypi.org/simple -r requirements.txt
 COPY common.py store.py probe.py bootstrap.py ./
+COPY static/index.html ./static/index.html
 CMD ["python", "probe.py"]
