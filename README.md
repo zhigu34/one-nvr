@@ -4,6 +4,8 @@
 
 当前提供 **M0 真机验证部署包**：单个 Docker Compose、`.env` 完整 RTSP URL 配置、ZLM MP4 分片录制、Frigate 人车检测、SQLite 索引和 HTTPS 测试页面。正式控制面板、云归档、自动清理和完整可靠性指标尚未实现，产品目标见 [PRD](docs/PRD.md)。
 
+正式后端已确定为 **Go + PostgreSQL**，前端直接基于 shadcn-admin 修改。M1 的账号权限、固定通道、批量导入、目录存储池、换源和实时预览设计见 [M1 控制面设计](docs/superpowers/specs/2026-10-03-m1-control-plane-design.md)；当前处于设计评审，尚未交付正式版代码。
+
 ## 部署
 
 需要 Linux x86_64、Docker Engine 和 Docker Compose v2；宿主无需 Python 或 OpenSSL。
@@ -54,7 +56,7 @@ docker compose run --rm --no-deps --entrypoint cat init \
 
 首次构建仍需安装依赖。Compose 默认使用清华 Debian/PyPI 镜像，可在 `.env` 修改 `DEBIAN_MIRROR`、`DEBIAN_SECURITY_MIRROR`、`PYPI_INDEX_URL`，旧 `.env` 不追加也会使用这些默认值。镜像失败会尝试原始 Debian 源或官方 PyPI，仍保留 TLS 验证和依赖 hash 校验。Dockerfile 单独构建默认使用官方安装源。Docker Hub 基础镜像鉴权/拉取与 apt/pip 是不同阶段，换软件包安装源不能替代镜像准备或修复不可达的 Docker Hub。
 
-详细硬件、故障实验、目录和未实现功能说明见 [M0 部署说明](deploy/m0/README.md) 与 [真机验证清单](docs/M0-validation.md)。镜像实际启动、GPU 与摄像头端到端链路仍待真机验证。
+详细硬件、故障实验、目录和未实现功能说明见 [M0 部署说明](deploy/m0/README.md) 与 [真机验证清单](docs/M0-validation.md)。两款机器各两路摄像头的取流、录像与浏览器播放，以及 N5105 的事件/抓拍已通过限定范围验证；AMD 检测、实际硬件执行、长期稳定性、故障恢复和 16/32 路容量仍未完成认证。
 
 ## 更新
 
