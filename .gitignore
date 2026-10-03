@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+deploy/m0/state/
+deploy/m0/storage/
+deploy/m0/.env
+deploy/m0/cameras.csv
+one-nvr-m0.tar.gz
+.DS_Store
