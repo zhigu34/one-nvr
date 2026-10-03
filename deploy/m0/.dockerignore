@@ -5,3 +5,5 @@ cameras.csv
 tests
 __pycache__
 *.pyc
+.git
+.DS_Store

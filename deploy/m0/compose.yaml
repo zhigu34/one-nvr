@@ -19,7 +19,14 @@ services:
   # Runs automatically before services consuming generated files start.
   init:
     image: one-nvr-m0-tools:local
-    build: {context: .}
+    pull_policy: never
+    build:
+      context: .
+      pull: false
+      args:
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/debian}
+        DEBIAN_SECURITY_MIRROR: ${DEBIAN_SECURITY_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/debian-security}
+        PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple}
     working_dir: /workspace
     env_file: .env
     environment:
@@ -87,7 +94,7 @@ services:
 
   probe:
     image: one-nvr-m0-tools:local
-    build: {context: .}
+    pull_policy: never
     restart: unless-stopped
     depends_on: [mqtt, zlm]
     environment: {TZ: UTC, PYTHONUNBUFFERED: "1"}

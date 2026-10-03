@@ -29,6 +29,9 @@ M0_HTTPS_PORT=8443
 M0_RTC_PORT=8000
 M0_SHM_SIZE=256mb
 M0_GPU_DEVICE=/dev/dri/renderD128
+DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian
+DEBIAN_SECURITY_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian-security
+PYPI_INDEX_URL=https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
 
 camera1='rtsp://admin:你的密码@192.168.1.101:554/main'
 camera1_sub='rtsp://admin:你的密码@192.168.1.101:554/sub'
@@ -50,7 +53,7 @@ URL 使用英文单引号 `'`，避免 `$` 被 Compose 插值；不要使用中�
 
 ```bash
 docker compose config --quiet
-docker compose up -d --build
+./deploy.sh
 docker compose ps -a
 ```
 
@@ -58,11 +61,30 @@ Compose 自动运行 `init` → MQTT 密码初始化 → 常驻服务。初始�
 
 EPYC：设 `COMPOSE_PROFILES=cpu`，只启动 CPU 版 `frigate`，不挂载 GPU。OpenVINO CPU 推理、软件解码；使用镜像内置 SSD MobileNet 模型验证 person/car 链路。AMD CPU/模型兼容性与负载待实测，不承诺 16–32 路检测能力。
 
+### 本地基础镜像与安装源
+
+`./deploy.sh` 要求本地已有对应 Engine 架构的 `python:3.12-slim`，使用当前 Docker context 的内置 `docker` 驱动构建器；不采用隔离的 `docker-container` 构建器，也不改宿主全局 builder。明确关闭 Bake 自动分派，只构建 `init` 的共享工具镜像一次，`probe` 复用结果。镜像不存在、架构不匹配或构建失败时停止，不启动依赖服务；脚本不把 `.env` 当 shell 脚本执行。
+
+脚本等效核心命令为：
+
+```bash
+COMPOSE_BAKE=false docker compose build --builder default init
+docker compose up -d --no-build --pull never
+```
+
+上面 builder `default` 对应 Linux 的 default context；脚本会根据 `docker context show` 选择实际内置构建器。普通 `docker compose up -d --build` 仍可使用，但不会替你选择构建器。如果 `auth.docker.io/token` 超时，发生在基础镜像解析阶段，尚未安装 apt/pip 依赖；先检查本地镜像、架构和构建器。内置构建器并不保证所有 Docker 版本/缓存状态下绝不查询 registry，网络问题仍需按实际新报错定位。缺少本地镜像时使用可用网络 `docker pull` 或其他机器 `docker save` 后本机 `docker load`，脚本不会自动拉取。
+
+启动采用 `--pull never`，所以 ZLM/Frigate/Mosquitto/Nginx 也必须有 Compose 固定的镜像 digest。网络可用时，预先执行 `docker compose pull mqtt-init mqtt zlm gateway frigate`（Intel 将 frigate 替换为 frigate-intel）；已有不同版本标签不代表已有锁定的镜像。首次构建仍要访问 Debian/PyPI，不能称为完全离线部署。
+
+依赖安装参考 [camera-recorder 的 Dockerfile](https://github.com/zhigu34/camera-recorder/blob/6e111b4f22ed279e3cd3cd36ac1c1cd9d010668c/backend/Dockerfile) 和 [部署脚本](https://github.com/zhigu34/camera-recorder/blob/6e111b4f22ed279e3cd3cd36ac1c1cd9d010668c/deploy.sh)：Compose 默认用清华 Debian/PyPI，可在 `.env` 改上述三个安装源参数；旧 `.env` 无需覆盖或追加也会使用默认值。保留镜像原来的 Debian 版本、签名设置，兼容 DEB822 与传统 sources.list；apt 获取/安装失败尝试原始源，pip 失败尝试官方 PyPI。增加超时/重试，仍验证 TLS 与锁定依赖 hash。单独 Dockerfile 构建默认用官方源。这里无需 camera-recorder 特定的 FFmpeg 滤镜，继续通过 apt 安装 ffmpeg，不增加宿主预下载大压缩包步骤。
+
+构建器依据：[Docker 内置驱动](https://docs.docker.com/build/builders/drivers/docker/)。安装源依据：[清华 Debian 帮助](https://mirrors.tuna.tsinghua.edu.cn/help/debian/)。
+
 ## 3. N5105 核显档案
 
 设 `COMPOSE_PROFILES=intel`，只启动 `frigate-intel`，内部网络别名仍为 `frigate`。只能选 cpu/intel 其中一个，不能同时启用。用 `ls -l /dev/dri` 确认 render 节点，并在 `.env` 的 `M0_GPU_DEVICE` 填实际节点；映射到容器 `/dev/dri/renderD128`。
 
-启动同样只用 `docker compose up -d --build`，无需额外 `-f` 或 `--profile`。该档案用 VAAPI/iHD 解码、OpenVINO GPU 推理；失败时查看 `docker compose logs frigate-intel`，不会自动降级 CPU。`M0_SHM_SIZE=256mb` 仅用于初始两路，缓存 `/tmp/cache` 另有 128MiB 上限；增加路数/分辨率需要实测调整。
+启动同样只用 `./deploy.sh`，无需额外 `-f` 或 `--profile`。该档案用 VAAPI/iHD 解码、OpenVINO GPU 推理；失败时查看 `docker compose logs frigate-intel`，不会自动降级 CPU。`M0_SHM_SIZE=256mb` 仅用于初始两路，缓存 `/tmp/cache` 另有 128MiB 上限；增加路数/分辨率需要实测调整。
 
 ## 4. 打开验证页
 
@@ -129,7 +151,7 @@ docker compose restart zlm
 
 保持测试页关闭至少跨过数个分片后再查看，确认后台录像不依赖浏览器。现场让人/车进入区域，检查 MQTT 事件与原片画面对应；下载跨片附近原片，核对关键帧和真实缺口。M0 的事件入库幂等，不具备 Frigate 历史 HTTP 对账或独立可用性/故障时间带，相关恢复边界需要按清单另行验证。
 
-修改摄像头、端口或硬件档案：先在修改 .env 前执行 `docker compose down`，编辑 `.env`，再执行 `docker compose up -d --build`，自动重新初始化并启动。旧版 CSV 部署迁移到 URL 配置时来源摘要会改变，历史仍按原来源保留。不要在服务运行时单独调用初始化覆盖上游配置。会中断本实验所有通道并保留实际分片/SQLite 数据；不是生产版单通道在线切换/自动回滚。旧流名带来源配置摘要，旧文件/事件不改归新来源。初始化不会迁移或删除旧媒体。
+修改摄像头、端口或硬件档案：先在修改 .env 前执行 `docker compose down`，编辑 `.env`，再执行 `./deploy.sh`，自动重新初始化并启动。旧版 CSV 部署迁移到 URL 配置时来源摘要会改变，历史仍按原来源保留。不要在服务运行时单独调用初始化覆盖上游配置。会中断本实验所有通道并保留实际分片/SQLite 数据；不是生产版单通道在线切换/自动回滚。旧流名带来源配置摘要，旧文件/事件不改归新来源。初始化不会迁移或删除旧媒体。
 
 ## 7. 停止、验证状态与后续实验
 

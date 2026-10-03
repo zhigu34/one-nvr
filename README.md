@@ -36,10 +36,10 @@ camera2='rtsp://admin:password@192.168.1.102:554/main'
 - `camera1` 对应 CH01，支持到 `camera32`；子流和名称可省略。
 - URL 使用英文单引号；账号/密码中的保留字符先 URL 编码。两台机器各自配置 `.env`，运行数据独立。
 
-启动时自动生成配置、密钥和测试证书：
+网络受限且基础镜像已在本地时，推荐通过脚本构建并启动，自动生成配置、密钥和测试证书：
 
 ```bash
-docker compose up -d --build
+./deploy.sh
 docker compose ps -a
 ```
 
@@ -50,7 +50,11 @@ docker compose run --rm --no-deps --entrypoint cat init \
   /workspace/state/operator.txt
 ```
 
-`init` 和 `mqtt-init` 成功后退出是正常状态。工具基础镜像使用 `python:3.12-slim`；首次构建仍需下载系统及 Python 依赖。详细硬件、故障实验、目录和未实现功能说明见 [M0 部署说明](deploy/m0/README.md) 与 [真机验证清单](docs/M0-validation.md)。镜像实际启动、GPU 与摄像头端到端链路仍待真机验证。
+`init` 和 `mqtt-init` 成功后退出是正常状态。仍使用一个 Compose 和 `.env`；`deploy.sh` 只协调 Docker 命令，不要求宿主 Python/OpenSSL，也不会执行 `.env` 中的内容。它检查本地 `python:3.12-slim` 与 Engine 架构，选用当前 context 的 Docker 驱动构建器，并关闭 Bake 自动分派；共享工具镜像只构建一次。启动采用 `--pull never`，上游镜像须已在本地且符合 Compose 固定的 digest；缺少时先通过可用网络 `docker compose pull mqtt-init mqtt zlm gateway frigate`（Intel 将 frigate 换 frigate-intel）或在另一机器 `docker save` 后本机 `docker load` 准备镜像。
+
+首次构建仍需安装依赖。Compose 默认使用清华 Debian/PyPI 镜像，可在 `.env` 修改 `DEBIAN_MIRROR`、`DEBIAN_SECURITY_MIRROR`、`PYPI_INDEX_URL`，旧 `.env` 不追加也会使用这些默认值。镜像失败会尝试原始 Debian 源或官方 PyPI，仍保留 TLS 验证和依赖 hash 校验。Dockerfile 单独构建默认使用官方安装源。Docker Hub 基础镜像鉴权/拉取与 apt/pip 是不同阶段，换软件包安装源不能替代镜像准备或修复不可达的 Docker Hub。
+
+详细硬件、故障实验、目录和未实现功能说明见 [M0 部署说明](deploy/m0/README.md) 与 [真机验证清单](docs/M0-validation.md)。镜像实际启动、GPU 与摄像头端到端链路仍待真机验证。
 
 ## 更新
 
@@ -59,7 +63,7 @@ docker compose run --rm --no-deps --entrypoint cat init \
 ```bash
 docker compose down
 git pull --ff-only
-docker compose up -d --build
+./deploy.sh
 ```
 
 不要覆盖已有 `.env`；按更新说明补充参数。停止或重建不会自动删除宿主录像与索引，也不会覆盖已有密钥。更新会中断本实验所有通道。
