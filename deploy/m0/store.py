@@ -34,6 +34,9 @@ class Store:
                   start REAL, end REAL, state TEXT, frame REAL, zones TEXT, score REAL);
                 CREATE INDEX IF NOT EXISTS events_time ON events(channel,start);
             ''')
+            # Existing MQTT rows did not retain this flag; NULL means unknown.
+            if 'has_snapshot' not in {row['name'] for row in db.execute('PRAGMA table_info(events)')}:
+                db.execute('ALTER TABLE events ADD COLUMN has_snapshot INTEGER')
 
     @contextmanager
     def connection(self):
@@ -88,6 +91,8 @@ class Store:
             raise ValueError('事件类型无效')
         zones = event.get('entered_zones') or event.get('current_zones') or []
         zones = [str(zone)[:100] for zone in zones[:32]]
+        has_snapshot = event.get('has_snapshot')
+        has_snapshot = int(has_snapshot) if isinstance(has_snapshot, bool) else None
         with self.connection() as db:
             previous = db.execute('SELECT * FROM events WHERE id=?', (identifier,)).fetchone()
             if previous:
@@ -98,11 +103,14 @@ class Store:
                     return identifier
                 if previous['end'] is not None and end is None:
                     end, kind = previous['end'], 'end'
-            db.execute('''INSERT INTO events VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id)
+            db.execute('''INSERT INTO events(id,source_id,camera,channel,label,start,end,state,frame,zones,score,has_snapshot)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id)
                 DO UPDATE SET end=excluded.end,state=excluded.state,frame=excluded.frame,
-                zones=excluded.zones,score=excluded.score''',
+                zones=excluded.zones,score=excluded.score,
+                has_snapshot=COALESCE(excluded.has_snapshot,events.has_snapshot)''',
                 (identifier, source_id, camera, 'CH' + match[1], str(event.get('label', 'unknown'))[:100],
-                 start, end, kind, frame, json.dumps(zones), float(event.get('top_score') or event.get('score') or 0)))
+                 start, end, kind, frame, json.dumps(zones), float(event.get('top_score') or event.get('score') or 0),
+                 has_snapshot))
         return identifier
 
     def recordings(self, channel=None, start=None, end=None, limit=200, stream=None):
@@ -135,6 +143,8 @@ class Store:
         result = [dict(row) for row in rows]
         for row in result:
             row['zones'] = json.loads(row['zones'])
+            if row['has_snapshot'] is not None:
+                row['has_snapshot'] = bool(row['has_snapshot'])
         return result
 
     def unchecked(self):

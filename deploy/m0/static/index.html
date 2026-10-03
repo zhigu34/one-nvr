@@ -13,10 +13,10 @@ body{font:15px system-ui,sans-serif;margin:0;background:#f5f6f8;color:#18222f}ma
 <section><h2>组件与检测状态</h2><button id="refresh">刷新</button><pre id="status">读取中…</pre></section>
 <section><h2>直播 / 录像播放器</h2><select id="channel"></select><label><input type="checkbox" id="sub" checked>子码流直播</label><button id="live">启动 WebRTC</button><button id="stop">停止播放</button><video id="video" controls autoplay muted playsinline></video><p id="playing"></p><small>点击事件后按实际分片回放。未完成/未验证/缺失片段不显示为可播放；此页不提供生产级无缝跨片、角色管理或剪辑导出。</small></section>
 <section><h2>录像分片</h2><label>起始<input type="datetime-local" id="start"></label><label>结束<input type="datetime-local" id="end"></label><button id="filter">按通道/时间检索</button><small>本页每次最多显示 200 条；时间按浏览器本地时区显示。</small><table><thead><tr><th>通道</th><th>起止</th><th>证据</th><th>操作</th></tr></thead><tbody id="recordings"></tbody></table></section>
-<section><h2>最近事件</h2><small>普通 MQTT 事件先写入本地 SQLite。抓拍首次打开时复制到本地；断连期间的历史事件补偿尚未实现。</small><table><thead><tr><th>通道/目标</th><th>时间 / 状态</th><th>区域</th><th>操作</th></tr></thead><tbody id="events"></tbody></table></section>
+<section><h2>最近事件</h2><small>MQTT 事件先写入本地 SQLite，收到事件不代表 Frigate 保存了抓拍。抓拍成功获取后复制到本地；旧事件的抓拍状态未知。断连期间的历史事件补偿尚未实现。</small><table><thead><tr><th>通道/目标</th><th>时间 / 状态</th><th>区域</th><th>操作</th></tr></thead><tbody id="events"></tbody></table><figure id="snapshot-preview" hidden><img id="snapshot-image" alt="事件抓拍" style="max-width:100%;max-height:500px"><figcaption id="snapshot-caption"></figcaption></figure></section>
 </main>
 <script>
-let connection=null, initialized=false;
+let connection=null, initialized=false, snapshotObjectUrl=null, snapshotRequest=0;
 const $=id=>document.getElementById(id);
 const date=t=>t==null?'进行中':new Date(t*1000).toLocaleString();
 function message(text){$('message').textContent=text;}
@@ -27,7 +27,23 @@ function cell(tr,text){const td=document.createElement('td');td.textContent=text
 function button(parent,label,action){const b=document.createElement('button');b.textContent=label;b.onclick=()=>Promise.resolve(action()).catch(e=>message(e.message));parent.appendChild(b);}
 function renderRecordings(rows){$('recordings').replaceChildren();for(const row of rows){const tr=document.createElement('tr');cell(tr,row.channel);cell(tr,date(row.start)+' — '+date(row.end));let evidence={};try{evidence=JSON.parse(row.evidence||'{}');}catch{}cell(tr,(row.checked?(evidence.readable?'结构可读':'损坏/不可读'):'待验证')+' · '+row.timing);const actions=cell(tr,'');if(row.checked&&evidence.readable){button(actions,'播放分片',()=>play(row));const a=document.createElement('a');a.href='/media/'+row.id;a.download=row.channel+'-'+row.id+'.mp4';a.textContent='下载原片';actions.appendChild(a);}$('recordings').appendChild(tr);}}
 async function recordings(){const q=new URLSearchParams({channel:$('channel').value});for(const field of ['start','end'])if($(field).value)q.set(field,String(new Date($(field).value).getTime()/1000));renderRecordings(await api('/api/recordings?'+q));}
-async function events(){const rows=await api('/api/events');$('events').replaceChildren();for(const row of rows){const tr=document.createElement('tr');cell(tr,row.channel+' / '+row.label);cell(tr,date(row.start)+' — '+date(row.end)+' / '+row.state);cell(tr,row.zones.join(', '));const actions=cell(tr,'');button(actions,'查看关联录像',async()=>{const clips=await api('/api/events/'+row.id+'/recordings');$('channel').value=row.channel;renderRecordings(clips);message(clips.length?'已显示事件前 10 秒/后 20 秒窗口相交分片，请选择播放。':'窗口内没有已登记分片，可能尚在生成或存在缺口。');$('recordings').scrollIntoView({behavior:'smooth'});});const a=document.createElement('a');a.href='/api/events/'+row.id+'/snapshot';a.target='_blank';a.rel='noopener';a.textContent='抓拍';actions.appendChild(a);$('events').appendChild(tr);}}
+async function showSnapshot(row){
+  const request=++snapshotRequest;
+  $('snapshot-preview').hidden=true;message('正在获取抓拍…');
+  try{
+    const r=await fetch('/api/events/'+row.id+'/snapshot');
+    if(request!==snapshotRequest)return;
+    if(!r.ok){const data=await r.json();throw Error(data.error||'抓拍获取失败');}
+    const blob=await r.blob();
+    if(request!==snapshotRequest)return;
+    if(snapshotObjectUrl)URL.revokeObjectURL(snapshotObjectUrl);
+    snapshotObjectUrl=URL.createObjectURL(blob);$('snapshot-image').src=snapshotObjectUrl;
+    $('snapshot-caption').textContent=row.channel+' / '+row.label+' · '+date(row.start);
+    $('snapshot-preview').hidden=false;message('抓拍已缓存到本地。');
+    $('snapshot-preview').scrollIntoView({behavior:'smooth'});
+  }catch(error){if(request===snapshotRequest)throw error;}
+}
+async function events(){const rows=await api('/api/events');$('events').replaceChildren();for(const row of rows){const tr=document.createElement('tr');cell(tr,row.channel+' / '+row.label);cell(tr,date(row.start)+' — '+date(row.end)+' / '+row.state);cell(tr,row.zones.join(', '));const actions=cell(tr,'');button(actions,'查看关联录像',async()=>{const clips=await api('/api/events/'+row.id+'/recordings');$('channel').value=row.channel;renderRecordings(clips);message(clips.length?'已显示事件前 10 秒/后 20 秒窗口相交分片，请选择播放。':'窗口内没有已登记分片，可能尚在生成或存在缺口。');$('recordings').scrollIntoView({behavior:'smooth'});});if(row.snapshot_cached||row.has_snapshot!==false){button(actions,row.snapshot_cached?'查看本地抓拍':row.has_snapshot===true?'获取抓拍':'尝试获取抓拍',()=>showSnapshot(row));}else{const text=document.createElement('small');text.textContent=row.state==='end'?'未保存抓拍':'抓拍待生成';actions.appendChild(text);}$('events').appendChild(tr);}}
 async function refresh(){const status=await api('/api/status');$('status').textContent=JSON.stringify(status,null,2);if(!initialized){for(const ch of status.channels){const option=document.createElement('option');option.value=ch.channel_no;option.textContent=ch.channel_no+' '+ch.channel_name;$('channel').appendChild(option);}initialized=true;await recordings();}await events();}
 $('live').onclick=async()=>{try{stop();if(!window.isSecureContext)throw Error('WebRTC 需要 HTTPS 安全上下文');const pc=connection=new RTCPeerConnection();pc.addTransceiver('video',{direction:'recvonly'});pc.ontrack=e=>{$('video').srcObject=e.streams[0]||new MediaStream([e.track]);};pc.onconnectionstatechange=()=>{$('playing').textContent='WebRTC: '+pc.connectionState;};await pc.setLocalDescription(await pc.createOffer());await new Promise(resolve=>{if(pc.iceGatheringState==='complete')return resolve();const timer=setTimeout(resolve,5000);pc.addEventListener('icegatheringstatechange',()=>{if(pc.iceGatheringState==='complete'){clearTimeout(timer);resolve();}});});const answer=await api('/api/webrtc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({channel:$('channel').value,sub:$('sub').checked,offer:pc.localDescription.sdp})});if(answer.code!==0||!answer.sdp)throw Error('ZLM WebRTC 协商失败，请查看组件/码流状态');await pc.setRemoteDescription({type:'answer',sdp:answer.sdp});message('');}catch(e){stop();message(e.message);}};
 $('stop').onclick=stop;$('filter').onclick=()=>recordings().catch(e=>message(e.message));$('refresh').onclick=()=>refresh().catch(e=>message(e.message));

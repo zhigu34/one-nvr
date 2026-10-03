@@ -97,6 +97,48 @@ class HttpTests(unittest.TestCase):
         rows = json.loads(urlopen(self.url + '/api/events/' + event_id + '/recordings', timeout=3).read())
         self.assertEqual([row['id'] for row in rows], [old_id])
 
+    def snapshot_event(self, **fields):
+        return self.probe.store.ingest_event({'type': 'end', 'after': {'id': '1000-photo',
+            'camera': 'ch01_abcdef12', 'start_time': 1000, 'end_time': 1010, **fields}})
+
+    def test_upstream_snapshot_404_keeps_local_event_and_returns_specific_error(self):
+        identifier = self.snapshot_event()
+        with patch('probe.fetch', side_effect=HTTPError('http://frigate/event', 404, 'Not Found', {}, None)):
+            with self.assertRaises(HTTPError) as result:
+                urlopen(self.url + '/api/events/' + identifier + '/snapshot', timeout=3)
+        self.assertEqual(result.exception.code, 404)
+        self.assertEqual(json.load(result.exception)['code'], 'snapshot_not_found')
+        self.assertEqual(self.probe.store.events(identifier)[0]['state'], 'end')
+        self.assertFalse((self.probe.snapshots / (identifier + '.jpg')).exists())
+
+    def test_end_without_snapshot_is_not_reported_as_available(self):
+        identifier = self.snapshot_event(has_snapshot=False)
+        with self.assertRaises(HTTPError) as result:
+            urlopen(self.url + '/api/events/' + identifier + '/snapshot', timeout=3)
+        self.assertEqual(result.exception.code, 404)
+        self.assertEqual(json.load(result.exception)['code'], 'snapshot_not_saved')
+
+    def test_cached_snapshot_survives_missing_upstream_and_reports_local_availability(self):
+        identifier = self.snapshot_event(has_snapshot=False)
+        jpeg = b'\xff\xd8local-cache'
+        (self.probe.snapshots / (identifier + '.jpg')).write_bytes(jpeg)
+        with patch('probe.fetch', side_effect=HTTPError('http://frigate/event', 404, 'Not Found', {}, None)):
+            response = urlopen(self.url + '/api/events/' + identifier + '/snapshot', timeout=3)
+        self.assertEqual(response.read(), jpeg)
+        rows = json.loads(urlopen(self.url + '/api/events', timeout=3).read())
+        self.assertTrue(rows[0]['snapshot_cached'])
+
+    def test_upstream_snapshot_service_failure_remains_retryable(self):
+        identifier = self.snapshot_event(has_snapshot=True)
+        with patch('probe.fetch', side_effect=HTTPError('http://frigate/event', 503, 'Unavailable', {}, None)):
+            with self.assertRaises(HTTPError) as result:
+                urlopen(self.url + '/api/events/' + identifier + '/snapshot', timeout=3)
+        self.assertEqual(result.exception.code, 502)
+        self.assertEqual(self.probe.store.events(identifier)[0]['has_snapshot'], True)
+        with patch('probe.fetch', return_value=b'\xff\xd8recovered'):
+            self.assertEqual(urlopen(self.url + '/api/events/' + identifier + '/snapshot', timeout=3).read(),
+                             b'\xff\xd8recovered')
+
 
 if __name__ == '__main__':
     unittest.main()

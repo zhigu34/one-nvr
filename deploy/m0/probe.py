@@ -11,6 +11,7 @@ import subprocess
 import threading
 import time
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from store import Store, confined_path
@@ -205,7 +206,10 @@ def make_handler(probe):
                         start=float(query['start'][0]) if query.get('start') else None,
                         end=float(query['end'][0]) if query.get('end') else None))
                 if parsed.path == '/api/events':
-                    return self.respond(probe.store.events())
+                    rows = probe.store.events()
+                    for row in rows:
+                        row['snapshot_cached'] = (probe.snapshots / (row['id'] + '.jpg')).is_file()
+                    return self.respond(rows)
                 match = re.fullmatch(r'/api/events/([a-f0-9]{32})/recordings', parsed.path)
                 if match:
                     rows = probe.store.events(match[1])
@@ -223,7 +227,18 @@ def make_handler(probe):
                         return self.respond({'error': '事件不存在'}, 404)
                     path = probe.snapshots / (match[1] + '.jpg')
                     if not path.exists():
-                        raw = fetch('http://frigate:5000/api/events/' + quote(rows[0]['source_id'], safe='') + '/snapshot.jpg')
+                        event = rows[0]
+                        if event['state'] == 'end' and event['has_snapshot'] is False:
+                            return self.respond({'code': 'snapshot_not_saved',
+                                'error': 'Frigate 未为此事件保存抓拍；仍可查看关联录像。'}, 404)
+                        try:
+                            raw = fetch('http://frigate:5000/api/events/' + quote(event['source_id'], safe='') + '/snapshot.jpg')
+                        except HTTPError as error:
+                            error.close()
+                            if error.code != 404:
+                                raise
+                            return self.respond({'code': 'snapshot_not_found',
+                                'error': 'Frigate 当前没有此抓拍（尚未生成、未保存或已清理）；不影响本地事件和录像索引。'}, 404)
                         if not raw.startswith(b'\xff\xd8'):
                             return self.respond({'error': '抓拍尚未就绪'}, 404)
                         path.write_bytes(raw)
