@@ -10,6 +10,8 @@
 
 正式版构建与运行镜像的具体版本/digest 见 [镜像版本基线](docs/image-versions.md)，均已核对 Linux amd64 元数据；新版本的正式运行链路仍需验收。此次版本冻结不修改现有 M0 部署。
 
+正式版录像采用固定通道/UTC 日期目录，文件名为通道号、UTC 开始时间和稳定录像 ID；ZLM 完成后由 Worker 在同池发布标准文件，云端保持同名。完整路径与恢复规则见 [录像文件规则](docs/recording-file-layout.md)，当前为设计，现有 M0 文件不自动迁移。
+
 ## 部署
 
 需要 Linux x86_64、Docker Engine 和 Docker Compose v2；宿主无需 Python 或 OpenSSL。
