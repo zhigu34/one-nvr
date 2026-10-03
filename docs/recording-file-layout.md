@@ -1,6 +1,6 @@
 # one-nvr 录像文件生成与路径规则
 
-版本：1；确定日期：2026-10-03。适用于正式版目录存储池及 WebDAV 归档。本文是设计基线，尚未实现；不改动现有 M0 文件，也不承诺已验证固定 ZLM 镜像的全部文件行为。
+版本：2；确定日期：2026-10-03。适用于正式版目录存储池及 WebDAV 归档。本文是设计基线，尚未实现；不改动现有 M0 文件，也不承诺已验证固定 ZLM 镜像的全部文件行为。
 
 ## 1. 正式录像规则
 
@@ -9,19 +9,19 @@
 本地正式文件：
 
 ```text
-<pool_root>/one-nvr/<pool_id>/recordings/<channel_no>/<YYYY-MM-DD>/<channel_no>_<YYYYMMDDTHHMMSSZ>_<recording_id>.mp4
+<pool_root>/recordings/<channel_no>/<YYYY-MM-DD>/<channel_no>_<YYYYMMDDTHHMMSSZ>_<recording_id>.mp4
 ```
 
 示例（ID 为格式示例，不代表实际部署）：
 
 ```text
-/storage/pool-a/one-nvr/3e7b65ae-85d9-4f44-97e8-b9cd4f896c72/recordings/CH01/2026-10-03/CH01_20261003T080439Z_6f3e2d1a9b485f07a812cc4d0e76b935.mp4
+/storage/pool-a/recordings/CH01/2026-10-03/CH01_20261003T080439Z_6f3e2d1a9b485f07a812cc4d0e76b935.mp4
 ```
 
 | 部分 | 规则 |
 | --- | --- |
 | `pool_root` | 已添加且验证过的存储池目录；用户只提供此目录 |
-| `pool_id` | 不可变池 UUID；one-nvr 只管理该专属命名空间 |
+| `pool_id` | 不可变池 UUID，保存在数据库及池根 `.one-nvr.json` 中，不作为目录层级 |
 | `channel_no` | 固定编号 CH01–CH32；不使用可修改的通道名称、摄像头名称、IP 或凭据 |
 | 日期目录 | 分片录制开始时刻的 UTC 日期，格式 YYYY-MM-DD |
 | 文件时间 | ZLM 完成回调中的原始 `start_time`，按 UTC 转为 YYYYMMDDTHHMMSSZ，秒精度；Z 表示 UTC |
@@ -34,12 +34,16 @@
 
 首版不提供自定义路径/文件名模板，避免换源、回放、归档和清理使用不同规则。
 
+池根 `.one-nvr.json` 保存格式版本、site_id、pool_id 和创建时间，首次注册时写入，之后不因目录暂时离线自动重建。`recordings`、`snapshots`、`exports`、`.work`、`.meta` 是保留目录名；首次注册遇到既有标识不匹配，或没有标识却已有这些目录时拒绝自动接管，提示选择专用目录或按恢复流程核对身份。不清空目录、不自动导入其他应用文件；测试文件仅在已登记 `.work/probes/` 内操作。
+
+v2 移除 v1 的本地 `one-nvr/<pool_id>/` 两层，云端移除 `one-nvr/` 一层；池与站点身份仍保留。当前规则尚未实现，不存在需要自动迁移的 v1 正式媒体；M0 仍保持原布局。未来若改变规则，位置记录保留生成时的规则版本和实际路径，不按新模板重算旧路径。
+
 ## 2. 由 ZLM 写入，由 Worker 发布
 
 采用“ZLM 原生写入工作目录，完成后在同池发布标准文件”的方式。相比直接保留原生流目录，增加每片一次目录移动，但正式目录可按固定通道和日期浏览；无需 fork ZLM 来增加自定义文件名功能。
 
 ```text
-<pool_root>/one-nvr/<pool_id>/_work/zlm/<recording_run_id>/<ZLM 实际附加的目录与文件名>
+<pool_root>/.work/zlm/<recording_run_id>/<ZLM 实际附加的目录与文件名>
 ```
 
 `customized_path` 指向上述 run 根目录。ZLM 仍可能追加 record app、app、stream、日期等层级；one-nvr 按完成回调的实际路径读取，不硬编码文档示例文件名。上游当前源码显示先写点号临时文件，关闭后改名并触发完成通知；固定镜像中的行为必须在 M1 真机验收中核对。
@@ -52,7 +56,7 @@
 
 1. 完成回调通过身份及路径检查后先持久化 inbox；数据库不可用时写持久 spool。Hook 应答不作为已经索引/可播放的证据。
 2. 原文件必须是该 run 内的已关闭普通 MP4 文件；拒绝越界/符号链接逃逸。核对存在、大小和基本轨道，记录缺失/损坏等状态，未完成文件不发布。
-3. 以 `(recording_run_id, ZLM 原始相对路径)` 为唯一来源键。使用 site UUID 作为 UUIDv5 namespace，以规范化的 `pool_id/run_id/原始相对路径` 为 name 生成 recording_id；同一回调、重复扫描和重试得到同一个 ID。目录/文件名规则版本记为 1。
+3. 以 `(recording_run_id, ZLM 原始相对路径)` 为唯一来源键。使用 site UUID 作为 UUIDv5 namespace，以规范化的 `pool_id/run_id/原始相对路径` 为 name 生成 recording_id；同一回调、重复扫描和重试得到同一个 ID。目录/文件名规则版本记为 2。
 4. 先提交发布意图：记录原始相对路径、目标相对路径、run、文件身份/大小、校验结果与 `finalizing` 状态；此时不能播放、归档或清理。数据库无法持久化意图时保留原文件并延后发布，不影响 ZLM 继续写入。
 5. 在同一池内以不覆盖目标的方式原子移动，确认文件与目录持久化；不复制整段视频、不转码。跨文件系统移动失败时保留原文件并报错，不默默复制/删除。池内部目录须支持所需 rename 和目录同步；这是目录操作能力测试，不管理底层实现。
 6. 提交标准本地位置并置为 `ready` 后才进入回放和归档资格判断。原始回调路径仅作来源/恢复线索，播放走 one-nvr 的授权媒体接口，不能继续引用 ZLM 原生回调 URL。
@@ -63,17 +67,17 @@ API/Worker 故障时 ZLM 在已绑定 run 工作目录继续录制。恢复扫�
 
 ## 3. 池内其他目录
 
-所有路径均相对于 `<pool_root>/one-nvr/<pool_id>/`；只在标识匹配的命名空间执行媒体操作。
+所有路径均相对于 `<pool_root>/`；操作前核验根目录 `.one-nvr.json` 的站点/池身份，只管理已登记的业务文件与任务目录。
 
 | 相对目录/文件 | 用途与边界 |
 | --- | --- |
 | `recordings/CH01/YYYY-MM-DD/CH01_<start>Z_<recording_id>.mp4` | 已发布原始分片；连续/计划/手动录像及未来事件保留的源片段共用 |
 | `snapshots/CH01/YYYY-MM-DD/CH01_<capture_time>Z_<asset_id>.jpg` | 归档后的抓拍；时间取实际捕获时刻，关联事件与源版本保存在索引；不直接用外部 event ID 拼路径 |
 | `exports/<export_job_id>/<artifact_id>.mp4`、`.zip` 或 `.json` | 导出产物/清单，独立于原录像；用户下载名可带通道与时间范围 |
-| `_work/zlm/<recording_run_id>/` | ZLM 原生录制工作目录；未发布分片的恢复来源 |
-| `_work/exports/<export_job_id>/` | 导出过程文件，产物确认完成后发布到 exports |
-| `_work/cache/<cache_job_id>/` | 云端读取/导出缓存，下载中使用 `.part`；有独立容量预算和租约 |
-| `_work/buffer/<recording_run_id>/` | P1 事件前录的滚动分片，仅在事件录像需要时使用，不属于 M1 功能 |
+| `.work/zlm/<recording_run_id>/` | ZLM 原生录制工作目录；未发布分片的恢复来源 |
+| `.work/exports/<export_job_id>/` | 导出过程文件，产物确认完成后发布到 exports |
+| `.work/cache/<cache_job_id>/` | 云端读取/导出缓存，下载中使用 `.part`；有独立容量预算和租约 |
+| `.work/buffer/<recording_run_id>/` | P1 事件前录的滚动分片，仅在事件录像需要时使用，不属于 M1 功能 |
 | `.meta/recording-runs/<recording_run_id>.json` | 不含连接凭据的来源绑定，配合数据库/发布意图恢复；不是用户录像 |
 
 文件日期和时间均采用 UTC；内部 ID 使用系统生成的安全形式，外部输入不能成为任意路径。缓存/导出工作区可以按任务终态与租约清理；原生录制工作区中的待发布媒体必须单独对账。
@@ -83,10 +87,10 @@ API/Worker 故障时 ZLM 在已绑定 run 工作目录继续录制。恢复扫�
 ## 4. 云端统一命名
 
 ```text
-<target_root>/one-nvr/<site_id>/recordings/<channel_no>/<YYYY-MM-DD>/<与本地相同的文件名>
+<target_root>/<site_id>/recordings/<channel_no>/<YYYY-MM-DD>/<与本地相同的文件名>
 ```
 
-云端加入不可变站点 ID，两个独立站点可共用同一 WebDAV 根而不覆盖 CH01。对象键不包含本地池 ID，通道改绑池不影响命名；文件名中的 recording_id 仍区别每条源录像。本地/云端位置共用 recording_id，文件字节保持一致。远端根目录和目标配置版本在任务创建时冻结，重试使用原对象键，不按当前目标重算历史位置。
+云端只额外保留不可变站点 ID 这一层，两个独立站点可共用同一 WebDAV 根而不覆盖 CH01。对象键不包含本地池 ID，通道改绑池不影响命名；文件名中的 recording_id 仍区别每条源录像。本地/云端位置共用 recording_id，文件字节保持一致。远端根目录和目标配置版本在任务创建时冻结，重试使用原对象键，不按当前目标重算历史位置。
 
 相对路径使用 POSIX `/`；WebDAV 请求逐路径段编码，不把对象键原样拼成 URL。上传失败或未验证的对象不能标为已归档；只有已登记且身份验证过的副本参加到期删除。按实际结束时间计算云保留期限，不解析文件名日期来删除文件。
 
