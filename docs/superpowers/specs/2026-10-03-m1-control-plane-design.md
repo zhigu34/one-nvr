@@ -1,6 +1,6 @@
 # one-nvr M1：正式控制面设计
 
-日期：2026-10-03。依据：[PRD v0.17](../../PRD.md)、已确认的 Go + PostgreSQL 选型及 M0 限定范围验证。
+日期：2026-10-03。依据：[PRD v0.18](../../PRD.md)、已确认的 Go + PostgreSQL 选型及 M0 限定范围验证。
 
 状态：设计待评审；本文中的模块、表和接口均为拟实现契约，不表示已经交付。
 
@@ -32,7 +32,24 @@ M1 的录像不自动清理；界面明确显示此阶段限制，并在安全�
 
 建议实现基线：Go 1.27 系列、标准库 `net/http`、`pgx/v5`、显式 SQL；PostgreSQL 17 系列；前端直接引入 shadcn-admin，保留 React/TypeScript/Vite、TanStack Router/Query 和组件体系。开始实现时冻结受支持的补丁版本、上游导入 commit、镜像 digest、`go.sum` 和 `pnpm-lock.yaml`，不使用浮动 `latest`。
 
-不增加 Redis、消息队列业务中间层或 ORM。PostgreSQL 任务表承担业务队列；Mosquitto 只承担 Frigate 消息集成。API 重启不重建 ZLM。业务配置保存在数据库，`.env` 只承担端口、路径、镜像、内部连接与部署约束，摄像头配置不再以 `.env` 为正式来源。
+不增加 Redis、消息队列业务中间层或 ORM。PostgreSQL 任务表承担业务队列；Mosquitto 仅在智能检测模块启用时承担 Frigate 消息集成。API 重启不重建 ZLM。业务配置保存在数据库，`.env` 承担模块开关、端口、路径、镜像、内部连接与部署约束，摄像头配置不再以 `.env` 为正式来源。
+
+### 2.1 模块化部署
+
+正式部署提供两个 yes/no 开关，缺失默认 no、无效值拒绝：
+
+```dotenv
+ONE_NVR_FRIGATE_ENABLE=no
+ONE_NVR_OPENLIST_ENABLE=no
+```
+
+基础看/录始终运行 gateway（含前端）、api、worker、postgres、zlm，共 5 个容器。智能检测开启才启动 frigate/mqtt，共 7 个；归档开启后使用已有 Worker 连接界面配置的 OpenList/WebDAV，不额外启动业务 Worker。OpenList 是外部服务，自行部署其容器时另计；OPENLIST_ENABLE 表示云归档模块是否提供，不强制创建本机 OpenList。
+
+deploy.sh 从明确 `.env` 路径解析统一配置，不执行 source/eval；使用 Compose profiles 和明确服务清单，核心 depends_on 不包含可选服务。关闭智能模块不检查模型/设备/对应镜像，不加载 GPU 覆盖；关闭归档不检查远端。启动/拉取/健康报告均只覆盖启用模块。修改 env 后再执行 deploy.sh 生效；先前开启后来关闭的模块须显式停对应容器，单纯减少 profile 不能当作已停止，不执行全站 down 或删除卷。API/Worker 只构造启用的适配器/调度器，未启用连接参数可缺失，不能后台持续重连或报离线告警。
+
+能力状态由后端统一生成，区分 disabled、not_configured、healthy、unavailable 和 not_available。enabled 是部署意图，available 是当前可用性；env=yes 不能将尚未交付的 M2.1/M3 能力冒充实现。前端配置/执行按钮依据状态置灰并显示“功能未启用”等具体原因；直接 API 调用同样检查，关闭返回 409 feature_disabled，未实现 501 feature_not_available，依赖异常 503。可选模块 disabled 不使核心 readiness 失败；已启用但宕机仍显示真实异常，不自动伪装禁用。
+
+禁用保留配置/数据/卷；历史本地事件/抓拍查询不依赖 Frigate 在线，依赖上游的新检测/规则操作不可选。归档关闭暂停上传、云端读取和到期删除，已有仅云媒体明确显示功能未启用；不删除对象或放松既有待归档/保全约束。再次启用先对账恢复，云期限仍基于原结束时间。基础取流、录像、源可靠性与本地回放独立运行。
 
 建议目录：
 
@@ -146,6 +163,7 @@ API 不可用时拒绝新媒体会话。API 与 Worker 均不可用时，前端�
 
 | 接口（均在 `/api/v1` 下） | 请求/结果及职责 |
 | --- | --- |
+| `GET /capabilities` | 当前版本/部署开关/配置/实际运行状态，返回模块 enabled、available、state、reason；前端和 API 同一判定依据 |
 | `GET /setup/status`、`POST /setup` | 仅返回是否初始化；POST 校验一次性部署令牌并事务创建站点、管理员、16/32 槽位和初始授权，成功失效令牌 |
 | `POST /auth/login`、`POST /auth/logout`、`GET /auth/me` | 本地会话、CSRF token、角色/当前动作范围；无示例默认密码 |
 | `POST /auth/change-password` | 旧密码验证，更新并撤销全部旧会话，重新登录 |
@@ -180,6 +198,8 @@ M1 一级入口为：总览、实时预览、录像、通道管理、存储池�
 
 全部工具提供 Docker 执行方式，宿主无需 Go、Node、Python。Go 多阶段镜像构建 API/Worker/admin，前端独立构建后由 gateway 交付；已有 `python:3.12-slim` 继续用于 M0，不强制正式 Go 服务依赖 Python。初始化工具生成一次性 setup token、数据库/上游/加密 secret 文件，重复执行不覆盖；`.env` 非敏感配置和源镜像准备/软件包镜像选择有清晰离线说明。
 
+基础部署默认两模块关闭，部署工具只要求核心镜像/目录/密钥；智能模块开启再生成 MQTT/Frigate 必要配置并检查硬件档案，归档开启但远端尚未配置时允许进入面板完成配置。核心模块初始化或健康失败必须返回失败；已启用可选模块失败须返回明确的部分失败报告，保留已经就绪的核心服务，不以全成功掩盖异常。正式模块开关在 M1-A 落地，实际云归档/智能能力按原里程碑交付，M0 实验脚本不冒充正式部署实现。
+
 迁移由独立 admin 命令串行执行，数据库锁、迁移编号与校验和记录；失败停止新 API/Worker 就绪，不删除旧数据。初始建表是新增环境，后续用向前兼容迁移；涉及不可逆数据变化时先备份，不自动执行破坏性 down migration。发布报告记录具体 schema、应用与上游镜像版本。
 
 M0 数据不自动转成正式记录。摄像头配置可通过受校验的显式导入迁移；旧录像作为后续只读导入能力另做设计，未迁移时保留 M0 查询入口，不把 SQLite 直接当作正式 PostgreSQL schema。M1 换源历史验收使用正式版产生的录像。
@@ -190,7 +210,7 @@ Frigate CPU/Intel 档案保留 M0 契约和独立数据目录；正式业务智�
 
 按依赖顺序拆成三个可部署增量，分别形成实施计划；共同遵守本文 ID、授权、数据和任务契约：
 
-1. **M1-A 基础面板**：引入真实上游前端、Go API/Worker/admin、PostgreSQL/迁移、Docker 工具链、初始化/账号授权、固定槽位、目录池登记与分项验证。真实数据替代所有演示内容。
+1. **M1-A 基础面板**：引入真实上游前端、Go API/Worker/admin、PostgreSQL/迁移、Docker 工具链、初始化/账号授权、固定槽位、模块开关/能力接口、目录池登记与分项验证。真实数据替代所有演示内容。
 2. **M1-B 通道接入**：加密凭据、结构化草稿/测试、源切换与回滚、批量导入/明文配置导出、ZLM 连续录制与最小索引，完成源归属、池改绑和重启对账。
 3. **M1-C 实时与验收**：受授权 WebRTC、1/4/9/16 分屏、视图保存、分项状态、历史单段 Range 回放、SSE、权限撤销、部署说明与真机验收。
 
@@ -202,6 +222,7 @@ Frigate CPU/Intel 档案保留 M0 契约和独立数据目录；正式业务智�
 - 正常切换、测试失败保留旧源、重启接管、回滚失败可见；旧会话迟到回调仍归旧源，清空源保留历史，重命名不重连。
 - 目录穿越/符号链接/嵌套/共享容量/业务标识异常，API 可写而 ZLM 不可写，低空间阻断只影响相关池。
 - 浏览器登录恢复、明文离页清除、真实查询/空/错误状态、页面隐藏释放连接、旧响应不覆盖新选中通道。
+- 模块 no/no、yes/no、no/yes、yes/yes 的服务选择/健康检查和未实现状态；模块缺失镜像/设备不影响基础部署，能力接口与页面/直接 API 一致。开→关再次 deploy 不遗留可选进程、不重建核心或删卷；模拟已启用服务宕机必须呈现异常，云任务暂停/恢复保持保全约束和原到期。
 - 后续事件阶段验收：无常规录像且事件录像关闭时仍检测/保存截图/时间记录，无事件视频或为事件服务的预录分片；已有常规录像不受开关影响，事件/换源/重启不复位开关，必要检测缓冲单独验证。
 
 真机验证使用现有每机两路：主/子流多画面、正式分片播放、源配置切换/故障回滚、池切换及旧分片读取、权限直接请求/正在播放撤销、API/Worker 重启对账、Frigate 故障隔离。长时、损坏媒体、完整云归档和 16/32 压测随对应阶段继续，报告区分未测、失败与通过。
@@ -212,5 +233,6 @@ Frigate CPU/Intel 档案保留 M0 契约和独立数据目录；正式业务智�
 - [上游 package.json](https://github.com/satnaing/shadcn-admin/blob/main/package.json)、[认证 store](https://github.com/satnaing/shadcn-admin/blob/main/src/stores/auth-store.ts)：需要替换的演示依赖与登录持久方式，不能默认视为 one-nvr 生产认证。
 - [ZLM REST API](https://docs.zlmediakit.com/guide/media_server/restful_api.html)、[Web Hook](https://docs.zlmediakit.com/guide/media_server/web_hook_api.html)：集成原语；实际固定镜像契约测试是放行依据。
 - [Go 发行与支持规则](https://go.dev/doc/devel/release)、[PostgreSQL 支持规则](https://www.postgresql.org/support/versioning/)：选择受支持版本，实施时固定补丁和镜像。
+- [Docker Compose profiles](https://docs.docker.com/compose/how-tos/profiles/)：服务选择原语；显式指定服务可自动启用其 profile，关闭模块须由部署脚本和业务能力检查共同约束。
 
 已自检：M1/M2/M3 边界明确；通道/来源/运行代次分别建模；录像只由 ZLM 生成；目录与权限不依赖底层存储类型；首次池/源探测可闭环；密码默认脱敏与显式明文操作分开；故障与未经验证的能力未标为通过。待用户评审后进入 M1-A 实施计划。
