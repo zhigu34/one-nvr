@@ -6,7 +6,7 @@
 
 正式后端已确定为 **Go + PostgreSQL**，前端直接基于 shadcn-admin 修改。M1 的账号权限、固定通道、批量导入、目录存储池、换源和实时预览设计见 [M1 控制面设计](docs/superpowers/specs/2026-10-03-m1-control-plane-design.md)；当前处于设计评审，尚未交付正式版代码。
 
-正式版采用模块化部署：基础看/录计划运行 5 个核心容器；`.env` 中 `ONE_NVR_FRIGATE_ENABLE=yes/no` 和 `ONE_NVR_OPENLIST_ENABLE=yes/no` 分别控制智能检测与云归档，默认关闭。部署脚本按启用模块启动/检查服务，面板显示未启用、未配置或运行异常；这些开关尚未实现在现有 M0 实验包中。
+正式版采用模块化部署：基础看/录计划运行 5 个核心容器；`.env` 中 `ONE_NVR_FRIGATE_ENABLE=yes/no` 和 `ONE_NVR_OPENLIST_ENABLE=yes/no` 分别控制智能检测与云归档，默认关闭。智能检测增加 Frigate/MQTT，云归档增加自带 OpenList，全部开启共 8 个。面板检测自带 OpenList 的实际状态，同时支持添加其他 WebDAV；各目标独立验证。部署脚本按启用模块启动/检查服务；这些开关与自带 OpenList 尚未实现在现有 M0 实验包中。
 
 ## 部署
 
