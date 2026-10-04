@@ -113,11 +113,11 @@
 
 **Interfaces:** `secrets.State.SealCredential(siteID,channelID,revisionID id.ID,field string,value []byte) (EncryptedCredential,error)`；`OpenCredential(...) ([]byte,error)`；`channel.ParseNetworkPolicy(string,[]netip.Addr) (NetworkPolicy,error)`；`SourceConfig.Validate(NetworkPolicy) error`、`BuildRTSPURL(config SourceConfig,username,password,path string) (string,error)`；`SourceService.CreateDraft(ctx,p,channelID,expected,in) (SourceRevision,error)`、`ListRevisions(ctx,p,channelID,cursor,limit)`、`Reveal(ctx,p,channelID,revisionID) (RevealedCredentials,error)`、`Export(ctx,p,[]id.ID) (ExportFile,error)`。
 
-- [ ] **Step 1:** 写 `TestCredentialAADAndMissingKey`：不同通道/版本/字段不能解密，同值每次 nonce 不同，密文/key错返回固定错误、不回退。`TestRTSPAddressAndAllowedCIDRs` 覆盖 IPv6、含 `@:/?#%` 的凭据、已有路径转义/query、空554/子路径、mapped-IP 和内部服务排除；原地址内容不进入错误字符串。
-- [ ] **Step 2:** 运行 `dev.sh test-go ./internal/secrets ./internal/channel ./internal/config` 和 `dev.sh test-db ./tests/integration -run 'SourceDraft|CredentialReveal|SourceExport'`，确认功能缺失失败。
-- [ ] **Step 3:** 实现不可变草稿与身份意图，事务锁版本并审计。keep 必须从所选本通道原版本读取后用新 revision AAD 重新加密；空密码是有效状态，不与未保存混淆；保存草稿不更改 current/旧录像。配置部署网段并在 Worker 重试重新校验。
-- [ ] **Step 4:** 测 `TestCredentialRevealAuditFailure` 与 `TestSourceExportSnapshotAuthorization`：管理员无该 configure 拒绝，operator/viewer 拒绝，事务内审计失败无明文响应，多通道任一解密失败整体失败；一致快照导出 `format_version=1/site_id/exported_at` 和八列配置追溯信息。对普通列表/错误/jobs/audit 做固定虚构凭据标记搜索，无泄漏；重新运行测试。
-- [ ] **Step 5:** 提交 `feat: add encrypted immutable channel source drafts`。
+- [x] **Step 1:** 写 `TestCredentialAADAndMissingKey`：不同通道/版本/字段不能解密，同值每次 nonce 不同，密文/key错返回固定错误、不回退。`TestRTSPAddressAndAllowedCIDRs` 覆盖 IPv6、含 `@:/?#%` 的凭据、已有路径转义/query、空554/子路径、mapped-IP 和内部服务排除；原地址内容不进入错误字符串。
+- [x] **Step 2:** 运行 `dev.sh test-go ./internal/secrets ./internal/channel ./internal/config` 和 `dev.sh test-db ./tests/integration -run 'SourceDraft|CredentialReveal|SourceExport'`，确认功能缺失失败。
+- [x] **Step 3:** 实现不可变草稿与身份意图，事务锁版本并审计。keep 必须从所选本通道原版本读取后用新 revision AAD 重新加密；空密码是有效状态，不与未保存混淆；保存草稿不更改 current/旧录像。配置部署网段并在 Worker 重试重新校验。
+- [x] **Step 4:** 测 `TestCredentialRevealAuditFailure` 与 `TestSourceExportSnapshotAuthorization`：管理员无该 configure 拒绝，operator/viewer 拒绝，事务内审计失败无明文响应，多通道任一解密失败整体失败；一致快照导出 `format_version=1/site_id/exported_at` 和八列配置追溯信息。对普通列表/错误/jobs/audit 做固定虚构凭据标记搜索，无泄漏；重新运行测试。
+- [x] **Step 5:** 提交 `feat: add encrypted immutable channel source drafts`。
 
 ## Task 3: 固定 ZLM 契约、真实首帧与运行镜像
 

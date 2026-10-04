@@ -86,6 +86,7 @@ func BuildDeployment(v map[string]string) (Deployment, error) {
 		return Deployment{}, fmt.Errorf("invalid storage root")
 	}
 	common := map[string]string{"ONE_NVR_PUBLIC_URL": c.PublicURL, "ONE_NVR_HTTP_PORT": fmt.Sprint(c.HTTPPort), "ONE_NVR_HTTPS_PORT": fmt.Sprint(c.HTTPSPort), "ONE_NVR_RTC_PORT": fmt.Sprint(c.RTCPort), "ONE_NVR_MEDIA_HOST": c.MediaHost, "ONE_NVR_DATA_DIR": "/data", "ONE_NVR_HARDWARE_PROFILE": c.HardwareProfile, "ONE_NVR_DATABASE_URL": "postgres://one_nvr:" + url.QueryEscape(v["ONE_NVR_POSTGRES_PASSWORD"]) + "@postgres:5432/one_nvr?sslmode=disable", "ONE_NVR_FRIGATE_ENABLE": boolValue(c.FrigateEnabled), "ONE_NVR_OPENLIST_ENABLE": boolValue(c.OpenListEnabled)}
+	common["ONE_NVR_CAMERA_CIDRS"] = c.CameraCIDRs
 	vols := []Mount{mount(root, "/data", false), mount(poolRoot, "/storage", false)}
 	if c.TLSDir != "" {
 		common["ONE_NVR_TLS_DIR"] = "/tls-input"

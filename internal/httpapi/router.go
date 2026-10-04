@@ -29,6 +29,7 @@ type Dependencies struct {
 	TrustedProxyToken               string
 	HealthCheck                     func(context.Context) error
 	Channels                        *channel.Service
+	Sources                         *channel.SourceService
 	Storage                         *storage.Service
 	TLS                             *tlsmanager.Service
 	Operations                      *operations.Service
@@ -64,6 +65,9 @@ func NewHandler(d Dependencies) http.Handler {
 	if d.Channels == nil {
 		d.Channels = &channel.Service{DB: d.Auth.DB, Auth: d.Auth}
 	}
+	if d.Sources == nil {
+		d.Sources = channel.NewSources(d.Auth.DB, d.Auth, d.Site.Secrets, channel.NetworkPolicy{})
+	}
 	if d.Operations == nil {
 		d.Operations = operations.New(d.Auth.DB, d.Auth, d.FrigateEnabled, d.OpenListEnabled)
 	}
@@ -95,6 +99,10 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("GET /api/v1/settings/hardware", r.protected(r.hardwareReport))
 	r.mux.HandleFunc("GET /api/v1/channel-slots", r.protected(r.channelSlots))
 	r.mux.HandleFunc("PATCH /api/v1/channels/{id}", r.protected(r.updateChannel))
+	r.mux.HandleFunc("GET /api/v1/channels/{id}/source-revisions", r.protected(r.listSourceRevisions))
+	r.mux.HandleFunc("POST /api/v1/channels/{id}/source-revisions", r.protected(r.createSourceDraft))
+	r.mux.HandleFunc("POST /api/v1/channels/{id}/source/credentials/reveal", r.protected(r.revealSourceCredentials))
+	r.mux.HandleFunc("POST /api/v1/channels/source-config-export", r.protected(r.exportSourceConfig))
 	r.mux.HandleFunc("GET /api/v1/storage-pools", r.protected(r.listPools))
 	r.mux.HandleFunc("POST /api/v1/storage-pools", r.protected(r.registerPool))
 	r.mux.HandleFunc("PATCH /api/v1/storage-pools/{id}", r.protected(r.updatePool))

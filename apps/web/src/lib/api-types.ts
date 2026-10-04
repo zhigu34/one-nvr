@@ -1159,7 +1159,7 @@ export interface components {
         };
         SourceExportItem: {
             channel_id: components["schemas"]["UUID"];
-            source_revision_id: components["schemas"]["UUID"];
+            source_revision_id: components["schemas"]["UUID"] | null;
             channel_no: number;
             channel_name: string;
             ip: string;
@@ -1169,6 +1169,10 @@ export interface components {
             main_path: string;
             sub_path: string;
             onvif_port?: number;
+            source_id: components["schemas"]["UUID"] | null;
+            source_revision_number: number | null;
+            /** @enum {string} */
+            source_state: "configured" | "not_configured";
         };
         SourceExportFile: {
             /** @constant */
@@ -2800,6 +2804,8 @@ export interface operations {
             header: {
                 "If-Match": string;
                 "X-CSRF-Token": string;
+                /** @description Same actor/key and same request return the original immutable draft; changed input conflicts. */
+                "Idempotency-Key"?: string;
             };
             path: {
                 id: components["schemas"]["UUID"];

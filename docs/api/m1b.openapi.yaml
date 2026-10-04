@@ -9,7 +9,7 @@
     "/api/v1/channels/{id}/source-revisions": {
       "get": {
         "operationId": "sourceRevisions",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
         "security": [
           {
@@ -159,7 +159,7 @@
       },
       "post": {
         "operationId": "sourceDraft",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
         "security": [
           {
@@ -181,7 +181,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[1-9][0-9]*$"
+              "pattern": "^\"[1-9][0-9]*\"$"
             }
           },
           {
@@ -191,6 +191,17 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "Same actor/key and same request return the original immutable draft; changed input conflicts."
           }
         ],
         "responses": {
@@ -647,7 +658,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[1-9][0-9]*$"
+              "pattern": "^\"[1-9][0-9]*\"$"
             }
           },
           {
@@ -819,7 +830,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[1-9][0-9]*$"
+              "pattern": "^\"[1-9][0-9]*\"$"
             }
           },
           {
@@ -959,7 +970,7 @@
     "/api/v1/channels/{id}/source/credentials/reveal": {
       "post": {
         "operationId": "sourceCredentialsReveal",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "admin+configure",
         "security": [
           {
@@ -1122,7 +1133,7 @@
     "/api/v1/channels/source-config-export": {
       "post": {
         "operationId": "sourceConfigExport",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "admin+configure",
         "security": [
           {
@@ -1573,7 +1584,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[1-9][0-9]*$"
+              "pattern": "^\"[1-9][0-9]*\"$"
             }
           },
           {
@@ -1758,7 +1769,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[1-9][0-9]*$"
+              "pattern": "^\"[1-9][0-9]*\"$"
             }
           },
           {
@@ -3621,7 +3632,14 @@
             "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
           },
           "source_revision_id": {
-            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            "anyOf": [
+              {
+                "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "channel_no": {
             "type": "integer",
@@ -3651,6 +3669,30 @@
           },
           "onvif_port": {
             "type": "integer"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_revision_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "source_state": {
+            "type": "string",
+            "enum": [
+              "configured",
+              "not_configured"
+            ]
           }
         },
         "required": [
@@ -3663,7 +3705,10 @@
           "username",
           "password",
           "main_path",
-          "sub_path"
+          "sub_path",
+          "source_id",
+          "source_revision_number",
+          "source_state"
         ],
         "additionalProperties": false
       },

@@ -6,6 +6,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/fault"
 	"github.com/zhigu34/one-nvr/internal/id"
+	"github.com/zhigu34/one-nvr/internal/secrets"
 	"io"
 	"net/http"
 	"strconv"
@@ -25,6 +26,9 @@ func respond(w http.ResponseWriter, r *http.Request, status int, data any) {
 func requestID(r *http.Request) id.ID { v, _ := r.Context().Value(requestKey{}).(id.ID); return v }
 func fail(w http.ResponseWriter, r *http.Request, err error) {
 	var f *fault.Error
+	if errors.Is(err, secrets.ErrCredentialUnavailable) {
+		err = fault.New(503, "credential_unavailable", "摄像头凭据无法解密，请检查持久密钥")
+	}
 	if !errors.As(err, &f) {
 		f = fault.New(503, "dependency_unavailable", "服务暂时不可用，请稍后重试")
 	}

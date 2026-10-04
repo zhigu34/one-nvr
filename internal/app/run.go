@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/zhigu34/one-nvr/internal/auth"
+	"github.com/zhigu34/one-nvr/internal/channel"
 	"github.com/zhigu34/one-nvr/internal/config"
 	"github.com/zhigu34/one-nvr/internal/database"
 	"github.com/zhigu34/one-nvr/internal/httpapi"
@@ -16,7 +17,10 @@ import (
 	"github.com/zhigu34/one-nvr/internal/storage"
 	"github.com/zhigu34/one-nvr/internal/tlsmanager"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"os/signal"
 	"strings"
 	"sync"
@@ -91,7 +95,36 @@ func Run(name string) error {
 		if err != nil {
 			return err
 		}
-		handler = httpapi.NewHandler(httpapi.Dependencies{Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, PublicURL: c.PublicURL, TrustedProxyToken: proxyKey, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled})
+		denied := []netip.Addr{}
+		public, _ := url.Parse(c.PublicURL)
+		for _, host := range []string{public.Hostname(), c.MediaHost} {
+			if ip, err := netip.ParseAddr(host); err == nil {
+				denied = append(denied, ip)
+			}
+		}
+		// Only resolve internal service aliases, never request-supplied camera names.
+		if strings.TrimSpace(c.CameraCIDRs) != "" {
+			names := []string{"api", "worker", "gateway", "postgres", "zlm"}
+			if c.FrigateEnabled {
+				names = append(names, "mqtt", "frigate")
+			}
+			if c.OpenListEnabled {
+				names = append(names, "openlist")
+			}
+			resolveCtx, resolveCancel := context.WithTimeout(ctx, 5*time.Second)
+			for _, name := range names {
+				if addresses, err := net.DefaultResolver.LookupNetIP(resolveCtx, "ip", name); err == nil {
+					denied = append(denied, addresses...)
+				}
+			}
+			resolveCancel()
+		}
+		network, err := channel.ParseNetworkPolicy(c.CameraCIDRs, denied)
+		if err != nil {
+			return err
+		}
+		sources := channel.NewSources(db, accounts, secret, network)
+		handler = httpapi.NewHandler(httpapi.Dependencies{Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, Sources: sources, PublicURL: c.PublicURL, TrustedProxyToken: proxyKey, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled})
 	}
 	if name == "worker" {
 		zlmKey, err := secret.ComponentCredential("zlm")
