@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/zhigu34/one-nvr/internal/media/egress"
 	"io"
+	"net"
 	"os"
 	"syscall"
 	"time"
@@ -19,6 +20,16 @@ func main() {
 	}
 }
 func run() error {
+	if len(os.Args) == 3 && os.Args[1] == "dns-check" && (os.Args[2] == "runner" || os.Args[2] == "worker") {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if _, err := net.DefaultResolver.LookupNetIP(ctx, "ip4", os.Args[2]); err != nil {
+			fmt.Println("media DNS unavailable")
+			return egress.ErrBoundary
+		}
+		fmt.Println("media DNS reachable")
+		return nil
+	}
 	if len(os.Args) < 3 {
 		return egress.ErrBoundary
 	}

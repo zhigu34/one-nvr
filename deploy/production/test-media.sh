@@ -48,13 +48,19 @@ chmod 755 "$ONE_NVR_MEDIA_TEST_DIR/launcher"
 "${compose[@]}" up -d camera
 camera_ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$("${compose[@]}" ps -q camera)")
 [[ "$camera_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
-printf '{"camera_cidrs":"%s/32","denied_hosts":["runner","zlm"],"hook_host":"runner"}\n' "$camera_ip" > "$ONE_NVR_MEDIA_TEST_DIR/egress.json"
 sleep 2
 "${compose[@]}" up -d fixture runner
+fixture_ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$("${compose[@]}" ps -q fixture)")
+[[ "$fixture_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+printf '{"camera_cidrs":"%s/32,%s/32","denied_hosts":["runner","zlm"],"hook_host":"runner"}\n' "$camera_ip" "$fixture_ip" > "$ONE_NVR_MEDIA_TEST_DIR/egress.json"
 "${compose[@]}" up -d zlm
 status=0
 "${compose[@]}" wait runner || status=$?
 "${compose[@]}" logs --no-log-prefix runner
+if [[ "$status" -ne 0 ]]; then
+ "${compose[@]}" exec -T zlm /usr/local/bin/media-launcher dns-check runner || true
+ "${compose[@]}" logs --tail=80 zlm
+fi
 mkdir -p media-test-results
 if [[ -f "$ONE_NVR_MEDIA_TEST_DIR/evidence/contract.json" ]]; then cp "$ONE_NVR_MEDIA_TEST_DIR/evidence/contract.json" media-test-results/; fi
 # Synthetic secrets must not appear even in private component stdout.
