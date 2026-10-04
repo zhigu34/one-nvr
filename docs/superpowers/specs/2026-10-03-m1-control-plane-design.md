@@ -76,7 +76,7 @@ docs/api/                        OpenAPI 和前端类型生成说明
 
 ## 3. 身份、通道权限与凭据
 
-使用服务器端会话。浏览器只保存随机会话标识的 `HttpOnly; Secure; SameSite=Lax; Path=/` Cookie，数据库保存标识的 SHA-256 摘要。默认闲置 30 分钟、绝对 12 小时到期；登录轮换标识，登出、改密、禁用立即撤销。修改类请求要求同源 Origin 与会话 CSRF token；登录/初始化也校验同源并限制尝试频率。生产仅通过 HTTPS 入口。
+使用服务器端会话。浏览器只保存随机会话标识的 `HttpOnly; SameSite=Lax; Path=/` Cookie，HTTPS 添加 Secure，明确选择的 HTTP 模式不设 Secure；协议只信任 gateway 覆写的受控信息，不由客户端头降级。数据库保存标识的 SHA-256 摘要。默认闲置 30 分钟、绝对 12 小时到期；登录轮换标识，登出、改密、禁用立即撤销。修改类请求要求同源 Origin 与会话 CSRF token；登录/初始化也校验同源并限制尝试频率。默认 HTTPS，部署者可通过 PUBLIC_URL 选择 HTTP；入口协议切换撤销原会话，HTTP 提示当前连接未加密。详见 [访问与证书设计](../../web-access-tls.md)。
 
 用户密码使用 Argon2id，编码保存参数、随机 salt 和结果；初始参数 64 MiB、3 次迭代、并行度 1，使用受限并发避免耗尽内存。站点角色固定为管理员、操作员、查看者。每用户每通道独立授予 `live`、`playback`、`export`、`configure`；角色限定可授予的动作，查看者无配置/凭据访问，操作员无密码查看/配置导出。站点管理权限不隐式授予全部通道的视频权限。初始管理员明确获得全部初始化槽位的授权，新用户默认无通道授权；禁止禁用最后一个有效管理员。
 
@@ -98,6 +98,8 @@ docs/api/                        OpenAPI 和前端类型生成说明
 | --- | --- |
 | `sites` | 单站点 ID、名称、IANA 时区、槽位数、初始化时间、配置版本；仅一条站点记录 |
 | `users` / `sessions` | 账号唯一、密码哈希、角色、禁用、授权版本；会话摘要唯一、闲置/绝对期限、撤销时间 |
+| `tls_certificates` | 不可变版本 ID、公共 X.509 元数据、叶证书指纹、证书/私钥受限文件引用、导入者/时间；数据库不保存私钥明文 |
+| `gateway_tls_state` | 单网关当前/上一有效版本、HTTP 下待用版本、配置版本与持久应用任务引用；同一网关互斥，预期版本冲突返回 409，生效依据实际握手指纹 |
 | `channel_grants` | `(user_id,channel_id)` 唯一；动作布尔字段，所有资源入口同一授权策略 |
 | `channels` | `(site_id,number)` 唯一；名称、分组、enabled、current_revision_id、storage_pool_id、config_version；ID/编号不可更新 |
 | `source_identities` | channel_id、标签、身份置信度、可选核验设备标识；身份只在通道历史内管理 |
@@ -180,6 +182,7 @@ API 不可用时拒绝新媒体会话。API 与 Worker 均不可用时，前端�
 | `POST /auth/change-password` | 旧密码验证，更新并撤销全部旧会话，重新登录 |
 | `GET/POST /users`、`PATCH /users/:id`、`PUT /users/:id/channel-grants` | 管理员操作；更新授权版本并触发媒体撤销，保护最后一个管理员 |
 | `GET /site/timezones` | 公共支持时区列表，仅返回中文标签/IANA 标识等参考数据，供初始化与设置选择；不暴露站点配置 |
+| `GET /settings/tls`、`POST /settings/tls/certificates`、`POST /settings/tls/certificates/:id/apply`、`POST /settings/tls/rollback` | 管理员读取证书公共元数据/上传 PEM 预检/提交应用或回滚任务；不返回私钥，证书动作审计；应用状态由持久任务和实际网关指纹确认 |
 | `GET/PATCH /site`、`POST /site/channel-expansion` | 名称/可选择的 IANA 时区；管理员修改，If-Match/审计/校验；仅 16→32 追加，已有通道和授权不改，提交时明确授予执行管理员新槽位授权，其他用户默认无新增授权 |
 | `GET /channels`、`GET/PATCH /channels/:id` | 槽位列表、配置/分项状态；名称/分组/启用，带版本条件 |
 | `GET/POST /channels/:id/source-revisions` | 查询脱敏历史、创建结构化不可变草稿；指定 modify/replace/history 身份意图 |
@@ -208,9 +211,11 @@ M1 一级入口为：总览、实时预览、录像、通道管理、存储池�
 
 正式 Compose 使用独立项目名、状态目录和 PostgreSQL 卷，不覆盖 `deploy/m0`、已有 `.env`、SQLite、密钥或录像。M0 与正式版不得同时对同一摄像头启动额外正式录制；同主机切换先停止实验流，再接管对应通道，维护中断记录在案。
 
-正式部署参数包含 `ONE_NVR_RTC_PORT`（整数 1–65535，默认 8000），与 `ONE_NVR_HTTPS_PORT` 独立。部署工具将它同时写入 ZLM `rtc.port` / `rtc.tcpPort`、对外协商端口和同号 Docker UDP/TCP 映射；因两者均使用 TCP，拒绝与 HTTPS 端口相同的配置。改端口须同步生成配置和映射；NAT 外部端口保持一致，浏览器连通性实际验证，媒体网络变更按 ZLM 维护流程记录中断。
+入口协议直接从 ONE_NVR_PUBLIC_URL 选择 http/https，默认 HTTPS；ONE_NVR_HTTP_PORT 默认 8080，ONE_NVR_HTTPS_PORT 默认 443，仅绑定选中的入口，URL 有效端口须匹配。HTTP 不依赖 TLS 证书；HTTPS 初始化一次生成自签或使用导入版本。系统设置提供证书信息/上传/预检/应用/回滚，公共元数据保存在数据库，私钥版本文件存 DATA_DIR/tls。由 gateway 容器内受限控制进程执行配置预检、reload 和新 TLS 连接指纹核验，Worker 通过受控共享任务目录交付请求；不增加容器、不挂 Docker socket，失败/重启按持久任务与上一有效版本对账，不影响 ZLM。具体文件、限额、校验与契约见 [访问与证书设计](../../web-access-tls.md)。
 
-`ONE_NVR_MEDIA_HOST` 为可选媒体 IP 覆盖项。PUBLIC_URL 主机为明确 IPv4/IPv6 的直连部署时默认沿用其 IP，正式 .env 最小示例仍显式列出 RTC 端口；域名/代理/NAT 拓扑无法确定可达媒体 IP 时要求明确填写，不以 Docker 网卡地址冒充。HTTP 页面/API/录像/信令可共用 HTTPS，WebRTC 媒体使用独立 RTC 端口；M0 保留 M0_RTC_PORT，不复用正式变量名。参数及完整示例见 PRD 第 14.4 节，当前尚未实现正式启动模板。
+正式部署参数包含 `ONE_NVR_RTC_PORT`（整数 1–65535，默认 8000），与所选 HTTP/HTTPS Web 入口端口独立。部署工具将它同时写入 ZLM `rtc.port` / `rtc.tcpPort`、对外协商端口和同号 Docker UDP/TCP 映射；因两者均使用 TCP，拒绝与当前活动 Web 入口端口相同的配置。改端口须同步生成配置和映射；NAT 外部端口保持一致，浏览器连通性实际验证，媒体网络变更按 ZLM 维护流程记录中断。
+
+`ONE_NVR_MEDIA_HOST` 为可选媒体 IP 覆盖项。PUBLIC_URL 主机为明确 IPv4/IPv6 的直连部署时默认沿用其 IP，正式 .env 最小示例仍显式列出 RTC 端口；域名/代理/NAT 拓扑无法确定可达媒体 IP 时要求明确填写，不以 Docker 网卡地址冒充。页面/API/录像/信令共用所选 HTTP/HTTPS 入口，WebRTC 媒体使用独立 RTC 端口；M0 保留 M0_RTC_PORT，不复用正式变量名。参数及完整示例见 PRD 第 14.4 节，当前尚未实现正式启动模板。
 
 全部工具提供 Docker 执行方式，宿主无需 Go、Node、Python。Go 多阶段镜像构建 API/Worker/admin，前端独立构建后由 gateway 交付；已有 `python:3.12-slim` 继续用于 M0，不强制正式 Go 服务依赖 Python。初始化工具生成一次性 setup token、数据库/上游/加密 secret 文件，重复执行不覆盖；`.env` 非敏感配置和源镜像准备/软件包镜像选择有清晰离线说明。
 
@@ -226,7 +231,7 @@ Frigate CPU/Intel 档案保留 M0 契约和独立数据目录；正式业务智�
 
 按依赖顺序拆成三个可部署增量，分别形成实施计划；共同遵守本文 ID、授权、数据和任务契约：
 
-1. **M1-A 基础面板**：引入真实上游前端、Go API/Worker/admin、PostgreSQL/迁移、Docker 工具链、初始化/账号授权、固定槽位、模块开关/能力接口、目录池登记与分项验证。真实数据替代所有演示内容。
+1. **M1-A 基础面板**：引入真实上游前端、Go API/Worker/admin、PostgreSQL/迁移、Docker 工具链、初始化/账号授权、固定槽位、模块开关/能力接口、目录池登记与分项验证、HTTP/HTTPS 入口与证书管理/网关控制。真实数据替代所有演示内容。
 2. **M1-B 通道接入**：加密凭据、结构化草稿/测试、源切换与回滚、批量导入/明文配置导出、ZLM 连续录制与最小索引，完成源归属、池改绑和重启对账。
 3. **M1-C 实时与验收**：受授权 WebRTC、1/4/9/16 分屏、视图保存、分项状态、历史单段 Range 回放、SSE、权限撤销、部署说明与真机验收。
 
@@ -240,7 +245,8 @@ Frigate CPU/Intel 档案保留 M0 契约和独立数据目录；正式业务智�
 - 目录穿越/符号链接/嵌套/共享容量/业务标识异常，API 可写而 ZLM 不可写，低空间阻断只影响相关池。
 - 浏览器登录恢复、明文离页清除、真实查询/空/错误状态、页面隐藏释放连接、旧响应不覆盖新选中通道。
 - 初始化与设置时区列表选择、权限/无效标识/版本冲突及保存后恢复；上海/东京转换改变显示和新文件日期时间，不改历史 UTC/路径或冻结任务，不重启录制；文件详情保留命名时区。
-- RTC 默认/自定义端口在 ZLM/协商/Compose 中一致；非法端口、HTTPS 冲突、媒体地址无法推导有明确拒绝，IP 直连默认与显式覆盖可用，实际浏览器验证媒体连通；不以 HTTPS 正常代替 RTC 通过。
+- RTC 默认/自定义端口在 ZLM/协商/Compose 中一致；非法端口、活动 Web 入口冲突、媒体地址无法推导有明确拒绝，IP 直连默认与显式覆盖可用，实际浏览器验证媒体连通；不以 Web 入口正常代替 RTC 通过。
+- HTTP/HTTPS 登录/Cookie/CSRF、端口选择、HTTP 远端接收浏览器兼容和安全上下文能力提示；证书 key/链/SAN/有效期/文件限额、应用故障/回滚/崩溃恢复，新 TLS 实际指纹和两路录像连续生成核验，私钥与控制目录不公开。
 - 模块 no/no、yes/no、no/yes、yes/yes 的服务选择/健康检查和未实现状态；模块缺失镜像/设备不影响基础部署，能力接口与页面/直接 API 一致。开→关再次 deploy 不遗留可选进程、不重建核心或删卷；模拟已启用服务宕机必须呈现异常，云任务暂停/恢复保持保全约束和原到期。自带 OpenList 容器重建保留配置，服务状态与各目标能力分别探测；故障自带目标与健康外部 WebDAV 并存时，后者仍可添加/测试/运行，不被全局置灰。
 - 后续事件阶段验收：无常规录像且事件录像关闭时仍检测/保存截图/时间记录，无事件视频或为事件服务的预录分片；已有常规录像不受开关影响，事件/换源/重启不复位开关，必要检测缓冲单独验证。
 
@@ -252,6 +258,7 @@ Frigate CPU/Intel 档案保留 M0 契约和独立数据目录；正式业务智�
 - [上游 package.json](https://github.com/satnaing/shadcn-admin/blob/main/package.json)、[认证 store](https://github.com/satnaing/shadcn-admin/blob/main/src/stores/auth-store.ts)：需要替换的演示依赖与登录持久方式，不能默认视为 one-nvr 生产认证。
 - [ZLM REST API](https://docs.zlmediakit.com/guide/media_server/restful_api.html)、[Web Hook](https://docs.zlmediakit.com/guide/media_server/web_hook_api.html)：集成原语；实际固定镜像契约测试是放行依据。
 - [Go 发行与支持规则](https://go.dev/doc/devel/release)、[PostgreSQL 支持规则](https://www.postgresql.org/support/versioning/)：具体镜像/补丁/digest 已见镜像版本基线，正式兼容性仍须验收。
+- [Nginx reload](https://nginx.org/en/docs/control.html)、[HTTPS 证书链](https://nginx.org/en/docs/http/configuring_https_servers.html)：自带网关应用原语；实际指纹与录像连续性需实测。
 - [Docker Compose profiles](https://docs.docker.com/compose/how-tos/profiles/)：服务选择原语；显式指定服务可自动启用其 profile，关闭模块须由部署脚本和业务能力检查共同约束。
 - [OpenList Docker 部署](https://doc.oplist.org/guide/installation/docker)：固定镜像、运行用户/目录权限与独立数据持久化按实际版本验证。
 
