@@ -96,7 +96,7 @@ optional_failed=no
 if [[ " ${services[*]} " == *' frigate '* ]]; then
  # Hash the existing authentication file once; no password is exposed as a command argument.
  mqtt_image=$(docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/image-mqtt)
- docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/work" --entrypoint sh "$mqtt_image" -ec 'if ! grep -q "^one_nvr:\$" /work/mqtt.passwd; then mosquitto_passwd -U /work/mqtt.passwd; fi; chown 1883:1883 /work/mqtt.passwd; chmod 600 /work/mqtt.passwd'
+ docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/work" --mount "type=bind,source=$PWD/deploy/production/hash-mqtt.sh,target=/hash-mqtt.sh,readonly" --entrypoint sh "$mqtt_image" -ec 'sh /hash-mqtt.sh /work/mqtt.passwd; chown 1883:1883 /work/mqtt.passwd; chmod 600 /work/mqtt.passwd'
  if ! ./deploy/production/probe-hardware.sh "$admin_image" "$data" "$tmp/compose.json" "$project"; then optional_failed=yes; printf 'Intelligence hardware validation failed; core remains available.\n' >&2
  else
   docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/hardware.compose.json > "$tmp/hardware.compose.json"

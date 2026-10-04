@@ -125,6 +125,11 @@ jobs:
           docker build -f deploy/production/Dockerfile.gateway -t one-nvr/gateway:m1a .
       - name: Actual production core and repeat deployment
         run: ./deploy/production/test-deployment.sh
+      - name: Actual Mosquitto password conversion remains idempotent
+        run: |
+          image=eclipse-mosquitto:2.0.22@sha256:199ea8ef2e35ec2b1b37e59cfd1dbae538ed4dfa4a2251a121a52215a6248a21
+          docker run --rm --network none --user 0:0 --tmpfs /work --mount "type=bind,source=$PWD/deploy/production/hash-mqtt.sh,target=/hash-mqtt.sh,readonly" --entrypoint sh "$image" -ec 'printf "one_nvr:isolated-test-only\n" > /work/passwords; sh /hash-mqtt.sh /work/passwords; before=$(sha256sum /work/passwords); sh /hash-mqtt.sh /work/passwords; after=$(sha256sum /work/passwords); test "$before" = "$after"; printf "Mosquitto actual repeated hash conversion PASS\n"'
+
   hardware-cpu-runtime:
     needs: [backend]
     runs-on: ubuntu-24.04

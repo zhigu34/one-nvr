@@ -1,3 +1,4 @@
+import { writeFileSync } from 'node:fs'
 import { expect, test, type Page } from '../../apps/web/tests/playwright'
 
 const password = 'Browser-test-only-2026!'
@@ -26,6 +27,17 @@ test('setupPersistsAfterReload', async ({ page }) => {
   await expect(page.getByTestId('channel-row')).toHaveCount(16)
   await expect(page.getByText('未配置摄像头').first()).toBeVisible()
   expect(await page.evaluate(() => Object.keys(localStorage).filter(k => /auth|token|session/i.test(k)))).toEqual([])
+})
+
+test('administratorNamesPermanentSlot', async ({page}) => {
+  await login(page)
+  await page.goto('/channels')
+  const row=page.getByTestId('channel-row').first()
+  await row.getByLabel('通道名称').fill('大门验证槽位')
+  await row.getByRole('button',{name:'保存名称',exact:true}).click()
+  await expect(row.getByText('名称已保存')).toBeVisible()
+  await page.reload()
+  await expect(page.getByTestId('channel-row').first().getByLabel('通道名称')).toHaveValue('大门验证槽位')
 })
 
 test('viewerCannotConfigureChannel', async ({ page }) => {
@@ -133,4 +145,10 @@ test('passwordChangeRevokesOldSession', async ({page}) => {
   await page.getByRole('button',{name:'保存新密码',exact:true}).click()
   await expect(page).toHaveURL(/sign-in/)
   await login(page,'admin','Browser-new-only-2026!')
+  const state=await page.evaluate(async()=>{
+    const get=async(path:string)=>fetch('/api/v1/'+path).then(r=>r.json()).then(r=>r.data)
+    const site=await get('site'),channels=await get('channels'),pools=await get('storage-pools')
+    return {site_id:site.id,channels:channels.items.map((x:{id:string;channel_name:string})=>({id:x.id,channel_name:x.channel_name})),pool_ids:pools.items.map((x:{id:string})=>x.id)}
+  })
+  if(process.env.ONE_NVR_E2E_STATE_FILE) writeFileSync(process.env.ONE_NVR_E2E_STATE_FILE,JSON.stringify(state),{mode:0o600})
 })

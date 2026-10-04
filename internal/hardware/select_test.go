@@ -44,4 +44,9 @@ func TestGPUInferenceIndependentOfDecoding(t *testing.T) {
 		t.Fatal("independent inference result ignored")
 	}
 }
-func TestExplicitCPUWithUnknownGPUInventory(t *testing.T){p,e:=Select(Inventory{},Validation{"cpu":{Decode:true,Inference:true}},"epyc-cpu",nil);if e!=nil||p.ID!="cpu"{t.Fatal("explicit validated CPU requires no GPU inventory")}}
+func TestExplicitCPUWithUnknownGPUInventory(t *testing.T) {
+	p, e := Select(Inventory{}, Validation{"cpu": {Decode: true, Inference: true}}, "epyc-cpu", nil)
+	if e != nil || p.ID != "cpu" {
+		t.Fatal("explicit validated CPU requires no GPU inventory")
+	}
+}

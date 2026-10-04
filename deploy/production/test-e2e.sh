@@ -14,8 +14,17 @@ elif [[ $# != 1 ]]; then exit 2; fi
 "${compose[@]}" run --rm permissions
 "${compose[@]}" run --rm runner go test -tags gateway_runtime ./tests/integration -run '^TestGatewayTLSRuntimeE2EInit$' -count=1 -v
 "${compose[@]}" up -d api worker gateway
-for ((attempt=0; attempt<60; attempt++)); do
- if "${compose[@]}" exec -T gateway wget -q -O /dev/null http://127.0.0.1/api/v1/setup/status; then break; fi
- sleep 1
-done
+wait_entry() {
+ for ((attempt=0; attempt<60; attempt++)); do
+  if "${compose[@]}" exec -T gateway wget -q -O /dev/null http://127.0.0.1/api/v1/setup/status; then return; fi
+  sleep 1
+ done
+ printf 'Isolated browser API did not become ready.\n' >&2
+ return 1
+}
+wait_entry
 "${compose[@]}" run --rm browser
+# Recreate actual processes while preserving only this fixture's DB/private volumes.
+"${compose[@]}" up -d --no-deps --force-recreate api worker gateway
+wait_entry
+"${compose[@]}" run --rm -e ONE_NVR_E2E_PHASE=restart browser
