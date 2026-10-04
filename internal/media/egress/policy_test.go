@@ -10,10 +10,13 @@ func TestMediaEgressRejectsRedirectAndOverlappingNetworks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, ip := range []string{"192.168.33.200", "172.19.0.2", "172.19.0.3", "169.254.169.254", "127.0.0.1", "224.0.0.1", "192.168.44.20"} {
+	for _, ip := range []string{"192.168.33.200", "172.19.0.2", "172.19.0.3", "169.254.169.254", "127.0.0.1", "127.0.0.11", "224.0.0.1", "192.168.44.20"} {
 		if p.Allows(netip.MustParseAddr(ip), 554, false) {
 			t.Fatal("redirect outside boundary allowed", ip)
 		}
+	}
+	if !p.Allows(netip.MustParseAddr("127.0.0.11"), 53, false) {
+		t.Fatal("embedded DNS blocked")
 	}
 	if !p.Allows(netip.MustParseAddr("192.168.33.20"), 554, false) || !p.Allows(netip.MustParseAddr("172.19.0.3"), 8083, false) {
 		t.Fatal("camera or hook blocked")

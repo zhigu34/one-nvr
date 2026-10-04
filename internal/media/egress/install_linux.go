@@ -56,7 +56,15 @@ func Install(p Policy) error {
 	add([]expr.Any{&expr.Ct{Key: expr.CtKeySTATE, Register: 1}, &expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4, Mask: state, Xor: make([]byte, 4)}, &expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: make([]byte, 4)}}, expr.VerdictAccept)
 	for _, protocol := range []byte{unix.IPPROTO_TCP, unix.IPPROTO_UDP} {
 		expressions := addressMatch(netip.MustParsePrefix("127.0.0.11/32"))
-		expressions = append(expressions, destinationPort(protocol, 53)...)
+		// Docker DNATs its embedded resolver to an ephemeral listener port
+		// before this filter chain. Match the original destination port,
+		// never allow arbitrary new connections to the loopback address.
+		expressions = append(expressions,
+			&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{protocol}},
+			&expr.Ct{Key: expr.CtKeyPROTODST, Register: 1, Direction: 0},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{0, 53}},
+		)
 		add(expressions, expr.VerdictAccept)
 	}
 	for _, ip := range p.HookIPs {
