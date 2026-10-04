@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/zhigu34/one-nvr/internal/media/probe"
@@ -37,6 +38,12 @@ func run() error {
 	}
 	if os.Args[1] == "fixture" {
 		return fixture()
+	}
+	if os.Args[1] == "prepare-probe" {
+		return preparePoolProbe()
+	}
+	if os.Args[1] == "probe" {
+		return poolProbeAcceptance()
 	}
 	if os.Args[1] == "contract" {
 		return contract()
@@ -216,6 +223,16 @@ func contract() error {
 		f, err := os.Open(c.Path)
 		if err != nil {
 			return fmt.Errorf("native completed file unreadable")
+		}
+		info, statErr := f.Stat()
+		if statErr != nil {
+			f.Close()
+			return fmt.Errorf("completed file identity unavailable")
+		}
+		owner, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || owner.Uid != 10001 {
+			f.Close()
+			return fmt.Errorf("completed media is not owned by Worker UID")
 		}
 		verified, err := runner.InspectMP4(ctx, f)
 		f.Close()

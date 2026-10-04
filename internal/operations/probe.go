@@ -133,6 +133,7 @@ func ProbeMQTT(ctx context.Context, address, username, password string) error {
 type Prober struct {
 	Operations                              *Service
 	Targets                                 map[string]ProbeTarget
+	Checks                                  map[string]func(context.Context) error
 	Client                                  *http.Client
 	MQTTAddress, MQTTUsername, MQTTPassword string
 }
@@ -161,6 +162,11 @@ func (p *Prober) Sample(ctx context.Context) {
 			continue
 		}
 		observe(name, func(ctx context.Context) error { return ProbeHTTP(ctx, target, p.Client) })
+	}
+	for name, check := range p.Checks {
+		if p.Operations.Enabled(name) {
+			observe(name, check)
+		}
 	}
 	if p.Operations.FrigateEnabled {
 		observe("mqtt", func(ctx context.Context) error { return ProbeMQTT(ctx, p.MQTTAddress, p.MQTTUsername, p.MQTTPassword) })

@@ -125,11 +125,11 @@
 
 **Interfaces:** `zlm.New(baseURL,secret string,client *http.Client) (*Client,error)`；`Client.AddProxy(ctx,ProxyInput) (ProxyRef,error)`、`RemoveProxy(ctx,ProxyRef) error`、`Inspect(ctx,StreamKey) (StreamSnapshot,error)`、`StartRecord(ctx,StreamKey,workDir string,maxSeconds int) error`、`StopRecord(ctx,StreamKey) error`。`probe.Runner.FirstFrame(ctx,internalURL string) (VideoEvidence,error)`、`InspectMP4(ctx,file *os.File) (FileEvidence,error)`；Evidence 仅 typed 轨道/时间/尺寸/结果。
 
-- [ ] **Step 1:** 写 `TestZLMRejectsFalseSuccessAndCredentialEcho`：HTTP200但code非0、result=false、过大/坏JSON、回显URL的msg都不能成功/泄密；禁止redirect，10秒超时。`TestProbeBoundedAndInternalOnly`：只允许持久映射生成的 ZLM 内部流，不接摄像头URL/任意命令/外部地址；子进程超时后确实结束且输出≤1MiB。
-- [ ] **Step 2:** 运行对应 Go 包测试确认红灯；在 CI 加固定镜像真实媒体 job，先运行 `test-media.sh --contract`，缺探测工具/操作应失败，不能用模拟HTTP替代该门槛。
-- [ ] **Step 3:** POST form 调用固定 API，管理 secret 不进入URL/log/公共DTO；拉流 `enable_mp4=0/enable_hls=0`，测试不自动录制，禁用透明无限重连，由业务对账建立新 generation。首帧用 FFmpeg 只解码一帧、固定参数/超时，无输出录像；MP4 结构用 ffprobe FD/受限路径。将 Bookworm 的 ffmpeg/ffprobe 及运行依赖从可验证 Debian snapshot 固定包版本/哈希至 media-packages.lock，安装源可配置但不得关闭签名/TLS或浮动升级，CI 记录实际版本。
-- [ ] **Step 4:** 在独立 test Compose 用另一固定 digest ZLM 充当摄像头 RTSP 服务，生成两路主/子H.264虚构样本，fixture 服务只在测试 profile 存在。实际检查拉流/首帧、开始/停止/状态、60秒与尾片、customized_path实际追加层级、完成Hook字段/路径、无人观看仍取流、重定向约束、敏感日志输出。保存脱敏契约证据；不匹配时修订适配器并保持 gate失败，不能按当前在线文档猜固定镜像行为。
-- [ ] **Step 5:** 单元及实际CI通过后提交 `feat: verify pinned ZLM media and bounded probes`；运行时常驻仍5/7/6/8，无新增录像容器。
+- [x] **Step 1:** 写 `TestZLMRejectsFalseSuccessAndCredentialEcho`：HTTP200但code非0、result=false、过大/坏JSON、回显URL的msg都不能成功/泄密；禁止redirect，10秒超时。`TestProbeBoundedAndInternalOnly`：只允许持久映射生成的 ZLM 内部流，不接摄像头URL/任意命令/外部地址；子进程超时后确实结束且输出≤1MiB。
+- [x] **Step 2:** 运行对应 Go 包测试确认红灯；在 CI 加固定镜像真实媒体 job，先运行 `test-media.sh --contract`，缺探测工具/操作应失败，不能用模拟HTTP替代该门槛。
+- [x] **Step 3:** POST form 调用固定 API，管理 secret 不进入URL/log/公共DTO；拉流 `enable_mp4=0/enable_hls=0`，测试不自动录制，禁用透明无限重连，由业务对账建立新 generation。首帧用 FFmpeg 只解码一帧、固定参数/超时，无输出录像；MP4 结构用 ffprobe FD/受限路径。将 Bookworm 的 ffmpeg/ffprobe 及运行依赖从可验证 Debian snapshot 固定包版本/哈希至 media-packages.lock，安装源可配置但不得关闭签名/TLS或浮动升级，CI 记录实际版本。
+- [x] **Step 4:** 在独立 test Compose 用另一固定 digest ZLM 充当摄像头 RTSP 服务，生成两路主/子H.264虚构样本，fixture 服务只在测试 profile 存在。实际检查拉流/首帧、开始/停止/状态、60秒与尾片、customized_path实际追加层级、完成Hook字段/路径、无人观看仍取流、重定向约束、敏感日志输出。保存脱敏契约证据；不匹配时修订适配器并保持 gate失败，不能按当前在线文档猜固定镜像行为。
+- [x] **Step 5:** 单元及实际CI通过后提交 `feat: verify pinned ZLM media and bounded probes`；运行时常驻仍5/7/6/8，无新增录像容器。
 
 ## Task 4: 持久 Hook 收件箱和 ZLM 池写入验证
 

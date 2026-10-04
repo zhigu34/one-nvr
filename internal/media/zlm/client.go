@@ -7,17 +7,17 @@ import (
 	"errors"
 	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/id"
-	"github.com/zhigu34/one-nvr/internal/operations"
 	"net/http"
+	"net/url"
+	"time"
 )
 
 var ErrTestSourceRequired = errors.New("ZLM write probe requires a real test source")
 
 type Client struct {
-	Client    *http.Client
-	HealthURL string
-	baseURL   string
-	secret    string
+	Client  *http.Client
+	baseURL string
+	secret  string
 }
 
 func (*Client) String() string { return "<private media client redacted>" }
@@ -27,12 +27,20 @@ type ProbeInput struct {
 	TemporaryStreamID id.ID
 }
 type WriteEvidence struct {
-	PoolID      id.ID
-	RecordingID id.ID
+	PoolID        id.ID
+	RecordingID   id.ID
+	FilePath      string
+	Size          int64
+	Duration      time.Duration
+	VideoVerified bool
+	ObservedAt    time.Time
 }
 
 func (c *Client) Health(ctx context.Context) error {
-	return operations.ProbeHTTP(ctx, operations.ProbeTarget{URL: c.HealthURL, Kind: "zlm"}, c.Client)
+	var out struct {
+		Code int `json:"code"`
+	}
+	return c.call(ctx, "getThreadsLoad", url.Values{}, &out)
 }
 func (c *Client) ProbeWrite(ctx context.Context, in ProbeInput) (WriteEvidence, error) {
 	if err := ctx.Err(); err != nil {

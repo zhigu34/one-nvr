@@ -11,7 +11,10 @@ import (
 	"github.com/zhigu34/one-nvr/internal/config"
 	"github.com/zhigu34/one-nvr/internal/database"
 	"github.com/zhigu34/one-nvr/internal/httpapi"
+	"github.com/zhigu34/one-nvr/internal/media/probe"
+	"github.com/zhigu34/one-nvr/internal/media/zlm"
 	"github.com/zhigu34/one-nvr/internal/operations"
+	"github.com/zhigu34/one-nvr/internal/recording"
 	"github.com/zhigu34/one-nvr/internal/secrets"
 	"github.com/zhigu34/one-nvr/internal/site"
 	"github.com/zhigu34/one-nvr/internal/storage"
@@ -66,6 +69,53 @@ func Run(name string) error {
 	defer func() { stop(); background.Wait() }()
 	background.Add(1)
 	go func() { defer background.Done(); pools.Monitor(ctx, name) }()
+	var media *zlm.Client
+	var hooksDone <-chan error
+	if name == "worker" {
+		apiKey, err := secret.ComponentCredential("zlm")
+		if err != nil {
+			return err
+		}
+		media, err = zlm.New("http://zlm", apiKey, nil)
+		if err != nil {
+			return err
+		}
+		hookKey, err := secret.ComponentCredential("recording-hook")
+		if err != nil {
+			return err
+		}
+		probeKey, err := secret.ComponentCredential("media-probe")
+		if err != nil {
+			return err
+		}
+		mediaProbe := probe.Runner{FFmpeg: "/usr/bin/ffmpeg", FFprobe: "/usr/bin/ffprobe"}
+		recordings := recording.New(db, media, mediaProbe, []string{"/storage"}, c.DataDir)
+		baseNetwork, err := channel.ParseNetworkPolicy(c.CameraCIDRs, nil)
+		if err != nil {
+			return err
+		}
+		recordings.Sources = channel.NewSources(db, nil, secret, baseNetwork)
+		recordings.FreshNetwork = func(ctx context.Context) (channel.NetworkPolicy, error) { return freshCameraNetwork(ctx, c) }
+		recordings.ProbeToken = probeKey
+		pools.MediaCheck = recordings.CheckPool
+		pools.MediaInspector = mediaProbe
+		listener, err := net.Listen("tcp", ":8083")
+		if err != nil {
+			return fmt.Errorf("private media hook listener unavailable")
+		}
+		hookServer := &http.Server{Handler: recording.NewHookHandler(recordings, hookKey, probeKey), ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second, IdleTimeout: 15 * time.Second, MaxHeaderBytes: 8 << 10}
+		completed := make(chan error, 1)
+		hooksDone = completed
+		go func() { completed <- hookServer.Serve(listener) }()
+		defer func() {
+			stop()
+			shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			hookServer.Shutdown(shutdown)
+		}()
+		background.Add(1)
+		go func() { defer background.Done(); recordings.Replay(ctx) }()
+	}
 	if name == "worker" {
 		background.Add(1)
 		go func() { defer background.Done(); pools.RunJobs(ctx) }()
@@ -127,14 +177,9 @@ func Run(name string) error {
 		handler = httpapi.NewHandler(httpapi.Dependencies{Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, Sources: sources, PublicURL: c.PublicURL, TrustedProxyToken: proxyKey, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled})
 	}
 	if name == "worker" {
-		zlmKey, err := secret.ComponentCredential("zlm")
-		if err != nil {
-			return err
-		}
-		prober := &operations.Prober{Operations: operations.New(db, nil, c.FrigateEnabled, c.OpenListEnabled), Client: operations.NewProbeClient(), Targets: map[string]operations.ProbeTarget{
+		prober := &operations.Prober{Checks: map[string]func(context.Context) error{"zlm": media.Health}, Operations: operations.New(db, nil, c.FrigateEnabled, c.OpenListEnabled), Client: operations.NewProbeClient(), Targets: map[string]operations.ProbeTarget{
 			"gateway": {URL: "http://gateway/health", Kind: "health"},
 			"api":     {URL: "http://api:8081/health/ready", Kind: "health"},
-			"zlm":     {URL: "http://zlm/index/api/getThreadsLoad?secret=" + zlmKey, Kind: "zlm"},
 		}}
 		if c.FrigateEnabled {
 			mqttKey, err := secret.ComponentCredential("mqtt")
@@ -162,9 +207,42 @@ func Run(name string) error {
 		if !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
+	case err := <-hooksDone:
+		if !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("private media hook listener stopped")
+		}
 	case <-ctx.Done():
 	}
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return server.Shutdown(shutdown)
+}
+
+func freshCameraNetwork(ctx context.Context, c config.Config) (channel.NetworkPolicy, error) {
+	bounded, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	denied := []netip.Addr{}
+	public, _ := url.Parse(c.PublicURL)
+	for _, host := range []string{public.Hostname(), c.MediaHost} {
+		if ip, err := netip.ParseAddr(host); err == nil {
+			denied = append(denied, ip)
+		}
+	}
+	hosts := []string{"api", "worker", "gateway", "postgres", "zlm"}
+	if c.FrigateEnabled {
+		hosts = append(hosts, "frigate", "mqtt")
+	}
+	if c.OpenListEnabled {
+		hosts = append(hosts, "openlist")
+	}
+	for _, host := range hosts {
+		ips, err := net.DefaultResolver.LookupNetIP(bounded, "ip", host)
+		if err != nil {
+			return channel.NetworkPolicy{}, fmt.Errorf("camera network boundary unavailable")
+		}
+		for _, ip := range ips {
+			denied = append(denied, ip.Unmap())
+		}
+	}
+	return channel.ParseNetworkPolicy(c.CameraCIDRs, denied)
 }

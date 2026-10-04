@@ -44,13 +44,15 @@ type UpdateInput struct {
 	IsDefault *bool   `json:"is_default"`
 }
 type Service struct {
-	DB    *database.DB
-	Auth  *auth.Service
-	Roots []string
+	DB             *database.DB
+	Auth           *auth.Service
+	Roots          []string
+	MediaInspector MediaInspector
+	MediaCheck     func(context.Context, id.ID) error
 }
 
 func New(db *database.DB, a *auth.Service, roots []string) *Service {
-	return &Service{db, a, append([]string(nil), roots...)}
+	return &Service{DB: db, Auth: a, Roots: append([]string(nil), roots...)}
 }
 
 const poolColumns = "id,site_id,name,canonical_path,enabled,is_default,version"
