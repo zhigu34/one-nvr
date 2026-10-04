@@ -211,16 +211,18 @@ func TestGatewayTLSRuntimeLifecycle(t *testing.T) {
 		t.Fatal("gateway HTTPS setup unavailable")
 	}
 	var status struct {
-		CSRF string `json:"csrf_token"`
+		Data struct {
+			CSRF string `json:"csrf_token"`
+		} `json:"data"`
 	}
 	err = json.NewDecoder(response.Body).Decode(&status)
 	response.Body.Close()
-	if err != nil || status.CSRF == "" {
+	if err != nil || status.Data.CSRF == "" {
 		t.Fatal("pre-auth handshake missing")
 	}
 	request, _ := http.NewRequest("POST", "https://gateway/api/v1/auth/login", strings.NewReader(fmt.Sprintf(`{"username":"runtime_admin","password":%q}`, runtimePassword)))
 	request.Header.Set("Origin", "https://127.0.0.1")
-	request.Header.Set("X-CSRF-Token", status.CSRF)
+	request.Header.Set("X-CSRF-Token", status.Data.CSRF)
 	request.Header.Set("Content-Type", "application/json")
 	response, err = client.Do(request)
 	if err != nil {
