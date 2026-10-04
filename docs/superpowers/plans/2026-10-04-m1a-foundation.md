@@ -10,7 +10,7 @@
 
 **Spec:** [M1 控制面设计](../specs/2026-10-03-m1-control-plane-design.md)、[PRD v0.28](../../PRD.md)、[访问与证书 v2](../../web-access-tls.md)、[镜像版本基线](../../image-versions.md)、[部署硬件自动探测](../../hardware-auto-detection.md)。
 
-**Status:** 2026-10-04 用户要求继续，按推荐方式在当前仓库的 `codex/m1a-foundation` 分支顺序执行。Task 1–3 已实现并通过 GitHub Docker CI，Task 4 已实现并准备全量复核；当前通过项与未运行的容器检查见 `docs/M1-A-validation.md`，未勾选步骤不作为功能通过记录。
+**Status:** 2026-10-04 用户要求继续，按推荐方式在当前仓库的 `codex/m1a-foundation` 分支顺序执行。Task 1–4 已实现并通过 GitHub Docker CI，Task 5 已实现并通过本机真实数据库回归，Task 6–9 继续执行；当前通过项与未运行的容器检查见 `docs/M1-A-validation.md`，未勾选步骤不作为功能通过记录。
 
 ## Global Constraints
 
@@ -108,7 +108,7 @@
 - [x] **Step 2:** 运行 `dev.sh test-db ./tests/integration -run 'Expansion|Timezone|Capabilities'`，确认失败。
 - [x] **Step 3:** 实现 sites/channels CRUD 与受控扩容、IANA 支持列表（含中文标签/当前时间预览，嵌入Go时区数据），统一 If-Match/脱敏审计；M1-A 不接受摄像头 URL、修改录像策略或池改绑副作用，这些属于 M1-B。
 - [x] **Step 4:** Worker 经私有服务名/真实 HTTP 状态采样 PostgreSQL/ZLM/gateway 与已启用的 Frigate/OpenList，MQTT 经认证协议连接验证；API/Worker 通过自身 readiness/持久心跳暴露真实状态。初始化无摄像头不阻塞核心就绪；每个观察带时间/过期，失联为unknown/unavailable。实现 capabilities、operations/components、jobs/:id、分页 audit-logs。未来智能/归档动作直接501，关闭409，依赖异常503，模块未启用不离线告警。
-- [ ] **Step 5:** 加 `TestObservationExpiresAndOptionalDoesNotFailCore` 和 `TestAuditVisibility`，验证旧正常观测过期、普通用户不能看站点敏感诊断；重跑 Task 4 测试并提交 `feat: expose stable channels timezone and real capability states`。
+- [x] **Step 5:** 加 `TestObservationExpiresAndOptionalDoesNotFailCore` 和 `TestAuditVisibility`，验证旧正常观测过期、普通用户不能看站点敏感诊断；重跑 Task 4 测试并提交 `feat: expose stable channels timezone and real capability states`。
 
 ## Task 5: 目录池登记与分服务探测
 
@@ -116,11 +116,11 @@
 
 **Interfaces:** Produces `storage.Service.Register(ctx,Principal,RegisterInput) (Pool,error)`、`Update(ctx,Principal,ID,expected int64,Update) (Pool,error)`、`RequestCheck(ctx,Principal,ID) (id.ID,error)`；`storage.Probe.Check(ctx,Pool) (Check,error)` 输出 API/Worker/ZLM 独立结果。`zlm.Client.Health(ctx) error` 与 `zlm.Client.ProbeWrite(ctx,ProbeInput) (WriteEvidence,error)` 是受限适配；ProbeInput 引用已登记池/临时流，不接受请求任意路径或 secret。
 
-- [ ] **Step 1:** 写 `TestPoolRootAndNestedConcurrency`、`TestMarkerNotRecreated`、`TestAPISuccessDoesNotImplyZLMWritable`：拒绝根外/符号链接逃逸/重复嵌套；无标识但已有保留目录拒绝自动接管，旧标识失联不补建；API可写但Worker失败或ZLM待验证不能 ready。
-- [ ] **Step 2:** 运行 `dev.sh test-go ./internal/storage` 和 `dev.sh test-db ./tests/integration -run Pool`，确认失败。
-- [ ] **Step 3:** 实现既有目录规范路径、根约束访问、.one-nvr.json 身份与事务级路径冲突锁，探测只用专用 .work/probes 文件；接口 storage-pools 的登记/默认/启停/无引用空池删除、test。不创建不存在的池根，不改已有媒体池路径，不扫描底层NAS/RAID。
-- [ ] **Step 4:** API/Worker各自独立读写/删/空间检查，Worker调度分项结果，ZLM无临时测试源记录 pending；保留 ProbeWrite 契约并在M1-B源测试时闭环，不能用Worker写文件冒充ZLM写入。10秒检查/30秒过期，statfs文件系统身份合并共享容量，池业务占用独立展示；低空间显示阻断，M1-B连接录制阻断，M1-A不实现循环清理。
-- [ ] **Step 5:** 加 `TestConcurrentDefaultPoolUnique`、`TestSharedFilesystemCapacityNotDoubled`、`TestLostRootNotRecreated`，重跑路径/数据库检查，提交 `feat: register directory pools with honest service-level checks`。
+- [x] **Step 1:** 写 `TestPoolRootAndNestedConcurrency`、`TestMarkerNotRecreated`、`TestAPISuccessDoesNotImplyZLMWritable`：拒绝根外/符号链接逃逸/重复嵌套；无标识但已有保留目录拒绝自动接管，旧标识失联不补建；API可写但Worker失败或ZLM待验证不能 ready。
+- [x] **Step 2:** 运行 `dev.sh test-go ./internal/storage` 和 `dev.sh test-db ./tests/integration -run Pool`，确认失败。
+- [x] **Step 3:** 实现既有目录规范路径、根约束访问、.one-nvr.json 身份与事务级路径冲突锁，探测只用专用 .work/probes 文件；接口 storage-pools 的登记/默认/启停/无引用空池删除、test。不创建不存在的池根，不改已有媒体池路径，不扫描底层NAS/RAID。
+- [x] **Step 4:** API/Worker各自独立读写/删/空间检查，Worker调度分项结果，ZLM无临时测试源记录 pending；保留 ProbeWrite 契约并在M1-B源测试时闭环，不能用Worker写文件冒充ZLM写入。10秒检查/30秒过期，statfs文件系统身份合并共享容量，池业务占用独立展示；低空间显示阻断，M1-B连接录制阻断，M1-A不实现循环清理。
+- [x] **Step 5:** 加 `TestConcurrentDefaultPoolUnique`、`TestSharedFilesystemCapacityNotDoubled`、`TestLostRootNotRecreated`，重跑路径/数据库检查，提交 `feat: register directory pools with honest service-level checks`。
 
 ## Task 6: 手动与映射目录证书的版本、校验和监测
 
@@ -128,11 +128,11 @@
 
 **Interfaces:** Produces `tlsmanager.Validate(chain,key []byte,host string,now time.Time) (Metadata,error)`；Metadata 是公共 X.509 信息。`tlsmanager.Service.Import(ctx,Principal,chain,key []byte) (Version,error)`、`CheckDirectory(ctx) (CheckResult,error)`、`SetAutoApply(ctx,Principal,expected int64,enabled bool) error`、`RequestApply(ctx,Principal,ID,expected int64) (id.ID,error)`、`RequestRollback(ctx,Principal,expected int64) (id.ID,error)`。内部 FileRefs/幂等摘要不公开。
 
-- [ ] **Step 1:** 用测试CA/自签 fixture 写 `TestValidatePairSANValidityAndLimit`、`TestWatcherPartialReplacementAndSameMtime`：RSA/EC/PKCS1/PKCS8、IP/DNS SAN、自签/省略根链可用；错误密钥、顺序/用途/有效期、总量>1MiB拒绝；先换chain后换key保持旧版本，mtime不变但内容变化仍识别。
-- [ ] **Step 2:** 运行 `dev.sh test-go ./internal/tlsmanager`，确认缺失实现失败。
-- [ ] **Step 3:** 实现上述校验/受限 DATA_DIR/tls/versions 不可变快照，手动上传来源和私钥不回显/下载；HTTP只保存待用。目录模式固定文件/根内符号链接/实际可读约束，10秒重新读取内容，前后身份校验、至少2秒间隔的两次一致完整采样；异常30秒重试，相同错误聚合；内容一致不生成任务，同叶证书换链仍处理。第一份目录输入坏且无旧快照不生成自签替代。
-- [ ] **Step 4:** 持久化自动应用开关默认true，与版本/审计/任务同事务；目录模式上传拒绝，回滚请求同时暂停；DB失联不应用新版本，恢复检查最新文件。实现settings/tls及watch/check/import/apply/rollback端点，管理员授权/If-Match/有界上传/no-store，返回公共信息/待用状态。
-- [ ] **Step 5:** 加 `TestWatcherDuplicateAndChainOnlyChange`、`TestHTTPDirectoryPendingAndRollbackPauses`、`TestPrivateMaterialNeverSerialized`，分别运行单元与 `dev.sh test-db ./tests/integration -run TLS`；提交 `feat: manage validated certificate versions and external renewal input`。
+- [x] **Step 1:** 用测试CA/自签 fixture 写 `TestValidatePairSANValidityAndLimit`、`TestWatcherPartialReplacementAndSameMtime`：RSA/EC/PKCS1/PKCS8、IP/DNS SAN、自签/省略根链可用；错误密钥、顺序/用途/有效期、总量>1MiB拒绝；先换chain后换key保持旧版本，mtime不变但内容变化仍识别。
+- [x] **Step 2:** 运行 `dev.sh test-go ./internal/tlsmanager`，确认缺失实现失败。
+- [x] **Step 3:** 实现上述校验/受限 DATA_DIR/tls/versions 不可变快照，手动上传来源和私钥不回显/下载；HTTP只保存待用。目录模式固定文件/根内符号链接/实际可读约束，10秒重新读取内容，前后身份校验、至少2秒间隔的两次一致完整采样；异常30秒重试，相同错误聚合；内容一致不生成任务，同叶证书换链仍处理。第一份目录输入坏且无旧快照不生成自签替代。
+- [x] **Step 4:** 持久化自动应用开关默认true，与版本/审计/任务同事务；目录模式上传拒绝，回滚请求同时暂停；DB失联不应用新版本，恢复检查最新文件。实现settings/tls及watch/check/import/apply/rollback端点，管理员授权/If-Match/有界上传/no-store，返回公共信息/待用状态。
+- [x] **Step 5:** 加 `TestWatcherDuplicateAndChainOnlyChange`、`TestHTTPDirectoryPendingAndRollbackPauses`、`TestPrivateMaterialNeverSerialized`，分别运行单元与 `dev.sh test-db ./tests/integration -run TLS`；提交 `feat: manage validated certificate versions and external renewal input`。
 
 ## Task 7: gateway 内受限应用、指纹核验及恢复
 

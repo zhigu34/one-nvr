@@ -1578,7 +1578,7 @@
     "/api/v1/storage-pools": {
       "get": {
         "operationId": "listPools",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "security": [
           {
             "session": []
@@ -1602,15 +1602,23 @@
                           }
                         },
                         "next_cursor": {
-                          "type": [
-                            "string",
-                            "null"
+                          "anyOf": [
+                            {
+                              "$ref": "#/components/schemas/UUID"
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
+                        },
+                        "capacity": {
+                          "$ref": "#/components/schemas/StorageCapacity"
                         }
                       },
                       "required": [
                         "items",
-                        "next_cursor"
+                        "next_cursor",
+                        "capacity"
                       ],
                       "additionalProperties": false
                     },
@@ -1660,7 +1668,7 @@
       },
       "post": {
         "operationId": "registerPool",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "security": [
           {
             "session": []
@@ -1748,7 +1756,7 @@
     "/api/v1/storage-pools/{id}": {
       "patch": {
         "operationId": "updatePool",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "security": [
           {
             "session": []
@@ -1851,7 +1859,7 @@
       },
       "delete": {
         "operationId": "deletePool",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "security": [
           {
             "session": []
@@ -1936,7 +1944,7 @@
     "/api/v1/storage-pools/{id}/test": {
       "post": {
         "operationId": "checkPool",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "security": [
           {
             "session": []
@@ -1951,7 +1959,16 @@
                   "type": "object",
                   "properties": {
                     "data": {
-                      "$ref": "#/components/schemas/Job"
+                      "type": "object",
+                      "properties": {
+                        "job_id": {
+                          "$ref": "#/components/schemas/UUID"
+                        }
+                      },
+                      "required": [
+                        "job_id"
+                      ],
+                      "additionalProperties": false
                     },
                     "request_id": {
                       "$ref": "#/components/schemas/UUID"
@@ -2009,7 +2026,7 @@
     "/api/v1/settings/tls": {
       "get": {
         "operationId": "tls",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "security": [
           {
             "session": []
@@ -2055,7 +2072,7 @@
     "/api/v1/settings/tls/watch": {
       "patch": {
         "operationId": "tlsWatch",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "security": [
           {
             "session": []
@@ -2148,7 +2165,7 @@
     "/api/v1/settings/tls/check": {
       "post": {
         "operationId": "tlsCheck",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "security": [
           {
             "session": []
@@ -2163,7 +2180,16 @@
                   "type": "object",
                   "properties": {
                     "data": {
-                      "$ref": "#/components/schemas/Job"
+                      "type": "object",
+                      "properties": {
+                        "job_id": {
+                          "$ref": "#/components/schemas/UUID"
+                        }
+                      },
+                      "required": [
+                        "job_id"
+                      ],
+                      "additionalProperties": false
                     },
                     "request_id": {
                       "$ref": "#/components/schemas/UUID"
@@ -2213,7 +2239,7 @@
     "/api/v1/settings/tls/import": {
       "post": {
         "operationId": "tlsImport",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "security": [
           {
             "session": []
@@ -2305,7 +2331,7 @@
     "/api/v1/settings/tls/{id}/apply": {
       "post": {
         "operationId": "tlsApply",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "security": [
           {
             "session": []
@@ -2320,7 +2346,16 @@
                   "type": "object",
                   "properties": {
                     "data": {
-                      "$ref": "#/components/schemas/Job"
+                      "type": "object",
+                      "properties": {
+                        "job_id": {
+                          "$ref": "#/components/schemas/UUID"
+                        }
+                      },
+                      "required": [
+                        "job_id"
+                      ],
+                      "additionalProperties": false
                     },
                     "request_id": {
                       "$ref": "#/components/schemas/UUID"
@@ -2387,7 +2422,7 @@
     "/api/v1/settings/tls/rollback": {
       "post": {
         "operationId": "tlsRollback",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "security": [
           {
             "session": []
@@ -2402,7 +2437,16 @@
                   "type": "object",
                   "properties": {
                     "data": {
-                      "$ref": "#/components/schemas/Job"
+                      "type": "object",
+                      "properties": {
+                        "job_id": {
+                          "$ref": "#/components/schemas/UUID"
+                        }
+                      },
+                      "required": [
+                        "job_id"
+                      ],
+                      "additionalProperties": false
                     },
                     "request_id": {
                       "$ref": "#/components/schemas/UUID"
@@ -2933,6 +2977,24 @@
             "items": {
               "$ref": "#/components/schemas/PoolCheck"
             }
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "pending",
+              "unavailable",
+              "low_space",
+              "disabled"
+            ]
+          },
+          "used_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Indexed media usage; null until the media index is implemented."
           }
         },
         "required": [
@@ -2942,7 +3004,9 @@
           "enabled",
           "is_default",
           "version",
-          "checks"
+          "checks",
+          "state",
+          "used_bytes"
         ],
         "additionalProperties": false
       },
@@ -2975,12 +3039,30 @@
           },
           "reason": {
             "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "total_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "free_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "filesystem_id": {
+            "type": "string"
           }
         },
         "required": [
           "service",
           "state",
-          "reason"
+          "reason",
+          "total_bytes",
+          "free_bytes",
+          "filesystem_id"
         ],
         "additionalProperties": false
       },
@@ -3059,6 +3141,27 @@
           },
           "algorithm": {
             "type": "string"
+          },
+          "common_name": {
+            "type": "string"
+          },
+          "serial_number": {
+            "type": "string"
+          },
+          "key_bits": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "self_signed": {
+            "type": "boolean"
+          },
+          "chain_status": {
+            "type": "string",
+            "enum": [
+              "issuer_not_provided",
+              "provided_chain_verified",
+              "self_signed"
+            ]
           }
         },
         "required": [
@@ -3070,7 +3173,12 @@
           "not_before",
           "not_after",
           "leaf_sha256",
-          "algorithm"
+          "algorithm",
+          "common_name",
+          "serial_number",
+          "key_bits",
+          "self_signed",
+          "chain_status"
         ],
         "additionalProperties": false
       },
@@ -3118,6 +3226,64 @@
             "items": {
               "$ref": "#/components/schemas/Certificate"
             }
+          },
+          "desired_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "candidate_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "check_state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "stabilizing",
+              "valid",
+              "unavailable",
+              "manual"
+            ]
+          },
+          "check_reason": {
+            "type": "string"
+          },
+          "consecutive_errors": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "http",
+              "https"
+            ]
+          },
+          "last_check_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_apply_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -3125,7 +3291,18 @@
           "auto_apply",
           "state",
           "version",
-          "certificates"
+          "certificates",
+          "active_id",
+          "previous_id",
+          "desired_id",
+          "candidate_id",
+          "check_state",
+          "check_reason",
+          "consecutive_errors",
+          "protocol",
+          "last_check_at",
+          "last_apply_at",
+          "error_code"
         ],
         "additionalProperties": false
       },
@@ -3161,6 +3338,29 @@
           "id",
           "action",
           "created_at"
+        ],
+        "additionalProperties": false
+      },
+      "StorageCapacity": {
+        "type": "object",
+        "properties": {
+          "filesystem_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "free_bytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "filesystem_count",
+          "total_bytes",
+          "free_bytes"
         ],
         "additionalProperties": false
       }

@@ -11,6 +11,8 @@ import (
 	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/operations"
 	"github.com/zhigu34/one-nvr/internal/site"
+	"github.com/zhigu34/one-nvr/internal/storage"
+	"github.com/zhigu34/one-nvr/internal/tlsmanager"
 	"net"
 	"net/http"
 	"strings"
@@ -24,6 +26,8 @@ type Dependencies struct {
 	PublicURL                       string
 	HealthCheck                     func(context.Context) error
 	Channels                        *channel.Service
+	Storage                         *storage.Service
+	TLS                             *tlsmanager.Service
 	Operations                      *operations.Service
 	Capabilities                    *capability.Service
 	FrigateEnabled, OpenListEnabled bool
@@ -63,6 +67,9 @@ func NewHandler(d Dependencies) http.Handler {
 	if d.Capabilities == nil {
 		d.Capabilities = &capability.Service{Operations: d.Operations, FrigateEnabled: d.FrigateEnabled, OpenListEnabled: d.OpenListEnabled}
 	}
+	if d.Storage == nil {
+		d.Storage = storage.New(d.Auth.DB, d.Auth, []string{"/storage"})
+	}
 	r.d = d
 	r.mux.Handle("/health/", Health(d.HealthCheck))
 	r.mux.HandleFunc("GET /api/v1/setup/status", r.setupStatus)
@@ -82,6 +89,17 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("GET /api/v1/timezones", r.timezones)
 	r.mux.HandleFunc("GET /api/v1/channels", r.protected(r.listChannels))
 	r.mux.HandleFunc("PATCH /api/v1/channels/{id}", r.protected(r.updateChannel))
+	r.mux.HandleFunc("GET /api/v1/storage-pools", r.protected(r.listPools))
+	r.mux.HandleFunc("POST /api/v1/storage-pools", r.protected(r.registerPool))
+	r.mux.HandleFunc("PATCH /api/v1/storage-pools/{id}", r.protected(r.updatePool))
+	r.mux.HandleFunc("DELETE /api/v1/storage-pools/{id}", r.protected(r.deletePool))
+	r.mux.HandleFunc("POST /api/v1/storage-pools/{id}/test", r.protected(r.testPool))
+	r.mux.HandleFunc("GET /api/v1/settings/tls", r.protected(r.tlsState))
+	r.mux.HandleFunc("PATCH /api/v1/settings/tls/watch", r.protected(r.tlsWatch))
+	r.mux.HandleFunc("POST /api/v1/settings/tls/import", r.protected(r.tlsImport))
+	r.mux.HandleFunc("POST /api/v1/settings/tls/check", r.protected(r.tlsCheck))
+	r.mux.HandleFunc("POST /api/v1/settings/tls/{id}/apply", r.protected(r.tlsApply))
+	r.mux.HandleFunc("POST /api/v1/settings/tls/rollback", r.protected(r.tlsRollback))
 	r.mux.HandleFunc("GET /api/v1/capabilities", r.protected(r.capabilities))
 	r.mux.HandleFunc("GET /api/v1/operations/components", r.protected(r.components))
 	r.mux.HandleFunc("GET /api/v1/jobs/{id}", r.protected(r.job))

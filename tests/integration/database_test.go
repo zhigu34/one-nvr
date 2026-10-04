@@ -68,7 +68,7 @@ func TestMigrationConcurrentAndChecksum(t *testing.T) {
 		}
 	}
 	var n int
-	if err := db.Pool.QueryRow(ctx, "SELECT count(*) FROM schema_migrations").Scan(&n); err != nil || n != 2 {
+	if err := db.Pool.QueryRow(ctx, "SELECT count(*) FROM schema_migrations").Scan(&n); err != nil || n != 3 {
 		t.Fatalf("migrations=%d err=%v", n, err)
 	}
 	if _, err := db.Pool.Exec(ctx, "UPDATE schema_migrations SET checksum='changed'"); err != nil {

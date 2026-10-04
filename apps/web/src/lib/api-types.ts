@@ -592,6 +592,10 @@ export interface components {
             is_default: boolean;
             version: components["schemas"]["Version"];
             checks: components["schemas"]["PoolCheck"][];
+            /** @enum {string} */
+            state: "ready" | "pending" | "unavailable" | "low_space" | "disabled";
+            /** @description Indexed media usage; null until the media index is implemented. */
+            used_bytes: number | null;
         };
         PoolCheck: {
             /** @enum {string} */
@@ -601,6 +605,11 @@ export interface components {
             /** Format: date-time */
             observed_at?: string | null;
             reason: string;
+            /** Format: date-time */
+            expires_at?: string;
+            total_bytes: number;
+            free_bytes: number;
+            filesystem_id: string;
         };
         Job: {
             id: components["schemas"]["UUID"];
@@ -623,19 +632,40 @@ export interface components {
             not_after: string;
             leaf_sha256: string;
             algorithm: string;
+            common_name: string;
+            serial_number: string;
+            key_bits: number;
+            self_signed: boolean;
+            /** @enum {string} */
+            chain_status: "issuer_not_provided" | "provided_chain_verified" | "self_signed";
         };
         TLSState: {
             /** @enum {string} */
             source: "manual" | "directory";
             auto_apply: boolean;
             /** Format: uuid */
-            active_id?: string | null;
+            active_id: string | null;
             /** Format: uuid */
-            previous_id?: string | null;
+            previous_id: string | null;
             /** @enum {string} */
             state: "pending" | "active" | "unavailable" | "applying";
             version: components["schemas"]["Version"];
             certificates: components["schemas"]["Certificate"][];
+            /** Format: uuid */
+            desired_id: string | null;
+            /** Format: uuid */
+            candidate_id: string | null;
+            /** @enum {string} */
+            check_state: "pending" | "stabilizing" | "valid" | "unavailable" | "manual";
+            check_reason: string;
+            consecutive_errors: number;
+            /** @enum {string} */
+            protocol: "http" | "https";
+            /** Format: date-time */
+            last_check_at: string | null;
+            /** Format: date-time */
+            last_apply_at: string | null;
+            error_code: string | null;
         };
         Audit: {
             id: components["schemas"]["UUID"];
@@ -646,6 +676,11 @@ export interface components {
             object_id?: string | null;
             /** Format: date-time */
             created_at: string;
+        };
+        StorageCapacity: {
+            filesystem_count: number;
+            total_bytes: number;
+            free_bytes: number;
         };
     };
     responses: never;
@@ -1474,7 +1509,8 @@ export interface operations {
                     "application/json": {
                         data: {
                             items: components["schemas"]["Pool"][];
-                            next_cursor: string | null;
+                            next_cursor: components["schemas"]["UUID"] | null;
+                            capacity: components["schemas"]["StorageCapacity"];
                         };
                         request_id: components["schemas"]["UUID"];
                     };
@@ -1638,7 +1674,9 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        data: components["schemas"]["Job"];
+                        data: {
+                            job_id: components["schemas"]["UUID"];
+                        };
                         request_id: components["schemas"]["UUID"];
                     };
                 };
@@ -1747,7 +1785,9 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        data: components["schemas"]["Job"];
+                        data: {
+                            job_id: components["schemas"]["UUID"];
+                        };
                         request_id: components["schemas"]["UUID"];
                     };
                 };
@@ -1827,7 +1867,9 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        data: components["schemas"]["Job"];
+                        data: {
+                            job_id: components["schemas"]["UUID"];
+                        };
                         request_id: components["schemas"]["UUID"];
                     };
                 };
@@ -1863,7 +1905,9 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        data: components["schemas"]["Job"];
+                        data: {
+                            job_id: components["schemas"]["UUID"];
+                        };
                         request_id: components["schemas"]["UUID"];
                     };
                 };

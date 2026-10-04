@@ -13,10 +13,13 @@ import (
 	"github.com/zhigu34/one-nvr/internal/operations"
 	"github.com/zhigu34/one-nvr/internal/secrets"
 	"github.com/zhigu34/one-nvr/internal/site"
+	"github.com/zhigu34/one-nvr/internal/storage"
+	"github.com/zhigu34/one-nvr/internal/tlsmanager"
 	"log/slog"
 	"net/http"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -43,9 +46,36 @@ func Run(name string) error {
 	}
 	check := func(ctx context.Context) error { return database.Ready(ctx, db) }
 	var handler http.Handler = httpapi.Health(check)
+	pools := storage.New(db, nil, []string{"/storage"})
+	tlsInput := ""
+	if c.TLSDir != "" {
+		tlsInput = "/tls-input"
+	}
+	certificates := tlsmanager.New(db, nil, c.DataDir, c.PublicURL, tlsInput)
+	initializeTLS, cancelTLS := context.WithTimeout(ctx, 10*time.Second)
+	err = certificates.Initialize(initializeTLS)
+	cancelTLS()
+	if err != nil {
+		return fmt.Errorf("TLS state initialization unavailable")
+	}
+	var background sync.WaitGroup
+	defer func() { stop(); background.Wait() }()
+	background.Add(1)
+	go func() { defer background.Done(); pools.Monitor(ctx, name) }()
+	if name == "worker" {
+		background.Add(1)
+		go func() { defer background.Done(); pools.RunJobs(ctx) }()
+	}
+	if name == "worker" {
+		background.Add(2)
+		go func() { defer background.Done(); certificates.Monitor(ctx) }()
+		go func() { defer background.Done(); certificates.RunCheckJobs(ctx) }()
+	}
 	if name == "api" {
 		passwords := auth.NewPasswordHasher(2)
 		accounts := auth.NewService(db, secret, passwords)
+		pools.Auth = accounts
+		certificates.Auth = accounts
 		scheme := "http"
 		if strings.HasPrefix(c.PublicURL, "https://") {
 			scheme = "https"
@@ -56,7 +86,7 @@ func Run(name string) error {
 		if err != nil {
 			return fmt.Errorf("entry protocol initialization unavailable")
 		}
-		handler = httpapi.NewHandler(httpapi.Dependencies{Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, PublicURL: c.PublicURL, HealthCheck: check, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled})
+		handler = httpapi.NewHandler(httpapi.Dependencies{Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, PublicURL: c.PublicURL, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled})
 	}
 	if name == "worker" {
 		zlmKey, err := secret.ComponentCredential("zlm")
