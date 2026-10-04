@@ -97,7 +97,7 @@ func (s *Service) PublishZLMEvidence(ctx context.Context, poolID, runID id.ID, e
 		return ErrMediaProof
 	}
 	media, err := s.MediaInspector.InspectMP4(ctx, f)
-	if err != nil || !media.Readable || media.Size != e.Size || media.Duration <= 0 || !media.Video.FirstFrame || media.Video.Width <= 0 || media.Video.Height <= 0 {
+	if err != nil || !media.Readable || media.Size != e.Size || media.Duration <= 0 || media.Video.Codec == "" || media.Video.Width <= 0 || media.Video.Height <= 0 {
 		return ErrMediaProof
 	}
 	return s.DB.WithinTx(ctx, func(tx pgx.Tx) error {

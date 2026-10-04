@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -18,6 +19,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/database"
 	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/jobs"
+	"github.com/zhigu34/one-nvr/internal/media/probe"
 	"github.com/zhigu34/one-nvr/internal/media/zlm"
 	"github.com/zhigu34/one-nvr/internal/recording"
 	"github.com/zhigu34/one-nvr/internal/storage"
@@ -312,5 +314,70 @@ func TestPoolCheckWithoutSourceRemainsPending(t *testing.T) {
 	var state, reason string
 	if err := db.Pool.QueryRow(ctx, "SELECT state,reason_code FROM storage_pool_checks WHERE pool_id=$1 AND service='zlm'", pool.ID).Scan(&state, &reason); err != nil || state != "pending" || reason != "test_source_required" {
 		t.Fatal("source-less check reported false readiness", state, reason, err)
+	}
+}
+
+func TestPoolMediaStructureDoesNotRequireLiveDecodedFrame(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("native media tools unavailable; required by actual media CI")
+	}
+	ffprobe, err := exec.LookPath("ffprobe")
+	if err != nil {
+		t.Skip("native media tools unavailable; required by actual media CI")
+	}
+	dir := t.TempDir()
+	db, accounts, sites, admin := authFixture(t, dir)
+	ctx := context.Background()
+	base := t.TempDir()
+	pools := storage.New(db, accounts, []string{base})
+	pool, err := pools.Register(ctx, admin.Principal, storage.RegisterInput{Name: "Structural proof", Path: base})
+	if err != nil {
+		t.Fatal(err)
+	}
+	network, _ := channel.ParseNetworkPolicy("192.168.33.0/24", nil)
+	sources := channel.NewSources(db, accounts, sites.Secrets, network)
+	var ch id.ID
+	if err := db.Pool.QueryRow(ctx, "SELECT id FROM channels WHERE channel_no=1").Scan(&ch); err != nil {
+		t.Fatal(err)
+	}
+	rev, err := sources.CreateDraft(ctx, admin.Principal, ch, 1, channel.DraftInput{Config: channel.SourceConfig{IP: "192.168.33.20", MainPath: "/main"}, IdentityIntent: "replace", Credentials: channel.CredentialInput{PasswordAction: "clear"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, _ := id.New()
+	run, _ := id.New()
+	work := ".work/probes/zlm/" + string(run)
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO stream_sessions(id,channel_id,source_revision_id,generation,app,stream,purpose,state) VALUES($1,$2,$3,1,'one_nvr',$1::uuid::text,'test','active')`, session, ch, rev.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO recording_runs(id,site_id,channel_id,source_revision_id,stream_session_id,pool_id,work_relative_path,purpose,state) VALUES($1,$2,$3,$4,$5,$6,$7,'probe','stopped')`, run, sites.Secrets.SiteID, ch, rev.ID, session, pool.ID, work); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(pool.Path, work, "closed.mp4")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := exec.Command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=5", "-t", "2", "-c:v", "libx264", "-threads", "1", path).Run(); err != nil {
+		t.Fatal("synthetic MP4 creation failed", err)
+	}
+	checker := probe.Runner{FFprobe: ffprobe}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := checker.InspectMP4(ctx, f)
+	f.Close()
+	if err != nil || !evidence.Readable || evidence.Video.FirstFrame {
+		t.Fatal("structure probe claims decoded frame", err)
+	}
+	recordings := recording.New(db, nil, checker, []string{base}, dir)
+	completion := recording.Completion{Key: zlm.StreamKey{VHost: "__defaultVhost__", App: "one_nvr", Stream: string(session)}, MediaServerID: "one-nvr-" + string(sites.Secrets.SiteID), FilePath: path, Size: evidence.Size, StartTime: time.Now().UTC(), Duration: evidence.Duration}
+	if err := recordings.Accept(ctx, completion); err != nil {
+		t.Fatal(err)
+	}
+	pools.MediaInspector = checker
+	if err := pools.PublishZLMEvidence(ctx, pool.ID, run, zlm.WriteEvidence{PoolID: pool.ID, RecordingID: run, FilePath: path, Size: evidence.Size, Duration: evidence.Duration, VideoVerified: true, ObservedAt: time.Now().UTC()}); err != nil {
+		t.Fatal("valid structure incorrectly requires decoded first frame", err)
 	}
 }
