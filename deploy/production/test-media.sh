@@ -6,7 +6,8 @@ project="one-nvr-media-test-${GITHUB_RUN_ID:-local}-$$"
 export ONE_NVR_MEDIA_TEST_DIR
 ONE_NVR_MEDIA_TEST_DIR=$(mktemp -d)
 compose=(docker compose -p "$project" -f deploy/production/compose.media-test.yaml)
-cleanup(){ "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true; rm -rf "$ONE_NVR_MEDIA_TEST_DIR"; }
+helper=
+cleanup(){ "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true; if [[ -n "$helper" ]]; then docker rm -f "$helper" >/dev/null 2>&1 || true; fi; rm -rf "$ONE_NVR_MEDIA_TEST_DIR"; }
 trap cleanup EXIT
 mkdir -p "$ONE_NVR_MEDIA_TEST_DIR/storage/pool/.work/zlm" "$ONE_NVR_MEDIA_TEST_DIR/evidence"
 chmod -R a+rwX "$ONE_NVR_MEDIA_TEST_DIR"
@@ -39,11 +40,21 @@ retry=3
 retry_delay=0.2
 INI
 "${compose[@]}" config --quiet
-"${compose[@]}" up -d camera zlm
+helper=$(docker create --entrypoint /usr/local/bin/media-launcher one-nvr/media-test:ci)
+docker cp "$helper:/usr/local/bin/media-launcher" "$ONE_NVR_MEDIA_TEST_DIR/launcher"
+docker rm "$helper" >/dev/null
+helper=
+chmod 755 "$ONE_NVR_MEDIA_TEST_DIR/launcher"
+"${compose[@]}" up -d camera
+camera_ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$("${compose[@]}" ps -q camera)")
+[[ "$camera_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+printf '{"camera_cidrs":"%s/32","denied_hosts":["runner","zlm"],"hook_host":"runner"}\n' "$camera_ip" > "$ONE_NVR_MEDIA_TEST_DIR/egress.json"
 sleep 2
-"${compose[@]}" up -d fixture
+"${compose[@]}" up -d fixture runner
+"${compose[@]}" up -d zlm
 status=0
-"${compose[@]}" run --rm --use-aliases runner || status=$?
+"${compose[@]}" wait runner || status=$?
+"${compose[@]}" logs --no-log-prefix runner
 mkdir -p media-test-results
 if [[ -f "$ONE_NVR_MEDIA_TEST_DIR/evidence/contract.json" ]]; then cp "$ONE_NVR_MEDIA_TEST_DIR/evidence/contract.json" media-test-results/; fi
 # Synthetic secrets must not appear even in private component stdout.
