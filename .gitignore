@@ -16,3 +16,6 @@ one-nvr-m0.tar.gz
 /apps/web/test-results/
 /apps/web/playwright-report/
 /deploy/production/runtime/
+
+# Local package-manager cache
+/.pnpm-store/

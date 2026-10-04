@@ -30,6 +30,7 @@ wait_entry
 "${compose[@]}" run --rm -e ONE_NVR_E2E_PHASE=restart browser
 # One same-browser protocol transition, using the actual Nginx TLS listener.
 if [[ -z ${ONE_NVR_E2E_TLS_DIR:-} && ${ONE_NVR_E2E_MODULES:-no} == no ]]; then
+ "${compose[@]}" stop worker
  "${compose[@]}" run --rm runner go test -tags gateway_runtime ./tests/integration -run '^TestGatewayTLSRuntimeE2EProtocolInit$' -count=1 -v
  export ONE_NVR_E2E_PUBLIC_URL=https://gateway
  "${compose[@]}" up -d --no-deps --force-recreate api worker gateway
