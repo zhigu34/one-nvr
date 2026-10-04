@@ -10,3 +10,5 @@ deploy/m0
 docs/M0-browser-validation-2026-10-03.md
 **/test-results
 **/playwright-report
+
+media-test-results
