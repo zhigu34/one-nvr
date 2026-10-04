@@ -120,7 +120,7 @@ func (r Runner) FirstFrame(ctx context.Context, raw string) (VideoEvidence, erro
 	if !validInternalURL(raw) {
 		return VideoEvidence{}, ErrProbeTarget
 	}
-	out, logs, err := run(ctx, r.FFmpeg, []string{"-nostdin", "-hide_banner", "-loglevel", "info", "-threads", "2", "-rtsp_transport", "tcp", "-rw_timeout", "8000000", "-i", raw, "-map", "0:v:0", "-an", "-vf", "showinfo", "-frames:v", "1", "-progress", "pipe:1", "-f", "null", "-"}, nil)
+	out, logs, err := run(ctx, r.FFmpeg, []string{"-nostdin", "-hide_banner", "-loglevel", "info", "-threads", "2", "-rtsp_transport", "tcp", "-timeout", "8000000", "-i", raw, "-map", "0:v:0", "-an", "-vf", "showinfo", "-frames:v", "1", "-progress", "pipe:1", "-f", "null", "-"}, nil)
 	if err != nil {
 		return VideoEvidence{}, err
 	}

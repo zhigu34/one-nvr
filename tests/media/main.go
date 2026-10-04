@@ -152,7 +152,7 @@ func contract() error {
 			// Only the synthetic Docker test image contains this diagnostic.
 			// This URL has no credentials and cannot refer to a user camera.
 			diagnosticCtx, stop := context.WithTimeout(ctx, 10*time.Second)
-			command := exec.CommandContext(diagnosticCtx, "/usr/bin/ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "info", "-threads", "2", "-rtsp_transport", "tcp", "-rw_timeout", "8000000", "-i", raw, "-map", "0:v:0", "-an", "-vf", "showinfo", "-frames:v", "1", "-progress", "pipe:1", "-f", "null", "-")
+			command := exec.CommandContext(diagnosticCtx, "/usr/bin/ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "info", "-threads", "2", "-rtsp_transport", "tcp", "-timeout", "8000000", "-i", raw, "-map", "0:v:0", "-an", "-vf", "showinfo", "-frames:v", "1", "-progress", "pipe:1", "-f", "null", "-")
 			command.Stdout = os.Stdout
 			command.Stderr = os.Stderr
 			command.Run()
