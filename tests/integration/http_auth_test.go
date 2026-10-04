@@ -63,7 +63,11 @@ func TestHTTPAndHTTPSCookiesAndCSRF(t *testing.T) {
 			cookies := login.Result().Cookies()
 			var session *http.Cookie
 			for _, c := range cookies {
-				if c.Name == "one_nvr_session" {
+				expectedName := "one_nvr_session"
+				if scheme == "https" {
+					expectedName = "__Host-one_nvr_session"
+				}
+				if c.Name == expectedName {
 					session = c
 				}
 			}

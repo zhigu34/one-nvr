@@ -7,11 +7,11 @@ if (process.env.ONE_NVR_E2E_SECRETS_FILE) {
 
 export default defineConfig({
   testDir: '../../tests/e2e',
-  testMatch: process.env.ONE_NVR_E2E_PHASE==='restart'?'**/restart.spec.ts':'**/m1a.spec.ts',
+  testMatch: process.env.ONE_NVR_E2E_PHASE==='protocol'?'**/protocol.spec.ts':process.env.ONE_NVR_E2E_PHASE==='restart'?'**/restart.spec.ts':'**/m1a.spec.ts',
   timeout: 30000,
   workers: 1,
   retries: 0,
   reporter: 'list',
   // Screenshots/traces may contain setup token, passwords or PEM inputs.
-  use: { baseURL: process.env.ONE_NVR_E2E_URL || 'http://gateway', screenshot:'off', trace:'off', video:'off' },
+  use: { ignoreHTTPSErrors: process.env.ONE_NVR_E2E_PHASE==='protocol', baseURL: process.env.ONE_NVR_E2E_URL || 'http://gateway', screenshot:'off', trace:'off', video:'off' },
 })

@@ -28,3 +28,27 @@ wait_entry
 "${compose[@]}" up -d --no-deps --force-recreate api worker gateway
 wait_entry
 "${compose[@]}" run --rm -e ONE_NVR_E2E_PHASE=restart browser
+# One same-browser protocol transition, using the actual Nginx TLS listener.
+if [[ -z ${ONE_NVR_E2E_TLS_DIR:-} && ${ONE_NVR_E2E_MODULES:-no} == no ]]; then
+ "${compose[@]}" run --rm runner go test -tags gateway_runtime ./tests/integration -run '^TestGatewayTLSRuntimeE2EProtocolInit$' -count=1 -v
+ export ONE_NVR_E2E_PUBLIC_URL=https://gateway
+ "${compose[@]}" up -d --no-deps --force-recreate api worker gateway
+ for ((attempt=0; attempt<60; attempt++)); do
+  if "${compose[@]}" exec -T gateway wget --no-check-certificate -q -O /dev/null https://gateway/api/v1/setup/status; then break; fi
+  sleep 1
+ done
+ [[ $attempt -lt 60 ]] || { printf 'Isolated TLS listener unavailable.\n' >&2; exit 1; }
+ "${compose[@]}" run --rm -e ONE_NVR_E2E_PHASE=protocol browser &
+ browser_pid=$!
+ for ((attempt=0; attempt<60; attempt++)); do
+  if "${compose[@]}" run --rm --no-deps --entrypoint sh browser -c 'test -f /results/protocol-ready'; then break; fi
+  kill -0 "$browser_pid" 2>/dev/null || { wait "$browser_pid"; exit 1; }
+  sleep 1
+ done
+ [[ $attempt -lt 60 ]] || { printf 'Isolated HTTPS login unavailable.\n' >&2; exit 1; }
+ export ONE_NVR_E2E_PUBLIC_URL=http://gateway
+ "${compose[@]}" up -d --no-deps --force-recreate api worker gateway
+ wait_entry
+ "${compose[@]}" run --rm --no-deps --entrypoint sh browser -c 'touch /results/protocol-http'
+ wait "$browser_pid"
+fi

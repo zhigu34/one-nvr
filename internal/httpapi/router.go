@@ -152,7 +152,7 @@ func (r *router) originAllowed(q *http.Request) bool {
 }
 func (r *router) anonymous(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, q *http.Request) {
-		cookie, err := q.Cookie(preAuthCookie)
+		cookie, err := q.Cookie(r.cookieName(preAuthCookie))
 		if !r.originAllowed(q) || err != nil || !r.d.Auth.VerifyPreAuth(cookie.Value, q.Header.Get("X-CSRF-Token")) {
 			fail(w, q, fault.New(403, "csrf_rejected", "请求来源或安全令牌无效"))
 			return
@@ -165,7 +165,7 @@ type protectedHandler func(http.ResponseWriter, *http.Request, auth.Principal, s
 
 func (r *router) protected(next protectedHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, q *http.Request) {
-		cookie, err := q.Cookie(sessionCookie)
+		cookie, err := q.Cookie(r.cookieName(sessionCookie))
 		if err != nil {
 			fail(w, q, auth.ErrUnauthenticated)
 			return
@@ -182,8 +182,14 @@ func (r *router) protected(next protectedHandler) http.HandlerFunc {
 		next(w, q, p, cookie.Value)
 	}
 }
+func (r *router) cookieName(base string) string {
+	if r.secure {
+		return "__Host-" + base
+	}
+	return base
+}
 func (r *router) setCookie(w http.ResponseWriter, name, value string, maxAge int) {
-	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/", HttpOnly: true, Secure: r.secure, SameSite: http.SameSiteLaxMode, MaxAge: maxAge})
+	http.SetCookie(w, &http.Cookie{Name: r.cookieName(name), Value: value, Path: "/", HttpOnly: true, Secure: r.secure, SameSite: http.SameSiteLaxMode, MaxAge: maxAge})
 }
 func (r *router) setupStatus(w http.ResponseWriter, q *http.Request) {
 	initialized, err := r.d.Site.Initialized(q.Context())

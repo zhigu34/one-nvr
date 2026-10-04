@@ -234,7 +234,7 @@ func TestGatewayTLSRuntimeLifecycle(t *testing.T) {
 	}
 	secureCookie := false
 	for _, cookie := range response.Cookies() {
-		if cookie.Name == "one_nvr_session" {
+		if cookie.Name == "__Host-one_nvr_session" {
 			secureCookie = cookie.Secure && cookie.HttpOnly && cookie.SameSite == http.SameSiteLaxMode
 		}
 	}

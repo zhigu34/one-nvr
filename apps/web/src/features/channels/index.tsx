@@ -32,7 +32,7 @@ export function Channels() {
           )}
           {query.data.items.map((channel) => (
             <ChannelRow
-              key={`${channel.id}:${channel.version}`}
+              key={channel.id}
               channel={channel}
             />
           ))}
@@ -83,6 +83,7 @@ function ChannelRow({ channel }: { channel: Schema<'Channel'> }) {
           }}
         >
           <Field
+            key={channel.version}
             label='通道名称'
             name='channel_name'
             id={`name-${channel.id}`}

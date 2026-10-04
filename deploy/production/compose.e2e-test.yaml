@@ -1,6 +1,6 @@
 # Transient CI fixture only. No production .env, ports, storage or Docker socket.
 x-app-env: &app-env
-  ONE_NVR_PUBLIC_URL: http://gateway
+  ONE_NVR_PUBLIC_URL: "${ONE_NVR_E2E_PUBLIC_URL:-http://gateway}"
   ONE_NVR_DATA_DIR: /data
   ONE_NVR_HTTP_PORT: "80"
   ONE_NVR_MEDIA_HOST: 127.0.0.1
@@ -91,7 +91,7 @@ services:
   gateway:
     image: one-nvr/gateway:ci
     environment:
-      ONE_NVR_PUBLIC_URL: http://gateway
+      ONE_NVR_PUBLIC_URL: "${ONE_NVR_E2E_PUBLIC_URL:-http://gateway}"
     # Only a fixed, private generated credential is read; no user .env is sourced.
     entrypoint: [sh, -ec]
     command: ['export ONE_NVR_GATEWAY_PROXY_TOKEN="$$(cat /control/proxy-token)"; exec /usr/local/bin/gateway-entrypoint']

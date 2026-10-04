@@ -67,3 +67,37 @@ func TestGatewayTLSRuntimeE2EInit(t *testing.T) {
 		t.Fatal("fixture must have no site")
 	}
 }
+
+// Activate the existing browser-imported certificate before changing this
+// isolated fixture to HTTPS. No production credentials or database are used.
+func TestGatewayTLSRuntimeE2EProtocolInit(t *testing.T) {
+	if os.Getenv("ONE_NVR_GATEWAY_RUNTIME") != "isolated" {
+		t.Fatal("requires isolated runtime")
+	}
+	ctx := context.Background()
+	db, err := database.Open(ctx, os.Getenv("ONE_NVR_DATABASE_URL"))
+	if err != nil {
+		t.Fatal("isolated database unavailable")
+	}
+	defer db.Pool.Close()
+	secret, err := secrets.Load("/data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accounts := auth.NewService(db, secret, auth.NewPasswordHasher(2))
+	login, err := accounts.Login(ctx, "admin", "Browser-new-only-2026!")
+	if err != nil {
+		t.Fatal("isolated administrator login unavailable")
+	}
+	svc := tlsmanager.New(db, accounts, "/data", "https://gateway", "")
+	if err = svc.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	state, err := svc.Current(ctx, login.Principal)
+	if err != nil || state.CandidateID == nil {
+		t.Fatal("isolated candidate missing")
+	}
+	if _, err = svc.RequestApply(ctx, login.Principal, *state.CandidateID, state.Version); err != nil {
+		t.Fatal(err)
+	}
+}
