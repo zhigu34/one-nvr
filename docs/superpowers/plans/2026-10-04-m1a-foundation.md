@@ -10,7 +10,7 @@
 
 **Spec:** [M1 控制面设计](../specs/2026-10-03-m1-control-plane-design.md)、[PRD v0.28](../../PRD.md)、[访问与证书 v2](../../web-access-tls.md)、[镜像版本基线](../../image-versions.md)、[部署硬件自动探测](../../hardware-auto-detection.md)。
 
-**Status:** 2026-10-04 用户确认沿用 shadcn-admin 并要求开始；本计划待书面评审与执行方式选择。全部复选框表示尚未执行，不能作为功能通过的记录。
+**Status:** 2026-10-04 用户要求继续，按推荐方式在当前仓库的 `codex/m1a-foundation` 分支顺序执行。Task 1 已开始；当前通过项与未运行的容器检查见 `docs/M1-A-validation.md`，未勾选步骤不作为功能通过记录。
 
 ## Global Constraints
 

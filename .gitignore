@@ -6,3 +6,10 @@ deploy/m0/.env
 deploy/m0/cameras.csv
 one-nvr-m0.tar.gz
 .DS_Store
+
+# Formal deployment secrets and build outputs
+/deploy/production/.env
+/deploy/production/state/
+/bin/
+*.test
+/coverage.out

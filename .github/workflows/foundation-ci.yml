@@ -1,0 +1,80 @@
+name: Foundation CI
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: foundation-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Validate Compose and shell
+        run: |
+          docker compose -f deploy/production/compose.test.yaml config --quiet
+          bash -n deploy/production/dev.sh
+          sh -n deploy/production/web-tool.sh
+      - name: Go unit race tests
+        run: ./deploy/production/dev.sh test-go -race ./internal/... ./cmd/... ./migrations
+      - name: PostgreSQL 17.11 integration race tests
+        run: ./deploy/production/dev.sh test-db -race ./tests/integration
+      - name: Vet
+        run: docker compose -p one-nvr-dev -f deploy/production/compose.test.yaml run --rm go go vet ./...
+      - name: Cleanup development containers
+        if: always()
+        run: docker compose -p one-nvr-dev -f deploy/production/compose.test.yaml down --volumes --remove-orphans
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install frozen dependencies
+        run: ./deploy/production/dev.sh web install --frozen-lockfile
+      - name: Generate API types and check drift
+        run: |
+          ./deploy/production/dev.sh web api:generate
+          git diff --exit-code -- apps/web/src/lib/api-types.ts
+      - name: Build
+        run: ./deploy/production/dev.sh web build
+      - name: Lint
+        run: ./deploy/production/dev.sh web lint
+      - name: Cleanup development containers
+        if: always()
+        run: docker compose -p one-nvr-dev -f deploy/production/compose.test.yaml down --volumes --remove-orphans
+  m0-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Preserve M0 behavior
+        run: |
+          docker run --rm --volume "$PWD:/workspace:ro" --workdir /workspace python:3.12-slim sh -eu -c '
+            pip install --disable-pip-version-check --require-hashes -r deploy/m0/requirements.txt
+            python -m unittest discover -s deploy/m0/tests -v
+          '
+  images:
+    needs: [backend, frontend, m0-regression]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [app, gateway]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Build pinned Linux amd64 image
+        run: docker build --platform linux/amd64 --file "deploy/production/Dockerfile.${{ matrix.image }}" --tag "one-nvr/${{ matrix.image }}:ci" .
