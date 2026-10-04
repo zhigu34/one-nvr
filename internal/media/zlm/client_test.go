@@ -101,3 +101,24 @@ func TestZLMTypedOperationsAndSanitizedSnapshot(t *testing.T) {
 		t.Fatal("cancellation lost", err)
 	}
 }
+
+func TestHealthUsesPrivatePOST(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.RawQuery != "" || r.URL.Path != "/index/api/getThreadsLoad" {
+			t.Error("health secret may enter URL")
+		}
+		r.ParseForm()
+		if r.PostForm.Get("secret") != "fixture-health" {
+			t.Error("missing health credential")
+		}
+		w.Write([]byte(`{"code":0,"data":[]}`))
+	}))
+	defer server.Close()
+	client, err := New(server.URL, "fixture-health", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Health(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
