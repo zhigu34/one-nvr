@@ -14,7 +14,7 @@
 
 正式版部署参数包含独立的 `ONE_NVR_RTC_PORT`（默认 8000，UDP/TCP），与选定的 HTTP/HTTPS 入口端口分开。`ONE_NVR_MEDIA_HOST` 可选，IP 直连时沿用 PUBLIC_URL 的主机 IP。完整设计示例见 [PRD 第 14.4 节](docs/PRD.md#144-env-与界面配置边界)，现有 M0 仍使用 `M0_RTC_PORT`。
 
-正式版默认 HTTPS，也可通过 PUBLIC_URL 选择 HTTP；“系统设置 → 访问与证书”计划提供 PEM 证书上传、信息/到期显示及网关应用/回滚。完整范围见 [访问与证书设计](docs/web-access-tls.md)，当前未实现，M0 保持现有 HTTPS 配置。
+正式版默认 HTTPS，也可通过 PUBLIC_URL 选择 HTTP；“系统设置 → 访问与证书”计划提供 PEM 证书上传、信息/到期显示及网关应用/回滚。可选 ONE_NVR_TLS_DIR 映射整个证书目录，外部程序更新 fullchain.pem/privkey.pem 后自动校验并应用，无需重建容器。完整范围见 [访问与证书设计](docs/web-access-tls.md)，当前未实现，M0 保持现有 HTTPS 配置。
 
 ## 部署
 
