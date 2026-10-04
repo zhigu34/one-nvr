@@ -1,0 +1,45 @@
+# Isolated development tooling. No production data, ports or .env are loaded.
+services:
+  go:
+    image: golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195
+    platform: linux/amd64
+    working_dir: /workspace
+    volumes:
+      - ../..:/workspace
+      - go-mod:/go/pkg/mod
+      - go-build:/root/.cache/go-build
+    environment:
+      GOPROXY: ${ONE_NVR_GOPROXY:-https://proxy.golang.org,direct}
+  web:
+    image: node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
+    platform: linux/amd64
+    working_dir: /workspace/apps/web
+    entrypoint: ["/workspace/deploy/production/web-tool.sh"]
+    volumes:
+      - ../..:/workspace
+      - web-deps:/workspace/apps/web/node_modules
+      - web-tools:/tools
+      - web-store:/pnpm/store
+    environment:
+      ONE_NVR_NPM_REGISTRY: ${ONE_NVR_NPM_REGISTRY:-https://registry.npmjs.org}
+  postgres:
+    image: postgres:17.11-bookworm@sha256:639ab7ceb90e13123085b741fb31ef493fba25463002f6da665352e7b534b652
+    platform: linux/amd64
+    environment:
+      POSTGRES_USER: one_nvr_test
+      POSTGRES_PASSWORD: isolated-test-only
+      POSTGRES_DB: one_nvr_test
+    volumes:
+      - test-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U one_nvr_test -d one_nvr_test"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+volumes:
+  go-mod:
+  go-build:
+  web-deps:
+  web-tools:
+  web-store:
+  test-db:

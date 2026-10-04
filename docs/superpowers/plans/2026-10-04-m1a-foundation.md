@@ -10,7 +10,7 @@
 
 **Spec:** [M1 控制面设计](../specs/2026-10-03-m1-control-plane-design.md)、[PRD v0.28](../../PRD.md)、[访问与证书 v2](../../web-access-tls.md)、[镜像版本基线](../../image-versions.md)、[部署硬件自动探测](../../hardware-auto-detection.md)。
 
-**Status:** 2026-10-04 用户确认沿用 shadcn-admin 并要求开始；本计划待书面评审与执行方式选择。全部复选框表示尚未执行，不能作为功能通过的记录。
+**Status:** Task 1–9 已完成。一次整分支独立审查的四项 Important 已修复，最终 GitHub CI `37205477648` 九项全部成功。实际通过、历史失败和未测真机项见 `docs/M1-A-validation.md`，全部裁定与两个暂缓 Minor 见 `docs/M1-A-decisions.md`。这是基础控制面交付，尚不包含 M1-B/C 的业务摄像头源、正式录制或回放。
 
 ## Global Constraints
 
@@ -58,6 +58,8 @@
 
 所有具体目录下实现按责任拆 `service.go` / `repository.go` / `handler.go`，测试位于相邻 `*_test.go`，数据库集成测试放 `tests/integration`。不预创建 M1-B/C 的空业务模块/页面来冒充交付。
 
+首次红灯验证因开发机无 daemon 使用校验过的临时原生 Go/PostgreSQL 工具；后续同一套测试在 GitHub Actions 的固定 Docker 镜像运行，结果见验证记录。
+
 验证工具由 Task 1 交付：`./deploy/production/dev.sh test-go <packages>`、`test-db <packages>`、`web <pnpm arguments>`、`e2e`。test-db 使用唯一测试项目名、临时 PostgreSQL 卷、内部 TEST_DATABASE_URL，退出清理仅自己创建的测试资源；不能接收生产 DATABASE_URL 为测试库。宿主只需 Docker/Compose，无需安装 Go/Node/Python。
 
 ## Task 1: 可构建工程、固定上游与配置契约
@@ -66,11 +68,11 @@
 
 **Interfaces:** Produces `config.Parse(io.Reader) (Config,error)`, `config.Config.Validate() error`, `id.New() (ID,error)`, `id.Parse(string) (ID,error)`；API 错误模型和本阶段各端点请求/结果先进入 OpenAPI，健康入口固定 `/health/live` 和 `/health/ready`（进程存活/依赖就绪），gateway 内网 `/health` 验证静态入口而非摄像头可用性。工具入口使用上文 dev.sh 契约。
 
-- [ ] **Step 1:** 写 `TestParseDoesNotExecuteEnv`、`TestValidateSelectedEntryAndRTC`：包含引号/# 的值保真，`$(...)`/反引号不执行；缺省两开关 no，非 yes/no 拒绝，URL 8443 对应 HTTPS 8443 可用，HTTP 8080 无证书可用，RTC 冲突/非整数拒绝，IP 自动媒体地址和域名缺少覆盖分别接受/拒绝。
-- [ ] **Step 2:** 创建只用于运行这些测试的 Go 测试容器/模块声明，运行 `dev.sh test-go ./internal/config ./internal/id`，记录缺失 Parse/Validate 实现导致失败；不为脚手架文件写镜像式测试。
-- [ ] **Step 3:** 实现配置解析/验证、UUID 基础和 API/Worker/admin 可编译入口。直接导入上游 `e16c87f213a5ba5e45964e9b67c792105ec74d26` 的真实源码及 MIT 许可，禁止另写相似页面代替上游；UPSTREAM.md 记录原始文件范围/commit/后续删改。使用 pnpm 10.12.4 作为待验证固定候选，首次确认包元数据/Node 兼容和 lock 可安装后记录版本及完整性；如候选不能构建，先记录原因并修订基线，不默换 latest。
-- [ ] **Step 4:** 实现容器测试/构建工具、两 Dockerfile 和 OpenAPI；app 静态构建 Go 程序，Task 1 的 gateway 先只交付静态页面；Task 7 再加入编译后的 gateway-control，不能在此依赖尚不存在的入口。保留上游 lock，改依赖后只在固定包管理器中更新；额外系统包采用可获取的固定快照/版本，不取消 TLS 校验。首次锁定 pgx/v5、x/crypto、前端类型生成工具的具体版本并提交 lock/sum。
-- [ ] **Step 5:** 运行上述单元测试、`dev.sh web install --frozen-lockfile`、`dev.sh web build`、`dev.sh web lint`，构建应用入口；此时是上游可构建基线，不是业务登录验收。提交 `build: establish pinned Go and shadcn-admin toolchain`。
+- [x] **Step 1:** 写 `TestParseDoesNotExecuteEnv`、`TestValidateSelectedEntryAndRTC`：包含引号/# 的值保真，`$(...)`/反引号不执行；缺省两开关 no，非 yes/no 拒绝，URL 8443 对应 HTTPS 8443 可用，HTTP 8080 无证书可用，RTC 冲突/非整数拒绝，IP 自动媒体地址和域名缺少覆盖分别接受/拒绝。
+- [x] **Step 2:** 创建只用于运行这些测试的 Go 测试容器/模块声明，运行 `dev.sh test-go ./internal/config ./internal/id`，记录缺失 Parse/Validate 实现导致失败；不为脚手架文件写镜像式测试。
+- [x] **Step 3:** 实现配置解析/验证、UUID 基础和 API/Worker/admin 可编译入口。直接导入上游 `e16c87f213a5ba5e45964e9b67c792105ec74d26` 的真实源码及 MIT 许可，禁止另写相似页面代替上游；UPSTREAM.md 记录原始文件范围/commit/后续删改。使用 pnpm 10.12.4 作为待验证固定候选，首次确认包元数据/Node 兼容和 lock 可安装后记录版本及完整性；如候选不能构建，先记录原因并修订基线，不默换 latest。
+- [x] **Step 4:** 实现容器测试/构建工具、两 Dockerfile 和 OpenAPI；app 静态构建 Go 程序，Task 1 的 gateway 先只交付静态页面；Task 7 再加入编译后的 gateway-control，不能在此依赖尚不存在的入口。保留上游 lock，改依赖后只在固定包管理器中更新；额外系统包采用可获取的固定快照/版本，不取消 TLS 校验。首次锁定 pgx/v5、x/crypto、前端类型生成工具的具体版本并提交 lock/sum。
+- [x] **Step 5:** 运行上述单元测试、`dev.sh web install --frozen-lockfile`、`dev.sh web build`、`dev.sh web lint`，构建应用入口；此时是上游可构建基线，不是业务登录验收。提交 `build: establish pinned Go and shadcn-admin toolchain`。
 
 ## Task 2: PostgreSQL 迁移、事务、任务与审计
 
@@ -78,11 +80,11 @@
 
 **Interfaces:** Produces `database.Open(ctx,dsn) (*DB,error)`, `DB.WithinTx`, `database.Migrate(ctx,*DB) error`；`jobs.Enqueue(ctx,pgx.Tx,Input) (id.ID,error)`, `jobs.Claim(ctx,kind string) (Lease,error)`, `jobs.Renew(ctx,Lease) error`, `jobs.Complete(ctx,Lease,Result) error`。Input 包含 Kind/ObjectID/IdempotencyKey/非敏感 JSON；Lease 含 ID/Attempt/FencingToken/ExpiresAt。`audit.Append(ctx,pgx.Tx,Entry) error` 不接受密码、完整 URI 或 PEM。
 
-- [ ] **Step 1:** 写 `TestMigrationConcurrentAndChecksum`、`TestTxRollsBackJobAndAudit`、`TestExpiredLeaseCannotCommit`：并发 migrate 仅一套 schema，已执行 SQL 校验和不符拒绝；事务失败无半份 job/audit；30 秒租约接手后旧 token 完成拒绝，同幂等键不同参数冲突。
-- [ ] **Step 2:** 运行 `dev.sh test-db ./tests/integration -run 'Migration|Tx|Lease'`，确认实现缺失失败，真实数据库测试不得自动 skip 为通过。
-- [ ] **Step 3:** 实现串行 migration/checksum 和上述接口。建 sites/users/sessions/channel_grants/channels/recording_policies、storage_pools/checks、jobs/job_attempts、component_observations/audit_logs、tls_certificates/gateway_tls_state；M1-B 来源/媒体表在对应后续迁移加入。FK 保留历史、编号唯一、部分唯一默认池；session 只保存摘要，证书只保存公共信息/受限文件引用。admin `migrate` 命令返回失败则 API/Worker 不就绪。
-- [ ] **Step 4:** 实现租约 30 秒、续期 10 秒、退避 2/4/8/16/30 秒，以及独立锁/失联停止副作用契约；测试租约和审计断开路径，不能以内存队列替代。重新运行数据库测试，无生产库修改。
-- [ ] **Step 5:** 提交 `feat: add transactional foundation schema and durable jobs`。
+- [x] **Step 1:** 写 `TestMigrationConcurrentAndChecksum`、`TestTxRollsBackJobAndAudit`、`TestExpiredLeaseCannotCommit`：并发 migrate 仅一套 schema，已执行 SQL 校验和不符拒绝；事务失败无半份 job/audit；30 秒租约接手后旧 token 完成拒绝，同幂等键不同参数冲突。
+- [x] **Step 2:** 运行 `dev.sh test-db ./tests/integration -run 'Migration|Tx|Lease'`，确认实现缺失失败，真实数据库测试不得自动 skip 为通过。
+- [x] **Step 3:** 实现串行 migration/checksum 和上述接口。建 sites/users/sessions/channel_grants/channels/recording_policies、storage_pools/checks、jobs/job_attempts、component_observations/audit_logs、tls_certificates/gateway_tls_state；M1-B 来源/媒体表在对应后续迁移加入。FK 保留历史、编号唯一、部分唯一默认池；session 只保存摘要，证书只保存公共信息/受限文件引用。admin `migrate` 命令返回失败则 API/Worker 不就绪。
+- [x] **Step 4:** 实现租约 30 秒、续期 10 秒、退避 2/4/8/16/30 秒，以及独立锁/失联停止副作用契约；测试租约和审计断开路径，不能以内存队列替代。重新运行数据库测试，无生产库修改。
+- [x] **Step 5:** 提交 `feat: add transactional foundation schema and durable jobs`。
 
 ## Task 3: 一次初始化、本地会话及账号/通道授权
 
@@ -90,11 +92,11 @@
 
 **Interfaces:** Produces `auth.Service.Authenticate(ctx,rawSession string) (Principal,error)`；Principal 含 UserID/SessionID/Role/AuthVersion，`auth.Service.RequireChannel(ctx,Principal,id.ID,Action) error`；`site.Setup(ctx,SetupInput) (Site,error)`，SetupInput 含 Token/AdminName/AdminPassword/Name/Timezone/ChannelCount。`httpapi.NewHandler(Dependencies) http.Handler` 只挂本计划端点，不开放媒体或 ZLM 管理代理。
 
-- [ ] **Step 1:** 写 `TestConcurrentSetupConsumesTokenOnce`、`TestSessionExpiryAndRevocation`、`TestDirectUnauthorizedChannelDenied`、`TestLastAdminProtected`：并发初始化只有一个站点/16或32槽位；初始化管理员获全部槽位动作，新用户无授权；闲置30分钟/绝对12小时、登出/改密/禁用失效；越权资源404、已知动作禁止403；最后管理员不可禁用/降权。
-- [ ] **Step 2:** 运行 `dev.sh test-db ./tests/integration -run 'Setup|Session|Unauthorized|LastAdmin'`，确认失败。
-- [ ] **Step 3:** 实现一次 setup token、持久秘密文件安全初始化（重复初始化不覆盖）、Argon2id 限制并发、服务器会话与上述权限接口；实现 setup/status、setup、login/logout/me/change-password、users 和 channel-grants 端点。管理员策略不能绕过通道动作检查。
-- [ ] **Step 4:** 加 `TestHTTPAndHTTPSCookiesAndCSRF`：按受控 PUBLIC_URL 配置决定 Cookie Secure，忽略客户端伪造 X-Forwarded-Proto；缺/错 Origin 与 CSRF 拒绝修改，认证 no-store。改权更新授权版本/撤销关联会话，审计失败不提交变更；M1-C 接入实际媒体关闭，不在此声称已撤销 RTC 连接。
-- [ ] **Step 5:** 重跑以上真实 DB/HTTP 测试，确认所有普通响应无哈希、session摘要、setup token、密钥；提交 `feat: implement local setup sessions and channel authorization`。
+- [x] **Step 1:** 写 `TestConcurrentSetupConsumesTokenOnce`、`TestSessionExpiryAndRevocation`、`TestDirectUnauthorizedChannelDenied`、`TestLastAdminProtected`：并发初始化只有一个站点/16或32槽位；初始化管理员获全部槽位动作，新用户无授权；闲置30分钟/绝对12小时、登出/改密/禁用失效；越权资源404、已知动作禁止403；最后管理员不可禁用/降权。
+- [x] **Step 2:** 运行 `dev.sh test-db ./tests/integration -run 'Setup|Session|Unauthorized|LastAdmin'`，确认失败。
+- [x] **Step 3:** 实现一次 setup token、持久秘密文件安全初始化（重复初始化不覆盖）、Argon2id 限制并发、服务器会话与上述权限接口；实现 setup/status、setup、login/logout/me/change-password、users 和 channel-grants 端点。管理员策略不能绕过通道动作检查。
+- [x] **Step 4:** 加 `TestHTTPAndHTTPSCookiesAndCSRF`：按受控 PUBLIC_URL 配置决定 Cookie Secure，忽略客户端伪造 X-Forwarded-Proto；缺/错 Origin 与 CSRF 拒绝修改，认证 no-store。改权更新授权版本/撤销关联会话，审计失败不提交变更；M1-C 接入实际媒体关闭，不在此声称已撤销 RTC 连接。
+- [x] **Step 5:** 重跑以上真实 DB/HTTP 测试，确认所有普通响应无哈希、session摘要、setup token、密钥；提交 `feat: implement local setup sessions and channel authorization`。
 
 ## Task 4: 固定通道、站点时区、能力与组件状态
 
@@ -102,11 +104,11 @@
 
 **Interfaces:** Produces `site.Service.Update(ctx,Principal,expected int64,Update) (Site,error)`、`Expand(ctx,Principal,expected int64) ([]channel.Channel,error)`；`channel.Service.List(ctx,Principal,Cursor) (Page,error)`、`Update(ctx,Principal,ID,expected int64,Update) (Channel,error)`；`capability.Service.Snapshot(ctx) (Snapshot,error)`；`operations.Service.Observe(ctx,Observation) error`。Snapshot 分开包含部署 enabled、业务 implemented、状态、reason，组件健康不是云目标能力。
 
-- [ ] **Step 1:** 写 `TestExpansionPreservesIDsAndGrants`、`TestSiteTimezoneAndVersion`、`TestCapabilitiesSeparateIntentFromImplementation`：16→32追加，禁止缩容/重编号，执行管理员获新槽位，其他用户不隐式获权；上海/东京持久保存，无效422/旧版本409；no/no禁用，yes模块组件异常不可伪报未启用，M2.1/M3功能即使容器健康仍 not_available。
-- [ ] **Step 2:** 运行 `dev.sh test-db ./tests/integration -run 'Expansion|Timezone|Capabilities'`，确认失败。
-- [ ] **Step 3:** 实现 sites/channels CRUD 与受控扩容、IANA 支持列表（含中文标签/当前时间预览，嵌入Go时区数据），统一 If-Match/脱敏审计；M1-A 不接受摄像头 URL、修改录像策略或池改绑副作用，这些属于 M1-B。
-- [ ] **Step 4:** Worker 经私有服务名/真实 HTTP 状态采样 PostgreSQL/ZLM/gateway 与已启用的 Frigate/OpenList，MQTT 经认证协议连接验证；API/Worker 通过自身 readiness/持久心跳暴露真实状态。初始化无摄像头不阻塞核心就绪；每个观察带时间/过期，失联为unknown/unavailable。实现 capabilities、operations/components、jobs/:id、分页 audit-logs。未来智能/归档动作直接501，关闭409，依赖异常503，模块未启用不离线告警。
-- [ ] **Step 5:** 加 `TestObservationExpiresAndOptionalDoesNotFailCore` 和 `TestAuditVisibility`，验证旧正常观测过期、普通用户不能看站点敏感诊断；重跑 Task 4 测试并提交 `feat: expose stable channels timezone and real capability states`。
+- [x] **Step 1:** 写 `TestExpansionPreservesIDsAndGrants`、`TestSiteTimezoneAndVersion`、`TestCapabilitiesSeparateIntentFromImplementation`：16→32追加，禁止缩容/重编号，执行管理员获新槽位，其他用户不隐式获权；上海/东京持久保存，无效422/旧版本409；no/no禁用，yes模块组件异常不可伪报未启用，M2.1/M3功能即使容器健康仍 not_available。
+- [x] **Step 2:** 运行 `dev.sh test-db ./tests/integration -run 'Expansion|Timezone|Capabilities'`，确认失败。
+- [x] **Step 3:** 实现 sites/channels CRUD 与受控扩容、IANA 支持列表（含中文标签/当前时间预览，嵌入Go时区数据），统一 If-Match/脱敏审计；M1-A 不接受摄像头 URL、修改录像策略或池改绑副作用，这些属于 M1-B。
+- [x] **Step 4:** Worker 经私有服务名/真实 HTTP 状态采样 PostgreSQL/ZLM/gateway 与已启用的 Frigate/OpenList，MQTT 经认证协议连接验证；API/Worker 通过自身 readiness/持久心跳暴露真实状态。初始化无摄像头不阻塞核心就绪；每个观察带时间/过期，失联为unknown/unavailable。实现 capabilities、operations/components、jobs/:id、分页 audit-logs。未来智能/归档动作直接501，关闭409，依赖异常503，模块未启用不离线告警。
+- [x] **Step 5:** 加 `TestObservationExpiresAndOptionalDoesNotFailCore` 和 `TestAuditVisibility`，验证旧正常观测过期、普通用户不能看站点敏感诊断；重跑 Task 4 测试并提交 `feat: expose stable channels timezone and real capability states`。
 
 ## Task 5: 目录池登记与分服务探测
 
@@ -114,11 +116,11 @@
 
 **Interfaces:** Produces `storage.Service.Register(ctx,Principal,RegisterInput) (Pool,error)`、`Update(ctx,Principal,ID,expected int64,Update) (Pool,error)`、`RequestCheck(ctx,Principal,ID) (id.ID,error)`；`storage.Probe.Check(ctx,Pool) (Check,error)` 输出 API/Worker/ZLM 独立结果。`zlm.Client.Health(ctx) error` 与 `zlm.Client.ProbeWrite(ctx,ProbeInput) (WriteEvidence,error)` 是受限适配；ProbeInput 引用已登记池/临时流，不接受请求任意路径或 secret。
 
-- [ ] **Step 1:** 写 `TestPoolRootAndNestedConcurrency`、`TestMarkerNotRecreated`、`TestAPISuccessDoesNotImplyZLMWritable`：拒绝根外/符号链接逃逸/重复嵌套；无标识但已有保留目录拒绝自动接管，旧标识失联不补建；API可写但Worker失败或ZLM待验证不能 ready。
-- [ ] **Step 2:** 运行 `dev.sh test-go ./internal/storage` 和 `dev.sh test-db ./tests/integration -run Pool`，确认失败。
-- [ ] **Step 3:** 实现既有目录规范路径、根约束访问、.one-nvr.json 身份与事务级路径冲突锁，探测只用专用 .work/probes 文件；接口 storage-pools 的登记/默认/启停/无引用空池删除、test。不创建不存在的池根，不改已有媒体池路径，不扫描底层NAS/RAID。
-- [ ] **Step 4:** API/Worker各自独立读写/删/空间检查，Worker调度分项结果，ZLM无临时测试源记录 pending；保留 ProbeWrite 契约并在M1-B源测试时闭环，不能用Worker写文件冒充ZLM写入。10秒检查/30秒过期，statfs文件系统身份合并共享容量，池业务占用独立展示；低空间显示阻断，M1-B连接录制阻断，M1-A不实现循环清理。
-- [ ] **Step 5:** 加 `TestConcurrentDefaultPoolUnique`、`TestSharedFilesystemCapacityNotDoubled`、`TestLostRootNotRecreated`，重跑路径/数据库检查，提交 `feat: register directory pools with honest service-level checks`。
+- [x] **Step 1:** 写 `TestPoolRootAndNestedConcurrency`、`TestMarkerNotRecreated`、`TestAPISuccessDoesNotImplyZLMWritable`：拒绝根外/符号链接逃逸/重复嵌套；无标识但已有保留目录拒绝自动接管，旧标识失联不补建；API可写但Worker失败或ZLM待验证不能 ready。
+- [x] **Step 2:** 运行 `dev.sh test-go ./internal/storage` 和 `dev.sh test-db ./tests/integration -run Pool`，确认失败。
+- [x] **Step 3:** 实现既有目录规范路径、根约束访问、.one-nvr.json 身份与事务级路径冲突锁，探测只用专用 .work/probes 文件；接口 storage-pools 的登记/默认/启停/无引用空池删除、test。不创建不存在的池根，不改已有媒体池路径，不扫描底层NAS/RAID。
+- [x] **Step 4:** API/Worker各自独立读写/删/空间检查，Worker调度分项结果，ZLM无临时测试源记录 pending；保留 ProbeWrite 契约并在M1-B源测试时闭环，不能用Worker写文件冒充ZLM写入。10秒检查/30秒过期，statfs文件系统身份合并共享容量，池业务占用独立展示；低空间显示阻断，M1-B连接录制阻断，M1-A不实现循环清理。
+- [x] **Step 5:** 加 `TestConcurrentDefaultPoolUnique`、`TestSharedFilesystemCapacityNotDoubled`、`TestLostRootNotRecreated`，重跑路径/数据库检查，提交 `feat: register directory pools with honest service-level checks`。
 
 ## Task 6: 手动与映射目录证书的版本、校验和监测
 
@@ -126,11 +128,11 @@
 
 **Interfaces:** Produces `tlsmanager.Validate(chain,key []byte,host string,now time.Time) (Metadata,error)`；Metadata 是公共 X.509 信息。`tlsmanager.Service.Import(ctx,Principal,chain,key []byte) (Version,error)`、`CheckDirectory(ctx) (CheckResult,error)`、`SetAutoApply(ctx,Principal,expected int64,enabled bool) error`、`RequestApply(ctx,Principal,ID,expected int64) (id.ID,error)`、`RequestRollback(ctx,Principal,expected int64) (id.ID,error)`。内部 FileRefs/幂等摘要不公开。
 
-- [ ] **Step 1:** 用测试CA/自签 fixture 写 `TestValidatePairSANValidityAndLimit`、`TestWatcherPartialReplacementAndSameMtime`：RSA/EC/PKCS1/PKCS8、IP/DNS SAN、自签/省略根链可用；错误密钥、顺序/用途/有效期、总量>1MiB拒绝；先换chain后换key保持旧版本，mtime不变但内容变化仍识别。
-- [ ] **Step 2:** 运行 `dev.sh test-go ./internal/tlsmanager`，确认缺失实现失败。
-- [ ] **Step 3:** 实现上述校验/受限 DATA_DIR/tls/versions 不可变快照，手动上传来源和私钥不回显/下载；HTTP只保存待用。目录模式固定文件/根内符号链接/实际可读约束，10秒重新读取内容，前后身份校验、至少2秒间隔的两次一致完整采样；异常30秒重试，相同错误聚合；内容一致不生成任务，同叶证书换链仍处理。第一份目录输入坏且无旧快照不生成自签替代。
-- [ ] **Step 4:** 持久化自动应用开关默认true，与版本/审计/任务同事务；目录模式上传拒绝，回滚请求同时暂停；DB失联不应用新版本，恢复检查最新文件。实现settings/tls及watch/check/import/apply/rollback端点，管理员授权/If-Match/有界上传/no-store，返回公共信息/待用状态。
-- [ ] **Step 5:** 加 `TestWatcherDuplicateAndChainOnlyChange`、`TestHTTPDirectoryPendingAndRollbackPauses`、`TestPrivateMaterialNeverSerialized`，分别运行单元与 `dev.sh test-db ./tests/integration -run TLS`；提交 `feat: manage validated certificate versions and external renewal input`。
+- [x] **Step 1:** 用测试CA/自签 fixture 写 `TestValidatePairSANValidityAndLimit`、`TestWatcherPartialReplacementAndSameMtime`：RSA/EC/PKCS1/PKCS8、IP/DNS SAN、自签/省略根链可用；错误密钥、顺序/用途/有效期、总量>1MiB拒绝；先换chain后换key保持旧版本，mtime不变但内容变化仍识别。
+- [x] **Step 2:** 运行 `dev.sh test-go ./internal/tlsmanager`，确认缺失实现失败。
+- [x] **Step 3:** 实现上述校验/受限 DATA_DIR/tls/versions 不可变快照，手动上传来源和私钥不回显/下载；HTTP只保存待用。目录模式固定文件/根内符号链接/实际可读约束，10秒重新读取内容，前后身份校验、至少2秒间隔的两次一致完整采样；异常30秒重试，相同错误聚合；内容一致不生成任务，同叶证书换链仍处理。第一份目录输入坏且无旧快照不生成自签替代。
+- [x] **Step 4:** 持久化自动应用开关默认true，与版本/审计/任务同事务；目录模式上传拒绝，回滚请求同时暂停；DB失联不应用新版本，恢复检查最新文件。实现settings/tls及watch/check/import/apply/rollback端点，管理员授权/If-Match/有界上传/no-store，返回公共信息/待用状态。
+- [x] **Step 5:** 加 `TestWatcherDuplicateAndChainOnlyChange`、`TestHTTPDirectoryPendingAndRollbackPauses`、`TestPrivateMaterialNeverSerialized`，分别运行单元与 `dev.sh test-db ./tests/integration -run TLS`；提交 `feat: manage validated certificate versions and external renewal input`。
 
 ## Task 7: gateway 内受限应用、指纹核验及恢复
 

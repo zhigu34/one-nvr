@@ -1,0 +1,145 @@
+name: Foundation CI
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: foundation-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Validate Compose and shell
+        run: |
+          docker compose -f deploy/production/compose.test.yaml config --quiet
+          bash -n deploy/production/dev.sh
+          sh -n deploy/production/web-tool.sh
+      - name: Go unit race tests
+        run: ./deploy/production/dev.sh test-go -race ./internal/... ./cmd/... ./migrations
+      - name: PostgreSQL 17.11 integration race tests
+        run: ./deploy/production/dev.sh test-db -race ./tests/integration
+      - name: Vet
+        run: docker compose -p one-nvr-dev -f deploy/production/compose.test.yaml run --rm go go vet ./...
+      - name: Cleanup development containers
+        if: always()
+        run: docker compose -p one-nvr-dev -f deploy/production/compose.test.yaml down --volumes --remove-orphans
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install frozen dependencies
+        run: ./deploy/production/dev.sh web install --frozen-lockfile
+      - name: Generate API types and check drift
+        run: |
+          ./deploy/production/dev.sh web api:generate
+          git diff --exit-code -- apps/web/src/lib/api-types.ts
+      - name: Build
+        run: ./deploy/production/dev.sh web build
+      - name: Lint
+        run: ./deploy/production/dev.sh web lint
+      - name: Cleanup development containers
+        if: always()
+        run: docker compose -p one-nvr-dev -f deploy/production/compose.test.yaml down --volumes --remove-orphans
+  m0-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Preserve M0 behavior
+        run: |
+          docker run --rm --volume "$PWD:/workspace:ro" --workdir /workspace python:3.12-slim sh -eu -c '
+            pip install --disable-pip-version-check --require-hashes -r deploy/m0/requirements.txt
+            python -m unittest discover -s deploy/m0/tests -v
+          '
+  images:
+    needs: [backend, frontend, m0-regression]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [app, gateway]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Build pinned Linux amd64 image
+        run: docker build --platform linux/amd64 --file "deploy/production/Dockerfile.${{ matrix.image }}" --tag "one-nvr/${{ matrix.image }}:ci" .
+  gateway-runtime:
+    needs: [backend, frontend, m0-regression]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Build pinned app and gateway images
+        run: |
+          docker build --platform linux/amd64 -f deploy/production/Dockerfile.app -t one-nvr/app:ci .
+          docker build --platform linux/amd64 -f deploy/production/Dockerfile.gateway -t one-nvr/gateway:ci .
+      - name: Actual Nginx application, rollback and crash recovery
+        run: ./deploy/production/test-gateway.sh
+  browser-runtime:
+    needs: [backend, frontend, m0-regression]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Build pinned runtime and browser images
+        run: |
+          for image in app gateway browser; do docker build -f "deploy/production/Dockerfile.$image" -t "one-nvr/$image:ci" .; done
+      - name: Frontend browser unit tests
+        run: docker run --rm --init --shm-size=256m one-nvr/browser:ci pnpm test
+      - name: Real browser with modules disabled and manual certificate
+        run: ./deploy/production/dev.sh e2e --no-build
+      - name: Real browser with modules enabled
+        run: ONE_NVR_E2E_MODULES=yes ./deploy/production/dev.sh e2e --no-build
+      - name: Real browser with read-only certificate directory
+        run: ONE_NVR_E2E_TLS_DIR=/tls-input ./deploy/production/dev.sh e2e --no-build
+  production-runtime:
+    needs: [backend, frontend, m0-regression]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Build actual production images
+        run: |
+          docker build -f deploy/production/Dockerfile.app -t one-nvr/app:m1a .
+          docker build -f deploy/production/Dockerfile.gateway -t one-nvr/gateway:m1a .
+      - name: Actual production core and repeat deployment
+        run: ./deploy/production/test-deployment.sh
+      - name: Actual Mosquitto password conversion remains idempotent
+        run: |
+          image=eclipse-mosquitto:2.0.22@sha256:199ea8ef2e35ec2b1b37e59cfd1dbae538ed4dfa4a2251a121a52215a6248a21
+          docker run --rm --network none --user 0:0 --tmpfs /work --mount "type=bind,source=$PWD/deploy/production/hash-mqtt.sh,target=/hash-mqtt.sh,readonly" --entrypoint sh "$image" -ec 'printf "one_nvr:isolated-test-only\n" > /work/passwords; sh /hash-mqtt.sh /work/passwords; before=$(sha256sum /work/passwords); sh /hash-mqtt.sh /work/passwords; after=$(sha256sum /work/passwords); test "$before" = "$after"; printf "Mosquitto actual repeated hash conversion PASS\n"'
+
+  hardware-cpu-runtime:
+    needs: [backend]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Real fixed-image decoding and model inference
+        run: |
+          image=ghcr.io/blakeblackshear/frigate:0.17.2@sha256:d4351369984d4a9e2a49ac59736f6490856a7ea11f7790040746d21496967010
+          docker run --rm --network none --cpus 2 --memory 2g --pids-limit 128 --mount "type=bind,source=$PWD/deploy/production/hardware-probe.py,target=/probe.py,readonly" --entrypoint python3 "$image" /probe.py cpu none > /tmp/hardware-result.json
+          docker run --rm -i --network none --entrypoint python3 "$image" -c 'import json,sys; r=json.load(sys.stdin); assert r["decode"] and r["inference"]; assert len(r["sample_sha256"])==64 and len(r["model_sha256"])==64; print("CPU actual decoder and inference PASS; no camera capacity claim")' < /tmp/hardware-result.json

@@ -1,0 +1,15 @@
+# syntax=docker/dockerfile:1
+FROM node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS node-runtime
+FROM mcr.microsoft.com/playwright:v1.59.1-noble@sha256:b0ab6f3cb99aa7803adbc14d9027ec1785fc6e433b97e134e0f8fe61683b6b53
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && npm install --global --ignore-scripts --no-audit --no-fund pnpm@10.12.4
+WORKDIR /workspace/apps/web
+COPY apps/web/package.json apps/web/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY apps/web/ ./
+COPY tests/e2e/ /workspace/tests/e2e/
+RUN chown -R 10001:10001 /workspace
+ENV HOME=/tmp
+USER 10001:10001
+CMD ["pnpm", "exec", "playwright", "test"]
