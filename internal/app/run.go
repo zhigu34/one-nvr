@@ -10,6 +10,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/config"
 	"github.com/zhigu34/one-nvr/internal/database"
 	"github.com/zhigu34/one-nvr/internal/httpapi"
+	"github.com/zhigu34/one-nvr/internal/operations"
 	"github.com/zhigu34/one-nvr/internal/secrets"
 	"github.com/zhigu34/one-nvr/internal/site"
 	"log/slog"
@@ -36,13 +37,13 @@ func Run(name string) error {
 	}
 	defer pool.Close()
 	db := &database.DB{Pool: pool}
+	secret, err := secrets.Load(c.DataDir)
+	if err != nil {
+		return fmt.Errorf("persistent secrets unavailable; run admin init-secrets before startup")
+	}
 	check := func(ctx context.Context) error { return database.Ready(ctx, db) }
 	var handler http.Handler = httpapi.Health(check)
 	if name == "api" {
-		secret, err := secrets.Load(c.DataDir)
-		if err != nil {
-			return fmt.Errorf("persistent secrets unavailable; run admin init-secrets before startup")
-		}
 		passwords := auth.NewPasswordHasher(2)
 		accounts := auth.NewService(db, secret, passwords)
 		scheme := "http"
@@ -55,7 +56,34 @@ func Run(name string) error {
 		if err != nil {
 			return fmt.Errorf("entry protocol initialization unavailable")
 		}
-		handler = httpapi.NewHandler(httpapi.Dependencies{Auth: accounts, Site: &site.Service{DB: db, Secrets: secret, Passwords: passwords}, PublicURL: c.PublicURL, HealthCheck: check})
+		handler = httpapi.NewHandler(httpapi.Dependencies{Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, PublicURL: c.PublicURL, HealthCheck: check, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled})
+	}
+	if name == "worker" {
+		zlmKey, err := secret.ComponentCredential("zlm")
+		if err != nil {
+			return err
+		}
+		prober := &operations.Prober{Operations: operations.New(db, nil, c.FrigateEnabled, c.OpenListEnabled), Client: operations.NewProbeClient(), Targets: map[string]operations.ProbeTarget{
+			"gateway": {URL: "http://gateway/health", Kind: "health"},
+			"api":     {URL: "http://api:8081/health/ready", Kind: "health"},
+			"zlm":     {URL: "http://zlm/index/api/getThreadsLoad?secret=" + zlmKey, Kind: "zlm"},
+		}}
+		if c.FrigateEnabled {
+			mqttKey, err := secret.ComponentCredential("mqtt")
+			if err != nil {
+				return err
+			}
+			prober.MQTTAddress = "mqtt:1883"
+			prober.MQTTUsername = "one_nvr"
+			prober.MQTTPassword = mqttKey
+			prober.Targets["frigate"] = operations.ProbeTarget{URL: "http://frigate:5000/api/version", Kind: "version"}
+		}
+		if c.OpenListEnabled {
+			prober.Targets["openlist"] = operations.ProbeTarget{URL: "http://openlist:5244/api/public/settings", Kind: "openlist"}
+		}
+		probeDone := make(chan struct{})
+		go func() { defer close(probeDone); prober.Run(ctx) }()
+		defer func() { stop(); <-probeDone }()
 	}
 	server := &http.Server{Addr: c.ListenAddress, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
 	done := make(chan error, 1)

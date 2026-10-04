@@ -35,6 +35,7 @@ type SetupInput struct {
 }
 type Service struct {
 	DB        *database.DB
+	Auth      *auth.Service
 	Secrets   secrets.State
 	Passwords *auth.PasswordHasher
 }

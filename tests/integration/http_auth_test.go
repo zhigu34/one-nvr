@@ -129,6 +129,30 @@ func TestOwnGrantChangeRespondsSuccessAndRevokesSession(t *testing.T) {
 		t.Fatal("old own-grant session still valid")
 	}
 }
+
+func TestMissingGrantFieldCannotClearExisting(t *testing.T) {
+	_, accounts, sites, admin := authFixture(t)
+	h := httpapi.NewHandler(httpapi.Dependencies{Auth: accounts, Site: sites, PublicURL: "http://nvr.example.com"})
+	for _, body := range []string{`{}`, `{"grants":null}`} {
+		r := httptest.NewRequest("PUT", "http://nvr.example.com/api/v1/users/"+string(admin.User.ID)+"/channel-grants", bytes.NewBufferString(body))
+		r.AddCookie(&http.Cookie{Name: "one_nvr_session", Value: admin.RawSession})
+		r.Header.Set("Origin", "http://nvr.example.com")
+		r.Header.Set("X-CSRF-Token", accounts.CSRF(admin.RawSession))
+		r.Header.Set("If-Match", `"1"`)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != 422 {
+			t.Fatalf("missing grants cleared state: %d %s", w.Code, w.Body.String())
+		}
+	}
+	if _, err := accounts.Authenticate(context.Background(), admin.RawSession); err != nil {
+		t.Fatal("invalid grant input revoked session", err)
+	}
+	grants, err := accounts.GetGrants(context.Background(), admin.Principal, admin.User.ID)
+	if err != nil || len(grants) != 16 {
+		t.Fatal("invalid request changed grants", grants, err)
+	}
+}
 func TestViewerDirectHTTPConfigurationRejected(t *testing.T) {
 	_, accounts, sites, admin := authFixture(t)
 	ctx := context.Background()

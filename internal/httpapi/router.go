@@ -5,8 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"github.com/zhigu34/one-nvr/internal/auth"
+	"github.com/zhigu34/one-nvr/internal/capability"
+	"github.com/zhigu34/one-nvr/internal/channel"
 	"github.com/zhigu34/one-nvr/internal/fault"
 	"github.com/zhigu34/one-nvr/internal/id"
+	"github.com/zhigu34/one-nvr/internal/operations"
 	"github.com/zhigu34/one-nvr/internal/site"
 	"net"
 	"net/http"
@@ -16,10 +19,14 @@ import (
 )
 
 type Dependencies struct {
-	Auth        *auth.Service
-	Site        *site.Service
-	PublicURL   string
-	HealthCheck func(context.Context) error
+	Auth                            *auth.Service
+	Site                            *site.Service
+	PublicURL                       string
+	HealthCheck                     func(context.Context) error
+	Channels                        *channel.Service
+	Operations                      *operations.Service
+	Capabilities                    *capability.Service
+	FrigateEnabled, OpenListEnabled bool
 }
 type router struct {
 	d             Dependencies
@@ -44,6 +51,19 @@ func NewHandler(d Dependencies) http.Handler {
 	if r.origin == "" || d.Auth == nil || d.Site == nil {
 		panic("invalid API dependencies")
 	}
+	if d.Site.Auth == nil {
+		d.Site.Auth = d.Auth
+	}
+	if d.Channels == nil {
+		d.Channels = &channel.Service{DB: d.Auth.DB, Auth: d.Auth}
+	}
+	if d.Operations == nil {
+		d.Operations = operations.New(d.Auth.DB, d.Auth, d.FrigateEnabled, d.OpenListEnabled)
+	}
+	if d.Capabilities == nil {
+		d.Capabilities = &capability.Service{Operations: d.Operations, FrigateEnabled: d.FrigateEnabled, OpenListEnabled: d.OpenListEnabled}
+	}
+	r.d = d
 	r.mux.Handle("/health/", Health(d.HealthCheck))
 	r.mux.HandleFunc("GET /api/v1/setup/status", r.setupStatus)
 	r.mux.HandleFunc("POST /api/v1/setup", r.anonymous(r.setup))
@@ -56,6 +76,18 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("PATCH /api/v1/users/{id}", r.protected(r.updateUser))
 	r.mux.HandleFunc("GET /api/v1/users/{id}/channel-grants", r.protected(r.getGrants))
 	r.mux.HandleFunc("PUT /api/v1/users/{id}/channel-grants", r.protected(r.setGrants))
+	r.mux.HandleFunc("GET /api/v1/site", r.protected(r.currentSite))
+	r.mux.HandleFunc("PATCH /api/v1/site", r.protected(r.updateSite))
+	r.mux.HandleFunc("POST /api/v1/site/expand", r.protected(r.expandSite))
+	r.mux.HandleFunc("GET /api/v1/timezones", r.timezones)
+	r.mux.HandleFunc("GET /api/v1/channels", r.protected(r.listChannels))
+	r.mux.HandleFunc("PATCH /api/v1/channels/{id}", r.protected(r.updateChannel))
+	r.mux.HandleFunc("GET /api/v1/capabilities", r.protected(r.capabilities))
+	r.mux.HandleFunc("GET /api/v1/operations/components", r.protected(r.components))
+	r.mux.HandleFunc("GET /api/v1/jobs/{id}", r.protected(r.job))
+	r.mux.HandleFunc("GET /api/v1/audit-logs", r.protected(r.auditLogs))
+	r.mux.HandleFunc("POST /api/v1/archive-tasks", r.protected(r.futureArchive))
+	r.mux.HandleFunc("POST /api/v1/detection-rules", r.protected(r.futureIntelligence))
 	r.mux.HandleFunc("/", func(w http.ResponseWriter, q *http.Request) { fail(w, q, auth.ErrNotFound) })
 	return http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
 		requestID, err := id.New()
@@ -353,13 +385,17 @@ func (r *router) setGrants(w http.ResponseWriter, q *http.Request, p auth.Princi
 		return
 	}
 	var in struct {
-		Grants []auth.Grant `json:"grants"`
+		Grants *[]auth.Grant `json:"grants"`
 	}
 	if err := decode(w, q, &in); err != nil {
 		fail(w, q, err)
 		return
 	}
-	if err := r.d.Auth.SetGrants(q.Context(), p, userID, version, in.Grants); err != nil {
+	if in.Grants == nil {
+		fail(w, q, auth.ErrInvalid)
+		return
+	}
+	if err := r.d.Auth.SetGrants(q.Context(), p, userID, version, *in.Grants); err != nil {
 		fail(w, q, err)
 		return
 	}
@@ -368,5 +404,5 @@ func (r *router) setGrants(w http.ResponseWriter, q *http.Request, p auth.Princi
 	if userID == p.UserID {
 		r.setCookie(w, sessionCookie, "", -1)
 	}
-	respond(w, q, 200, in.Grants)
+	respond(w, q, 200, *in.Grants)
 }

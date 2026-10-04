@@ -24,15 +24,29 @@ type Grant struct {
 
 func validAction(a Action) bool { return a == Live || a == Playback || a == Export || a == Configure }
 func (s *Service) RequireChannel(ctx context.Context, p Principal, channelID id.ID, action Action) error {
+	return s.requireChannel(ctx, p, channelID, action, s.DB.Pool)
+}
+
+// RequireChannelTx serializes a channel mutation with session/grant revocation.
+func (s *Service) RequireChannelTx(ctx context.Context, p Principal, channelID id.ID, action Action, tx pgx.Tx) error {
+	if err := LockAuthorization(ctx, tx); err != nil {
+		return err
+	}
+	return s.requireChannel(ctx, p, channelID, action, tx)
+}
+
+func (s *Service) requireChannel(ctx context.Context, p Principal, channelID id.ID, action Action, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}) error {
 	if !validAction(action) {
 		return ErrInvalid
 	}
-	user, err := s.CurrentUser(ctx, p)
+	user, err := s.current(ctx, p, q)
 	if err != nil {
 		return err
 	}
 	var live, playback, export, configure bool
-	err = s.DB.Pool.QueryRow(ctx, "SELECT live,playback,export,configure FROM channel_grants WHERE user_id=$1 AND channel_id=$2", p.UserID, channelID).Scan(&live, &playback, &export, &configure)
+	err = q.QueryRow(ctx, "SELECT live,playback,export,configure FROM channel_grants WHERE user_id=$1 AND channel_id=$2", p.UserID, channelID).Scan(&live, &playback, &export, &configure)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}

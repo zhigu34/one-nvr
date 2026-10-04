@@ -139,6 +139,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** @description 供初始化和设置选择的公开 IANA 参考列表，不含站点配置。 */
         get: operations["timezones"];
         put?: never;
         post?: never;
@@ -462,6 +463,40 @@ export interface paths {
         get: operations["ready"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/archive-tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description M1-A 仅实现管理员权限和模块门禁；未启用返回 409，启用后业务尚未实现返回 501。 */
+        post: operations["requestArchiveTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/detection-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description M1-A 仅实现管理员权限和模块门禁；未启用返回 409，启用后业务尚未实现返回 501。 */
+        post: operations["createDetectionRule"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1891,6 +1926,52 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    requestArchiveTask: {
+        parameters: {
+            query?: never;
+            header: {
+                Origin: string;
+                "X-CSRF-Token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Structured error (401/403/409/501/503) */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createDetectionRule: {
+        parameters: {
+            query?: never;
+            header: {
+                Origin: string;
+                "X-CSRF-Token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Structured error (401/403/409/501/503) */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
             };
         };
     };
