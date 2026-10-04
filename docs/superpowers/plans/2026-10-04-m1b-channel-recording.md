@@ -137,11 +137,11 @@
 
 **Interfaces:** `recording.Service.Accept(ctx,Completion) error`（DB inbox 成功或 fsync spool 后返回）；`DrainSpool(ctx) error`；`recording.NewHookHandler(service *Service,token string) http.Handler`；`storage.Service.OpenMediaRoot(ctx,poolID id.ID) (*os.Root,Pool,error)`；`PublishZLMEvidence(ctx,poolID,runID id.ID,evidence WriteEvidence) error`。`zlm.WriteEvidence` 明确 run/文件存在/结构检查/实测时间，不用业务手写文件代替。
 
-- [ ] **Step 1:** 写 `TestHookDurabilityAndWrongIdentity`：错误服务令牌/超64KiB请求拒绝，合法Completion重复只一条；DB不可用落盘后应答，DB+spool都不可写必须非成功；hook的url/folder不用作媒体来源。`TestPoolProbeRequiresZLMFile` 断言 API可写/ZLM不可写不能healthy。
-- [ ] **Step 2:** `dev.sh test-db ./tests/integration -run 'Hook|PoolProbeRequiresZLM'`、`test-go ./internal/recording ./internal/storage` 红灯。
-- [ ] **Step 3:** Worker 独立内部 hook listener `:8083`，不挂gateway、不发布宿主端口。由主密钥域分离派生 hook 身份，仅私有生成ZLM配置持有；限制body/时间/字段，校验mediaServerID和StreamKey绑定，未登记流进入脱敏诊断不分配当前源。ZLM生成配置 `apiDebug=0`、MP4默认关闭、auto_close关闭、无人观看hook不关闭；M1-B播放hook仅允许Worker经已映射内部流持有的私有探测凭据，不接受匿名RTC/原生文件读取，M1-C再接入业务票据。spool为 `/data/recording-spool` 0700/0600，独立原子文件+目录fsync，256MiB上限，满时显式失败且不淘汰已有未处理回调；重放成功后才删。
-- [ ] **Step 4:** 临时测试源分配持久 Purpose=probe run，实际 ZLM 录制到池内专用 `.work/probes/zlm/<run_id>`，stop后等真实完成片并验证读取/结构；再受限删除该probe媒体。API/Worker基础检查健康即可进入此验证，不要求已有zlm healthy。无测试源仍pending；成功写证据30秒有效，正式活跃run完成片/实际状态持续刷新，空闲已验证池受控重测而不伪造新证据。测试 symlink/marker/离线/服务视角不一致，重跑Go/DB和 `test-media.sh --probe`。
-- [ ] **Step 5:** 提交 `feat: persist media hooks and verify ZLM pool writes`。
+- [x] **Step 1:** 写 `TestHookDurabilityAndWrongIdentity`：错误服务令牌/超64KiB请求拒绝，合法Completion重复只一条；DB不可用落盘后应答，DB+spool都不可写必须非成功；hook的url/folder不用作媒体来源。`TestPoolProbeRequiresZLMFile` 断言 API可写/ZLM不可写不能healthy。
+- [x] **Step 2:** `dev.sh test-db ./tests/integration -run 'Hook|PoolProbeRequiresZLM'`、`test-go ./internal/recording ./internal/storage` 红灯。
+- [x] **Step 3:** Worker 独立内部 hook listener `:8083`，不挂gateway、不发布宿主端口。由主密钥域分离派生 hook 身份，仅私有生成ZLM配置持有；限制body/时间/字段，校验mediaServerID和StreamKey绑定，未登记流进入脱敏诊断不分配当前源。ZLM生成配置 `apiDebug=0`、MP4默认关闭、auto_close关闭、无人观看hook不关闭；M1-B播放hook仅允许Worker经已映射内部流持有的私有探测凭据，不接受匿名RTC/原生文件读取，M1-C再接入业务票据。spool为 `/data/recording-spool` 0700/0600，独立原子文件+目录fsync，256MiB上限，满时显式失败且不淘汰已有未处理回调；重放成功后才删。
+- [x] **Step 4:** 临时测试源分配持久 Purpose=probe run，实际 ZLM 录制到池内专用 `.work/probes/zlm/<run_id>`，stop后等真实完成片并验证读取/结构；再受限删除该probe媒体。API/Worker基础检查健康即可进入此验证，不要求已有zlm healthy。无测试源仍pending；成功写证据30秒有效，正式活跃run完成片/实际状态持续刷新，空闲已验证池受控重测而不伪造新证据。测试 symlink/marker/离线/服务视角不一致，重跑Go/DB和 `test-media.sh --probe`。
+- [x] **Step 5:** 提交 `feat: persist media hooks and verify ZLM pool writes`。
 
 ## Task 5: 同池标准文件发布、索引与崩溃恢复
 

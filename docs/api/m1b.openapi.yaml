@@ -2911,7 +2911,7 @@
     "/api/v1/recordings": {
       "get": {
         "operationId": "recordings",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "playback",
         "security": [
           {

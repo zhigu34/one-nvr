@@ -14,6 +14,8 @@ services:
     sysctls:
       net.ipv4.ip_unprivileged_port_start: "0"
     cap_add: [NET_ADMIN]
+    environment:
+      TZ: UTC
     volumes:
       - ${ONE_NVR_MEDIA_TEST_DIR}/zlm.ini:/opt/media/conf/config.ini:ro
       - ${ONE_NVR_MEDIA_TEST_DIR}/launcher:/usr/local/bin/media-launcher:ro

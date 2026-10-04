@@ -2,6 +2,7 @@ package probe
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,5 +88,27 @@ printf 'Video: h264, yuv420p, 320x180, 5 fps\n[Parsed_showinfo_0] s:320x180 i:P\
 	e, err := r.FirstFrame(context.Background(), "rtsp://zlm:554/one_nvr/bb6f7f61-e7dd-4eee-a03c-a53167d6d688")
 	if err != nil || !e.FirstFrame || e.Codec != "h264" || e.Width != 320 || e.Height != 180 || e.FPS != 5 || e.ObservedAt.IsZero() {
 		t.Fatal("decoded frame evidence missing", e, err)
+	}
+}
+
+func TestInspectMP4InvalidFileDiffersFromUnavailableTool(t *testing.T) {
+	binary, err := exec.LookPath("ffprobe")
+	if err != nil {
+		t.Skip("native ffprobe unavailable")
+	}
+	path := filepath.Join(t.TempDir(), "invalid.mp4")
+	if err := os.WriteFile(path, []byte("invalid closed media"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if _, err := (Runner{FFprobe: binary}).InspectMP4(context.Background(), file); !errors.Is(err, ErrFileInvalid) {
+		t.Fatal("invalid file lacks distinct media evidence", err)
+	}
+	if _, err := (Runner{FFprobe: filepath.Join(t.TempDir(), "absent")}).InspectMP4(context.Background(), file); !errors.Is(err, ErrProbeFailed) || errors.Is(err, ErrFileInvalid) {
+		t.Fatal("missing tool reported corrupted media", err)
 	}
 }

@@ -115,6 +115,8 @@ func Run(name string) error {
 		}()
 		background.Add(1)
 		go func() { defer background.Done(); recordings.Replay(ctx) }()
+		background.Add(1)
+		go func() { defer background.Done(); recordings.RunPublisher(ctx) }()
 	}
 	if name == "worker" {
 		background.Add(1)

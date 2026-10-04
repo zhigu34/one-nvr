@@ -9,9 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/channel"
 	"github.com/zhigu34/one-nvr/internal/database"
 	"github.com/zhigu34/one-nvr/internal/id"
@@ -36,16 +38,22 @@ type Probe interface {
 	InspectMP4(context.Context, *os.File) (probe.FileEvidence, error)
 }
 type Service struct {
-	DB           *database.DB
-	Media        Media
-	Probe        Probe
-	Roots        []string
-	DataDir      string
-	Pools        *storage.Service
-	Sources      *channel.SourceService
-	FreshNetwork func(context.Context) (channel.NetworkPolicy, error)
-	ProbeToken   string
-	siteID       id.ID
+	DB             *database.DB
+	Auth           *auth.Service
+	Files          FilePublisher
+	Media          Media
+	Probe          Probe
+	Roots          []string
+	DataDir        string
+	Pools          *storage.Service
+	Sources        *channel.SourceService
+	FreshNetwork   func(context.Context) (channel.NetworkPolicy, error)
+	ProbeToken     string
+	siteID         id.ID
+	discoveryMu    sync.Mutex
+	discoveryAfter id.ID
+	discoveryTime  time.Time
+	discoveryFiles map[id.ID]string
 }
 
 func New(db *database.DB, media Media, checker Probe, roots []string, dataDir string) *Service {
@@ -66,10 +74,14 @@ type Completion struct {
 	Size          int64
 	StartTime     time.Time
 	Duration      time.Duration
+	TimeEvidence  string `json:",omitempty"`
 }
 
 func (Completion) String() string { return "<private recording completion>" }
 func (c Completion) validate() error {
+	if c.TimeEvidence != "" && c.TimeEvidence != "completion" && c.TimeEvidence != "recovered" && c.TimeEvidence != "provisional" {
+		return ErrCompletionInvalid
+	}
 	if c.Key.Validate() != nil || c.MediaServerID == "" || len(c.MediaServerID) > 128 || c.Size <= 0 || c.StartTime.IsZero() || c.Duration <= 0 || c.Duration > 24*time.Hour || len(c.FilePath) > 4096 || !filepath.IsAbs(c.FilePath) || filepath.Clean(c.FilePath) != c.FilePath || filepath.Ext(c.FilePath) != ".mp4" || strings.ContainsAny(c.FilePath, "\x00\r\n") {
 		return ErrCompletionInvalid
 	}
