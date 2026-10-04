@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 cd "$(dirname "$0")/../.."
-[[ ${1:---contract} == --contract ]] || { echo 'Media acceptance stage not implemented' >&2; exit 2; }
+mode=${1:---contract}
+[[ $mode == --contract || $mode == --probe ]] || { echo 'Unknown media acceptance stage' >&2; exit 2; }
+export ONE_NVR_MEDIA_TEST_MODE=${mode#--}
+export ONE_NVR_MEDIA_TEST_LOG_LEVEL=0
+if [[ $mode == --probe ]]; then ONE_NVR_MEDIA_TEST_LOG_LEVEL=4; fi
 project="one-nvr-media-test-${GITHUB_RUN_ID:-local}-$$"
 export ONE_NVR_MEDIA_TEST_DIR
 ONE_NVR_MEDIA_TEST_DIR=$(mktemp -d)
 compose=(docker compose -p "$project" -f deploy/production/compose.media-test.yaml)
+if [[ $mode == --probe ]]; then compose+=(--profile probe); fi
 helper=
 cleanup(){ "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true; if [[ -n "$helper" ]]; then docker rm -f "$helper" >/dev/null 2>&1 || true; fi; docker run --rm --user 0:0 --network none --mount "type=bind,src=$ONE_NVR_MEDIA_TEST_DIR,dst=/test-cleanup" --entrypoint sh one-nvr/media-test:ci -c 'chmod -R a+rwX /test-cleanup' >/dev/null 2>&1 || true; rm -rf "$ONE_NVR_MEDIA_TEST_DIR"; }
 trap cleanup EXIT
-mkdir -p "$ONE_NVR_MEDIA_TEST_DIR/storage/pool/.work/zlm" "$ONE_NVR_MEDIA_TEST_DIR/evidence"
+mkdir -p "$ONE_NVR_MEDIA_TEST_DIR/storage/pool" "$ONE_NVR_MEDIA_TEST_DIR/evidence"
+if [[ $mode == --contract ]]; then mkdir -p "$ONE_NVR_MEDIA_TEST_DIR/storage/pool/.work/zlm"; fi
 chmod -R a+rwX "$ONE_NVR_MEDIA_TEST_DIR"
 cat > "$ONE_NVR_MEDIA_TEST_DIR/camera.ini" <<'INI'
 [api]
@@ -49,6 +55,11 @@ chmod 755 "$ONE_NVR_MEDIA_TEST_DIR/launcher"
 camera_ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$("${compose[@]}" ps -q camera)")
 [[ "$camera_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
 sleep 2
+if [[ $mode == --probe ]]; then
+ "${compose[@]}" up -d --wait postgres
+ "${compose[@]}" run --rm --no-deps --entrypoint /usr/local/bin/media-test runner prepare-probe
+ cp "$ONE_NVR_MEDIA_TEST_DIR/evidence/zlm-probe.ini" "$ONE_NVR_MEDIA_TEST_DIR/zlm.ini"
+fi
 "${compose[@]}" up -d fixture runner
 fixture_ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$("${compose[@]}" ps -q fixture)")
 [[ "$fixture_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
@@ -64,7 +75,7 @@ if [[ "$status" -ne 0 ]]; then
  "${compose[@]}" logs --tail=80 zlm
 fi
 mkdir -p media-test-results
-if [[ -f "$ONE_NVR_MEDIA_TEST_DIR/evidence/contract.json" ]]; then cp "$ONE_NVR_MEDIA_TEST_DIR/evidence/contract.json" media-test-results/; fi
+if [[ -f "$ONE_NVR_MEDIA_TEST_DIR/evidence/$ONE_NVR_MEDIA_TEST_MODE.json" ]]; then cp "$ONE_NVR_MEDIA_TEST_DIR/evidence/$ONE_NVR_MEDIA_TEST_MODE.json" media-test-results/; fi
 # Synthetic secrets must not appear even in private component stdout.
 if "${compose[@]}" logs zlm | grep -F 'isolated-media-fixture-only'; then echo 'Media log leaked fixture secret' >&2; exit 1; fi
 exit "$status"

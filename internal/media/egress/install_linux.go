@@ -108,5 +108,10 @@ func DropPrivileges() error {
 	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
 		return ErrBoundary
 	}
+	// Match the API/Worker identity so completed media can be atomically
+	// published and probe files removed without world-writable directories.
+	if unix.Setgroups([]int{}) != nil || unix.Setgid(10001) != nil || unix.Setuid(10001) != nil {
+		return ErrBoundary
+	}
 	return nil
 }

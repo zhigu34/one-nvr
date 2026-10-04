@@ -16,14 +16,20 @@ import (
 
 const testPassword = "fixture-password-12345"
 
-func authFixture(t *testing.T) (*database.DB, *auth.Service, *site.Service, auth.LoginResult) {
+func authFixture(t *testing.T, dataDirectories ...string) (*database.DB, *auth.Service, *site.Service, auth.LoginResult) {
 	t.Helper()
 	db := testDB(t)
 	ctx := context.Background()
 	if err := database.Migrate(ctx, db); err != nil {
 		t.Fatal(err)
 	}
-	secret, err := secrets.Init(t.TempDir())
+	dataDirectory := ""
+	if len(dataDirectories) > 0 {
+		dataDirectory = dataDirectories[0]
+	} else {
+		dataDirectory = t.TempDir()
+	}
+	secret, err := secrets.Init(dataDirectory)
 	if err != nil {
 		t.Fatal(err)
 	}

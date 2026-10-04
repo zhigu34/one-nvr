@@ -133,7 +133,7 @@ func BuildDeployment(v map[string]string) (Deployment, error) {
 	if e != nil {
 		return d, e
 	}
-	d.Services["zlm"] = Service{Image: zlm, EntryPoint: []string{"/usr/local/bin/media-launcher"}, Command: []string{"/opt/media/conf/egress.json", "./MediaServer", "-c", "/opt/media/conf/config.ini", "-l", "4"}, CapAdd: []string{"NET_ADMIN"}, Volumes: []Mount{mount(filepath.Join(runtime, "zlm.ini"), "/opt/media/conf/config.ini", true), mount(filepath.Join(runtime, "zlm-egress.json"), "/opt/media/conf/egress.json", true), mount(filepath.Join(runtime, "zlm-launcher"), "/usr/local/bin/media-launcher", true), mount(poolRoot, "/storage", false)}, Ports: []string{fmt.Sprintf("%d:%d/tcp", c.RTCPort, c.RTCPort), fmt.Sprintf("%d:%d/udp", c.RTCPort, c.RTCPort)}, Restart: "unless-stopped"}
+	d.Services["zlm"] = Service{Image: zlm, EntryPoint: []string{"/usr/local/bin/media-launcher"}, Command: []string{"/opt/media/conf/egress.json", "./MediaServer", "-c", "/opt/media/conf/config.ini", "-l", "4", "--log-dir", "/tmp/one-nvr-media-log"}, CapAdd: []string{"NET_ADMIN"}, Sysctls: map[string]string{"net.ipv4.ip_unprivileged_port_start": "0"}, Volumes: []Mount{mount(filepath.Join(runtime, "zlm.ini"), "/opt/media/conf/config.ini", true), mount(filepath.Join(runtime, "zlm-egress.json"), "/opt/media/conf/egress.json", true), mount(filepath.Join(runtime, "zlm-launcher"), "/usr/local/bin/media-launcher", true), mount(poolRoot, "/storage", false)}, Ports: []string{fmt.Sprintf("%d:%d/tcp", c.RTCPort, c.RTCPort), fmt.Sprintf("%d:%d/udp", c.RTCPort, c.RTCPort)}, Restart: "unless-stopped"}
 	if c.FrigateEnabled {
 		fg, e := image("frigate")
 		if e != nil {

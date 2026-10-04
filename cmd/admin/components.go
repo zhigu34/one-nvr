@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/zhigu34/one-nvr/internal/config"
 	"github.com/zhigu34/one-nvr/internal/media/egress"
+	"github.com/zhigu34/one-nvr/internal/media/zlm"
 	"github.com/zhigu34/one-nvr/internal/secrets"
 	"net/netip"
 	"net/url"
@@ -22,11 +23,11 @@ func writeComponentConfigs(v map[string]string, secret secrets.State) error {
 	if host == "" {
 		host = u.Hostname()
 	}
-	key, e := secret.ComponentCredential("zlm")
+	c.MediaHost = host
+	zlm, e := zlm.RenderConfig(c, secret)
 	if e != nil {
 		return e
 	}
-	zlm := fmt.Sprintf("[api]\nsecret=%s\n[http]\nport=80\nsslport=0\n[rtsp]\nport=554\nsslport=0\n[rtmp]\nport=1935\n[rtc]\nexternIP=%s\nport=%d\ntcpPort=%d\n[protocol]\nenable_mp4=0\nenable_hls=0\n", key, host, c.RTCPort, c.RTCPort)
 	if e = replaceFile("/data/runtime/zlm.ini", []byte(zlm), 0644); e != nil {
 		return e
 	}
