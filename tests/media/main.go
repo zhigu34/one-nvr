@@ -46,6 +46,11 @@ func run() error {
 func fixture() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	closeRedirect, err := startRedirectFixture(ctx)
+	if err != nil {
+		return err
+	}
+	defer closeRedirect()
 	var processes []*exec.Cmd
 	defer func() {
 		cancel()
@@ -261,11 +266,41 @@ func checkRedirect(ctx context.Context, client *zlm.Client) (bool, error) {
 			c.Close()
 		}
 	}()
+	fixtureIPs, err := net.DefaultResolver.LookupIP(ctx, "ip4", "fixture")
+	if err != nil || len(fixtureIPs) != 1 {
+		return false, fmt.Errorf("redirect origin fixture missing")
+	}
+	key := zlm.StreamKey{VHost: "__defaultVhost__", App: "one_nvr", Stream: "d5934ab7-1098-45fa-bb1d-b28eddf206f9"}
+	ref, err := client.AddProxy(ctx, zlm.ProxyInput{Key: key, URL: "rtsp://" + fixtureIPs[0].String() + ":8554/redirect", Transport: "tcp"})
+	if err == nil {
+		client.RemoveProxy(context.Background(), ref)
+		return false, nil
+	}
+	httpClient := &http.Client{Timeout: 2 * time.Second}
+	response, err := httpClient.Get("http://" + fixtureIPs[0].String() + ":8556/count")
+	if err != nil {
+		return false, fmt.Errorf("redirect origin evidence unavailable")
+	}
+	defer response.Body.Close()
+	var origin struct {
+		Requests int64 `json:"requests"`
+	}
+	if json.NewDecoder(io.LimitReader(response.Body, 1024)).Decode(&origin) != nil || origin.Requests < 1 {
+		return false, fmt.Errorf("redirect origin not reached; containment unproven")
+	}
+	return connections.Load() == 0, nil
+}
+
+func startRedirectFixture(ctx context.Context) (func(), error) {
+	runnerIPs, err := net.DefaultResolver.LookupIP(ctx, "ip4", "runner")
+	if err != nil || len(runnerIPs) != 1 {
+		return nil, fmt.Errorf("sentinel fixture address unavailable")
+	}
+	var requests atomic.Int64
 	redirect, err := net.Listen("tcp", ":8554")
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	defer redirect.Close()
 	go func() {
 		for {
 			c, e := redirect.Accept()
@@ -289,15 +324,21 @@ func checkRedirect(ctx context.Context, client *zlm.Client) (bool, error) {
 						break
 					}
 				}
-				fmt.Fprintf(c, "RTSP/1.0 302 Moved Temporarily\r\nCSeq: %s\r\nLocation: rtsp://runner:8555/denied\r\nContent-Length: 0\r\n\r\n", seq)
+				requests.Add(1)
+				fmt.Fprintf(c, "RTSP/1.0 302 Moved Temporarily\r\nCSeq: %s\r\nLocation: rtsp://%s:8555/denied\r\nContent-Length: 0\r\n\r\n", seq, runnerIPs[0].String())
 			}()
 		}
 	}()
-	key := zlm.StreamKey{VHost: "__defaultVhost__", App: "one_nvr", Stream: "d5934ab7-1098-45fa-bb1d-b28eddf206f9"}
-	ref, err := client.AddProxy(ctx, zlm.ProxyInput{Key: key, URL: "rtsp://runner:8554/redirect", Transport: "tcp"})
-	if err == nil {
-		client.RemoveProxy(context.Background(), ref)
-		return false, nil
+	mux := http.NewServeMux()
+	mux.HandleFunc("/count", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]int64{"requests": requests.Load()})
+	})
+	listener, err := net.Listen("tcp", ":8556")
+	if err != nil {
+		redirect.Close()
+		return nil, err
 	}
-	return connections.Load() == 0, nil
+	server := &http.Server{Handler: mux, ReadHeaderTimeout: time.Second}
+	go server.Serve(listener)
+	return func() { redirect.Close(); server.Close() }, nil
 }
