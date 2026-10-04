@@ -7,7 +7,7 @@ export ONE_NVR_MEDIA_TEST_DIR
 ONE_NVR_MEDIA_TEST_DIR=$(mktemp -d)
 compose=(docker compose -p "$project" -f deploy/production/compose.media-test.yaml)
 helper=
-cleanup(){ "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true; if [[ -n "$helper" ]]; then docker rm -f "$helper" >/dev/null 2>&1 || true; fi; rm -rf "$ONE_NVR_MEDIA_TEST_DIR"; }
+cleanup(){ "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true; if [[ -n "$helper" ]]; then docker rm -f "$helper" >/dev/null 2>&1 || true; fi; docker run --rm --user 0:0 --network none --mount "type=bind,src=$ONE_NVR_MEDIA_TEST_DIR,dst=/test-cleanup" --entrypoint sh one-nvr/media-test:ci -c 'chmod -R a+rwX /test-cleanup' >/dev/null 2>&1 || true; rm -rf "$ONE_NVR_MEDIA_TEST_DIR"; }
 trap cleanup EXIT
 mkdir -p "$ONE_NVR_MEDIA_TEST_DIR/storage/pool/.work/zlm" "$ONE_NVR_MEDIA_TEST_DIR/evidence"
 chmod -R a+rwX "$ONE_NVR_MEDIA_TEST_DIR"
