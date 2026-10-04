@@ -120,7 +120,7 @@ func (s *Service) ProbeSession(ctx context.Context, poolID, sessionID id.ID) err
 			}
 			proof, err := s.Probe.InspectMP4(wait, f)
 			f.Close()
-			if err != nil || !proof.Readable || !proof.Video.FirstFrame || proof.Size != c.Size {
+			if err != nil || !proof.Readable || proof.Video.Codec == "" || proof.Video.Width <= 0 || proof.Video.Height <= 0 || proof.Duration <= 0 || proof.Size != c.Size {
 				return storage.ErrMediaProof
 			}
 			e := zlm.WriteEvidence{PoolID: poolID, RecordingID: run, FilePath: c.FilePath, Size: proof.Size, Duration: proof.Duration, VideoVerified: true, ObservedAt: time.Now().UTC()}
