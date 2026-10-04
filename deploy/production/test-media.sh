@@ -54,6 +54,8 @@ fixture_ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAd
 [[ "$fixture_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
 printf '{"camera_cidrs":"%s/32,%s/32","denied_hosts":["runner","zlm"],"hook_host":"runner"}\n' "$camera_ip" "$fixture_ip" > "$ONE_NVR_MEDIA_TEST_DIR/egress.json"
 "${compose[@]}" up -d zlm
+sleep 1
+"${compose[@]}" exec -T zlm /usr/local/bin/media-launcher dns-check runner
 status=0
 "${compose[@]}" wait runner || status=$?
 "${compose[@]}" logs --no-log-prefix runner
