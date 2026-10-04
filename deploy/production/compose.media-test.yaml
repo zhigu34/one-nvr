@@ -9,9 +9,13 @@ services:
   zlm:
     image: zlmediakit/zlmediakit:master@sha256:25ecf6c4a55e72bc495be15c8480f0b0cef58c712e5c9f0596452777b41bf344
     platform: linux/amd64
-    command: ["./MediaServer", "-c", "/opt/media/conf/config.ini", "-l", "0"]
+    entrypoint: ["/usr/local/bin/media-launcher"]
+    command: ["/opt/media/conf/egress.json", "./MediaServer", "-c", "/opt/media/conf/config.ini", "-l", "0"]
+    cap_add: [NET_ADMIN]
     volumes:
       - ${ONE_NVR_MEDIA_TEST_DIR}/zlm.ini:/opt/media/conf/config.ini:ro
+      - ${ONE_NVR_MEDIA_TEST_DIR}/launcher:/usr/local/bin/media-launcher:ro
+      - ${ONE_NVR_MEDIA_TEST_DIR}/egress.json:/opt/media/conf/egress.json:ro
       - ${ONE_NVR_MEDIA_TEST_DIR}/storage:/storage
   fixture:
     image: one-nvr/media-test:ci

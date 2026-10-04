@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/zhigu34/one-nvr/internal/config"
+	"github.com/zhigu34/one-nvr/internal/media/egress"
 	"github.com/zhigu34/one-nvr/internal/secrets"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -26,6 +28,34 @@ func writeComponentConfigs(v map[string]string, secret secrets.State) error {
 	}
 	zlm := fmt.Sprintf("[api]\nsecret=%s\n[http]\nport=80\nsslport=0\n[rtsp]\nport=554\nsslport=0\n[rtmp]\nport=1935\n[rtc]\nexternIP=%s\nport=%d\ntcpPort=%d\n[protocol]\nenable_mp4=0\nenable_hls=0\n", key, host, c.RTCPort, c.RTCPort)
 	if e = replaceFile("/data/runtime/zlm.ini", []byte(zlm), 0644); e != nil {
+		return e
+	}
+	launcher, e := os.ReadFile("/usr/local/bin/media-launcher")
+	if e != nil {
+		return fmt.Errorf("media network launcher unavailable")
+	}
+	if e = replaceFile("/data/runtime/zlm-launcher", launcher, 0755); e != nil {
+		return e
+	}
+	boundary := egress.Config{CameraCIDRs: c.CameraCIDRs, HookHost: "worker", DeniedHosts: []string{"api", "worker", "gateway", "postgres", "zlm"}}
+	for _, address := range []string{host, u.Hostname()} {
+		if ip, e := netip.ParseAddr(address); e == nil {
+			boundary.DeniedIPs = append(boundary.DeniedIPs, ip.String())
+		} else if address != "" {
+			boundary.DeniedHosts = append(boundary.DeniedHosts, address)
+		}
+	}
+	if c.FrigateEnabled {
+		boundary.DeniedHosts = append(boundary.DeniedHosts, "frigate", "mqtt")
+	}
+	if c.OpenListEnabled {
+		boundary.DeniedHosts = append(boundary.DeniedHosts, "openlist")
+	}
+	policy, e := json.Marshal(boundary)
+	if e != nil {
+		return e
+	}
+	if e = replaceFile("/data/runtime/zlm-egress.json", policy, 0644); e != nil {
 		return e
 	}
 	if c.FrigateEnabled {

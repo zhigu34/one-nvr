@@ -13,7 +13,8 @@ COPY migrations ./migrations
 COPY deploy/production/templates ./deploy/production/templates
 RUN mkdir /out && go build -trimpath -buildvcs=false -o /out/api ./cmd/api && \
     go build -trimpath -buildvcs=false -o /out/worker ./cmd/worker && \
-    go build -trimpath -buildvcs=false -o /out/admin ./cmd/admin
+    go build -trimpath -buildvcs=false -o /out/admin ./cmd/admin && \
+    go build -trimpath -buildvcs=false -o /out/media-launcher ./cmd/media-launcher
 FROM build AS media-test-build
 COPY tests/media ./tests/media
 RUN go build -trimpath -buildvcs=false -o /out/media-test ./tests/media

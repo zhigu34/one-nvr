@@ -34,6 +34,7 @@ type Service struct {
 	Sysctls     map[string]string            `json:"sysctls,omitempty"`
 	Devices     []string                     `json:"devices,omitempty"`
 	ShmSize     string                       `json:"shm_size,omitempty"`
+	CapAdd      []string                     `json:"cap_add,omitempty"`
 }
 type Deployment struct {
 	Services map[string]Service `json:"services"`
@@ -132,7 +133,7 @@ func BuildDeployment(v map[string]string) (Deployment, error) {
 	if e != nil {
 		return d, e
 	}
-	d.Services["zlm"] = Service{Image: zlm, Command: []string{"./MediaServer", "-c", "/opt/media/conf/config.ini", "-l", "0"}, Volumes: []Mount{mount(filepath.Join(runtime, "zlm.ini"), "/opt/media/conf/config.ini", true), mount(poolRoot, "/storage", false)}, Ports: []string{fmt.Sprintf("%d:%d/tcp", c.RTCPort, c.RTCPort), fmt.Sprintf("%d:%d/udp", c.RTCPort, c.RTCPort)}, Restart: "unless-stopped"}
+	d.Services["zlm"] = Service{Image: zlm, EntryPoint: []string{"/usr/local/bin/media-launcher"}, Command: []string{"/opt/media/conf/egress.json", "./MediaServer", "-c", "/opt/media/conf/config.ini", "-l", "4"}, CapAdd: []string{"NET_ADMIN"}, Volumes: []Mount{mount(filepath.Join(runtime, "zlm.ini"), "/opt/media/conf/config.ini", true), mount(filepath.Join(runtime, "zlm-egress.json"), "/opt/media/conf/egress.json", true), mount(filepath.Join(runtime, "zlm-launcher"), "/usr/local/bin/media-launcher", true), mount(poolRoot, "/storage", false)}, Ports: []string{fmt.Sprintf("%d:%d/tcp", c.RTCPort, c.RTCPort), fmt.Sprintf("%d:%d/udp", c.RTCPort, c.RTCPort)}, Restart: "unless-stopped"}
 	if c.FrigateEnabled {
 		fg, e := image("frigate")
 		if e != nil {

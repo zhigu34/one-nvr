@@ -22,3 +22,32 @@ func TestCameraNetworksReachAPIAndWorker(t *testing.T) {
 		t.Fatal("empty camera ranges prevented basic deployment", err)
 	}
 }
+
+func TestZLMAlwaysUsesContainerNetworkBoundary(t *testing.T) {
+	d, err := BuildDeployment(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := d.Services["zlm"]
+	if len(s.EntryPoint) != 1 || s.EntryPoint[0] != "/usr/local/bin/media-launcher" {
+		t.Fatal("ZLM can start without installing its boundary")
+	}
+	if len(s.CapAdd) != 1 || s.CapAdd[0] != "NET_ADMIN" {
+		t.Fatal("initializer cannot install boundary")
+	}
+	binary, policy := false, false
+	for _, mount := range s.Volumes {
+		if mount.Target == "/usr/local/bin/media-launcher" {
+			binary = mount.ReadOnly && !mount.Bind.CreateHostPath
+		}
+		if mount.Target == "/opt/media/conf/egress.json" {
+			policy = mount.ReadOnly && !mount.Bind.CreateHostPath
+		}
+	}
+	if !binary || !policy {
+		t.Fatal("network wrapper or policy missing/read-write")
+	}
+	if len(d.Services) != 5 {
+		t.Fatal("network boundary added a permanent container")
+	}
+}
