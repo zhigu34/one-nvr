@@ -1,0 +1,26 @@
+# Temporary CI-only synthetic camera fixture. No production .env/data/ports.
+services:
+  camera:
+    image: zlmediakit/zlmediakit:master@sha256:25ecf6c4a55e72bc495be15c8480f0b0cef58c712e5c9f0596452777b41bf344
+    platform: linux/amd64
+    command: ["./MediaServer", "-c", "/opt/media/conf/config.ini", "-l", "0"]
+    volumes:
+      - ${ONE_NVR_MEDIA_TEST_DIR:?isolated test directory}/camera.ini:/opt/media/conf/config.ini:ro
+  zlm:
+    image: zlmediakit/zlmediakit:master@sha256:25ecf6c4a55e72bc495be15c8480f0b0cef58c712e5c9f0596452777b41bf344
+    platform: linux/amd64
+    command: ["./MediaServer", "-c", "/opt/media/conf/config.ini", "-l", "0"]
+    volumes:
+      - ${ONE_NVR_MEDIA_TEST_DIR}/zlm.ini:/opt/media/conf/config.ini:ro
+      - ${ONE_NVR_MEDIA_TEST_DIR}/storage:/storage
+  fixture:
+    image: one-nvr/media-test:ci
+    entrypoint: ["/usr/local/bin/media-test", "fixture"]
+    depends_on: [camera]
+  runner:
+    image: one-nvr/media-test:ci
+    user: "0:0"
+    entrypoint: ["/usr/local/bin/media-test", "contract"]
+    volumes:
+      - ${ONE_NVR_MEDIA_TEST_DIR}/storage:/storage
+      - ${ONE_NVR_MEDIA_TEST_DIR}/evidence:/evidence
