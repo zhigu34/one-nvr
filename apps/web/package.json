@@ -17,7 +17,7 @@
     "test:browser": "vitest",
     "test:coverage": "vitest run --coverage --browser.headless",
     "test:browser:install": "playwright install chromium --with-deps",
-    "api:generate": "openapi-typescript ../../docs/api/m1a.openapi.yaml -o src/lib/api-types.ts"
+    "api:generate": "node scripts/generate-api.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

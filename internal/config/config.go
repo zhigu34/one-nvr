@@ -15,6 +15,7 @@ type Config struct {
 	PublicURL                                                               string
 	HTTPPort, HTTPSPort, RTCPort                                            int
 	MediaHost, DataDir, DatabaseURL, TLSDir, HardwareProfile, ListenAddress string
+	CameraCIDRs                                                             string
 	FrigateEnabled, OpenListEnabled                                         bool
 }
 
@@ -85,6 +86,18 @@ func (c *Config) Validate() error {
 	}
 	if _, p, err := net.SplitHostPort(c.ListenAddress); err != nil || p == "" {
 		return fmt.Errorf("invalid API listen address")
+	}
+	if strings.TrimSpace(c.CameraCIDRs) != "" {
+		parts := strings.Split(c.CameraCIDRs, ",")
+		if len(parts) > 32 {
+			return fmt.Errorf("ONE_NVR_CAMERA_CIDRS supports at most 32 ranges")
+		}
+		for _, raw := range parts {
+			p, err := netip.ParsePrefix(strings.TrimSpace(raw))
+			if err != nil || p.Bits() == 0 || p.Addr().Is4In6() {
+				return fmt.Errorf("ONE_NVR_CAMERA_CIDRS requires explicit valid IP ranges")
+			}
+		}
 	}
 	return nil
 }
