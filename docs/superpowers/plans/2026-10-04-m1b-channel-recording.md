@@ -10,7 +10,7 @@
 
 **Spec:** [M1 控制面设计](../specs/2026-10-03-m1-control-plane-design.md) 第 3–6、8–10 节；[PRD](../../PRD.md) CH-03/05/09/10/11/12、REC；[录像文件规则 v3](../../recording-file-layout.md)。
 
-**状态：** 计划已完成作者自检，待用户书面评审；尚未开始 M1-B 产品代码。M1-A 功能基线 `93dfefc7ff3fbf8b4ab7b6a385fa7e67927b8f24` 已通过 CI，最新文档基线 `904c9d4d6118ca15ed9659d20df22c2edadb7405`。M1-A 草稿 PR #1 保持其已交付范围，M1-B 执行时从该基线创建 `codex/m1b-channel-recording` 分支，不自动合并 main。
+**状态：** 用户已确认继续，沿用本会话原生执行；Task 1 已实现，Tasks 2–10 按顺序执行。M1-A 功能基线 `93dfefc7ff3fbf8b4ab7b6a385fa7e67927b8f24` 已通过 CI，最新文档基线 `904c9d4d6118ca15ed9659d20df22c2edadb7405`。M1-A 草稿 PR #1 保持其已交付范围，M1-B 执行时从该基线创建 `codex/m1b-channel-recording` 分支，不自动合并 main。
 
 ## Global Constraints
 
@@ -101,11 +101,11 @@
 
 **Interfaces:** 定义上文共有类型。新增 `channel.NewSources(db *database.DB,a *auth.Service,secret secrets.State,network NetworkPolicy) *SourceService` 与 `recording.New(db *database.DB,media Media,probe Probe,roots []string,dataDir string) *Service`；`Media` 是 Task 3 typed ZLM 操作，`Probe` 是 Task 3 媒体探测操作。
 
-- [ ] **Step 1:** 写 `TestSourceSchemaPreservesFoundation`：先只应用 0001–0004 并建立站点/授权/池，再升级；原 ID/授权/时区/none 策略及 TLS 状态相同。`TestSourceSchemaRejectsCrossChannelAndDuplicateRun` 断言跨通道 current FK、同通道非终态 switch、相同 run+原始路径/池+标准路径重复均拒绝；移除源不能级联删除历史。
-- [ ] **Step 2:** `./deploy/production/dev.sh test-db ./tests/integration -run 'SourceSchema'`，确认因缺少新增模型失败。
-- [ ] **Step 3:** 创建 0005：source_identities/revisions/tests/switches、import_batches/items、stream_sessions、recording_runs/segments/locations/gaps、hook_inbox、source_observations。扩充 channels current/desired/pool/enabled，策略版本沿用现有列；source密文、状态/阶段及 composite FK 明确约束。增加来源键、时间区间、恢复队列索引；run/test/probe/正式记录用途独立。状态历史表保存 transition/过期 unknown，不宣称可用率评分。
-- [ ] **Step 4:** 新 OpenAPI 定义源历史/草稿/test/apply/clear/reveal/export、导入 preview/get/test/apply/retry/cancel、pool 改绑、recording-policy 与最小 `GET /recordings`，沿用 `/api/v1`、If-Match、幂等和分页。版本冲突 409；未实现播放 content 501。生成组合类型，运行上述真实 DB 测试、`web api:generate`/build，类型无漂移。
-- [ ] **Step 5:** 仅提交本任务列明文件，`feat: define channel source and recording contracts`。
+- [x] **Step 1:** 写 `TestSourceSchemaPreservesFoundation`：先只应用 0001–0004 并建立站点/授权/池，再升级；原 ID/授权/时区/none 策略及 TLS 状态相同。`TestSourceSchemaRejectsCrossChannelAndDuplicateRun` 断言跨通道 current FK、同通道非终态 switch、相同 run+原始路径/池+标准路径重复均拒绝；移除源不能级联删除历史。
+- [x] **Step 2:** `./deploy/production/dev.sh test-db ./tests/integration -run 'SourceSchema'`，确认因缺少新增模型失败。
+- [x] **Step 3:** 创建 0005：source_identities/revisions/tests/switches、import_batches/items、stream_sessions、recording_runs/segments/locations/gaps、hook_inbox、source_observations。扩充 channels current/desired/pool/enabled，策略版本沿用现有列；source密文、状态/阶段及 composite FK 明确约束。增加来源键、时间区间、恢复队列索引；run/test/probe/正式记录用途独立。状态历史表保存 transition/过期 unknown，不宣称可用率评分。
+- [x] **Step 4:** 新 OpenAPI 定义源历史/草稿/test/apply/clear/reveal/export、导入 preview/get/test/apply/retry/cancel、pool 改绑、recording-policy 与最小 `GET /recordings`，沿用 `/api/v1`、If-Match、幂等和分页。版本冲突 409；未实现播放 content 501。生成组合类型，运行上述真实 DB 测试、`web api:generate`/build，类型无漂移。
+- [x] **Step 5:** 仅提交本任务列明文件，`feat: define channel source and recording contracts`。
 
 ## Task 2: 加密草稿、地址验证与凭据交付
 
