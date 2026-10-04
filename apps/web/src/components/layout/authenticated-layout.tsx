@@ -1,6 +1,8 @@
 import { useEffect } from 'react'
 import { Outlet } from '@tanstack/react-router'
 import { useAuthStore } from '@/stores/auth-store'
+import { apiRequest, jsonRequest } from '@/lib/api-client'
+import { attachUserActivity } from '@/lib/user-activity'
 import { getCookie } from '@/lib/cookies'
 import type { Schema } from '@/lib/types'
 import { LayoutProvider } from '@/context/layout-provider'
@@ -15,6 +17,9 @@ import { Main } from './main'
 
 export function AuthenticatedLayout() {
   const session = useAPI<Schema<'Session'>>('/api/v1/auth/me', true, 5000)
+  useEffect(() => attachUserActivity(document, () => {
+    void apiRequest('/api/v1/auth/activity', jsonRequest('POST')).catch(() => {})
+  }), [])
   const setUser = useAuthStore((s) => s.setUser)
   useEffect(() => {
     if (session.data) setUser(session.data.user)

@@ -3,7 +3,7 @@
   "info": {
     "title": "one-nvr M1-A API contract",
     "version": "0.1.0",
-    "description": "M1-A contract: setup/auth/users and health implemented; remaining operations marked planned. Obtain signed pre-auth CSRF Cookie/token via setup/status before setup/login. Other mutations use session CSRF from login/me. Cookies are HttpOnly; credentials/private material never enter read DTOs."
+    "description": "M1-A foundation contract. Obtain signed pre-auth CSRF Cookie/token via setup/status before setup/login. Other mutations use session CSRF from login/me. Cookies are HttpOnly; HTTP names are one_nvr_session/one_nvr_preauth, HTTPS names are __Host-one_nvr_session/__Host-one_nvr_preauth with Secure, Path=/ and no Domain. The configured PUBLIC_URL determines protocol; protocol changes revoke sessions. Credentials/private material never enter read DTOs."
   },
   "paths": {
     "/api/v1/setup/status": {
@@ -2712,6 +2712,56 @@
         },
         "summary": "读取最近的独立硬件自检报告（管理员）"
       }
+    },
+    "/api/v1/auth/activity": {
+      "post": {
+        "operationId": "renewUserActivity",
+        "x-one-nvr-implementation": "implemented",
+        "summary": "显式用户交互续期；后台 GET 轮询不延长闲置期限",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User activity accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "renewed"
+                      ],
+                      "properties": {
+                        "renewed": {
+                          "type": "boolean"
+                        }
+                      }
+                    },
+                    "request_id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Expired or revoked session"
+          },
+          "403": {
+            "description": "Origin or CSRF rejected"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2719,7 +2769,8 @@
       "session": {
         "type": "apiKey",
         "in": "cookie",
-        "name": "one_nvr_session"
+        "name": "one_nvr_session",
+        "description": "HTTP deployment cookie. HTTPS deployments use __Host-one_nvr_session instead; browsers send HttpOnly cookies automatically with same-origin credentials."
       }
     },
     "schemas": {

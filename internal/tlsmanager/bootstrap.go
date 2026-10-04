@@ -30,8 +30,16 @@ func (s *Service) Bootstrap(ctx context.Context) error {
 		if e != nil {
 			return e
 		}
-		if state.ActiveID != nil || state.CandidateID != nil || state.DesiredID != nil {
+		if state.ActiveID != nil || state.DesiredID != nil {
 			return nil
+		}
+		if state.CandidateID != nil {
+			// Local HTTPS activation must reuse the validated HTTP candidate;
+			// otherwise the administrator has no listener from which to apply it.
+			if _, e = s.queueApplyTxWithAutomatic(ctx, tx, state, *state.CandidateID, "apply", "", false); e != nil {
+				return e
+			}
+			return audit.Append(ctx, tx, audit.Entry{Action: "tls.bootstrap_queued", ObjectID: *state.CandidateID})
 		}
 		var count int
 		if e = tx.QueryRow(ctx, "SELECT count(*) FROM tls_certificates").Scan(&count); e != nil {
@@ -51,7 +59,7 @@ func (s *Service) Bootstrap(ctx context.Context) error {
 		if _, e = tx.Exec(ctx, "UPDATE gateway_tls_state SET candidate_id=$1 WHERE singleton", v.ID); e != nil {
 			return e
 		}
-		if _, e = s.queueApplyTx(ctx, tx, state, v.ID, "apply", ""); e != nil {
+		if _, e = s.queueApplyTxWithAutomatic(ctx, tx, state, v.ID, "apply", "", false); e != nil {
 			return e
 		}
 		return audit.Append(ctx, tx, audit.Entry{Action: "tls.bootstrap_queued", ObjectID: v.ID})

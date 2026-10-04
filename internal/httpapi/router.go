@@ -79,6 +79,7 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("POST /api/v1/setup", r.anonymous(r.setup))
 	r.mux.HandleFunc("POST /api/v1/auth/login", r.anonymous(r.login))
 	r.mux.HandleFunc("GET /api/v1/auth/me", r.protected(r.me))
+	r.mux.HandleFunc("POST /api/v1/auth/activity", r.protected(r.activity))
 	r.mux.HandleFunc("POST /api/v1/auth/logout", r.protected(r.logout))
 	r.mux.HandleFunc("POST /api/v1/auth/change-password", r.protected(r.changePassword))
 	r.mux.HandleFunc("GET /api/v1/users", r.protected(r.listUsers))
@@ -170,7 +171,7 @@ func (r *router) protected(next protectedHandler) http.HandlerFunc {
 			fail(w, q, auth.ErrUnauthenticated)
 			return
 		}
-		p, err := r.d.Auth.Authenticate(q.Context(), cookie.Value)
+		p, err := r.d.Auth.CheckSession(q.Context(), cookie.Value)
 		if err != nil {
 			fail(w, q, err)
 			return
@@ -178,6 +179,13 @@ func (r *router) protected(next protectedHandler) http.HandlerFunc {
 		if q.Method != "GET" && (!r.originAllowed(q) || !r.d.Auth.VerifyCSRF(cookie.Value, q.Header.Get("X-CSRF-Token"))) {
 			fail(w, q, fault.New(403, "csrf_rejected", "请求来源或安全令牌无效"))
 			return
+		}
+		if q.Method != "GET" && q.Method != "HEAD" && q.Method != "OPTIONS" {
+			p, err = r.d.Auth.Authenticate(q.Context(), cookie.Value)
+			if err != nil {
+				fail(w, q, err)
+				return
+			}
 		}
 		next(w, q, p, cookie.Value)
 	}
@@ -445,4 +453,10 @@ func (r *router) clientIP(q *http.Request) string {
 		return q.RemoteAddr
 	}
 	return peer
+}
+
+func (r *router) activity(w http.ResponseWriter, q *http.Request, _ auth.Principal, _ string) {
+	respond(w, q, 200, struct {
+		Renewed bool `json:"renewed"`
+	}{true})
 }

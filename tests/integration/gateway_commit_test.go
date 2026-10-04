@@ -246,3 +246,67 @@ func TestGatewayTLSInvalidQueuedSnapshotTerminatesPreparation(t *testing.T) {
 		t.Fatal("failed preparation left stuck intent", err)
 	}
 }
+
+func TestGatewayTLSRetainsReconciliationAfterRetryLimit(t *testing.T) {
+	for _, crashed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "temporary-errors", true: "last-lease-crash"}[crashed], func(t *testing.T) {
+			db, accounts, _, admin := authFixture(t)
+			ctx := context.Background()
+			svc := tlsmanager.New(db, accounts, t.TempDir(), "https://nvr.example.com", "")
+			if e := svc.Initialize(ctx); e != nil {
+				t.Fatal(e)
+			}
+			chain, key := tlsPair(t, 91)
+			v, e := svc.Import(ctx, admin.Principal, chain, key)
+			if e != nil {
+				t.Fatal(e)
+			}
+			state, e := svc.Current(ctx, admin.Principal)
+			if e != nil {
+				t.Fatal(e)
+			}
+			job, e := svc.RequestApply(ctx, admin.Principal, v.ID, state.Version)
+			if e != nil {
+				t.Fatal(e)
+			}
+			repo := jobs.Repository{DB: db}
+			for i := 0; i < 6; i++ {
+				lease, e := repo.Claim(ctx, "tls.apply")
+				if e != nil {
+					t.Fatal("TLS reconciliation stopped before verified outcome", e)
+				}
+				if crashed {
+					_, e = db.Pool.Exec(ctx, "UPDATE jobs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", job)
+				} else {
+					e = repo.Fail(ctx, lease, "handler_failed")
+					if e == nil {
+						_, e = db.Pool.Exec(ctx, "UPDATE jobs SET available_at=clock_timestamp()-interval '1 second' WHERE id=$1", job)
+					}
+				}
+				if e != nil {
+					t.Fatal(e)
+				}
+			}
+			// An unrelated worker may not discard a TLS intent at its generic limit.
+			_, _ = repo.Claim(ctx, "pool.check")
+			fresh, e := repo.Claim(ctx, "tls.apply")
+			if e != nil {
+				t.Fatal("TLS intent was abandoned at retry limit", e)
+			}
+			if _, e = svc.PrepareApply(ctx, fresh); e != nil {
+				t.Fatal(e)
+			}
+			result := tlsmanager.GatewayResult{JobID: job, State: "applied", ActiveID: &v.ID, LeafSHA256: v.LeafSHA256, ChainSHA256: v.ChainSHA256}
+			if e = svc.CommitGatewayResult(ctx, fresh, result); e != nil {
+				t.Fatal(e)
+			}
+			if e = repo.Complete(ctx, fresh, jobs.Result{}); e != nil {
+				t.Fatal(e)
+			}
+			after, e := svc.Current(ctx, admin.Principal)
+			if e != nil || after.State != "active" || after.ActiveID == nil || *after.ActiveID != v.ID {
+				t.Fatal("verified receipt did not recover domain state", e)
+			}
+		})
+	}
+}

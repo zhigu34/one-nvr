@@ -19,6 +19,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/database"
 	"github.com/zhigu34/one-nvr/internal/gatewaycontrol"
 	"github.com/zhigu34/one-nvr/internal/id"
+	"github.com/zhigu34/one-nvr/internal/jobs"
 	"github.com/zhigu34/one-nvr/internal/secrets"
 	"github.com/zhigu34/one-nvr/internal/site"
 	"github.com/zhigu34/one-nvr/internal/tlsmanager"
@@ -296,6 +297,17 @@ func TestGatewayTLSRuntimeLifecycle(t *testing.T) {
 	waitPhase(t, "worker-paused")
 	target := f.importPair(t, 104)
 	pending := f.apply(t, target)
+	// Consume the last permitted generic attempt before the real gateway
+	// switches. Recovery must still acquire a fenced reconciliation lease.
+	if _, err = f.db.Pool.Exec(f.ctx, "UPDATE jobs SET max_attempts=1 WHERE id=$1", pending); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = (jobs.Repository{DB: f.db}).Claim(f.ctx, "tls.apply"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.db.Pool.Exec(f.ctx, "UPDATE jobs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", pending); err != nil {
+		t.Fatal(err)
+	}
 	current, err := f.tls.Current(f.ctx, f.p)
 	if err != nil {
 		t.Fatal(err)

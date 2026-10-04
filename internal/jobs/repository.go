@@ -81,9 +81,12 @@ func (r Repository) Claim(ctx context.Context, kind string) (Lease, error) {
 		return lease, err
 	}
 	err = r.DB.WithinTx(ctx, func(tx pgx.Tx) error {
-		// Terminalize exhausted crashed executions; commit this even when no job is claimable.
+		// Ordinary jobs have bounded retries. TLS has durable external intent:
+		// retain reconciliation until its handler verifies and commits a terminal
+		// domain result, even after a last-attempt crash. Backoff remains bounded.
+		// Terminalize ordinary exhausted jobs even when no job is claimable.
 		if _, err := tx.Exec(ctx, `WITH exhausted AS (
-   SELECT id FROM jobs WHERE state='running' AND attempt>=max_attempts AND lease_expires_at<=clock_timestamp()
+   SELECT id FROM jobs WHERE kind <> 'tls.apply' AND state='running' AND attempt>=max_attempts AND lease_expires_at<=clock_timestamp()
    FOR UPDATE SKIP LOCKED
   ), terminal AS (
    UPDATE jobs SET state='failed',error_code='lease_expired',lease_expires_at=NULL,updated_at=clock_timestamp()
@@ -93,7 +96,7 @@ func (r Repository) Claim(ctx context.Context, kind string) (Lease, error) {
 			return err
 		}
 		err := tx.QueryRow(ctx, `WITH candidate AS (
-   SELECT id FROM jobs WHERE kind=$1 AND attempt<max_attempts AND
+   SELECT id FROM jobs WHERE kind=$1 AND (kind='tls.apply' OR attempt<max_attempts) AND
     ((state='queued' AND available_at<=clock_timestamp()) OR (state='running' AND lease_expires_at<=clock_timestamp()))
    ORDER BY available_at,created_at,id FOR UPDATE SKIP LOCKED LIMIT 1
   ) UPDATE jobs SET state='running',attempt=attempt+1,fencing_token=$2,
@@ -153,7 +156,7 @@ func (r Repository) finish(ctx context.Context, l Lease, payload []byte, code st
 		}
 		delay := backoff(l.Attempt)
 		var actual string
-		err := tx.QueryRow(ctx, `UPDATE jobs SET state=CASE WHEN $4='queued' AND (attempt>=max_attempts OR $8) THEN 'failed' ELSE $4 END,
+		err := tx.QueryRow(ctx, `UPDATE jobs SET state=CASE WHEN $4='queued' AND ((kind <> 'tls.apply' AND attempt>=max_attempts) OR $8) THEN 'failed' ELSE $4 END,
    result=$5,error_code=NULLIF($6,''),available_at=clock_timestamp()+make_interval(secs=>$7),
    lease_expires_at=NULL,updated_at=clock_timestamp()
    WHERE id=$1 AND fencing_token=$2 AND attempt=$3 AND state='running' AND lease_expires_at>clock_timestamp() RETURNING state`, l.ID, l.FencingToken, l.Attempt, state, payload, code, delay, permanent).Scan(&actual)

@@ -275,3 +275,57 @@ func TestProtocolSwitchRevokesOldSessionsPermanently(t *testing.T) {
 		}
 	}
 }
+
+func TestBackgroundPollingDoesNotExtendIdleSession(t *testing.T) {
+	db, accounts, sites, login := authFixture(t)
+	ctx := context.Background()
+	origin := "http://nvr.example.com"
+	h := httpapi.NewHandler(httpapi.Dependencies{Auth: accounts, Site: sites, PublicURL: origin})
+	request := func(method, path string, csrf bool) int {
+		q := httptest.NewRequest(method, origin+path, nil)
+		q.AddCookie(&http.Cookie{Name: "one_nvr_session", Value: login.RawSession})
+		q.Header.Set("Origin", origin)
+		if csrf {
+			q.Header.Set("X-CSRF-Token", accounts.CSRF(login.RawSession))
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, q)
+		return w.Code
+	}
+	if _, e := db.Pool.Exec(ctx, "UPDATE sessions SET last_seen_at=clock_timestamp()-interval '29 minutes' WHERE id=$1", login.Principal.SessionID); e != nil {
+		t.Fatal(e)
+	}
+	var before, after string
+	if e := db.Pool.QueryRow(ctx, "SELECT last_seen_at::text FROM sessions WHERE id=$1", login.Principal.SessionID).Scan(&before); e != nil {
+		t.Fatal(e)
+	}
+	for _, path := range []string{"/api/v1/auth/me", "/api/v1/channels", "/api/v1/site"} {
+		if code := request("GET", path, false); code != 200 {
+			t.Fatal("poll rejected unexpired session", code)
+		}
+	}
+	if e := db.Pool.QueryRow(ctx, "SELECT last_seen_at::text FROM sessions WHERE id=$1", login.Principal.SessionID).Scan(&after); e != nil || after != before {
+		t.Fatal("background reads refreshed idle deadline")
+	}
+	if code := request("POST", "/api/v1/auth/activity", false); code != 403 {
+		t.Fatal("activity bypassed CSRF", code)
+	}
+	if e := db.Pool.QueryRow(ctx, "SELECT last_seen_at::text FROM sessions WHERE id=$1", login.Principal.SessionID).Scan(&after); e != nil || after != before {
+		t.Fatal("rejected activity extended idle deadline")
+	}
+	if code := request("POST", "/api/v1/auth/activity", true); code != 200 {
+		t.Fatal("explicit user activity did not renew session", code)
+	}
+	if e := db.Pool.QueryRow(ctx, "SELECT last_seen_at::text FROM sessions WHERE id=$1", login.Principal.SessionID).Scan(&after); e != nil || after == before {
+		t.Fatal("activity left deadline unchanged")
+	}
+	if _, e := db.Pool.Exec(ctx, "UPDATE sessions SET last_seen_at=clock_timestamp()-interval '31 minutes' WHERE id=$1", login.Principal.SessionID); e != nil {
+		t.Fatal(e)
+	}
+	if code := request("GET", "/api/v1/auth/me", false); code != 401 {
+		t.Fatal("poll kept idle session alive", code)
+	}
+	if code := request("POST", "/api/v1/auth/activity", true); code != 401 {
+		t.Fatal("activity revived expired session", code)
+	}
+}

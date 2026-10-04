@@ -102,15 +102,26 @@ func (s *Service) Login(ctx context.Context, name, password string) (out LoginRe
 	return LoginResult{User: user, Principal: Principal{user.ID, sessionID, user.Role, authVersion}, RawSession: raw}, nil
 }
 func (s *Service) Authenticate(ctx context.Context, raw string) (Principal, error) {
+	return s.authenticate(ctx, raw, true)
+}
+
+// CheckSession validates polling/read requests without extending idle expiry.
+func (s *Service) CheckSession(ctx context.Context, raw string) (Principal, error) {
+	return s.authenticate(ctx, raw, false)
+}
+func (s *Service) authenticate(ctx context.Context, raw string, renew bool) (Principal, error) {
 	var p Principal
 	hash, err := digest(raw)
 	if err != nil {
 		return p, err
 	}
-	err = s.DB.Pool.QueryRow(ctx, `UPDATE sessions ss SET last_seen_at=clock_timestamp() FROM users u
- WHERE ss.digest=$1 AND ss.user_id=u.id AND u.enabled AND ss.auth_version=u.auth_version AND ss.revoked_at IS NULL
- AND ss.last_seen_at>clock_timestamp()-interval '30 minutes' AND ss.absolute_expires_at>clock_timestamp()
- RETURNING u.id,ss.id,u.role,u.auth_version`, hash).Scan(&p.UserID, &p.SessionID, &p.Role, &p.AuthVersion)
+	const validity = `ss.digest=$1 AND ss.user_id=u.id AND u.enabled AND ss.auth_version=u.auth_version AND ss.revoked_at IS NULL
+ AND ss.last_seen_at>clock_timestamp()-interval '30 minutes' AND ss.absolute_expires_at>clock_timestamp()`
+	query := `SELECT u.id,ss.id,u.role,u.auth_version FROM sessions ss,users u WHERE ` + validity
+	if renew {
+		query = `UPDATE sessions ss SET last_seen_at=clock_timestamp() FROM users u WHERE ` + validity + ` RETURNING u.id,ss.id,u.role,u.auth_version`
+	}
+	err = s.DB.Pool.QueryRow(ctx, query, hash).Scan(&p.UserID, &p.SessionID, &p.Role, &p.AuthVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = ErrUnauthenticated
 	}

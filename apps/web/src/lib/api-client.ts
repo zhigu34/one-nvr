@@ -52,6 +52,8 @@ export async function apiRequest<T>(
       '服务响应无效，请稍后重试'
     )
   }
+  if (generation !== started)
+    throw new ApiError(401, 'session_changed', '会话已改变，请重新加载')
   if (!response.ok) {
     if (response.status === 401) {
       clearAuthentication()

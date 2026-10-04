@@ -193,6 +193,9 @@ func (s *Service) SetAutoApply(ctx context.Context, p auth.Principal, expected i
 }
 
 func (s *Service) queueApplyTx(ctx context.Context, tx pgx.Tx, state State, target id.ID, operation string, actor id.ID) (id.ID, error) {
+	return s.queueApplyTxWithAutomatic(ctx, tx, state, target, operation, actor, actor == "")
+}
+func (s *Service) queueApplyTxWithAutomatic(ctx context.Context, tx pgx.Tx, state State, target id.ID, operation string, actor id.ID, automatic bool) (id.ID, error) {
 	if state.State == "applying" {
 		return "", auth.ErrConflict
 	}
@@ -216,7 +219,7 @@ func (s *Service) queueApplyTx(ctx context.Context, tx pgx.Tx, state State, targ
 		Operation        string `json:"operation"`
 		ActorID          id.ID  `json:"actor_id,omitempty"`
 		Automatic        bool   `json:"automatic"`
-	}{target, state.ActiveID, operation, actor, actor == ""})
+	}{target, state.ActiveID, operation, actor, automatic})
 	if err != nil {
 		return "", err
 	}
