@@ -8,6 +8,8 @@
 
 正式版采用模块化部署：基础看/录计划运行 5 个核心容器；`.env` 中 `ONE_NVR_FRIGATE_ENABLE=yes/no` 和 `ONE_NVR_OPENLIST_ENABLE=yes/no` 分别控制智能检测与云归档，默认关闭。智能检测增加 Frigate/MQTT，云归档增加自带 OpenList，全部开启共 8 个。面板检测自带 OpenList 的实际状态，同时支持添加其他 WebDAV；各目标独立验证。部署脚本按启用模块启动/检查服务；这些开关与自带 OpenList 尚未实现在现有 M0 实验包中。
 
+正式版智能检测启用时，deploy.sh 计划默认自动探测设备并分别核验硬解和推理，ONE_NVR_HARDWARE_PROFILE 可省略（默认 auto），手动档案仅作高级覆盖；关闭检测则跳过。范围与失败策略见 [部署硬件自动探测](docs/hardware-auto-detection.md)，现有 M0 不变。
+
 正式版构建与运行镜像的具体版本/digest 见 [镜像版本基线](docs/image-versions.md)，均已核对 Linux amd64 元数据；新版本的正式运行链路仍需验收。此次版本冻结不修改现有 M0 部署。
 
 正式版录像直接采用 `<存储池目录>/recordings/CH01/YYYY-MM-DD/`，池 ID 保存在隐藏标识文件中；目录日期和文件名使用“系统设置 → 站点设置”选择的时区（默认北京时间），文件名如 `CH01_20261003_160439_<录像ID>.mp4`；ZLM 完成后由 Worker 在同池发布标准文件，云端保持同名。完整路径与恢复规则见 [录像文件规则](docs/recording-file-layout.md)，当前为设计，现有 M0 文件不自动迁移。

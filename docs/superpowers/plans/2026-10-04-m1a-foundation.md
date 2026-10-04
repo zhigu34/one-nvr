@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go 1.27.1、net/http、pgx/v5、显式 SQL、PostgreSQL 17.11；React/TypeScript/Vite、TanStack Router/Query、shadcn/ui；Docker Compose、Nginx 1.30.5。
 
-**Spec:** [M1 控制面设计](../specs/2026-10-03-m1-control-plane-design.md)、[PRD v0.27](../../PRD.md)、[访问与证书 v2](../../web-access-tls.md)、[镜像版本基线](../../image-versions.md)。
+**Spec:** [M1 控制面设计](../specs/2026-10-03-m1-control-plane-design.md)、[PRD v0.28](../../PRD.md)、[访问与证书 v2](../../web-access-tls.md)、[镜像版本基线](../../image-versions.md)、[部署硬件自动探测](../../hardware-auto-detection.md)。
 
 **Status:** 2026-10-04 用户确认沿用 shadcn-admin 并要求开始；本计划待书面评审与执行方式选择。全部复选框表示尚未执行，不能作为功能通过的记录。
 
@@ -18,6 +18,7 @@
 - ZLM 为唯一正式录像组件；Frigate `record.enabled=false`。M1-A 不启动摄像头拉流/录制，M1-B 接入与最小录像，M1-C 实时与单段回放；不把 M1-A 标成“能看能录已完成”。
 - 保留整个 `deploy/m0` 及既有 .env、SQLite、密钥与录像；正式 Compose 项目名 `one-nvr`，数据使用独立目录。不自动迁移 M0 数据。
 - 两模块开关 `ONE_NVR_FRIGATE_ENABLE` / `ONE_NVR_OPENLIST_ENABLE` 为 yes/no，默认 no；核心 5 服务，组合为 5/7/6/8。构建/测试/迁移的一次性容器不计入。
+- ONE_NVR_HARDWARE_PROFILE 可省略，默认 auto；仅 Frigate 开启枚举/分项核验，生成最小设备映射，保留高级覆盖。初次无适配GPU可测试CPU，已有GPU失败不静默降级；当前自动范围CPU/Intel，NVIDIA未认证组合不可自动启用，详见硬件设计。
 - 默认 Asia/Shanghai，后端 IANA 列表/校验，数据库 timestamptz，API UTC RFC3339；不使用 .env 作为业务时区或摄像头配置来源。
 - 默认 HTTPS，PUBLIC_URL scheme 决定活动入口；HTTP 8080 / HTTPS 443 / RTC 8000 默认值，RTC 同号 UDP/TCP，不与活动 Web TCP 端口冲突；IP 直连沿用入口 IP，域名/代理拓扑需明确可达媒体 IP。
 - ONE_NVR_TLS_DIR 默认为空；非空只读绑定整个目录至 Worker /tls-input，固定 fullchain.pem / privkey.pem，目录模式不允许手动上传竞争。
@@ -157,14 +158,14 @@
 
 ## Task 9: 正式模块化部署与可交付验收
 
-**Files:** Create: `deploy/production/compose.yaml`, `deploy/production/.env.example`, `deploy/production/deploy.sh`, `deploy/production/README.md`, `deploy/production/templates/{zlm.ini,mosquitto.conf,frigate.yaml}`, `internal/config/render.go`, `tests/integration/{deployment,smoke}_test.go`, `docs/M1-A-validation.md`；Modify: `cmd/admin/main.go`, `README.md`, `.gitignore`。
+**Files:** Create: `deploy/production/compose.yaml`, `deploy/production/.env.example`, `deploy/production/deploy.sh`, `deploy/production/README.md`, `deploy/production/templates/{zlm.ini,mosquitto.conf,frigate.yaml}`, `internal/config/render.go`, `internal/hardware/{discover,select,report}.go`, `internal/hardware/select_test.go`, `tests/integration/{deployment,hardware,smoke}_test.go`, `docs/M1-A-validation.md`；Modify: `cmd/admin/main.go`, `README.md`, `.gitignore`。
 
-**Interfaces:** admin `render-deployment --env-file <path> --output-dir <path>` 解析配置并生成不可变服务清单/Compose覆盖，`init-secrets`只生成缺失秘密并核验已有身份，`migrate`串行执行。`deploy.sh --env-file <path>` 唯一部署入口，`--check`只校验/报告、不启停；env文件只读传入admin容器，不source/eval。首次准备工具镜像使用固定bootstrap清单，CLI参数可指定已构建的admin镜像；覆盖镜像引用由受限解析器校验后进入生成清单。
+**Interfaces:** admin `render-deployment --env-file <path> --output-dir <path>` 解析配置并生成不可变服务清单/Compose覆盖，`init-secrets`只生成缺失秘密并核验已有身份，`migrate`串行执行。`deploy.sh --env-file <path>` 唯一部署入口，`--check`只校验/报告、不启停；env文件只读传入admin容器，不source/eval。硬件模块产生 `hardware.Discover(ctx) (Inventory,error)` 和 `hardware.Select(Inventory,Validation,Override,Prior) (Proposal,error)`，Proposal 分别列解码/推理、稳定设备标识和最小映射；测试工具由 deploy.sh 控制，不在 API/Worker 挂 Docker socket。报告保存在 DATA_DIR/hardware/latest.json 并由后端读取，不把运行记录写入 .env。首次准备工具镜像使用固定bootstrap清单，CLI参数可指定已构建的admin镜像；覆盖镜像引用由受限解析器校验后进入生成清单。
 
-- [ ] **Step 1:** 写 `TestDeploymentModuleMatrixAndSelectedPorts`、`TestDisableStopsOnlyOptionalServices`、`TestRepeatedDeployPreservesState`：4组合为5/7/6/8，默认只核心，关闭不要求可选镜像/GPU/secret；开→关明确stop旧可选服务且不删卷、不stopZLM；重复启动不覆盖secret/证书/站点；TLS目录只读整目录，输入缺失不自动创建；Web/RTC监听与协商一致。
-- [ ] **Step 2:** 运行 `dev.sh test-db ./tests/integration -run Deployment`，确认失败，随后用真实 `docker compose config --quiet` 验证渲染输出，不能仅检查YAML字符串。
-- [ ] **Step 3:** 实现独立项目/目录、上述admin工具和deploy.sh；只准备本次所需镜像，检测本地镜像amd64/ID/RepoDigests并记录离线载入例外；不把换apt/pnpm源当Docker Hub鉴权修复。生成5核心和profile服务；ZLM私网管理、独立RTC UDP/TCP；Frigate仅一服务按硬件覆盖映射，CPU/Intel模板无正式录像；OpenList持久配置不默认映射录像根。无业务检测/云目标时不假报可用。
-- [ ] **Step 4:** 实际启动空站点，完成初始化→登录→用户授权→槽位命名→目录登记/待ZLM验证→时区→证书上传及目录文件更换→重启恢复。核心失败返回失败，可选已启用失败报告部分失败且保留核心，不以exit0全成功掩盖；智能/归档未来动作仍501。关闭模块不产生离线告警，健康外部WebDAV操作在M2.1接入后独立处理。
+- [ ] **Step 1:** 写 `TestDeploymentModuleMatrixAndSelectedPorts`、`TestDisableStopsOnlyOptionalServices`、`TestRepeatedDeployPreservesState`：4组合为5/7/6/8，默认只核心，关闭不要求可选镜像/GPU/secret；开→关明确stop旧可选服务且不删卷、不stopZLM；重复启动不覆盖secret/证书/站点；TLS目录只读整目录，输入缺失不自动创建；Web/RTC监听与协商一致。加 `TestAutoHardwareDisabledAndStableIdentity`、`TestAutoHardwareSeparatesDecodeAndInference`、`TestPriorGPUFailureDoesNotFallback`：关闭不启动工具/要求设备，Intel节点变号按PCI身份选择，多候选顺序稳定，服务器显示卡不当加速器；解码成功推理失败独立报告；无GPU初选CPU需验证，已有GPU失败保留期望并返回模块故障。
+- [ ] **Step 2:** 运行 `dev.sh test-go ./internal/hardware` 和 `dev.sh test-db ./tests/integration -run 'Deployment|Hardware'`，确认失败，随后用真实 `docker compose config --quiet` 验证渲染输出，不能仅检查YAML字符串。
+- [ ] **Step 3:** 实现独立项目/目录、上述admin工具和deploy.sh；只准备本次所需镜像，检测本地镜像amd64/ID/RepoDigests并记录离线载入例外；不把换apt/pnpm源当Docker Hub鉴权修复。实现缺省auto硬件枚举、固定Frigate镜像中最小映射自检、自动候选选择/报告；使用短且有来源/hash的编码样本及兼容模型输入，不用CPU品牌或节点存在判断通过，不自动切换未登记镜像。只读枚举目标Docker daemon宿主，无法探测则unknown；分项结果有超时与失败诊断，保持旧设备/业务配置。生成5核心和profile服务；ZLM私网管理、独立RTC UDP/TCP；Frigate仅一服务按硬件覆盖映射，CPU/Intel模板无正式录像；OpenList持久配置不默认映射录像根。无业务检测/云目标时不假报可用。
+- [ ] **Step 4:** 在启用检测时实际运行硬件探测，验证CPU/Intel自动选择及驱动/权限/节点变化，实际检测自检优先N5105，EPYC推理仍可未测且不作M1-A门槛；样本自检通过不能代替M3实际ZLM业务流、事件和容量验证。实际启动空站点，完成初始化→登录→用户授权→槽位命名→目录登记/待ZLM验证→时区→证书上传及目录文件更换→重启恢复。核心失败返回失败，可选已启用失败报告部分失败且保留核心，不以exit0全成功掩盖；智能/归档未来动作仍501。关闭模块不产生离线告警，健康外部WebDAV操作在M2.1接入后独立处理。
 - [ ] **Step 5:** 运行全部 `test-go`、`test-db`、前端build/lint/test/e2e，构建两镜像，实际HTTP/HTTPS与新TLS指纹验证；用两路媒体验证证书更换/可选故障不重启ZLM（可用专用验证流，不以M0槽位或产品页面冒充M1-B已实现）。没有媒体环境则明确记未测并保留M1-C退出项，不能宣称不中断录像已验收。回归原M0测试，仅检查未引入回归，不上传私密真机报告。
 - [ ] **Step 6:** 更新正式README操作命令、镜像/源码/schema/前端commit、实际通过/失败/未测报告；列清M1-A尚无摄像头配置、录制和回放UI。请求按用户选择方式的一次独立审查并修复实际问题，提交 `feat: ship modular M1-A deployment and validation evidence`，推送开发分支/PR供评审；不要把未测目标自动标通过或合并main。
 
@@ -177,6 +178,7 @@
 | UUID/If-Match/幂等/审计/任务租约 | 1/2/3/4 | 并发及失败事务不产生半状态 |
 | 固定槽位、扩容、业务时区 | 3/4/8 | 原ID保持、时区保存/刷新/重启保持 |
 | 模块开关、核心5容器、能力/组件健康 | 4/8/9 | 四组合与开→关实际部署结果 |
+| 自动硬件档案、设备/解码/推理分项报告 | 4/9 | 关闭跳过、CPU/Intel样本自检与异常报告；业务认证M3 |
 | 目录池、身份、分项探测/容量状态 | 5/8/9 | API/Worker可用；ZLM无源明确待验证，M1-B闭环 |
 | HTTP/HTTPS/RTC参数边界 | 1/3/7/9 | 配置、Cookie、端口及实际入口；RTC播放M1-C |
 | 手动/目录证书、自动应用、回滚/恢复 | 2/6/7/8/9 | 实际Nginx新连接指纹+故障重启；录像连续性单列 |
