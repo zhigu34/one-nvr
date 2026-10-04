@@ -14,9 +14,19 @@ COPY deploy/production/templates ./deploy/production/templates
 RUN mkdir /out && go build -trimpath -buildvcs=false -o /out/api ./cmd/api && \
     go build -trimpath -buildvcs=false -o /out/worker ./cmd/worker && \
     go build -trimpath -buildvcs=false -o /out/admin ./cmd/admin
-FROM ${RUNTIME_IMAGE}
+FROM build AS media-test-build
+COPY tests/media ./tests/media
+RUN go build -trimpath -buildvcs=false -o /out/media-test ./tests/media
+FROM ${RUNTIME_IMAGE} AS runtime
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+ARG ONE_NVR_DEBIAN_SNAPSHOT_URL=https://snapshot.debian.org/archive/debian/20260919T000000Z/
+COPY deploy/production/media-packages.lock deploy/production/install-media.sh /tmp/
+RUN sh /tmp/install-media.sh && rm /tmp/install-media.sh /tmp/media-packages.lock
 COPY --from=build /out/ /usr/local/bin/
 USER 10001:10001
 WORKDIR /data
 ENTRYPOINT ["/usr/local/bin/api"]
+FROM runtime AS media-test
+COPY --from=media-test-build /out/media-test /usr/local/bin/media-test
+ENTRYPOINT ["/usr/local/bin/media-test"]
+FROM runtime AS app

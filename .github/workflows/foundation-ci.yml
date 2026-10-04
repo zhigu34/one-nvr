@@ -10,6 +10,22 @@ concurrency:
   group: foundation-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 jobs:
+  media-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Build media runtime with locked Debian packages
+        run: docker build -f deploy/production/Dockerfile.app --target media-test -t one-nvr/media-test:ci .
+      - name: Fixed-image synthetic camera contract
+        run: ./deploy/production/test-media.sh --contract
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: media-contract
+          path: media-test-results/contract.json
   backend:
     runs-on: ubuntu-24.04
     timeout-minutes: 20

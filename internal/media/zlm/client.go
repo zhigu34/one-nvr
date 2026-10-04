@@ -16,7 +16,12 @@ var ErrTestSourceRequired = errors.New("ZLM write probe requires a real test sou
 type Client struct {
 	Client    *http.Client
 	HealthURL string
+	baseURL   string
+	secret    string
 }
+
+func (*Client) String() string { return "<private media client redacted>" }
+
 type ProbeInput struct {
 	PoolID            id.ID
 	TemporaryStreamID id.ID

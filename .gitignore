@@ -19,3 +19,4 @@ one-nvr-m0.tar.gz
 
 # Local package-manager cache
 /.pnpm-store/
+media-test-results/
