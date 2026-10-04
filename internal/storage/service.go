@@ -26,7 +26,7 @@ type Pool struct {
 	Version   int64   `json:"version"`
 	Checks    []Check `json:"checks"`
 	State     string  `json:"state"`
-	// Indexed business usage is unavailable until the M1-B media index exists.
+	// Verified indexed local usage; raw working/unpublished media usage is unknown.
 	UsedBytes *int64 `json:"used_bytes"`
 }
 type Page struct {
@@ -224,10 +224,12 @@ func (s *Service) ListPage(ctx context.Context, p auth.Principal, cursor id.ID, 
 	if err != nil {
 		return out, err
 	}
+	usageContext, cancelUsage := context.WithTimeout(ctx, 3*time.Second)
+	defer cancelUsage()
 	start := 0
 	found := cursor == ""
 	for i, pool := range pools {
-		pool, err = s.withChecks(ctx, pool)
+		pool, err = s.withChecks(ctx, pool, usageContext)
 		if err != nil {
 			return out, err
 		}
@@ -268,7 +270,7 @@ func (s *Service) pools(ctx context.Context) ([]Pool, error) {
 	}
 	return out, rows.Err()
 }
-func (s *Service) withChecks(ctx context.Context, p Pool) (Pool, error) {
+func (s *Service) withChecks(ctx context.Context, p Pool, usageContexts ...context.Context) (Pool, error) {
 	p.Checks = []Check{}
 	now := time.Now()
 	for _, name := range []string{"api", "worker", "zlm"} {
@@ -291,6 +293,19 @@ func (s *Service) withChecks(ctx context.Context, p Pool) (Pool, error) {
 		p.Checks = append(p.Checks, c)
 	}
 	p.State = p.Readiness(now)
+	usageCtx := ctx
+	if len(usageContexts) == 1 {
+		usageCtx = usageContexts[0]
+	}
+	usage, err := s.verifiedUsage(usageCtx, p)
+	if err != nil && usageCtx.Err() != nil && ctx.Err() == nil {
+		err = nil
+		usage = nil
+	}
+	if err != nil {
+		return Pool{}, err
+	}
+	p.UsedBytes = usage
 	return p, nil
 }
 

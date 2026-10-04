@@ -110,7 +110,7 @@ function PoolRow({ pool }: { pool: Schema<'Pool'> }) {
       <p className='mb-2 font-mono text-sm break-all'>{pool.path}</p>
       <p className='mb-3 text-sm text-muted-foreground'>
         状态：{pool.state} · 业务占用：
-        {pool.used_bytes === null ? '尚未提供索引' : bytes(pool.used_bytes)}
+        {pool.used_bytes === null ? '已验证录像占用待核查' : bytes(pool.used_bytes)}<span className='text-muted-foreground ms-1 text-xs'>（仅已索引录像；未发布占用未知）</span>
       </p>
       <div className='mb-4 grid gap-2 md:grid-cols-3'>
         {pool.checks.map((check) => (

@@ -78,6 +78,9 @@ func (s *Service) ProbeSession(ctx context.Context, poolID, sessionID id.ID) err
 			return storage.ErrMediaProof
 		}
 	}
+	if err := s.DescribeRun(ctx, run); err != nil {
+		return err
+	}
 	if err := s.Media.StartRecord(ctx, key, filepath.Join(pool.Path, relative), 60); err != nil {
 		return err
 	}

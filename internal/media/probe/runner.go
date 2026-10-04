@@ -22,6 +22,8 @@ import (
 )
 
 var ErrProbeFailed = errors.New("media_probe_failed")
+var ErrFileInvalid = errors.New("media_file_invalid")
+var errProcessExit = errors.New("media_process_exit")
 var ErrProbeTarget = errors.New("invalid_internal_media_target")
 
 const outputLimit = 1 << 20
@@ -91,6 +93,10 @@ func run(ctx context.Context, binary string, args []string, files []*os.File) ([
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		var exited *exec.ExitError
+		if bounded.Err() == nil && stdout.left > 0 && stderr.left > 0 && errors.As(err, &exited) {
+			return nil, nil, errors.Join(ErrProbeFailed, errProcessExit)
+		}
 		return nil, nil, ErrProbeFailed
 	}
 	return stdout.Bytes(), stderr.Bytes(), nil
@@ -157,7 +163,10 @@ func (r Runner) InspectMP4(ctx context.Context, file *os.File) (FileEvidence, er
 	}
 	out, _, err := run(ctx, r.FFprobe, []string{"-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries", "format=format_name,duration:stream=codec_type,codec_name,width,height,avg_frame_rate", "-of", "json", path}, []*os.File{file})
 	if err != nil {
-		return FileEvidence{}, err
+		if errors.Is(err, errProcessExit) {
+			return FileEvidence{}, ErrFileInvalid
+		}
+		return FileEvidence{}, ErrProbeFailed
 	}
 	var result struct {
 		Format struct {
@@ -173,18 +182,18 @@ func (r Runner) InspectMP4(ctx context.Context, file *os.File) (FileEvidence, er
 		} `json:"streams"`
 	}
 	if json.Unmarshal(out, &result) != nil || !strings.Contains(result.Format.Name, "mp4") {
-		return FileEvidence{}, ErrProbeFailed
+		return FileEvidence{}, ErrFileInvalid
 	}
 	seconds, err := strconv.ParseFloat(result.Format.Duration, 64)
 	if err != nil || seconds <= 0 || seconds > 86400 {
-		return FileEvidence{}, ErrProbeFailed
+		return FileEvidence{}, ErrFileInvalid
 	}
 	for _, s := range result.Streams {
 		if s.Type != "video" {
 			continue
 		}
 		if s.Width <= 0 || s.Height <= 0 || s.Codec == "" {
-			return FileEvidence{}, ErrProbeFailed
+			return FileEvidence{}, ErrFileInvalid
 		}
 		fps := 0.0
 		var n, d float64
@@ -193,7 +202,7 @@ func (r Runner) InspectMP4(ctx context.Context, file *os.File) (FileEvidence, er
 		}
 		return FileEvidence{Video: VideoEvidence{Codec: s.Codec, Width: s.Width, Height: s.Height, FPS: fps, ObservedAt: time.Now().UTC()}, Duration: time.Duration(seconds * float64(time.Second)), Size: info.Size(), Readable: true}, nil
 	}
-	return FileEvidence{}, ErrProbeFailed
+	return FileEvidence{}, ErrFileInvalid
 }
 
 var _ io.Writer = (*limitedOutput)(nil)

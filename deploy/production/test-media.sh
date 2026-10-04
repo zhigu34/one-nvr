@@ -2,15 +2,15 @@
 set -Eeuo pipefail
 cd "$(dirname "$0")/../.."
 mode=${1:---contract}
-[[ $mode == --contract || $mode == --probe ]] || { echo 'Unknown media acceptance stage' >&2; exit 2; }
+[[ $mode == --contract || $mode == --probe || $mode == --publish ]] || { echo 'Unknown media acceptance stage' >&2; exit 2; }
 export ONE_NVR_MEDIA_TEST_MODE=${mode#--}
 export ONE_NVR_MEDIA_TEST_LOG_LEVEL=0
-if [[ $mode == --probe ]]; then ONE_NVR_MEDIA_TEST_LOG_LEVEL=4; fi
+if [[ $mode == --probe || $mode == --publish ]]; then ONE_NVR_MEDIA_TEST_LOG_LEVEL=4; fi
 project="one-nvr-media-test-${GITHUB_RUN_ID:-local}-$$"
 export ONE_NVR_MEDIA_TEST_DIR
 ONE_NVR_MEDIA_TEST_DIR=$(mktemp -d)
 compose=(docker compose -p "$project" -f deploy/production/compose.media-test.yaml)
-if [[ $mode == --probe ]]; then compose+=(--profile probe); fi
+if [[ $mode == --probe || $mode == --publish ]]; then compose+=(--profile probe); fi
 helper=
 cleanup(){ "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true; if [[ -n "$helper" ]]; then docker rm -f "$helper" >/dev/null 2>&1 || true; fi; docker run --rm --user 0:0 --network none --mount "type=bind,src=$ONE_NVR_MEDIA_TEST_DIR,dst=/test-cleanup" --entrypoint sh one-nvr/media-test:ci -c 'chmod -R a+rwX /test-cleanup' >/dev/null 2>&1 || true; rm -rf "$ONE_NVR_MEDIA_TEST_DIR"; }
 trap cleanup EXIT
@@ -55,9 +55,9 @@ chmod 755 "$ONE_NVR_MEDIA_TEST_DIR/launcher"
 camera_ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$("${compose[@]}" ps -q camera)")
 [[ "$camera_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
 sleep 2
-if [[ $mode == --probe ]]; then
+if [[ $mode == --probe || $mode == --publish ]]; then
  "${compose[@]}" up -d --wait postgres
- "${compose[@]}" run --rm --no-deps --entrypoint /usr/local/bin/media-test runner prepare-probe
+ "${compose[@]}" run --rm --no-deps --entrypoint /usr/local/bin/media-test runner "prepare-$ONE_NVR_MEDIA_TEST_MODE"
  cp "$ONE_NVR_MEDIA_TEST_DIR/evidence/zlm-probe.ini" "$ONE_NVR_MEDIA_TEST_DIR/zlm.ini"
 fi
 "${compose[@]}" up -d fixture runner

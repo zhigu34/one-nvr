@@ -11,6 +11,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/fault"
 	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/operations"
+	"github.com/zhigu34/one-nvr/internal/recording"
 	"github.com/zhigu34/one-nvr/internal/site"
 	"github.com/zhigu34/one-nvr/internal/storage"
 	"github.com/zhigu34/one-nvr/internal/tlsmanager"
@@ -30,6 +31,7 @@ type Dependencies struct {
 	HealthCheck                     func(context.Context) error
 	Channels                        *channel.Service
 	Sources                         *channel.SourceService
+	Recordings                      *recording.Service
 	Storage                         *storage.Service
 	TLS                             *tlsmanager.Service
 	Operations                      *operations.Service
@@ -77,6 +79,9 @@ func NewHandler(d Dependencies) http.Handler {
 	if d.Storage == nil {
 		d.Storage = storage.New(d.Auth.DB, d.Auth, []string{"/storage"})
 	}
+	if d.Recordings == nil {
+		d.Recordings = &recording.Service{DB: d.Auth.DB, Auth: d.Auth, Pools: d.Storage}
+	}
 	r.d = d
 	r.mux.Handle("/health/", Health(d.HealthCheck))
 	r.mux.HandleFunc("GET /api/v1/setup/status", r.setupStatus)
@@ -103,6 +108,8 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("POST /api/v1/channels/{id}/source-revisions", r.protected(r.createSourceDraft))
 	r.mux.HandleFunc("POST /api/v1/channels/{id}/source/credentials/reveal", r.protected(r.revealSourceCredentials))
 	r.mux.HandleFunc("POST /api/v1/channels/source-config-export", r.protected(r.exportSourceConfig))
+	r.mux.HandleFunc("GET /api/v1/recordings", r.protected(r.recordings))
+	r.mux.HandleFunc("GET /api/v1/recordings/{id}/content", r.protected(r.recordingContent))
 	r.mux.HandleFunc("GET /api/v1/storage-pools", r.protected(r.listPools))
 	r.mux.HandleFunc("POST /api/v1/storage-pools", r.protected(r.registerPool))
 	r.mux.HandleFunc("PATCH /api/v1/storage-pools/{id}", r.protected(r.updatePool))

@@ -39,6 +39,12 @@ func run() error {
 	if os.Args[1] == "fixture" {
 		return fixture()
 	}
+	if os.Args[1] == "prepare-publish" {
+		return prepareMediaSession("main")
+	}
+	if os.Args[1] == "publish" {
+		return publishAcceptance()
+	}
 	if os.Args[1] == "prepare-probe" {
 		return preparePoolProbe()
 	}
@@ -219,6 +225,9 @@ func contract() error {
 		}
 		if !strings.HasPrefix(c.Path, work+"/") || filepath.Ext(c.Path) != ".mp4" {
 			return fmt.Errorf("customized_path escaped configured work directory")
+		}
+		if !strings.HasPrefix(filepath.Base(c.Path), time.Unix(c.Start, 0).UTC().Format("2006-01-02-15-04-05")+"-") {
+			return fmt.Errorf("native working timestamp is not UTC")
 		}
 		f, err := os.Open(c.Path)
 		if err != nil {
