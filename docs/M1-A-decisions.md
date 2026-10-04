@@ -2,9 +2,9 @@
 
 以下保留全部实施裁定、独立审查的取舍与暂缓项。运行证据见 [验证报告](M1-A-validation.md)。
 
-## 独立审查
+## 独立审查和最终验收
 
-一次独立审查针对 `349cd0a..20a2b55`，发现四项 Important、两项 Minor，无确认的 Critical。四项 Important 已在真实数据库/浏览器单元回归中复现并修复；实际 Docker 最终复核仍在等待。暂缓项完整列于下方，没有第二次审查循环。
+一次独立审查针对 `349cd0a..20a2b55`，发现四项 Important、两项 Minor，无确认的 Critical。四项 Important 逐项先复现再修复，完整回归与 [最终 Docker CI 37205477648](https://github.com/zhigu34/one-nvr/actions/runs/37205477648) 九项均通过；没有第二次审查循环，不把初始 With fixes 结论改写为审查者批准修复后的代码。
 
 ## 全部裁定与暂缓项
 
@@ -46,9 +46,9 @@
 
 - Final: Ruling: read requests validate sessions without renewing idle expiry; visible pointer/key/scroll interactions renew via CSRF-protected POST at most once per minute — background polls must not keep unattended management sessions alive — cost: a custom client must explicitly renew during human activity; an inactive viewer expires after30min even if video continues.
 
-- Final: Minor deferred: users/pools id:version row remount loses success notices/pool-local job display — saved data and centralized jobs persist, no business loss; defer consistent form-state refinement.
+- Final: minor (deferred): users/pools id:version row remount loses success notices/pool-local job display — saved data and centralized jobs persist, no business loss; defer consistent form-state refinement.
 
-- Final: Minor deferred: initialization has Shanghai/UTC only, and settings timezone select lacks search/selection preview — backend supports fullIANA and post-setup selection, no recording exists yet; defer picker refinement.
+- Final: minor (deferred): initialization has Shanghai/UTC only, and settings timezone select lacks search/selection preview — backend supports fullIANA and post-setup selection, no recording exists yet; defer picker refinement.
 
 - Final: Ruling: reviewer set aside camera/recording/playback/media permissions/events/cloud actions — remain explicit M1-B/C/M2/M2.1 scope, no claims of usable NVR delivery — cost: user keeps M0/otherNVR until these phases.
 
@@ -69,3 +69,19 @@
 - Final: Ruling: reviewer accepted private/selfsigned TLS chain validation without client-trust guarantee — show verification metadata but don't claim public trust — cost: client trust remains operator's responsibility.
 
 - Final: Ruling: reviewer declined pendingDocker acceptance/absentnativeDB at its reviewtime — author subsequently ran restored isolatedPG and awaits final realCI, no inference from reviewer verdict — cost: final completion requires actual CI evidence.
+
+- Final: Ruling: User already authorized GitHub publication and chose CI, so finish by updating the existing draft PR rather than asking the skill's integration menu again — authorization persists and main merge remains excluded — cost: maintainer must explicitly choose when to merge or deploy.
+
+## 四项修复证据
+
+- Final: fixed HTTP candidate activation — TestHTTPSBootstrapReusesHTTPCandidate RED→GREEN, actual browser CLI bootstrap/TLS listener PASS in37205477648.
+
+- Final: fixed TLS retry-limit abandonment — TestGatewayTLSRetainsReconciliationAfterRetryLimit RED→GREEN, actual Nginx max_attempts1 receipt-before-DB crash/recreate lifecycle PASS in37205477648.
+
+- Final: fixed delayed response-body authentication restore — status200/401 delayed-body RED→GREEN,73Chromium suite PASS in37205477648.
+
+- Final: fixed background polling idle extension — TestBackgroundPollingDoesNotExtendIdleSession RED→GREEN, explicit activity tests andfull61PG suite PASS in37205477648.
+
+## 完成记录
+
+Task 9: complete (commits 9dc84e7..8c54183, tests: python3 /private/tmp/one-nvr-verify-task9-ci.py → GitHub Actions 37205477648: all 9 Docker jobs SUCCESS; exact committed tree verified; real browser restart/protocol, last-attempt Nginx recovery, production repeat/scoped disable, Mosquitto and CPU decoder/inference evidence inspected.)

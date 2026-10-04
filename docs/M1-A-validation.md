@@ -1,6 +1,15 @@
 # M1-A 开发验证记录
 
-日期：2026-10-04。开发分支 `codex/m1a-foundation`。这是逐步更新的工程记录，**M1-A 尚未交付**；不能据此认为正式版已能看/录。
+日期：2026-10-04。开发分支 `codex/m1a-foundation`。这是逐步更新的工程记录。M1-A 基础控制面已实现，最终审查修复已通过 Docker 验收；正式摄像头源、录制与回放属于 M1-B/C。后面的 Task 记录保留各提交当时状态，以顶部最新结论为准。
+
+## 最新验收状态（M1-A 已完成）
+
+- [CI 37203995849](https://github.com/zhigu34/one-nvr/actions/runs/37203995849)，commit `bc8d8b5e8c378309b97a61ed5863421eae9998f7`：九项任务全部成功。三种实际部署配置各通过 9 项业务流程及 1 项服务重建恢复；同一 Chromium 上下文完成 HTTPS→HTTP 再登录。实际 Nginx 换证/回滚/崩溃恢复、生产首次 HTTPS/重复部署/5-7-6-8 配置/限定关闭、Mosquitto 重复哈希和固定 Frigate 镜像 CPU 解码/TFLite 推理通过。
+- 一次整分支独立审查发现四项 Important，均已复现并修复：HTTP 待用证书切 HTTPS 无入口、TLS 重试耗尽遗弃对账、响应正文迟到恢复旧认证状态、后台轮询延长闲置会话。修复后完整本机 race 含 61 项真实 PostgreSQL 集成通过（158.965 秒），补充检查通过；73 项 Chromium 单元、build/lint、vet/Linux amd64 编译与运行测试编译通过。[最终修复 CI 37205477648](https://github.com/zhigu34/one-nvr/actions/runs/37205477648) / commit `93dfefc7ff3fbf8b4ab7b6a385fa7e67927b8f24` 九项任务全部成功：61 项真实 PostgreSQL 集成、73 项 Chromium 单元、三配置业务/服务重建恢复、生产 CLI 激活 HTTP 待用证书、同浏览器 HTTPS→HTTP、最后一次尝试后实际 Nginx 崩溃恢复、核心重复部署与固定 CPU 自检均通过。源码 tree `b11838e1f7aa841e4eebadaceea3c64071675a1f` 与本机已提交修复逐次核对一致。
+- 尚未验证 N5105 实际驱动/权限/GPU 推理、EPYC 真机推理、两路媒体连续性和 16–32 路容量。容器 ID 不变只证明未重建，不能替代录像连续性。M1-A 没有业务摄像头流；RTC/正式录像回放、真实事件和云归档留后续里程碑。
+- 两项 Minor 暂缓：用户/池保存提示会因整行重建消失，初始化时区选择及设置搜索/预览尚需完善。保存数据和后台任务仍持久存在，完整审查取舍及全部实施裁定见 [决策记录](M1-A-decisions.md)。未合并 main 或部署到用户机器。
+
+## 各阶段历史证据
 
 已验证的 Task 1 基线：
 
@@ -12,7 +21,7 @@
 - OpenAPI 尚未实现的业务端点标为 `planned`；前端仍包含上游演示页，只是构建基线，不作为正式产品页面验收。
 - 用真实 Docker Compose CLI 对测试清单执行 `config --quiet` 通过；shell 语法校验通过。
 
-待验证：
+Task 1 当时待验证（后续 CI 结论见顶部）：
 
 - 本机没有 Docker daemon。Task 1–3 的固定 Node/Go/PostgreSQL 容器检查与应用/gateway 镜像构建已由下方 GitHub CI 通过；Nginx TLS、真实浏览器与模块部署仍未运行。镜像构建成功不代表正式栈运行验收完成。
 - Task 4 已通过下方 GitHub CI；Task 5 目录池完成本机验证，本批容器回归待发布；Task 6–9 证书、网关应用、真实前端和正式部署继续实现。

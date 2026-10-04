@@ -10,7 +10,7 @@
 
 **Spec:** [M1 控制面设计](../specs/2026-10-03-m1-control-plane-design.md)、[PRD v0.28](../../PRD.md)、[访问与证书 v2](../../web-access-tls.md)、[镜像版本基线](../../image-versions.md)、[部署硬件自动探测](../../hardware-auto-detection.md)。
 
-**Status:** 2026-10-04 用户要求继续，按推荐方式在当前仓库的 `codex/m1a-foundation` 分支顺序执行。Task 1–4 已实现并通过 GitHub Docker CI，Task 5 已实现并通过本机真实数据库回归，Task 6–9 继续执行；当前通过项与未运行的容器检查见 `docs/M1-A-validation.md`，未勾选步骤不作为功能通过记录。
+**Status:** Task 1–9 已完成。一次整分支独立审查的四项 Important 已修复，最终 GitHub CI `37205477648` 九项全部成功。实际通过、历史失败和未测真机项见 `docs/M1-A-validation.md`，全部裁定与两个暂缓 Minor 见 `docs/M1-A-decisions.md`。这是基础控制面交付，尚不包含 M1-B/C 的业务摄像头源、正式录制或回放。
 
 ## Global Constraints
 
