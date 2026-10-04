@@ -5,14 +5,16 @@ cd "$(dirname "$0")/../.."
 env_file=deploy/production/.env
 admin_image=one-nvr/app:m1a
 check=no
+project=one-nvr
 for ((i=1; i<=$#; i++)); do
  arg=${!i}
  case "$arg" in
   --check) check=yes ;;
-  --env-file|--admin-image) ((i+=1)); [[ $i -le $# ]] || exit 2; value=${!i}; if [[ $arg == --env-file ]]; then env_file=$value; else admin_image=$value; fi ;;
+  --env-file|--admin-image|--project) ((i+=1)); [[ $i -le $# ]] || exit 2; value=${!i}; if [[ $arg == --env-file ]]; then env_file=$value; elif [[ $arg == --project ]]; then project=$value; else admin_image=$value; fi ;;
   *) printf 'Unknown option: %s\n' "$arg" >&2; exit 2 ;;
  esac
 done
+[[ $project =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]] || { printf 'Invalid project name.\n' >&2; exit 2; }
 command -v docker >/dev/null
 [[ -f $env_file ]] || { printf 'Missing env file; copy deploy/production/.env.example first.\n' >&2; exit 2; }
 env_file=$(cd "$(dirname "$env_file")" && printf '%s/%s' "$PWD" "$(basename "$env_file")")
@@ -50,7 +52,7 @@ tls=$(public_value tls)
 if [[ $check == yes ]]; then
  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
  docker run --rm --network none --user "$(id -u):$(id -g)" --mount "type=bind,source=$env_file,target=/settings.env,readonly" --mount "type=bind,source=$tmp,target=/output" --entrypoint /usr/local/bin/admin "$admin_image" render-deployment --env-file /settings.env --output-dir /output --check
- docker compose -p one-nvr-production -f "$tmp/compose.json" config --quiet
+ docker compose -p "$project" -f "$tmp/compose.json" config --quiet
  printf 'Configuration valid. Required services:\n'; cat "$tmp/services"
  exit
 fi
@@ -61,23 +63,23 @@ docker run --rm --network none --user 0:0 --mount "type=bind,source=$data,target
 runtime=$data/runtime
 previous=()
 if [[ -f $runtime/services ]]; then
- while IFS= read -r name; do previous+=("$name"); done < <(docker run --rm --network none --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/services)
+ while IFS= read -r name; do previous+=("$name"); done < <(docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/services)
 fi
 docker run --rm --network none --user 0:0 --mount "type=bind,source=$env_file,target=/settings.env,readonly" --mount "type=bind,source=$data,target=/data" --mount "type=bind,source=$runtime,target=/output" --entrypoint /usr/local/bin/admin "$admin_image" render-deployment --env-file /settings.env --output-dir /output
 services=(); images=()
-while IFS= read -r name; do services+=("$name"); done < <(docker run --rm --network none --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/services)
-while IFS= read -r image; do images+=("$image"); done < <(docker run --rm --network none --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/images)
+while IFS= read -r name; do services+=("$name"); done < <(docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/services)
+while IFS= read -r image; do images+=("$image"); done < <(docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/images)
 # Read private manifest via Docker. The local caller owns this short-lived copy.
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-docker run --rm --network none --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/compose.json > "$tmp/compose.json"
-compose=(docker compose -p one-nvr-production -f "$tmp/compose.json")
+docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/compose.json > "$tmp/compose.json"
+compose=(docker compose -p "$project" -f "$tmp/compose.json")
 "${compose[@]}" config --quiet
 for image in "${images[@]}"; do ensure_image "$image"; done
 # Identify only disabled optional containers by project/service labels, never prune or down.
 for name in frigate mqtt openlist; do
  selected=no; for wanted in "${services[@]}"; do [[ $wanted != "$name" ]] || selected=yes; done
  if [[ $selected == no ]]; then
-  ids=$(docker ps -aq --filter label=com.docker.compose.project=one-nvr-production --filter "label=com.docker.compose.service=$name")
+  ids=$(docker ps -aq --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=$name")
   if [[ -n $ids ]]; then while IFS= read -r container; do docker stop "$container" >/dev/null; done <<< "$ids"; fi
  fi
 done
@@ -93,11 +95,11 @@ done | docker run --rm -i --network none --user 0:0 --mount "type=bind,source=$r
 optional_failed=no
 if [[ " ${services[*]} " == *' frigate '* ]]; then
  # Hash the existing authentication file once; no password is exposed as a command argument.
- mqtt_image=$(docker run --rm --network none --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/image-mqtt)
+ mqtt_image=$(docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/image-mqtt)
  docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/work" --entrypoint sh "$mqtt_image" -ec 'if ! grep -q "^one_nvr:\$" /work/mqtt.passwd; then mosquitto_passwd -U /work/mqtt.passwd; fi; chown 1883:1883 /work/mqtt.passwd; chmod 600 /work/mqtt.passwd'
- if ! ./deploy/production/probe-hardware.sh "$admin_image" "$data" "$tmp/compose.json"; then optional_failed=yes; printf 'Intelligence hardware validation failed; core remains available.\n' >&2
+ if ! ./deploy/production/probe-hardware.sh "$admin_image" "$data" "$tmp/compose.json" "$project"; then optional_failed=yes; printf 'Intelligence hardware validation failed; core remains available.\n' >&2
  else
-  docker run --rm --network none --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/hardware.compose.json > "$tmp/hardware.compose.json"
+  docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/hardware.compose.json > "$tmp/hardware.compose.json"
   compose+=(-f "$tmp/hardware.compose.json")
   "${compose[@]}" config --quiet
   "${compose[@]}" up -d mqtt frigate || optional_failed=yes
@@ -107,4 +109,4 @@ if [[ " ${services[*]} " == *' openlist '* ]]; then "${compose[@]}" up -d openli
 if [[ $optional_failed == yes ]]; then exit 1; fi
 "${compose[@]}" run --rm --no-deps --entrypoint /usr/local/bin/admin api verify-optional
 printf 'M1-A services started. Get the one-time token with:\n'
-printf 'docker compose -p one-nvr-production -f %q run --rm --entrypoint /usr/local/bin/admin api setup-token\n' "$runtime/compose.json"
+printf 'docker compose -p %q -f %q run --rm --entrypoint /usr/local/bin/admin api setup-token\n' "$project" "$runtime/compose.json"

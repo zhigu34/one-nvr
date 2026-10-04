@@ -46,3 +46,45 @@ func ReadReport(data string) (Report, error) {
 	}
 	return out, nil
 }
+
+// Persist an interrupted probe as failure, preserving the last expected profile.
+// This is used if the Docker tool cannot start, before normal selection can run.
+func RecordFailure(data string) error {
+	report, _ := ReadReport(data)
+	report.Validated = false
+	report.ErrorCode = "hardware_probe_failed"
+	report.CheckedAt = time.Now().UTC()
+	report.Validation = Validation{}
+	root, e := os.OpenRoot(data)
+	if e != nil {
+		return e
+	}
+	defer root.Close()
+	dir, e := root.OpenRoot("hardware")
+	if e != nil {
+		return e
+	}
+	defer dir.Close()
+	bytes, e := json.MarshalIndent(report, "", "  ")
+	if e != nil {
+		return e
+	}
+	name := fmt.Sprintf(".failure-%d", time.Now().UnixNano())
+	f, e := dir.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if e != nil {
+		return e
+	}
+	defer dir.Remove(name)
+	if _, e = f.Write(bytes); e != nil {
+		f.Close()
+		return e
+	}
+	if e = f.Sync(); e != nil {
+		f.Close()
+		return e
+	}
+	if e = f.Close(); e != nil {
+		return e
+	}
+	return dir.Rename(name, "latest.json")
+}

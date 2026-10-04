@@ -16,6 +16,11 @@ func hardwareCommand(args []string) (bool, error) {
 		return false, nil
 	}
 	switch args[0] {
+	case "hardware-failed":
+		if e := hardware.RecordFailure("/data"); e != nil {
+			return true, e
+		}
+		return true, os.Chown("/data/hardware/latest.json", 10001, 10001)
 	case "hardware-nodes":
 		var inv hardware.Inventory
 		b, e := os.ReadFile("/data/hardware/inventory.json")
