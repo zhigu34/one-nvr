@@ -1,6 +1,6 @@
 # one-nvr 镜像版本基线
 
-确定日期：2026-10-03。适用范围：正式版单机 Docker Compose，Linux `amd64`（AMD EPYC 7402 / Intel N5105）。这是设计阶段的镜像冻结记录，正式 Dockerfile / Compose 尚未交付。
+确定日期：2026-10-03。适用范围：正式版单机 Docker Compose，Linux `amd64`（AMD EPYC 7402 / Intel N5105）。M1-A 已交付正式 Dockerfile / Compose 并通过 GitHub CI 的构建、基础部署和网关验证；M1-B 媒体能力仍在实测中。
 
 ## 版本选择
 
@@ -68,3 +68,9 @@ nginx:1.28.0-alpine@sha256:30f1c0d78e0ad60901648be663a710bdadf19e4c10ac6782c2352
 - [Mosquitto 官方镜像清单](https://github.com/docker-library/official-images/blob/master/library/eclipse-mosquitto)。
 - [Frigate 0.17.2](https://github.com/blakeblackshear/frigate/releases/tag/v0.17.2)、[ZLM 上游](https://github.com/ZLMediaKit/ZLMediaKit)。
 - [OpenList Docker 部署说明](https://doc.oplist.org/guide/installation/docker)。
+
+## M1-B 媒体工具
+
+2026-10-05 增加 FFmpeg/ffprobe：Debian Bookworm 签名快照 `20260919T000000Z`，包 `ffmpeg=7:5.1.9-0+deb12u1`。`deploy/production/media-packages.lock` 记录该包及可用依赖备选包的版本、架构和 SHA256；安装脚本验证每个实际下载的 deb 后才安装。基础镜像已安装的软件由原 digest 固定，构建不执行浮动全系统升级。
+
+构建可通过 `--build-arg ONE_NVR_DEBIAN_SNAPSHOT_URL=https://内部快照镜像/路径/` 指定保留同一签名索引和软件包内容的镜像地址。仓库签名和 TLS 校验均开启；历史快照仅关闭索引的时效检查，不关闭签名认证。修改来源不能绕过包哈希锁。最终运行镜像包含媒体工具，但仍由 API / Worker 共用，不增加常驻容器。固定镜像的真实媒体契约见 [M1-B 验证记录](M1-B-validation.md)。
