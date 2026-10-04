@@ -2615,6 +2615,56 @@
           }
         }
       }
+    },
+    "/api/v1/channel-slots": {
+      "get": {
+        "operationId": "listChannelSlots",
+        "x-one-nvr-implementation": "implemented",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ChannelSlot"
+                      }
+                    },
+                    "request_id": {
+                      "$ref": "#/components/schemas/UUID"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "request_id"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Structured error (401/403/404/409/422/501/503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "summary": "管理员列出用于通道授权的槽位元数据，不授予视频权限"
+      }
     }
   },
   "components": {
@@ -3369,6 +3419,28 @@
           "free_bytes"
         ],
         "additionalProperties": false
+      },
+      "ChannelSlot": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "channel_no": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 32
+          },
+          "channel_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "channel_no",
+          "channel_name"
+        ]
       }
     }
   }

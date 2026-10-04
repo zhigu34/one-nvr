@@ -21,6 +21,6 @@ case "$mode" in
   "${compose[@]}" run --rm -e TEST_DATABASE_URL=postgres://one_nvr_test:isolated-test-only@postgres:5432/one_nvr_test?sslmode=disable go go test "$@"
   ;;
  web) "${compose[@]}" run --rm web "$@" ;;
- e2e) printf '%s\n' 'E2E stack is not implemented yet; refusing to report a pass.' >&2; exit 1 ;;
+ e2e) exec ./deploy/production/test-e2e.sh "$@" ;;
  *) printf '%s\n' 'Unknown development command.' >&2; exit 2 ;;
 esac

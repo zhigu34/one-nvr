@@ -27,6 +27,34 @@ type Page struct {
 type UpdateInput struct {
 	ChannelName string `json:"channel_name"`
 }
+
+// Slot contains only grant-management metadata, never video permissions or URLs.
+type Slot struct {
+	ID          id.ID  `json:"id"`
+	ChannelNo   int    `json:"channel_no"`
+	ChannelName string `json:"channel_name"`
+}
+
+func (s *Service) Slots(ctx context.Context, p auth.Principal) ([]Slot, error) {
+	if err := s.Auth.RequireAdmin(ctx, p); err != nil {
+		return nil, err
+	}
+	rows, err := s.DB.Pool.Query(ctx, "SELECT c.id,c.channel_no,c.channel_name FROM channels c JOIN sites s ON s.id=c.site_id WHERE s.singleton ORDER BY c.channel_no")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Slot, 0, 32)
+	for rows.Next() {
+		var slot Slot
+		if err = rows.Scan(&slot.ID, &slot.ChannelNo, &slot.ChannelName); err != nil {
+			return nil, err
+		}
+		out = append(out, slot)
+	}
+	return out, rows.Err()
+}
+
 type Service struct {
 	DB   *database.DB
 	Auth *auth.Service

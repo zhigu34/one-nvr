@@ -92,3 +92,22 @@ jobs:
           docker build --platform linux/amd64 -f deploy/production/Dockerfile.gateway -t one-nvr/gateway:ci .
       - name: Actual Nginx application, rollback and crash recovery
         run: ./deploy/production/test-gateway.sh
+  browser-runtime:
+    needs: [backend, frontend, m0-regression]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Build pinned runtime and browser images
+        run: |
+          for image in app gateway browser; do docker build -f "deploy/production/Dockerfile.$image" -t "one-nvr/$image:ci" .; done
+      - name: Frontend browser unit tests
+        run: docker run --rm --init --shm-size=256m one-nvr/browser:ci pnpm test
+      - name: Real browser with modules disabled and manual certificate
+        run: ./deploy/production/dev.sh e2e --no-build
+      - name: Real browser with modules enabled
+        run: ONE_NVR_E2E_MODULES=yes ./deploy/production/dev.sh e2e --no-build
+      - name: Real browser with read-only certificate directory
+        run: ONE_NVR_E2E_TLS_DIR=/tls-input ./deploy/production/dev.sh e2e --no-build

@@ -93,3 +93,7 @@ Task 7 网关控制与本机验证：
 - 本机完整 race 回归通过，55 项真实 PostgreSQL/HTTP 测试耗时 152.333 秒；末次恢复修复另跑网关 race，Linux amd64 编译/vet、前端类型生成/build/lint、Compose 和 shell 语法均通过。测试构建标签 `gateway_runtime` 缺少独立 Docker 环境即失败，不作为跳过后的通过证据。
 - GitHub CI 新增实际 Nginx 容器验收：HTTPS 登录、换证书保留会话、错误密钥、回滚暂停、reload 返回 0 但旧指纹、切配置后崩溃、网关已生效而 Worker 未提交时崩溃、重建/重复结果和同叶换链。**本次提交时该运行仍待 CI 执行；不宣称通过。** ZLM 录像连续性和真机容量仍需媒体环境，M1-A 不作证明。
 - Task7 前的开发证书快照缺少新私有 manifest，应重新导入；尚未正式发布的开发快照不作生产升级基线。M0 数据/代码未改。真实基础前端与正式部署留 Task8–9。
+
+Task 7 实际 Docker 验证：[run 37185613818](https://github.com/zhigu34/one-nvr/actions/runs/37185613818) / commit `6e9875951911fbcd14c80187385a8792218fd762`，六项任务全部成功。实际 Nginx 完成 HTTPS 登录、Secure Cookie、更新保留会话、错误密钥拒绝、回滚暂停、旧指纹拒绝、两个崩溃边界恢复、幂等审计及同叶换链验证。以上替代先前提交时的“待运行”状态；未验证 ZLM 录像连续性。
+
+Task 8 前端验证：真实本机 API/隔离 PostgreSQL 的六项浏览器业务流程通过（12.8 秒），密码修改撤销会话另行通过；70 项 Chromium 单元测试通过。页面基于固定上游 shadcn-admin，删除演示业务与 Clerk/faker，采用同源 Cookie/CSRF、生成类型和真实授权。新增管理员专用槽位名称清单用于分配权限，不赋予视频访问权；直接 HTTP/PG 回归通过。Docker 浏览器三配置验收已接入 CI，当前待运行。测试镜像与 Playwright 包同为 1.59.1，按[官方 Docker 文档](https://playwright.dev/docs/docker)固定匹配版本和镜像摘要；不上传可能含令牌/密码的截图、trace 或错误上下文。

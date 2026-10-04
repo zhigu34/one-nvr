@@ -8,6 +8,15 @@ import { playwright } from '@vitest/browser-playwright'
 
 // https://vite.dev/config/
 export default defineConfig({
+  optimizeDeps: { include: ['zustand'] },
+  server: {
+    proxy: {
+      '/api': {
+        target: process.env.ONE_NVR_DEV_API || 'http://127.0.0.1:8081',
+        changeOrigin: false,
+      },
+    },
+  },
   plugins: [
     tanstackRouter({
       target: 'react',

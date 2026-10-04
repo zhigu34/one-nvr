@@ -1,39 +1,46 @@
+import { useEffect } from 'react'
 import { Outlet } from '@tanstack/react-router'
+import { useAuthStore } from '@/stores/auth-store'
 import { getCookie } from '@/lib/cookies'
-import { cn } from '@/lib/utils'
+import type { Schema } from '@/lib/types'
 import { LayoutProvider } from '@/context/layout-provider'
 import { SearchProvider } from '@/context/search-provider'
+import { useTheme } from '@/context/theme-provider'
+import { Button } from '@/components/ui/button'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
-import { AppSidebar } from '@/components/layout/app-sidebar'
-import { SkipToMain } from '@/components/skip-to-main'
+import { useAPI } from '@/features/foundation/hooks'
+import { AppSidebar } from './app-sidebar'
+import { Header } from './header'
+import { Main } from './main'
 
-type AuthenticatedLayoutProps = {
-  children?: React.ReactNode
-}
-
-export function AuthenticatedLayout({ children }: AuthenticatedLayoutProps) {
-  const defaultOpen = getCookie('sidebar_state') !== 'false'
+export function AuthenticatedLayout() {
+  const session = useAPI<Schema<'Session'>>('/api/v1/auth/me', true, 5000)
+  const setUser = useAuthStore((s) => s.setUser)
+  useEffect(() => {
+    if (session.data) setUser(session.data.user)
+  }, [session.data, setUser])
+  const { theme, setTheme } = useTheme()
   return (
     <SearchProvider>
       <LayoutProvider>
-        <SidebarProvider defaultOpen={defaultOpen}>
-          <SkipToMain />
+        <SidebarProvider defaultOpen={getCookie('sidebar_state') !== 'false'}>
           <AppSidebar />
-          <SidebarInset
-            className={cn(
-              // Set content container, so we can use container queries
-              '@container/content',
-
-              // If layout is fixed, set the height
-              // to 100svh to prevent overflow
-              'has-data-[layout=fixed]:h-svh',
-
-              // If layout is fixed and sidebar is inset,
-              // set the height to 100svh - spacing (total margins) to prevent overflow
-              'peer-data-[variant=inset]:has-data-[layout=fixed]:h-[calc(100svh-(var(--spacing)*4))]'
-            )}
-          >
-            {children ?? <Outlet />}
+          <SidebarInset>
+            <Header fixed>
+              <span className='text-sm text-muted-foreground'>
+                本地视频管理 · M1-A
+              </span>
+              <Button
+                className='ml-auto'
+                variant='ghost'
+                onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+              >
+                切换主题
+              </Button>
+            </Header>
+            <Main id='content'>
+              <Outlet />
+            </Main>
           </SidebarInset>
         </SidebarProvider>
       </LayoutProvider>

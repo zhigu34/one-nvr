@@ -13,3 +13,5 @@ one-nvr-m0.tar.gz
 /bin/
 *.test
 /coverage.out
+/apps/web/test-results/
+/apps/web/playwright-report/

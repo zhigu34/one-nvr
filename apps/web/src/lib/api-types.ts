@@ -503,6 +503,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/channel-slots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 管理员列出用于通道授权的槽位元数据，不授予视频权限 */
+        get: operations["listChannelSlots"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -683,6 +700,11 @@ export interface components {
             filesystem_count: number;
             total_bytes: number;
             free_bytes: number;
+        };
+        ChannelSlot: {
+            id: components["schemas"]["UUID"];
+            channel_no: number;
+            channel_name: string;
         };
     };
     responses: never;
@@ -2011,6 +2033,38 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Structured error (401/403/409/501/503) */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listChannelSlots: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ChannelSlot"][];
+                        request_id: components["schemas"]["UUID"];
+                    };
+                };
+            };
+            /** @description Structured error (401/403/404/409/422/501/503) */
             default: {
                 headers: {
                     [name: string]: unknown;

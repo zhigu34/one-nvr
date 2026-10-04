@@ -91,6 +91,7 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("POST /api/v1/site/expand", r.protected(r.expandSite))
 	r.mux.HandleFunc("GET /api/v1/timezones", r.timezones)
 	r.mux.HandleFunc("GET /api/v1/channels", r.protected(r.listChannels))
+	r.mux.HandleFunc("GET /api/v1/channel-slots", r.protected(r.channelSlots))
 	r.mux.HandleFunc("PATCH /api/v1/channels/{id}", r.protected(r.updateChannel))
 	r.mux.HandleFunc("GET /api/v1/storage-pools", r.protected(r.listPools))
 	r.mux.HandleFunc("POST /api/v1/storage-pools", r.protected(r.registerPool))
