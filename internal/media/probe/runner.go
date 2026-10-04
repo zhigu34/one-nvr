@@ -85,7 +85,7 @@ func run(ctx context.Context, binary string, args []string, files []*os.File) ([
 	cmd := exec.CommandContext(bounded, binary, args...)
 	cmd.ExtraFiles = files
 	cmd.WaitDelay = time.Second
-	// Separate locked budgets prevent os/exec's concurrent copy goroutines racing.
+	// Separate budgets prevent os/exec's concurrent copy goroutines racing.
 	stdout := limitedOutput{left: outputLimit / 2}
 	stderr := limitedOutput{left: outputLimit / 2}
 	cmd.Stdout = &stdout
