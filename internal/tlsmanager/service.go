@@ -196,6 +196,13 @@ func (s *Service) queueApplyTx(ctx context.Context, tx pgx.Tx, state State, targ
 	if state.State == "applying" {
 		return "", auth.ErrConflict
 	}
+	var unfinished bool
+	if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM jobs WHERE kind='tls.apply' AND state IN ('queued','running'))").Scan(&unfinished); err != nil {
+		return "", err
+	}
+	if unfinished {
+		return "", auth.ErrConflict
+	}
 	if _, err := s.readVersion(ctx, tx, target); err != nil {
 		return "", err
 	}

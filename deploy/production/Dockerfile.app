@@ -10,6 +10,7 @@ RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
 COPY migrations ./migrations
+COPY deploy/production/templates ./deploy/production/templates
 RUN mkdir /out && go build -trimpath -buildvcs=false -o /out/api ./cmd/api && \
     go build -trimpath -buildvcs=false -o /out/worker ./cmd/worker && \
     go build -trimpath -buildvcs=false -o /out/admin ./cmd/admin

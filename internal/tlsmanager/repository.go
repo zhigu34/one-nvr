@@ -3,6 +3,7 @@ package tlsmanager
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"github.com/jackc/pgx/v5"
@@ -94,10 +95,19 @@ func (s *Service) snapshot(ctx context.Context, versionID id.ID, chain, key []by
 		return err
 	}
 	defer staging.Close()
+	manifestTime := time.Now().UTC()
+	if _, err = Validate(chain, key, s.Host, manifestTime); err != nil {
+		return err
+	}
+	digest := pairDigest(chain, key)
+	manifest, err := json.Marshal(snapshotManifest{ID: versionID, Digest: hex.EncodeToString(digest[:]), ImportedAt: manifestTime})
+	if err != nil {
+		return err
+	}
 	for _, file := range []struct {
 		name string
 		data []byte
-	}{{"fullchain.pem", chain}, {"privkey.pem", key}} {
+	}{{"fullchain.pem", chain}, {"privkey.pem", key}, {".snapshot.json", manifest}} {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
@@ -182,6 +192,7 @@ func (s *Service) readVersion(ctx context.Context, tx pgx.Tx, versionID id.ID) (
 	if metadata.LeafSHA256 != version.LeafSHA256 {
 		return Version{}, validationError("tls_snapshot_changed")
 	}
+	version.Metadata = metadata
 	return version, nil
 }
 

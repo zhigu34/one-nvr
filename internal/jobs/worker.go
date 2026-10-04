@@ -10,6 +10,12 @@ import (
 // gateway adapters additionally reconcile durable intent after lease takeover.
 type Handler func(context.Context, Lease) (Result, error)
 
+// PermanentFailure terminalizes a completed, verified failure rather than
+// retrying the same irreversible receipt as though no operation had occurred.
+type PermanentFailure struct{ Code string }
+
+func (e *PermanentFailure) Error() string { return e.Code }
+
 // Execute renews the fenced lease every ten seconds. A renewal failure cancels
 // the handler and forbids committing its result, even if the handler returned nil.
 func Execute(ctx context.Context, repo Repository, lease Lease, handler Handler) error {
@@ -52,6 +58,10 @@ func Execute(ctx context.Context, repo Repository, lease Lease, handler Handler)
 		return ctx.Err()
 	}
 	if err != nil {
+		var permanent *PermanentFailure
+		if errors.As(err, &permanent) {
+			return repo.FailPermanent(ctx, lease, permanent.Code)
+		}
 		return repo.Fail(ctx, lease, "handler_failed")
 	}
 	return repo.Complete(ctx, lease, result)

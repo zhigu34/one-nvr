@@ -131,15 +131,21 @@ func (r Repository) Complete(ctx context.Context, l Lease, result Result) error 
 	if err != nil {
 		return err
 	}
-	return r.finish(ctx, l, payload, "")
+	return r.finish(ctx, l, payload, "", false)
 }
 func (r Repository) Fail(ctx context.Context, l Lease, code string) error {
 	if !kindPattern.MatchString(code) {
 		return fmt.Errorf("invalid error code")
 	}
-	return r.finish(ctx, l, nil, code)
+	return r.finish(ctx, l, nil, code, false)
 }
-func (r Repository) finish(ctx context.Context, l Lease, payload []byte, code string) error {
+func (r Repository) FailPermanent(ctx context.Context, l Lease, code string) error {
+	if !kindPattern.MatchString(code) {
+		return fmt.Errorf("invalid error code")
+	}
+	return r.finish(ctx, l, nil, code, true)
+}
+func (r Repository) finish(ctx context.Context, l Lease, payload []byte, code string, permanent bool) error {
 	return r.DB.WithinTx(ctx, func(tx pgx.Tx) error {
 		state := "succeeded"
 		if code != "" {
@@ -147,10 +153,10 @@ func (r Repository) finish(ctx context.Context, l Lease, payload []byte, code st
 		}
 		delay := backoff(l.Attempt)
 		var actual string
-		err := tx.QueryRow(ctx, `UPDATE jobs SET state=CASE WHEN $4='queued' AND attempt>=max_attempts THEN 'failed' ELSE $4 END,
+		err := tx.QueryRow(ctx, `UPDATE jobs SET state=CASE WHEN $4='queued' AND (attempt>=max_attempts OR $8) THEN 'failed' ELSE $4 END,
    result=$5,error_code=NULLIF($6,''),available_at=clock_timestamp()+make_interval(secs=>$7),
    lease_expires_at=NULL,updated_at=clock_timestamp()
-   WHERE id=$1 AND fencing_token=$2 AND attempt=$3 AND state='running' AND lease_expires_at>clock_timestamp() RETURNING state`, l.ID, l.FencingToken, l.Attempt, state, payload, code, delay).Scan(&actual)
+   WHERE id=$1 AND fencing_token=$2 AND attempt=$3 AND state='running' AND lease_expires_at>clock_timestamp() RETURNING state`, l.ID, l.FencingToken, l.Attempt, state, payload, code, delay, permanent).Scan(&actual)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrLeaseLost
 		}

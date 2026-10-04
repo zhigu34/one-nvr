@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/pem"
 	"github.com/zhigu34/one-nvr/internal/fault"
@@ -24,6 +25,7 @@ type Metadata struct {
 	NotBefore    time.Time `json:"not_before"`
 	NotAfter     time.Time `json:"not_after"`
 	LeafSHA256   string    `json:"leaf_sha256"`
+	ChainSHA256  string    `json:"chain_sha256"`
 	Algorithm    string    `json:"algorithm"`
 	KeyBits      int       `json:"key_bits"`
 	SelfSigned   bool      `json:"self_signed"`
@@ -143,6 +145,11 @@ func Validate(chain, key []byte, host string, now time.Time) (Metadata, error) {
 	out.NotAfter = leaf.NotAfter.UTC()
 	fingerprint := sha256.Sum256(leaf.Raw)
 	out.LeafSHA256 = hex.EncodeToString(fingerprint[:])
+	derChain := make([][]byte, 0, len(certs))
+	for _, cert := range certs {
+		derChain = append(derChain, cert.Raw)
+	}
+	out.ChainSHA256 = ChainFingerprint(derChain)
 	out.SelfSigned = bytes.Equal(leaf.RawSubject, leaf.RawIssuer) && leaf.CheckSignature(leaf.SignatureAlgorithm, leaf.RawTBSCertificate, leaf.Signature) == nil
 	out.ChainStatus = "issuer_not_provided"
 	if len(certs) > 1 {
@@ -152,4 +159,16 @@ func Validate(chain, key []byte, host string, now time.Time) (Metadata, error) {
 	}
 	// No public or enterprise trust-store claim is inferred from pair validation.
 	return out, nil
+}
+
+// ChainFingerprint uses public certificate DER, never private-key material.
+func ChainFingerprint(certificates [][]byte) string {
+	hash := sha256.New()
+	var length [8]byte
+	for _, der := range certificates {
+		binary.BigEndian.PutUint64(length[:], uint64(len(der)))
+		hash.Write(length[:])
+		hash.Write(der)
+	}
+	return hex.EncodeToString(hash.Sum(nil))
 }

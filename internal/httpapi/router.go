@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/capability"
@@ -15,6 +16,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/tlsmanager"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +26,7 @@ type Dependencies struct {
 	Auth                            *auth.Service
 	Site                            *site.Service
 	PublicURL                       string
+	TrustedProxyToken               string
 	HealthCheck                     func(context.Context) error
 	Channels                        *channel.Service
 	Storage                         *storage.Service
@@ -198,7 +201,7 @@ func (r *router) setupStatus(w http.ResponseWriter, q *http.Request) {
 	}{initialized, token})
 }
 func (r *router) setup(w http.ResponseWriter, q *http.Request) {
-	if !r.allow("setup:" + q.RemoteAddr) {
+	if !r.allow("setup:" + r.clientIP(q)) {
 		fail(w, q, fault.New(429, "rate_limited", "尝试过于频繁，请稍后重试"))
 		return
 	}
@@ -257,10 +260,7 @@ func (r *router) login(w http.ResponseWriter, q *http.Request) {
 		fail(w, q, err)
 		return
 	}
-	peer, _, err := net.SplitHostPort(q.RemoteAddr)
-	if err != nil {
-		peer = q.RemoteAddr
-	}
+	peer := r.clientIP(q)
 	if !r.allow("login-client:"+peer, 60) {
 		fail(w, q, fault.New(429, "rate_limited", "尝试过于频繁，请稍后重试"))
 		return
@@ -423,4 +423,18 @@ func (r *router) setGrants(w http.ResponseWriter, q *http.Request, p auth.Princi
 		r.setCookie(w, sessionCookie, "", -1)
 	}
 	respond(w, q, 200, *in.Grants)
+}
+
+func (r *router) clientIP(q *http.Request) string {
+	token := q.Header.Get("X-One-NVR-Proxy-Token")
+	if r.d.TrustedProxyToken != "" && len(token) == len(r.d.TrustedProxyToken) && subtle.ConstantTimeCompare([]byte(token), []byte(r.d.TrustedProxyToken)) == 1 {
+		if ip, err := netip.ParseAddr(q.Header.Get("X-One-NVR-Client-IP")); err == nil && ip.Zone() == "" {
+			return ip.Unmap().String()
+		}
+	}
+	peer, _, err := net.SplitHostPort(q.RemoteAddr)
+	if err != nil {
+		return q.RemoteAddr
+	}
+	return peer
 }

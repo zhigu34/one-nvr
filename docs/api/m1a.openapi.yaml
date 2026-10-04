@@ -3162,6 +3162,11 @@
               "provided_chain_verified",
               "self_signed"
             ]
+          },
+          "chain_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA256 of length-prefixed public certificate DER chain"
           }
         },
         "required": [
@@ -3178,7 +3183,8 @@
           "serial_number",
           "key_bits",
           "self_signed",
-          "chain_status"
+          "chain_status",
+          "chain_sha256"
         ],
         "additionalProperties": false
       },

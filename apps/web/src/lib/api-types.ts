@@ -638,6 +638,8 @@ export interface components {
             self_signed: boolean;
             /** @enum {string} */
             chain_status: "issuer_not_provided" | "provided_chain_verified" | "self_signed";
+            /** @description SHA256 of length-prefixed public certificate DER chain */
+            chain_sha256: string;
         };
         TLSState: {
             /** @enum {string} */

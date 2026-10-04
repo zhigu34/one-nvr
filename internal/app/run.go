@@ -67,9 +67,10 @@ func Run(name string) error {
 		go func() { defer background.Done(); pools.RunJobs(ctx) }()
 	}
 	if name == "worker" {
-		background.Add(2)
+		background.Add(3)
 		go func() { defer background.Done(); certificates.Monitor(ctx) }()
 		go func() { defer background.Done(); certificates.RunCheckJobs(ctx) }()
+		go func() { defer background.Done(); runTLSApplyJobs(ctx, certificates) }()
 	}
 	if name == "api" {
 		passwords := auth.NewPasswordHasher(2)
@@ -86,7 +87,11 @@ func Run(name string) error {
 		if err != nil {
 			return fmt.Errorf("entry protocol initialization unavailable")
 		}
-		handler = httpapi.NewHandler(httpapi.Dependencies{Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, PublicURL: c.PublicURL, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled})
+		proxyKey, err := secret.ComponentCredential("gateway")
+		if err != nil {
+			return err
+		}
+		handler = httpapi.NewHandler(httpapi.Dependencies{Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, PublicURL: c.PublicURL, TrustedProxyToken: proxyKey, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled})
 	}
 	if name == "worker" {
 		zlmKey, err := secret.ComponentCredential("zlm")
