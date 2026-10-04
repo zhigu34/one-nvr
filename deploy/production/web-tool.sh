@@ -5,4 +5,5 @@ if [ ! -x /tools/node_modules/.bin/pnpm ]; then
  npm install --prefix /tools --ignore-scripts --no-audit --no-fund pnpm@10.12.4
 fi
 [ "$(/tools/node_modules/.bin/pnpm --version)" = '10.12.4' ] || { echo 'Incorrect pnpm tool version' >&2; exit 1; }
-exec /tools/node_modules/.bin/pnpm --store-dir /pnpm/store "$@"
+export npm_config_store_dir=/pnpm/store
+exec /tools/node_modules/.bin/pnpm "$@"
