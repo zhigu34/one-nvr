@@ -91,3 +91,5 @@ python3 -m unittest discover -s deploy/m0/tests -v
 ```
 
 测试覆盖 URL/CSV 解析、初始化、来源隔离、录像索引、事件时序、路径访问约束和本机 HTTP 接口，不替代实际 Docker/硬件验证。
+
+M1-A 正式基础服务与控制面板部署入口：[`deploy/production/README.md`](deploy/production/README.md)。默认仅五个核心容器，Frigate/OpenList 按 `.env` 开关启停；M1-A 尚未交付源配置、录制或回放 UI。实际测试证据见 [`docs/M1-A-validation.md`](docs/M1-A-validation.md)。

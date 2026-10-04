@@ -520,6 +520,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/hardware": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取最近的独立硬件自检报告（管理员） */
+        get: operations["getHardwareReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -705,6 +722,40 @@ export interface components {
             id: components["schemas"]["UUID"];
             channel_no: number;
             channel_name: string;
+        };
+        HardwareDevice: {
+            id: string;
+            vendor: string;
+            node: string;
+            accelerator: boolean;
+        };
+        HardwareResult: {
+            decode: boolean;
+            inference: boolean;
+            reason?: string;
+            sample_sha256?: string;
+            model_sha256?: string;
+        };
+        HardwareReport: {
+            inventory: {
+                known: boolean;
+                devices: components["schemas"]["HardwareDevice"][];
+            };
+            validation: {
+                [key: string]: components["schemas"]["HardwareResult"];
+            };
+            proposal: {
+                id: string;
+                decode_id: string;
+                inference_id: string;
+                node?: string;
+            };
+            validated: boolean;
+            error_code?: string;
+            /** Format: date-time */
+            checked_at: string;
+            sample_source: string;
+            image: string;
         };
     };
     responses: never;
@@ -2060,6 +2111,38 @@ export interface operations {
                 content: {
                     "application/json": {
                         data: components["schemas"]["ChannelSlot"][];
+                        request_id: components["schemas"]["UUID"];
+                    };
+                };
+            };
+            /** @description Structured error (401/403/404/409/422/501/503) */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getHardwareReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["HardwareReport"];
                         request_id: components["schemas"]["UUID"];
                     };
                 };

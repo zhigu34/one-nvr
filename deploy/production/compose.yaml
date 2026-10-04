@@ -1,0 +1,8 @@
+# Bootstrap tool only; production services are generated from literal .env data.
+# deploy.sh creates the immutable five/seven/six/eight-service manifest.
+services:
+  admin:
+    image: one-nvr/app:m1a
+    profiles: [tools]
+    entrypoint: [/usr/local/bin/admin]
+    network_mode: none

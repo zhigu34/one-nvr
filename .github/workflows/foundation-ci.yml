@@ -111,3 +111,30 @@ jobs:
         run: ONE_NVR_E2E_MODULES=yes ./deploy/production/dev.sh e2e --no-build
       - name: Real browser with read-only certificate directory
         run: ONE_NVR_E2E_TLS_DIR=/tls-input ./deploy/production/dev.sh e2e --no-build
+  production-runtime:
+    needs: [backend, frontend, m0-regression]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Build actual production images
+        run: |
+          docker build -f deploy/production/Dockerfile.app -t one-nvr/app:m1a .
+          docker build -f deploy/production/Dockerfile.gateway -t one-nvr/gateway:m1a .
+      - name: Actual production core and repeat deployment
+        run: ./deploy/production/test-deployment.sh
+  hardware-cpu-runtime:
+    needs: [backend]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Real fixed-image decoding and model inference
+        run: |
+          image=ghcr.io/blakeblackshear/frigate:0.17.2@sha256:d4351369984d4a9e2a49ac59736f6490856a7ea11f7790040746d21496967010
+          docker run --rm --network none --cpus 2 --memory 2g --pids-limit 128 --mount "type=bind,source=$PWD/deploy/production/hardware-probe.py,target=/probe.py,readonly" --entrypoint python3 "$image" /probe.py cpu none > /tmp/hardware-result.json
+          docker run --rm -i --network none --entrypoint python3 "$image" -c 'import json,sys; r=json.load(sys.stdin); assert r["decode"] and r["inference"]; assert len(r["sample_sha256"])==64 and len(r["model_sha256"])==64; print("CPU actual decoder and inference PASS; no camera capacity claim")' < /tmp/hardware-result.json

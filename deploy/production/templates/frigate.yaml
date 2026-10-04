@@ -1,0 +1,13 @@
+# Documentation baseline. admin writes credentials and validated hardware privately.
+record:
+  enabled: false
+snapshots:
+  enabled: true
+cameras: {}
+detectors:
+  cpu:
+    type: cpu
+    num_threads: 2
+model:
+  path: /cpu_model.tflite
+version: 0.17-0

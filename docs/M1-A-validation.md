@@ -97,3 +97,15 @@ Task 7 网关控制与本机验证：
 Task 7 实际 Docker 验证：[run 37185613818](https://github.com/zhigu34/one-nvr/actions/runs/37185613818) / commit `6e9875951911fbcd14c80187385a8792218fd762`，六项任务全部成功。实际 Nginx 完成 HTTPS 登录、Secure Cookie、更新保留会话、错误密钥拒绝、回滚暂停、旧指纹拒绝、两个崩溃边界恢复、幂等审计及同叶换链验证。以上替代先前提交时的“待运行”状态；未验证 ZLM 录像连续性。
 
 Task 8 前端验证：真实本机 API/隔离 PostgreSQL 的六项浏览器业务流程通过（12.8 秒），密码修改撤销会话另行通过；70 项 Chromium 单元测试通过。页面基于固定上游 shadcn-admin，删除演示业务与 Clerk/faker，采用同源 Cookie/CSRF、生成类型和真实授权。新增管理员专用槽位名称清单用于分配权限，不赋予视频访问权；直接 HTTP/PG 回归通过。Docker 浏览器三配置验收已接入 CI，当前待运行。测试镜像与 Playwright 包同为 1.59.1，按[官方 Docker 文档](https://playwright.dev/docs/docker)固定匹配版本和镜像摘要；不上传可能含令牌/密码的截图、trace 或错误上下文。
+
+Task 8 实际 Docker 验证：[run 37187153806](https://github.com/zhigu34/one-nvr/actions/runs/37187153806) / commit `2d8010efdf2c8564d559291c984b94006fa5d526`，七项任务全部通过：Go/真实 PostgreSQL、类型/build/lint、35 项 M0 回归、两个镜像、实际网关及浏览器。Chromium 单元 70 项通过，真实 Docker 浏览器三种配置各 7 项通过（均约 15.1 秒），包括初始化、权限与撤权缓存、模块状态、HTTP 待用证书、时区和密码修改。无 mock 登录/DB；目录模式隐藏上传并可检查输入。以上替代上一提交时“待运行”。
+
+Task 9 当前实现和待验收：
+
+- 字面量配置由 Go 工具生成私有、按内容寻址的 Compose；五核心与可选服务数量单元测试通过，映射目录 `create_host_path=false`，所有实际数据值中的 `$` 对 Compose 再转义，拒绝浮动上游镜像覆盖。
+- 新部署一次生成持续内部凭据，迁移后手动 HTTPS 首次私有自签候选排队；真实 PG 验证重复部署不换 UUID/秘密/证书，不重复任务。默认无业务摄像头源；没有管理员也通过本地工具引导，HTTP 不误报 TLS 生效。
+- 自动硬件枚举读取 daemon 宿主 sysfs，按 PCI/实际 render 路径选择 Intel，解码和推理独立自检与报告；GPU 推理失败不静默降级测试通过。固定镜像内使用 FFmpeg 短合成 H.264/TFLite 或 OpenVINO，记录来源和内容 hash，失败保留旧业务配置。报告只读 API 为管理员提供公共设备/状态；未运行显示未检查。
+- 新增生产 Docker CI 验收脚本覆盖首次 HTTPS、实际指纹入口检查、重复部署、四种配置，以及停止旧可选容器时 ZLM 容器 ID 保留；本次提交时待运行。浏览器补实际目录池登记/刷新与 ZLM 待测试源文案，待本批 CI。
+- **未测**：N5105 真实驱动、权限与 GPU 模型验证；EPYC 实际推理；两路实际媒体录制连续性及 16–32 路容量。容器 ID 保留只证明未重建容器，不证明录像连续性。这些保留 M1-C/M3 退出项；AMD 检测按用户要求不作当前门槛。
+
+Task 9 本机补充检查：完整真实 PG race 57 项通过（159.443 秒），之后新增硬件报告权限回归与重复部署回归合跑通过（7.640 秒）；当前累计 58 项待 CI 全量复核。单位 race、vet/Linux amd64 编译、类型生成/build/lint、70 项 Chromium 单元回归通过。渲染后的 Compose 由实际 Compose CLI 校验通过；宿主仍没有 Docker daemon，不能将这项语法校验当作运行通过。

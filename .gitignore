@@ -15,3 +15,4 @@ one-nvr-m0.tar.gz
 /coverage.out
 /apps/web/test-results/
 /apps/web/playwright-report/
+/deploy/production/runtime/

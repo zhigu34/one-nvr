@@ -2665,6 +2665,53 @@
         },
         "summary": "管理员列出用于通道授权的槽位元数据，不授予视频权限"
       }
+    },
+    "/api/v1/settings/hardware": {
+      "get": {
+        "operationId": "getHardwareReport",
+        "x-one-nvr-implementation": "implemented",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/HardwareReport"
+                    },
+                    "request_id": {
+                      "$ref": "#/components/schemas/UUID"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "request_id"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Structured error (401/403/404/409/422/501/503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "summary": "读取最近的独立硬件自检报告（管理员）"
+      }
     }
   },
   "components": {
@@ -3440,6 +3487,134 @@
           "id",
           "channel_no",
           "channel_name"
+        ]
+      },
+      "HardwareDevice": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "vendor": {
+            "type": "string"
+          },
+          "node": {
+            "type": "string"
+          },
+          "accelerator": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "vendor",
+          "node",
+          "accelerator"
+        ]
+      },
+      "HardwareResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "decode": {
+            "type": "boolean"
+          },
+          "inference": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "sample_sha256": {
+            "type": "string"
+          },
+          "model_sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "decode",
+          "inference"
+        ]
+      },
+      "HardwareReport": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "inventory": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "known": {
+                "type": "boolean"
+              },
+              "devices": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/HardwareDevice"
+                }
+              }
+            },
+            "required": [
+              "known",
+              "devices"
+            ]
+          },
+          "validation": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/HardwareResult"
+            }
+          },
+          "proposal": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "decode_id": {
+                "type": "string"
+              },
+              "inference_id": {
+                "type": "string"
+              },
+              "node": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "decode_id",
+              "inference_id"
+            ]
+          },
+          "validated": {
+            "type": "boolean"
+          },
+          "error_code": {
+            "type": "string"
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sample_source": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "inventory",
+          "validation",
+          "proposal",
+          "validated",
+          "checked_at",
+          "sample_source",
+          "image"
         ]
       }
     }

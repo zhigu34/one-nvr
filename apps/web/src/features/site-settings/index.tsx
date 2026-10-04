@@ -20,6 +20,11 @@ export function Settings() {
   const query = useAPI<Schema<'Site'>>('/api/v1/site', admin)
   const zones = useAPI<Timezone[]>('/api/v1/timezones', admin)
   const modules = useAPI<Capabilities>('/api/v1/capabilities', admin, 5000)
+  const hardware = useAPI<Schema<'HardwareReport'>>(
+    '/api/v1/settings/hardware',
+    admin && !!modules.data?.frigate.enabled,
+    5000
+  )
   const action = useAction()
   if (!admin) return <Forbidden />
   return (
@@ -140,6 +145,31 @@ export function Settings() {
           </div>
         )}
       </Panel>
+      {modules.data?.frigate.enabled && (
+        <Panel title='智能检测硬件'>
+          <QueryState
+            pending={hardware.isPending}
+            error={hardware.error}
+            retry={() => hardware.refetch()}
+          />
+          {hardware.data && (
+            <>
+              <p>
+                自检：{hardware.data.validated ? '通过' : '失败'} ·{' '}
+                {hardware.data.error_code || 'validated'}
+              </p>
+              <p>
+                解码：{hardware.data.proposal.decode_id} · 推理：
+                {hardware.data.proposal.inference_id}
+              </p>
+              <p className='text-sm text-muted-foreground'>
+                设备：{hardware.data.proposal.node || 'CPU'} ·
+                样本自检不代表摄像头业务或容量验收。
+              </p>
+            </>
+          )}
+        </Panel>
+      )}
       <TLSSettings />
     </>
   )

@@ -27,6 +27,9 @@ services:
     entrypoint: [sh, -ec]
     command:
       - |
+        mkdir -p /storage/pool1
+        chmod 755 /storage /storage/pool1
+        chown 10001:10001 /storage/pool1
         mkdir -p /data/secrets /data/test-phase /data/tls/versions /data/gateway /cache/go /cache/build /tls-input /data/e2e
         chmod 700 /tls-input /data/e2e /data /data/secrets /data/test-phase /data/tls /data/tls/versions /data/gateway
         chown 10001:10001 /tls-input /data/e2e /data /data/secrets /data/test-phase /data/tls /data/tls/versions /data/gateway /cache /cache/go /cache/build
@@ -36,6 +39,7 @@ services:
       - runtime-control:/data/gateway
       - runtime-cache:/cache
       - runtime-input:/tls-input
+      - runtime-storage:/storage
   runner:
     image: golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195
     user: "10001:10001"
@@ -63,6 +67,7 @@ services:
       - runtime-tls:/data/tls
       - runtime-control:/data/gateway
       - runtime-input:/tls-input:ro
+      - runtime-storage:/storage
     depends_on:
       postgres: {condition: service_healthy}
   worker:
@@ -76,6 +81,7 @@ services:
       - runtime-tls:/data/tls
       - runtime-control:/data/gateway
       - runtime-input:/tls-input:ro
+      - runtime-storage:/storage
     depends_on:
       postgres: {condition: service_healthy}
   gateway:
@@ -97,6 +103,7 @@ services:
     user: "10001:10001"
     shm_size: 256mb
     environment:
+      ONE_NVR_E2E_POOL: "yes"
       ONE_NVR_E2E_URL: http://gateway
       ONE_NVR_E2E_SECRETS_FILE: /data/secrets/one-nvr.json
       ONE_NVR_E2E_CERT: /data/e2e/fullchain.pem
@@ -106,6 +113,7 @@ services:
     volumes:
       - runtime-data:/data:ro
 volumes:
+  runtime-storage:
   runtime-input:
   runtime-db:
   runtime-data:

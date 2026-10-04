@@ -11,7 +11,7 @@ import (
 // Values are only written to private generated component configs, never DTOs.
 func (s State) ComponentCredential(name string) (string, error) {
 	switch name {
-	case "zlm", "mqtt", "openlist", "gateway":
+	case "zlm", "mqtt", "openlist", "gateway", "postgres":
 	default:
 		return "", errors.New("unknown component credential")
 	}

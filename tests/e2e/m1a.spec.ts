@@ -112,6 +112,19 @@ test('timezoneChangesDisplayWithoutRestart', async ({ page }) => {
   await expect(page.getByLabel('时区', {exact:true})).toHaveValue('America/New_York')
 })
 
+test('directoryPoolKeepsPendingZLMStatus', async ({page}) => {
+  expect(process.env.ONE_NVR_E2E_POOL, 'requires isolated Docker pool fixture').toBe('yes')
+  await login(page)
+  await page.goto('/storage-pools')
+  await page.getByLabel('存储池名称',{exact:true}).fill('验证池')
+  await page.getByLabel('挂载目录',{exact:true}).fill('/storage/pool1')
+  await page.getByRole('button',{name:'添加存储池',exact:true}).click()
+  await expect(page.getByText('存储池已登记')).toBeVisible()
+  await expect(page.getByText('待 ZLM 测试视频源')).toBeVisible()
+  await page.reload()
+  await expect(page.getByText('/storage/pool1',{exact:true})).toBeVisible()
+})
+
 test('passwordChangeRevokesOldSession', async ({page}) => {
   await login(page)
   await page.getByRole('button',{name:'修改密码',exact:true}).click()

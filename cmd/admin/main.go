@@ -18,9 +18,21 @@ func main() {
 	}
 }
 func run() error {
+	if handled, err := hardwareCommand(os.Args[1:]); handled {
+		return err
+	}
+	if handled, err := verifyCommand(os.Args[1:]); handled {
+		return err
+	}
+	if handled, err := deploymentCommand(os.Args[1:]); handled {
+		return err
+	}
 	if len(os.Args) == 2 && os.Args[1] == "init-secrets" {
 		c, err := config.Load()
 		if err != nil {
+			return err
+		}
+		if err = validateRuntimeIdentity(c.DataDir); err != nil {
 			return err
 		}
 		state, err := secrets.Init(c.DataDir)
