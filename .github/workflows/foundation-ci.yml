@@ -136,6 +136,25 @@ jobs:
         run: ONE_NVR_E2E_MODULES=yes ./deploy/production/dev.sh e2e --no-build
       - name: Real browser with read-only certificate directory
         run: ONE_NVR_E2E_TLS_DIR=/tls-input ./deploy/production/dev.sh e2e --no-build
+  media-browser-runtime:
+    needs: [backend, frontend, m0-regression]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Build pinned production media and browser images
+        run: |
+          for image in app gateway browser; do docker build -f "deploy/production/Dockerfile.$image" -t "one-nvr/$image:ci" .; done
+          docker build -f deploy/production/Dockerfile.app --target media-test -t one-nvr/media-test:ci .
+      - name: Actual UI source switches, rollback and recording controls
+        run: ./deploy/production/test-media-e2e.sh --no-build
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: media-browser-contract
+          path: media-test-results/media-browser.json
   production-runtime:
     needs: [backend, frontend, m0-regression]
     runs-on: ubuntu-24.04

@@ -173,11 +173,11 @@
 
 **Interfaces:** `SourceService.SetPolicy(ctx,p,channelID,expected int64,mode,key string) (Change,error)`；`BindPool(ctx,p,channelID,poolID,expected,key) (Change,error)`；`recording.Service.Reconcile(ctx,channelID id.ID) error`、`Monitor(ctx) error`；`recording.SafetyLine([]BitrateSample) (bytes int64,known bool)`；`SourceService.GetStatus(ctx,p,channelID) (Status,error)`。
 
-- [ ] **Step 1:** 写 `TestRecordingOffKeepsPullAndHistory`：none停止录制，取流继续，换源/重启不重置策略、不开始事件buffer；`TestPoolSwitchKeepsOldLocations`：先验证目标池，收尾旧run，新片入新池，旧位置不变，改默认池不改绑定。
-- [ ] **Step 2:** `dev.sh test-db ./tests/integration -run 'RecordingOff|PoolSwitch|RecordingCapacity|RecordingRecovery'` 红灯。
-- [ ] **Step 3:** Worker10秒对账期望/实际、源可读/帧进展/录制状态/最近完成片，数据过期显示unknown。禁止以流已登记推算摄像头可用率；源恢复创建新session/run，Worker/API重启而上游仍录制则复用原run。DB不可用不强停已有ZLM录制、不执行新未知配置；根/marker/写失败时停受影响run并持久gap/原因，恢复后新run不覆盖旧片。
-- [ ] **Step 4:** 按文件系统聚合近5分钟有效主流码率（10秒采样，至少两次有效且≤30秒过期），同时考虑已索引片实际bytes/duration；取可证据支持的保守较高估值。无近期证据的continuous启动阻断并显示bitrate_unknown（初次真实测试供证据），不得把未知当0；恢复两倍线并连续两次健康样本。测试10GiB底线、600秒写入量、溢出饱和、共享池去重和仅相关池阻断；停用池新写入停止，已有引用池不能删除、历史索引不消失。明确记录中断/未知区间而非完整性评分，重跑DB和 `test-media.sh --recovery`。
-- [ ] **Step 5:** 提交 `feat: control continuous recording and pool recovery`。
+- [x] **Step 1:** 写 `TestRecordingOffKeepsPullAndHistory`：none停止录制，取流继续，换源/重启不重置策略、不开始事件buffer；`TestPoolSwitchKeepsOldLocations`：先验证目标池，收尾旧run，新片入新池，旧位置不变，改默认池不改绑定。
+- [x] **Step 2:** `dev.sh test-db ./tests/integration -run 'RecordingOff|PoolSwitch|RecordingCapacity|RecordingRecovery'` 红灯。
+- [x] **Step 3:** Worker10秒对账期望/实际、源可读/帧进展/录制状态/最近完成片，数据过期显示unknown。禁止以流已登记推算摄像头可用率；源恢复创建新session/run，Worker/API重启而上游仍录制则复用原run。DB不可用不强停已有ZLM录制、不执行新未知配置；根/marker/写失败时停受影响run并持久gap/原因，恢复后新run不覆盖旧片。
+- [x] **Step 4:** 按文件系统聚合近5分钟有效主流码率（10秒采样，至少两次有效且≤30秒过期），同时考虑已索引片实际bytes/duration；取可证据支持的保守较高估值。无近期证据的continuous启动阻断并显示bitrate_unknown（初次真实测试供证据），不得把未知当0；恢复两倍线并连续两次健康样本。测试10GiB底线、600秒写入量、溢出饱和、共享池去重和仅相关池阻断；停用池新写入停止，已有引用池不能删除、历史索引不消失。明确记录中断/未知区间而非完整性评分，重跑DB和 `test-media.sh --recovery`。
+- [x] **Step 5:** 提交 `feat: control continuous recording and pool recovery`。
 
 ## Task 8: 批量预览、测试、逐行应用与配置回导
 
