@@ -319,7 +319,7 @@ func (s *Service) Publish(ctx context.Context, inboxID id.ID) (segment Segment, 
 		if _, err := tx.Exec(work, `INSERT INTO recording_locations(segment_id,pool_id,relative_path,size_bytes) VALUES($1,$2,$3,$4) ON CONFLICT(segment_id,pool_id) DO NOTHING`, intent.ID, intent.PoolID, intent.Target, intent.Bytes); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(work, `UPDATE recording_runs SET last_completion_at=$2 WHERE id=$1 AND (last_completion_at IS NULL OR last_completion_at<$2)`, run.ID, c.StartTime); err != nil {
+		if _, err := tx.Exec(work, `UPDATE recording_runs SET last_completion_at=$2 WHERE id=$1 AND (last_completion_at IS NULL OR last_completion_at<$2)`, run.ID, c.StartTime.Add(c.Duration)); err != nil {
 			return err
 		}
 		_, err = tx.Exec(work, `UPDATE hook_inbox SET state='processed',processed_at=clock_timestamp(),lease_expires_at=NULL,fencing_token=NULL,error_code=NULL WHERE id=$1 AND fencing_token=$2`, lease.ID, lease.Token)

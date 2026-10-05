@@ -60,6 +60,11 @@ func (s *Service) Start(ctx context.Context, e *channel.Execution, in StartInput
 	if err != nil {
 		return out, err
 	}
+	if !snapshot.Recording {
+		if err := s.checkStartCapacity(ctx, e, ss, in.PoolID); err != nil {
+			return out, err
+		}
+	}
 	err = e.WithinTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		var state string
 		err := tx.QueryRow(ctx, `SELECT id,stream_session_id,pool_id,work_relative_path,state FROM recording_runs WHERE stream_session_id=$1 AND state IN ('starting','recording','stopping') FOR UPDATE`, ss.ID).Scan(&out.RunID, &out.SessionID, &out.PoolID, &out.RelativePath, &state)

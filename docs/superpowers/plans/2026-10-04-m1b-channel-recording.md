@@ -161,11 +161,11 @@
 
 **Interfaces:** `SourceService.RequestTest(ctx,p,channelID,revisionID,key) (Change,error)`、`TestResult(ctx,p,channelID,testID) (SourceTestResult,error)`、`RequestApply(ctx,p,channelID,in SourceApplyInput,key string) (Change,error)`、`RequestClear(ctx,p,channelID,expected,key) (Change,error)`；`recording.Service.Start(ctx,Execution,StartInput) (Handle,error)`、`Stop(ctx,Execution,Handle) error`；`app.ExecuteSourceTest(ctx,Execution) (jobs.Result,error)`、`ExecuteSourceChange(ctx,Execution) (jobs.Result,error)`。
 
-- [ ] **Step 1:** 写 `TestSourceTestDoesNotInterruptOldRun`、`TestSourceSwitchRollbackAndLateTail`：测试两并发上限真实DB计数不因多Worker越界；主流测试5分钟到期或配置摘要不匹配不能发布；子流失败降级。切换成功current更新，失败旧revision以新generation恢复，旧尾片归旧run；回滚失败可见真实状态，不伪称旧源在线。
-- [ ] **Step 2:** `dev.sh test-db ./tests/integration -run 'SourceTest|SourceSwitch'` 确认缺少执行器红灯。
-- [ ] **Step 3:** 持久阶段 queued→testing→stopping_old→starting_new→verifying_new→committed 或 rolling_back→rolled_back/failed。临时测试源有专用 session，成功后清理，最多2个DB全局名额。每次流物理ID包含新session/generation，actual recorder restart总分配新run；调用前先保存意图/run descriptor，再操作，返回值后检查实际首帧/期望录制状态。同通道使用pgx专用连接advisory lock，任务renew与该连接活性共同控制Execution，不长时间持有配置事务。
-- [ ] **Step 4:** 事务复核授权/expected并保存job/audit；任务开始前再复核（撤权后未开始不执行），已经开始的变更继续安全完成/回滚。停止旧源收尾当前片，新源符合期望才commit current；none不要求池且不会录制，continuous必须源+池证据齐全，首次默认池绑定与明确策略一并提交。清空/禁用收尾并保留历史。测试 `TestSourceApplyLastAttemptCrashReconciles`：source.apply/clear/pool_switch/policy_apply 属持久副作用意图，普通max_attempt耗尽不能把未对账域任务丢弃；只扩展明确类型白名单，正常source.test仍有限重试。源切换deadline持久；重启先观察已有唯一物理流/run，不按超时盲目重做；相同配置跳过，更名不重连。重跑DB及真实 `test-media.sh --switch`。
-- [ ] **Step 5:** 提交 `feat: reconcile channel source switches and rollback`。
+- [x] **Step 1:** 写 `TestSourceTestDoesNotInterruptOldRun`、`TestSourceSwitchRollbackAndLateTail`：测试两并发上限真实DB计数不因多Worker越界；主流测试5分钟到期或配置摘要不匹配不能发布；子流失败降级。切换成功current更新，失败旧revision以新generation恢复，旧尾片归旧run；回滚失败可见真实状态，不伪称旧源在线。
+- [x] **Step 2:** `dev.sh test-db ./tests/integration -run 'SourceTest|SourceSwitch'` 确认缺少执行器红灯。
+- [x] **Step 3:** 持久阶段 queued→testing→stopping_old→starting_new→verifying_new→committed 或 rolling_back→rolled_back/failed。临时测试源有专用 session，成功后清理，最多2个DB全局名额。每次流物理ID包含新session/generation，actual recorder restart总分配新run；调用前先保存意图/run descriptor，再操作，返回值后检查实际首帧/期望录制状态。同通道使用pgx专用连接advisory lock，任务renew与该连接活性共同控制Execution，不长时间持有配置事务。
+- [x] **Step 4:** 事务复核授权/expected并保存job/audit；任务开始前再复核（撤权后未开始不执行），已经开始的变更继续安全完成/回滚。停止旧源收尾当前片，新源符合期望才commit current；none不要求池且不会录制，continuous必须源+池证据齐全，首次默认池绑定与明确策略一并提交。清空/禁用收尾并保留历史。测试 `TestSourceApplyLastAttemptCrashReconciles`：source.apply/clear/pool_switch/policy_apply 属持久副作用意图，普通max_attempt耗尽不能把未对账域任务丢弃；只扩展明确类型白名单，正常source.test仍有限重试。源切换deadline持久；重启先观察已有唯一物理流/run，不按超时盲目重做；相同配置跳过，更名不重连。重跑DB及真实 `test-media.sh --switch`。
+- [x] **Step 5:** 提交 `feat: reconcile channel source switches and rollback`。
 
 ## Task 7: 普通录像开关、改池、容量与持续状态
 

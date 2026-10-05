@@ -45,11 +45,14 @@ func run() error {
 	if os.Args[1] == "publish" {
 		return publishAcceptance()
 	}
-	if os.Args[1] == "prepare-switch" {
+	if os.Args[1] == "prepare-switch" || os.Args[1] == "prepare-recovery" {
 		return prepareMediaSession("switch")
 	}
 	if os.Args[1] == "switch" {
 		return switchAcceptance()
+	}
+	if os.Args[1] == "recovery" {
+		return recoveryAcceptance()
 	}
 	if os.Args[1] == "prepare-probe" {
 		return preparePoolProbe()

@@ -165,12 +165,14 @@ func TestSourceApplyLastAttemptCrashReconciles(t *testing.T) {
 // Controlled external peer; assertions below inspect persistent domain outcomes
 // and physical stream state. Fixed-image CI covers the real ZLM implementation.
 type controlledMedia struct {
-	mu         sync.Mutex
-	urls       map[string]string
-	recording  map[string]bool
-	failPath   string
-	failURL    string
-	AfterStart func()
+	mu           sync.Mutex
+	urls         map[string]string
+	recording    map[string]bool
+	failPath     string
+	failURL      string
+	AfterStart   func()
+	FrozenFrames int64
+	AddCalls     int
 }
 
 func newControlledMedia() *controlledMedia {
@@ -182,6 +184,7 @@ func (m *controlledMedia) AddProxy(ctx context.Context, in zlm.ProxyInput) (zlm.
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.AddCalls++
 	u, err := url.Parse(in.URL)
 	if err != nil {
 		return zlm.ProxyRef{}, err
@@ -211,7 +214,11 @@ func (m *controlledMedia) Inspect(ctx context.Context, key zlm.StreamKey) (zlm.S
 	if _, ok := m.urls[key.Stream]; !ok {
 		return zlm.StreamSnapshot{}, zlm.ErrStreamAbsent
 	}
-	return zlm.StreamSnapshot{Key: key, Recording: m.recording[key.Stream], BytesPerSecond: 1 << 20, ObservedAt: time.Now().UTC(), Tracks: []zlm.Track{{Codec: "H264", Ready: true, Width: 320, Height: 180, FPS: 5, Frames: time.Now().UnixMilli()}}}, nil
+	frames := time.Now().UnixMilli()
+	if m.FrozenFrames > 0 {
+		frames = m.FrozenFrames
+	}
+	return zlm.StreamSnapshot{Key: key, Recording: m.recording[key.Stream], BytesPerSecond: 1 << 20, ObservedAt: time.Now().UTC(), Tracks: []zlm.Track{{Codec: "H264", Ready: true, Width: 320, Height: 180, FPS: 5, Frames: frames}}}, nil
 }
 func (m *controlledMedia) StartRecord(ctx context.Context, key zlm.StreamKey, _ string, _ int) error {
 	if err := ctx.Err(); err != nil {
@@ -462,5 +469,23 @@ func TestSourceTestsSameChannelWaitWithoutConsumingAttempt(t *testing.T) {
 	next, err := repo.Claim(ctx, "source.test")
 	if err != nil || next.ID != second.JobID {
 		t.Fatal("channel capacity not released", err)
+	}
+}
+
+func TestSourceTestProvidesSeparatedBitrateEvidence(t *testing.T) {
+	f, _, change, _ := prepareControlledSourceTest(t)
+	ctx := context.Background()
+	repo := jobs.Repository{DB: f.DB}
+	lease, err := repo.Claim(ctx, "source.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := jobs.Execute(ctx, repo, lease, f.Service.ExecuteSourceTest); err != nil {
+		t.Fatal(err)
+	}
+	var samples int
+	var seconds float64
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT count(*),coalesce(extract(epoch FROM max(observed_at)-min(observed_at)),0)::double precision FROM recording_bitrate_samples WHERE source_test_id=$1 AND valid", change.TestID).Scan(&samples, &seconds); err != nil || samples < 2 || seconds < 10 {
+		t.Fatal("actual source test lacks separated valid bitrate evidence", samples, seconds, err)
 	}
 }

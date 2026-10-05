@@ -35,6 +35,31 @@ func (s *Service) RequireChannelTx(ctx context.Context, p Principal, channelID i
 	return s.requireChannel(ctx, p, channelID, action, tx)
 }
 
+func (s *Service) RequireAnyChannelTx(ctx context.Context, p Principal, ch id.ID, tx pgx.Tx) error {
+	if err := LockAuthorization(ctx, tx); err != nil {
+		return err
+	}
+	user, err := s.current(ctx, p, tx)
+	if err != nil {
+		return err
+	}
+	var live, playback, export, configure bool
+	err = tx.QueryRow(ctx, "SELECT live,playback,export,configure FROM channel_grants WHERE user_id=$1 AND channel_id=$2", p.UserID, ch).Scan(&live, &playback, &export, &configure)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !live && !playback && !export && !configure {
+		return ErrNotFound
+	}
+	if live && roleAllows(user.Role, Live) || playback && roleAllows(user.Role, Playback) || export && roleAllows(user.Role, Export) || configure && roleAllows(user.Role, Configure) {
+		return nil
+	}
+	return ErrForbidden
+}
+
 func (s *Service) requireChannel(ctx context.Context, p Principal, channelID id.ID, action Action, q interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }) error {

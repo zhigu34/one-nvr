@@ -327,6 +327,13 @@ func (s *Service) Delete(ctx context.Context, p auth.Principal, poolID id.ID, ex
 		if pool.Version != expected {
 			return auth.ErrConflict
 		}
+		var referenced bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM channels WHERE storage_pool_id=$1) OR EXISTS(SELECT 1 FROM recording_runs WHERE pool_id=$1) OR EXISTS(SELECT 1 FROM recording_locations WHERE pool_id=$1) OR EXISTS(SELECT 1 FROM source_switches WHERE old_pool_id=$1 OR new_pool_id=$1) OR EXISTS(SELECT 1 FROM pool_probe_intents pi JOIN stream_sessions ss ON ss.id=pi.session_id WHERE pi.pool_id=$1 AND ss.state<>'closed')`, poolID).Scan(&referenced); err != nil {
+			return err
+		}
+		if referenced {
+			return auth.ErrConflict
+		}
 		var active bool
 		if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM jobs WHERE object_id=$1 AND state IN ('queued','running'))", poolID).Scan(&active); err != nil {
 			return err
@@ -357,6 +364,9 @@ func (s *Service) Delete(ctx context.Context, p auth.Principal, poolID id.ID, ex
 			return auth.ErrConflict
 		})
 		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, "DELETE FROM pool_probe_intents WHERE pool_id=$1", poolID); err != nil {
 			return err
 		}
 		if _, err = tx.Exec(ctx, "DELETE FROM storage_pool_checks WHERE pool_id=$1", poolID); err != nil {

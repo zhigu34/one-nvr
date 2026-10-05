@@ -148,7 +148,11 @@ func (s *Service) stopSwitchSessions(ctx context.Context, e *channel.Execution, 
 	if old {
 		query = "SELECT " + physicalColumns + " FROM stream_sessions WHERE channel_id=$1 AND purpose IN ('main','sub') AND state NOT IN ('closed','failed') AND switch_id IS DISTINCT FROM $2 ORDER BY created_at"
 	}
-	rows, err := s.DB.Pool.Query(ctx, query, e.ChannelID, w.ID)
+	var switchID *id.ID
+	if w.ID != "" {
+		switchID = &w.ID
+	}
+	rows, err := s.DB.Pool.Query(ctx, query, e.ChannelID, switchID)
 	if err != nil {
 		return err
 	}
@@ -174,6 +178,9 @@ func (s *Service) stopSwitchSessions(ctx context.Context, e *channel.Execution, 
 }
 
 func (s *Service) verifySwitchTarget(ctx context.Context, e *channel.Execution, w channel.SwitchWork, rollback bool) (physicalSession, error) {
+	if w.Kind == "policy_apply" || w.Kind == "pool_switch" {
+		return s.verifyRecordingTarget(ctx, e, w, rollback)
+	}
 	revision, pool, mode, prefix := w.NewRevision, w.NewPool, w.DesiredMode, "candidate_"
 	if rollback {
 		revision, pool, mode, prefix = w.OldRevision, w.OldPool, w.OldMode, "rollback_"
@@ -201,6 +208,15 @@ func (s *Service) verifySwitchTarget(ctx context.Context, e *channel.Execution, 
 				return main, err
 			}
 			if err := s.CheckPool(ctx, *pool); err != nil {
+				return main, err
+			}
+		}
+		capacity, err := s.capacityFor(ctx, e.ChannelID, main.RevisionID, *pool)
+		if err != nil {
+			return main, err
+		}
+		if !capacity.Known {
+			if err := s.sampleBitratePair(ctx, e, main, ""); err != nil {
 				return main, err
 			}
 		}
@@ -408,6 +424,9 @@ func (s *Service) ExecuteSourceChange(ctx context.Context, lease jobs.Lease) (jo
 	if w.State != "running" {
 		return switchJobResult(w)
 	}
+	if w.Kind == "policy_apply" || w.Kind == "pool_switch" {
+		return s.executeRecordingChange(ctx, e, w)
+	}
 	if w.Phase == "testing" {
 		if w.Kind == "apply" && w.DesiredMode == "continuous" {
 			if w.NewPool == nil {
@@ -424,6 +443,25 @@ func (s *Service) ExecuteSourceChange(ctx context.Context, lease jobs.Lease) (jo
 				if err := s.CheckPool(ctx, *w.NewPool); err != nil {
 					return jobs.Result{}, err
 				}
+			}
+			if w.NewRevision == nil {
+				return jobs.Result{}, ErrPublicationConflict
+			}
+			capacity, err := s.capacityFor(ctx, e.ChannelID, *w.NewRevision, *w.NewPool)
+			if err != nil {
+				return jobs.Result{}, err
+			}
+			reason := ""
+			if !capacity.Known {
+				reason = "bitrate_unknown"
+			} else if capacity.Free < capacity.Line {
+				reason = "low_space"
+			}
+			if reason != "" {
+				if err := s.finishSwitch(ctx, e, &w, "rolled_back", reason); err != nil {
+					return jobs.Result{}, err
+				}
+				return jobs.Result{}, &jobs.PermanentFailure{Code: reason}
 			}
 		}
 		if w.Kind == "apply" && w.OldRevision != nil && w.NewRevision != nil && *w.OldRevision == *w.NewRevision {
