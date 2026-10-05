@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/database"
@@ -71,6 +72,9 @@ func recordingRecoveryScenario(ctx context.Context, db *database.DB, s *recordin
 	// revision. This is an external absence, not a seeded fake health observation.
 	if err := media.RemoveProxy(ctx, zlm.ProxyRef{Key: key(originalSession), OpaqueKey: "__defaultVhost__/one_nvr/" + string(originalSession)}); err != nil {
 		return err
+	}
+	if err := waitPhysicalAbsence(ctx, media, key(originalSession)); err != nil {
+		return fmt.Errorf("external source removal not observed: %w", err)
 	}
 	if err := s.Reconcile(ctx, ids.Channel); err != nil {
 		return err
@@ -182,4 +186,28 @@ func recordingRecoveryScenario(ctx context.Context, db *database.DB, s *recordin
 	}
 	fmt.Println("Actual recording policy, source generation recovery, pool marker fault, hysteresis and historical tail PASS")
 	return nil
+}
+
+// A proxy deletion acknowledgement precedes asynchronous media unregistration.
+// Inject the fault only after actual typed absence is observed, never by treating
+// an HTTP/management error as disappearance.
+func waitPhysicalAbsence(ctx context.Context, media *zlm.Client, key zlm.StreamKey) error {
+	wait, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	for {
+		_, err := media.Inspect(wait, key)
+		if errors.Is(err, zlm.ErrStreamAbsent) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-wait.Done():
+			timer.Stop()
+			return wait.Err()
+		case <-timer.C:
+		}
+	}
 }
