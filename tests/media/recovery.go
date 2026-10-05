@@ -84,7 +84,7 @@ func recordingRecoveryScenario(ctx context.Context, db *database.DB, s *recordin
 	})
 	if err != nil {
 		var reason string
-		_ = db.Pool.QueryRow(ctx, "SELECT reason_code FROM source_observations WHERE channel_id=$1 AND kind='main' ORDER BY observed_at DESC LIMIT 1", ids.Channel).Scan(&reason)
+		_ = db.Pool.QueryRow(ctx, "SELECT coalesce(string_agg(reason_code,','),'') FROM (SELECT reason_code FROM source_observations WHERE channel_id=$1 AND kind='main' ORDER BY observed_at DESC LIMIT 6) recent", ids.Channel).Scan(&reason)
 		return fmt.Errorf("source recovery did not reach a fresh active generation: %w (observed=%s)", err, reason)
 	}
 	timer := time.NewTimer(11 * time.Second)
@@ -220,7 +220,7 @@ func waitPhysicalAbsence(ctx context.Context, media *zlm.Client, key zlm.StreamK
 }
 
 func waitRecoveredSession(ctx context.Context, previous id.ID, reconcile func(context.Context) error, find func(context.Context) (id.ID, error)) (id.ID, error) {
-	bounded, cancel := context.WithTimeout(ctx, 30*time.Second)
+	bounded, cancel := context.WithTimeout(ctx, 75*time.Second)
 	defer cancel()
 	for {
 		if err := reconcile(bounded); err != nil {

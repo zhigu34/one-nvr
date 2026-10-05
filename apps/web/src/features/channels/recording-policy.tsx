@@ -58,6 +58,7 @@ export function RecordingPolicyControls({
       <label className='grid gap-2 text-sm'>
         普通录像
         <select
+          aria-label='普通录像'
           value={selected}
           onChange={(e) => setSelected(e.target.value as typeof selected)}
           className='rounded-md border bg-background p-2'
@@ -84,6 +85,7 @@ export function RecordingPolicyControls({
       <label className='grid gap-2 text-sm'>
         录像存储池
         <select
+          aria-label='录像存储池'
           value={target}
           onChange={(e) => setTarget(e.target.value)}
           className='rounded-md border bg-background p-2'

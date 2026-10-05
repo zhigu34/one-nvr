@@ -359,7 +359,14 @@ func checkRedirect(ctx context.Context, client *zlm.Client) (bool, error) {
 }
 
 func startRedirectFixture(ctx context.Context) (func(), error) {
-	runnerIPs, err := net.DefaultResolver.LookupIP(ctx, "ip4", "runner")
+	sentinel := os.Getenv("ONE_NVR_MEDIA_FIXTURE_SENTINEL")
+	if sentinel == "" {
+		sentinel = "runner"
+	}
+	if sentinel != "runner" && sentinel != "worker" {
+		return nil, fmt.Errorf("invalid private fixture sentinel")
+	}
+	runnerIPs, err := net.DefaultResolver.LookupIP(ctx, "ip4", sentinel)
 	if err != nil || len(runnerIPs) != 1 {
 		return nil, fmt.Errorf("sentinel fixture address unavailable")
 	}

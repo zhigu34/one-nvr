@@ -24,6 +24,10 @@ wait_entry() {
 }
 wait_entry
 "${compose[@]}" run --rm browser
+# Prior phase intentionally exercises ten admin logins in under one minute.
+# Recreate only the isolated API process; retain real DB credentials and do not weaken the login limiter.
+"${compose[@]}" up -d --no-deps --force-recreate api
+wait_entry
 "${compose[@]}" run --rm -e ONE_NVR_E2E_PHASE=sources -e ONE_NVR_E2E_ADMIN_PASSWORD=Browser-new-only-2026! browser
 # Recreate actual processes while preserving only this fixture's DB/private volumes.
 "${compose[@]}" up -d --no-deps --force-recreate api worker gateway

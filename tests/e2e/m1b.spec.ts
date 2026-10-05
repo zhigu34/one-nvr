@@ -1,7 +1,7 @@
 import {readFileSync} from 'node:fs'
 import {expect,test,type Page} from '../../apps/web/tests/playwright'
 const password='Browser-test-only-2026!'
-async function login(page:Page){await page.goto('/sign-in');await page.getByLabel('用户名',{exact:true}).fill('admin');await page.getByLabel('密码',{exact:true}).fill(process.env.ONE_NVR_E2E_ADMIN_PASSWORD || password);await page.getByRole('button',{name:'登录',exact:true}).click();await expect(page.getByRole('heading',{name:'总览',exact:true})).toBeVisible()}
+async function login(page:Page){await page.goto('/sign-in');await page.getByLabel('用户名',{exact:true}).fill('admin');await page.getByLabel('密码',{exact:true}).fill(process.env.ONE_NVR_E2E_ADMIN_PASSWORD || password);const accepted=page.waitForResponse(r=>r.url().endsWith('/api/v1/auth/login')&&r.request().method()==='POST');await page.getByRole('button',{name:'登录',exact:true}).click();expect((await accepted).status()).toBe(200);await expect(page.getByRole('heading',{name:'总览',exact:true})).toBeVisible()}
 test('draft save and export round trip keep the permanent channel and do not activate it',async({page})=>{
  await login(page);await page.goto('/channels/configure')
  await expect(page.getByRole('heading',{name:'通道配置',exact:true})).toBeVisible()

@@ -37,7 +37,9 @@ services:
   fixture:
     image: one-nvr/media-test:ci
     entrypoint: [/usr/local/bin/media-test, fixture]
-    depends_on: [camera]
+    environment:
+      ONE_NVR_MEDIA_FIXTURE_SENTINEL: worker
+    depends_on: [camera, worker]
   zlm:
     image: zlmediakit/zlmediakit:master@sha256:25ecf6c4a55e72bc495be15c8480f0b0cef58c712e5c9f0596452777b41bf344
     platform: linux/amd64
