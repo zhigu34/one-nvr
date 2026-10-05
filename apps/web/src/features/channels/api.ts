@@ -1,4 +1,4 @@
-import { apiRequest, jsonRequest } from '@/lib/api-client'
+import { apiRequest, jsonRequest, newRequestKey } from '@/lib/api-client'
 
 export function sourceCommand<T>(
   path: string,
@@ -10,7 +10,7 @@ export function sourceCommand<T>(
   const init = jsonRequest(method, body, version)
   return apiRequest<T>(path, {
     ...init,
-    headers: { ...init.headers, 'Idempotency-Key': crypto.randomUUID() },
+    headers: { ...init.headers, 'Idempotency-Key': newRequestKey() },
     signal,
   })
 }

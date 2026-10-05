@@ -1153,6 +1153,8 @@ export interface components {
             main: components["schemas"]["ObservedStatus"];
             sub: components["schemas"]["ObservedStatus"];
             recording: components["schemas"]["ObservedStatus"];
+            /** @description True only before the first successful source application; clearing a previously configured channel preserves its recording policy. */
+            requires_initial_recording_mode: boolean;
         };
         RevealedCredentials: {
             username: string;

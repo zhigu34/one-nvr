@@ -50,6 +50,25 @@ function wrapper(
     </QueryClientProvider>
   )
 }
+test('draft save works when ordinary HTTP has no crypto.randomUUID', async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(crypto, 'randomUUID')
+  Object.defineProperty(crypto, 'randomUUID', {
+    configurable: true,
+    value: undefined,
+  })
+  try {
+    calls.request.mockResolvedValue(revision)
+    const view = await render(wrapper())
+    await userEvent.click(view.getByRole('button', { name: '保存草稿' }))
+    expect(calls.request).toHaveBeenCalledOnce()
+    expect(calls.request.mock.calls[0][1].headers['Idempotency-Key']).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    )
+  } finally {
+    if (descriptor) Object.defineProperty(crypto, 'randomUUID', descriptor)
+    else Reflect.deleteProperty(crypto, 'randomUUID')
+  }
+})
 test('keep and clear submit explicit intent without a masked password', async () => {
   calls.request.mockResolvedValue(revision)
   const view = await render(wrapper())
@@ -57,7 +76,10 @@ test('keep and clear submit explicit intent without a masked password', async ()
   let body = JSON.parse(calls.request.mock.calls[0][1].body)
   expect(body.credentials.password_action).toBe('keep')
   expect(body.credentials).not.toHaveProperty('password')
-  await userEvent.selectOptions(view.getByLabelText('密码处理', { exact: true }), 'clear')
+  await userEvent.selectOptions(
+    view.getByLabelText('密码处理', { exact: true }),
+    'clear'
+  )
   await userEvent.click(view.getByRole('button', { name: '保存草稿' }))
   body = JSON.parse(calls.request.mock.calls[1][1].body)
   expect(body.credentials.password_action).toBe('clear')
@@ -66,7 +88,10 @@ test('keep and clear submit explicit intent without a masked password', async ()
 test('replace rejects mask and sends only an explicitly entered real password', async () => {
   calls.request.mockResolvedValue(revision)
   const view = await render(wrapper())
-  await userEvent.selectOptions(view.getByLabelText('密码处理', { exact: true }), 'replace')
+  await userEvent.selectOptions(
+    view.getByLabelText('密码处理', { exact: true }),
+    'replace'
+  )
   await userEvent.fill(view.getByLabelText('新密码', { exact: true }), '••••••')
   await userEvent.click(view.getByRole('button', { name: '保存草稿' }))
   expect(calls.request).not.toHaveBeenCalled()
@@ -107,7 +132,10 @@ test('late saved revision cannot fill or activate a different selected channel',
 test('changing a revision clears typed credentials but preserves a saved-operation notice', async () => {
   calls.request.mockResolvedValue(revision)
   const view = await render(wrapper())
-  await userEvent.selectOptions(view.getByLabelText('密码处理', { exact: true }), 'replace')
+  await userEvent.selectOptions(
+    view.getByLabelText('密码处理', { exact: true }),
+    'replace'
+  )
   await userEvent.fill(
     view.getByLabelText('新密码', { exact: true }),
     'isolated-draft-secret'

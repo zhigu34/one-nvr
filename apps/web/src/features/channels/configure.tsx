@@ -232,7 +232,7 @@ function ConfigureChannel({ channel }: { channel: Schema<'Channel'> }) {
               version={version}
               revisionId={activeRevision.id}
               proof={proof.data || null}
-              first={!status.data.current_revision_id}
+              first={status.data.requires_initial_recording_mode}
               hasPool={!!status.data.storage_pool_id}
               onAccepted={accepted}
             />
