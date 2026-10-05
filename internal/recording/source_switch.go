@@ -146,7 +146,7 @@ func (s *Service) stopPhysical(ctx context.Context, e *channel.Execution, ss phy
 func (s *Service) stopSwitchSessions(ctx context.Context, e *channel.Execution, w channel.SwitchWork, old bool) error {
 	query := "SELECT " + physicalColumns + " FROM stream_sessions WHERE channel_id=$1 AND purpose IN ('main','sub') AND state NOT IN ('closed','failed') AND switch_id=$2 AND operation_role IN ('candidate_main','candidate_sub') ORDER BY created_at"
 	if old {
-		query = "SELECT " + physicalColumns + " FROM stream_sessions WHERE channel_id=$1 AND purpose IN ('main','sub') AND state NOT IN ('closed','failed') AND switch_id IS DISTINCT FROM $2 ORDER BY created_at"
+		query = "SELECT " + physicalColumns + " FROM stream_sessions WHERE channel_id=$1 AND purpose IN ('main','sub') AND state NOT IN ('closed','failed') AND ($2::uuid IS NULL OR switch_id IS DISTINCT FROM $2) ORDER BY created_at"
 	}
 	var switchID *id.ID
 	if w.ID != "" {
@@ -303,6 +303,7 @@ func (s *Service) observeSwitch(ctx context.Context, e *channel.Execution, w cha
 			if err == nil {
 				subState, subReason = "healthy", "decoded_first_frame"
 			} else {
+				subReason = subFailureReason(err)
 				if err := e.Check(ctx); err != nil {
 					return err
 				}

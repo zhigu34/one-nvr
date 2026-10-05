@@ -6,11 +6,11 @@
 
 | 组件 | 固定标签 | 用途 | 验证范围 |
 | --- | --- | --- | --- |
-| Go | `1.27.1-bookworm` | 构建 API / Worker / admin | 仓库与架构已核对，正式构建未测 |
-| Node.js | `24.21.0-bookworm-slim` | 构建 shadcn-admin 前端 | 仓库与架构已核对，正式构建未测 |
-| Debian | `bookworm-20260918-slim` | 自建 Go 应用运行基础 | 仓库与架构已核对，正式运行未测 |
-| PostgreSQL | `17.11-bookworm` | 基础模块数据库 | 仓库与架构已核对，业务迁移未测 |
-| Nginx | `1.30.5-alpine3.24` | 自建 gateway 的运行基础 | 仓库与架构已核对，正式网关未测 |
+| Go | `1.27.1-bookworm` | 构建 API / Worker / admin | M1-A/M1-B CI 实际构建通过 |
+| Node.js | `24.21.0-bookworm-slim` | 构建 shadcn-admin 前端 | M1-A/M1-B CI 实际构建通过 |
+| Debian | `bookworm-20260918-slim` | 自建 Go 应用运行基础 | CI 核心实际运行/重复部署通过 |
+| PostgreSQL | `17.11-bookworm` | 基础模块数据库 | CI PostgreSQL 实际迁移/集成通过 |
+| Nginx | `1.30.5-alpine3.24` | 自建 gateway 的运行基础 | CI 实际网关/换证/恢复通过 |
 | ZLMediaKit | `master + 固定 digest` | 基础模块取流与录像 | 沿用 M0 两机每机两路直播/录像/回放的构建 |
 | Frigate | `0.17.2` | 可选智能检测 | 沿用 M0 N5105 事件/抓拍验证构建；AMD 检测未验收 |
 | Mosquitto | `2.0.22` | 可选智能检测的 MQTT | 沿用 M0 消息链路构建 |
@@ -52,7 +52,7 @@ nginx:1.28.0-alpine@sha256:30f1c0d78e0ad60901648be663a710bdadf19e4c10ac6782c2352
 
 ## 构建、部署与升级约束
 
-- 正式 Dockerfile 的各个 FROM 与上游运行镜像引用采用上述 digest。自建应用/gateway 发布镜像还须记录源码 commit、构建参数和最终 digest；尚未构建，不能用基础镜像 digest 代替最终产品镜像 digest。
+- 正式 Dockerfile 的各个 FROM 与上游运行镜像引用采用上述 digest。自建应用/gateway 发布镜像还须记录源码 commit、构建参数和最终 digest；CI 已实际构建；尚未发布产品镜像，不能用基础镜像 digest 代替最终产品镜像 digest。
 - 前端导入时记录 shadcn-admin commit、固定包管理器版本并保留 `pnpm-lock.yaml`，后端保留 `go.sum`。ffmpeg/ffprobe、CA 证书等通过系统包安装时还须记录包版本和来源；基础镜像固定不等于 apt 安装结果已冻结，发布构建需固定包版本与可获取的仓库快照。
 - `.env` 可覆盖镜像引用以使用离线/内部仓库，但发布基线保留可读版本和已核对的不可变摘要。内部镜像搬运后核对 manifest 与架构，不能仅检查同名标签存在；`docker save/load` 导入须核对本机实际 ID / RepoDigests，不能假定 digest 引用一定保留。
 - 部署脚本仅准备启用模块所需镜像；Frigate 关闭时不要求 Frigate/MQTT，云归档关闭时不要求 OpenList。Go/Node 构建镜像只有需要构建自建镜像时才准备。

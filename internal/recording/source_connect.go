@@ -21,3 +21,14 @@ func recoveryFailureReason(err error) string {
 	}
 	return "source_unavailable"
 }
+
+func subFailureReason(err error) string {
+	var failure *sourceConnectionFailure
+	if errors.As(err, &failure) {
+		switch failure.stage {
+		case "inspect", "credentials", "add_proxy", "first_frame":
+			return "sub_source_" + failure.stage + "_unavailable"
+		}
+	}
+	return "sub_source_unavailable"
+}

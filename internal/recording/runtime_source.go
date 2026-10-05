@@ -90,7 +90,7 @@ func (s *Service) reconcileRuntimeSub(ctx context.Context, e *channel.Execution,
 		if err := s.stopPhysical(ctx, e, ss); err != nil {
 			return err
 		}
-		return s.observation(ctx, e, ss, "sub", "unavailable", "sub_source_unavailable", nil)
+		return s.observation(ctx, e, ss, "sub", "unavailable", subFailureReason(err), nil)
 	}
 	if err != nil {
 		return err

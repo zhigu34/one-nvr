@@ -15,6 +15,62 @@ import (
 	"github.com/zhigu34/one-nvr/internal/storage"
 )
 
+func TestRecordingMonitorEmptySlotsDoNotExpireConfiguredSource(t *testing.T) {
+	f, _, _, _ := testedSource(t)
+	ctx := context.Background()
+	if _, err := f.Service.Sources.SetPolicy(ctx, f.Admin, f.Channel, 3, "none", "monitor-no-recording"); err != nil {
+		t.Fatal(err)
+	}
+	executeChange(t, f, "source.policy_apply")
+	if _, err := f.DB.Pool.Exec(ctx, "DELETE FROM recording_bitrate_samples WHERE channel_id=$1", f.Channel); err != nil {
+		t.Fatal(err)
+	}
+	var slots int
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT count(*) FROM channels").Scan(&slots); err != nil || slots != 16 {
+		t.Fatal("requires permanent empty slots", slots, err)
+	}
+	monitor, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- f.Service.Monitor(monitor) }()
+	t.Cleanup(func() { cancel(); <-done })
+	deadline := time.Now().Add(18 * time.Second)
+	for time.Now().Before(deadline) {
+		var samples int
+		if err := f.DB.Pool.QueryRow(ctx, "SELECT count(*) FROM recording_bitrate_samples WHERE channel_id=$1 AND valid AND observed_at>clock_timestamp()-interval '30 seconds'", f.Channel).Scan(&samples); err != nil {
+			t.Fatal(err)
+		}
+		if samples >= 2 {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("empty permanent slots starved fresh paired observations of the configured source")
+}
+
+func TestRecordingMonitorCleansDisabledRuntimeSessions(t *testing.T) {
+	f, media, _, _ := testedSource(t)
+	ctx := context.Background()
+	// The existing physical main was adopted without a source-switch receipt.
+	if _, err := f.DB.Pool.Exec(ctx, "UPDATE channels SET enabled=false WHERE id=$1", f.Channel); err != nil {
+		t.Fatal(err)
+	}
+	monitor, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- f.Service.Monitor(monitor) }()
+	t.Cleanup(func() { cancel(); <-done })
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		media.mu.Lock()
+		left := len(media.urls)
+		media.mu.Unlock()
+		if left == 0 {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("disabled runtime session was excluded from cleanup")
+}
+
 func TestRecordingOffKeepsPullAndHistory(t *testing.T) {
 	f, media, _, _ := testedSource(t)
 	ctx := context.Background()
