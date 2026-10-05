@@ -497,3 +497,45 @@ func TestImportPreviewProvidesSafePasswordIntent(t *testing.T) {
 		}
 	}
 }
+
+func TestImportClearedChannelRetainsFirstApplyHistory(t *testing.T) {
+	f, _, test, revision := testedSource(t)
+	ctx := context.Background()
+	if _, err := f.Service.Sources.RequestApply(ctx, f.Admin, f.Channel, channel.SourceApplyInput{RevisionID: revision, TestID: *test.TestID, ExpectedVersion: 3}, "import-history-apply"); err != nil {
+		t.Fatal(err)
+	}
+	executeChange(t, f, "source.apply")
+	var version int64
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT version FROM channels WHERE id=$1", f.Channel).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Service.Sources.RequestClear(ctx, f.Admin, f.Channel, version, "import-history-clear"); err != nil {
+		t.Fatal(err)
+	}
+	executeChange(t, f, "source.clear")
+	input := "channel_no,channel_name,ip,rtsp_port,username,password,main_path,sub_path\n1,Front,192.168.33.24,554,admin,,/main,\n2,Second,192.168.33.25,554,admin,,/main,\n"
+	preview, err := f.Service.Sources.PreviewImport(ctx, f.Admin, "csv", strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(preview)
+	var safe struct {
+		Items []struct {
+			Requires bool `json:"requires_initial_recording_mode"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &safe); err != nil {
+		t.Fatal(err)
+	}
+	if safe.Items[0].Requires || !safe.Items[1].Requires {
+		t.Fatal("cleared and never-configured channels treated alike", string(raw))
+	}
+	progress, err := f.Service.Sources.GetImport(ctx, f.Admin, preview.BatchID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, _ := json.Marshal(progress)
+	if !bytes.Contains(saved, []byte(`"requires_initial_recording_mode":true`)) {
+		t.Fatal("progress lost first-configuration metadata")
+	}
+}

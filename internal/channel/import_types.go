@@ -6,15 +6,16 @@ import (
 )
 
 type ImportItem struct {
-	Row             int      `json:"row"`
-	PasswordAction  string   `json:"password_action"`
-	ChannelID       *id.ID   `json:"channel_id"`
-	ExpectedVersion *int64   `json:"expected_version"`
-	State           string   `json:"state"`
-	Differences     []string `json:"differences"`
-	Errors          []string `json:"errors"`
-	Warnings        []string `json:"warnings"`
-	JobID           *id.ID   `json:"job_id"`
+	RequiresInitialRecordingMode bool     `json:"requires_initial_recording_mode"`
+	Row                          int      `json:"row"`
+	PasswordAction               string   `json:"password_action"`
+	ChannelID                    *id.ID   `json:"channel_id"`
+	ExpectedVersion              *int64   `json:"expected_version"`
+	State                        string   `json:"state"`
+	Differences                  []string `json:"differences"`
+	Errors                       []string `json:"errors"`
+	Warnings                     []string `json:"warnings"`
+	JobID                        *id.ID   `json:"job_id"`
 }
 type ImportPreview struct {
 	BatchID   id.ID        `json:"batch_id"`

@@ -64,6 +64,9 @@ func (s *SourceService) PreviewImport(ctx context.Context, p auth.Principal, for
 				}
 				summary.ChannelID = &ch
 				summary.ExpectedVersion = &version
+				if err := tx.QueryRow(ctx, "SELECT $2::uuid IS NULL AND NOT EXISTS(SELECT 1 FROM source_switches WHERE channel_id=$1 AND kind='apply' AND state='succeeded')", ch, current).Scan(&summary.RequiresInitialRecordingMode); err != nil {
+					return err
+				}
 				if input.SiteID != "" && input.SiteID != s.secret.SiteID {
 					summary.Warnings = append(summary.Warnings, "foreign_identity_ignored")
 				}

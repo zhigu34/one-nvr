@@ -20,6 +20,12 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
   const [intent, setIntent] = useState<Schema<'DraftInput'>['identity_intent']>(
     revision ? 'modify' : 'replace'
   )
+  const [intentRevision, setIntentRevision] = useState(revision?.id)
+  if (intentRevision !== revision?.id) {
+    setIntentRevision(revision?.id)
+    setPasswordAction(revision ? 'keep' : 'replace')
+    setIntent(revision ? 'modify' : 'replace')
+  }
   const [pending, setPending] = useState(false),
     [error, setError] = useState(''),
     [notice, setNotice] = useState('')

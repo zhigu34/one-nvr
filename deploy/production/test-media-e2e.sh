@@ -55,7 +55,7 @@ browser=$("${compose[@]}" ps -aq browser)
 docker cp "$browser:/results/media-browser.json" media-test-results/media-browser.json
 
 if [[ $joint == yes ]]; then
- for receipt in runtime spool db tls zlm modules boundaries publish-before publish-after; do
+ for receipt in runtime spool db tls zlm modules boundaries publish-before publish-after rollback-failure rollback-recovery; do
   docker cp "$browser:/results/joint-$receipt.json" "media-test-results/joint-$receipt.json"
  done
 fi

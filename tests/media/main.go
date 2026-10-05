@@ -103,13 +103,23 @@ func fixture() error {
 	}
 	// This isolated fixture can stop exactly publisher zero after a successful
 	// test, so the real source-switch rollback runs against a failed camera.
-	var requestedStop atomic.Bool
+	var requestedStop [4]atomic.Bool
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /stop-one", func(w http.ResponseWriter, r *http.Request) {
-		requestedStop.Store(true)
+		requestedStop[0].Store(true)
 		if err := processes[0].Process.Signal(os.Interrupt); err != nil {
 			w.WriteHeader(503)
 			return
+		}
+		w.Write([]byte(`{"stopped":true}`))
+	})
+	mux.HandleFunc("POST /stop-all", func(w http.ResponseWriter, r *http.Request) {
+		for i, process := range processes {
+			requestedStop[i].Store(true)
+			if err := process.Process.Signal(os.Interrupt); err != nil {
+				w.WriteHeader(503)
+				return
+			}
 		}
 		w.Write([]byte(`{"stopped":true}`))
 	})
@@ -125,7 +135,7 @@ func fixture() error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case result := <-exits:
-			if result.index != 0 || !requestedStop.Load() {
+			if !requestedStop[result.index].Load() {
 				return fmt.Errorf("synthetic publisher stopped")
 			}
 		}

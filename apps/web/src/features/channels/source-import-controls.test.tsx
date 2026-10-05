@@ -190,3 +190,70 @@ test('opening a batch link restores safe progress without testing or submitting'
     )
   ).toBe(true)
 })
+
+test.each([false, true])(
+  'cleared target import omits first mode even after remapping: %s',
+  async (remap) => {
+    const target = {
+      ...channel,
+      id: '00000000-0000-4000-8000-000000000002',
+      channel_no: 2,
+    }
+    const row: Schema<'ImportItem'> = {
+      row: 1,
+      channel_id: channel.id,
+      expected_version: 4,
+      state: 'tested',
+      password_action: 'clear',
+      differences: ['new_source'],
+      warnings: [],
+      errors: [],
+      job_id: null,
+      requires_initial_recording_mode: remap,
+    }
+    calls.request.mockImplementation(async (path: string) =>
+      path.endsWith('/source/status')
+        ? { requires_initial_recording_mode: false }
+        : {
+            batch_id: '00000000-0000-4000-8000-000000000009',
+            state: 'preview',
+            expires_at: new Date(Date.now() + 300000).toISOString(),
+            items: [row],
+          }
+    )
+    const view = await render(
+      <QueryClientProvider
+        client={
+          new QueryClient({ defaultOptions: { queries: { retry: false } } })
+        }
+      >
+        <SourceImportControls
+          channels={[channel, target]}
+          initialBatch='00000000-0000-4000-8000-000000000009'
+        />
+      </QueryClientProvider>
+    )
+    await expect.element(view.getByText('第 1 行 · 测试通过')).toBeVisible()
+    if (remap)
+      await userEvent.selectOptions(
+        view.getByLabelText('第 1 行目标通道'),
+        target.id
+      )
+    await userEvent.click(view.getByLabelText('选择第 1 行'))
+    await userEvent.click(
+      view.getByLabelText(
+        '已确认选中行的目标、密码处理和当前版本；应用会切换对应摄像头'
+      )
+    )
+    await userEvent.click(
+      view.getByRole('button', { name: '确认并应用选中行', exact: true })
+    )
+    const call = calls.request.mock.calls.find(
+      ([path]) => path === '/api/v1/source-imports'
+    )
+    expect(call).toBeDefined()
+    expect(JSON.parse(call![1].body).items[0]).not.toHaveProperty(
+      'first_recording_mode'
+    )
+  }
+)

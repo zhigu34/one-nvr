@@ -99,7 +99,11 @@ export function RecordingsIndex({ channelId }: { channelId: string }) {
                   <td className='p-2'>
                     {time(item.start)} — {time(item.end)}
                   </td>
-                  <td className='p-2'>{states[item.state]}</td>
+                  <td className='p-2'>
+                    {item.check_state === 'pool_unavailable'
+                      ? '存储池不可用'
+                      : states[item.state]}
+                  </td>
                   <td className='p-2'>
                     {(item.bytes / 1048576).toFixed(1)} MiB
                   </td>

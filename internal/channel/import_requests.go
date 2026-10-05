@@ -78,6 +78,7 @@ func loadImportRows(ctx context.Context, tx pgx.Tx, batch id.ID) ([]importRow, e
 		r.Summary.Errors = safe.Errors
 		r.Summary.Warnings = safe.Warnings
 		r.Summary.PasswordAction = safe.PasswordAction
+		r.Summary.RequiresInitialRecordingMode = safe.RequiresInitialRecordingMode
 		if code != "" {
 			r.Summary.Errors = []string{code}
 		}
@@ -141,6 +142,9 @@ func (s *SourceService) GetImport(ctx context.Context, p auth.Principal, batch i
 					return err
 				}
 				r.Summary.ExpectedVersion = &current
+				if err := tx.QueryRow(ctx, "SELECT current_revision_id IS NULL AND NOT EXISTS(SELECT 1 FROM source_switches WHERE channel_id=$1 AND kind='apply' AND state='succeeded') FROM channels WHERE id=$1", r.Summary.ChannelID).Scan(&r.Summary.RequiresInitialRecordingMode); err != nil {
+					return err
+				}
 			}
 			out.Items = append(out.Items, r.Summary)
 		}

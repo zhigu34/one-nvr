@@ -24,25 +24,72 @@ func (s *Service) CheckPool(ctx context.Context, poolID id.ID) error {
 	if err := s.recoverPoolProbe(ctx, poolID); err != nil {
 		return err
 	}
-	var channelID, revisionID id.ID
-	var generation int64
-	// Reuse a configured source, or an explicitly tested draft for first-pool
-	// bootstrap. This check does not change the channel's current source/policy.
-	err = s.DB.Pool.QueryRow(ctx, `SELECT c.id,COALESCE(c.current_revision_id,t.revision_id),GREATEST(c.source_generation,1) FROM channels c LEFT JOIN LATERAL (SELECT revision_id FROM source_tests WHERE channel_id=c.id AND state='succeeded' AND expires_at>clock_timestamp() ORDER BY observed_at DESC LIMIT 1) t ON true WHERE c.site_id=$1 AND c.enabled AND COALESCE(c.current_revision_id,t.revision_id) IS NOT NULL ORDER BY (c.current_revision_id IS NOT NULL) DESC,c.channel_no LIMIT 1`, s.siteID).Scan(&channelID, &revisionID, &generation)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return zlm.ErrTestSourceRequired
-	}
-	if err != nil {
-		return err
-	}
 	network, err := s.FreshNetwork(ctx)
 	if err != nil {
 		return err
 	}
-	input, err := s.Sources.PrivateConnection(ctx, channelID, revisionID, "main", network)
+	rows, err := s.DB.Pool.Query(ctx, `SELECT DISTINCT c.id,r.revision_id,GREATEST(c.source_generation,1),r.priority,c.channel_no FROM channels c JOIN LATERAL (
+ SELECT c.current_revision_id AS revision_id,1 AS priority WHERE c.current_revision_id IS NOT NULL
+ UNION ALL SELECT t.revision_id,0 FROM (SELECT revision_id FROM source_tests WHERE channel_id=c.id AND state='succeeded' AND expires_at>clock_timestamp() ORDER BY observed_at DESC LIMIT 1) t
+ ) r ON true WHERE c.site_id=$1 AND c.enabled ORDER BY r.priority,c.channel_no LIMIT 64`, s.siteID)
 	if err != nil {
 		return err
 	}
+	type candidate struct {
+		channel, revision id.ID
+		generation        int64
+	}
+	var candidates []candidate
+	seen := map[id.ID]bool{}
+	for rows.Next() {
+		var v candidate
+		var priority, no int
+		if err := rows.Scan(&v.channel, &v.revision, &v.generation, &priority, &no); err != nil {
+			rows.Close()
+			return err
+		}
+		if !seen[v.revision] {
+			candidates = append(candidates, v)
+			seen[v.revision] = true
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(candidates) == 0 {
+		return zlm.ErrTestSourceRequired
+	}
+	// Source failures may try another candidate; a pool write/verification failure
+	// must remain visible and must not be disguised as a camera selection issue.
+	bounded, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	var last error
+	for _, v := range candidates {
+		if err := bounded.Err(); err != nil {
+			return err
+		}
+		input, err := s.Sources.PrivateConnection(bounded, v.channel, v.revision, "main", network)
+		if err != nil {
+			last = err
+			continue
+		}
+		err = s.checkPoolCandidate(bounded, poolID, v.channel, v.revision, v.generation, input)
+		if err == nil {
+			return nil
+		}
+		var source *sourceConnectionFailure
+		if !errors.As(err, &source) {
+			return err
+		}
+		last = err
+	}
+	return last
+}
+
+func (s *Service) checkPoolCandidate(ctx context.Context, poolID, channelID, revisionID id.ID, generation int64, input zlm.ProxyInput) error {
+	connection, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	sessionID, err := id.New()
 	if err != nil {
 		return err
@@ -71,9 +118,9 @@ func (s *Service) CheckPool(ctx context.Context, poolID id.ID) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	proxy, err := s.Media.AddProxy(ctx, input)
+	proxy, err := s.Media.AddProxy(connection, input)
 	if err != nil {
-		return err
+		return sourceFailure("add_proxy", err)
 	}
 	ref = &proxy
 	if _, err := s.DB.Pool.Exec(ctx, `UPDATE stream_sessions SET state='active',proxy_key=$2,started_at=clock_timestamp() WHERE id=$1`, sessionID, proxy.OpaqueKey); err != nil {
@@ -83,8 +130,8 @@ func (s *Service) CheckPool(ctx context.Context, poolID id.ID) error {
 	if err != nil {
 		return err
 	}
-	if _, err := s.Probe.FirstFrame(ctx, privateURL); err != nil {
-		return err
+	if _, err := s.Probe.FirstFrame(connection, privateURL); err != nil {
+		return sourceFailure("first_frame", err)
 	}
 	return s.ProbeSession(ctx, poolID, sessionID)
 }

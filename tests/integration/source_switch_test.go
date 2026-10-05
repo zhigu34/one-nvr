@@ -171,6 +171,9 @@ type controlledMedia struct {
 	failPath     string
 	failURL      string
 	AfterStart   func()
+	AfterStop    func()
+	ObservedAt   time.Time
+	InspectDelay time.Duration
 	FrozenFrames int64
 	AddCalls     int
 }
@@ -206,6 +209,13 @@ func (m *controlledMedia) RemoveProxy(ctx context.Context, ref zlm.ProxyRef) err
 	return nil
 }
 func (m *controlledMedia) Inspect(ctx context.Context, key zlm.StreamKey) (zlm.StreamSnapshot, error) {
+	if m.InspectDelay > 0 {
+		select {
+		case <-ctx.Done():
+			return zlm.StreamSnapshot{}, ctx.Err()
+		case <-time.After(m.InspectDelay):
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return zlm.StreamSnapshot{}, err
 	}
@@ -218,7 +228,11 @@ func (m *controlledMedia) Inspect(ctx context.Context, key zlm.StreamKey) (zlm.S
 	if m.FrozenFrames > 0 {
 		frames = m.FrozenFrames
 	}
-	return zlm.StreamSnapshot{Key: key, Recording: m.recording[key.Stream], BytesPerSecond: 1 << 20, ObservedAt: time.Now().UTC(), Tracks: []zlm.Track{{Codec: "H264", Ready: true, Width: 320, Height: 180, FPS: 5, Frames: frames}}}, nil
+	observed := time.Now().UTC()
+	if !m.ObservedAt.IsZero() {
+		observed = m.ObservedAt
+	}
+	return zlm.StreamSnapshot{Key: key, Recording: m.recording[key.Stream], BytesPerSecond: 1 << 20, ObservedAt: observed, Tracks: []zlm.Track{{Codec: "H264", Ready: true, Width: 320, Height: 180, FPS: 5, Frames: frames}}}, nil
 }
 func (m *controlledMedia) StartRecord(ctx context.Context, key zlm.StreamKey, _ string, _ int) error {
 	if err := ctx.Err(); err != nil {
@@ -242,6 +256,9 @@ func (m *controlledMedia) StopRecord(ctx context.Context, key zlm.StreamKey) err
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.recording[key.Stream] = false
+	if m.AfterStop != nil {
+		m.AfterStop()
+	}
 	return nil
 }
 

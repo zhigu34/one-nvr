@@ -14,8 +14,9 @@ import (
 )
 
 type NetworkPolicy struct {
-	Allowed []netip.Prefix
-	Denied  []netip.Addr
+	Allowed        []netip.Prefix
+	Denied         []netip.Addr
+	DeniedNetworks []netip.Prefix
 }
 
 func ParseNetworkPolicy(value string, denied []netip.Addr) (NetworkPolicy, error) {
@@ -48,6 +49,21 @@ func (p NetworkPolicy) allows(addr netip.Addr) bool {
 	}
 	for _, deny := range p.Denied {
 		if deny.Unmap() == addr.Unmap() {
+			return false
+		}
+	}
+	for _, network := range p.DeniedNetworks {
+		if !network.Contains(addr) {
+			continue
+		}
+		exact := false
+		for _, allow := range p.Allowed {
+			if allow.Bits() == addr.BitLen() && allow.Contains(addr) {
+				exact = true
+				break
+			}
+		}
+		if !exact {
 			return false
 		}
 	}

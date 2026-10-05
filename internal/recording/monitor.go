@@ -13,12 +13,36 @@ import (
 func (s *Service) Monitor(ctx context.Context) error {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
+	work, cancel := context.WithCancel(ctx)
+	var running sync.WaitGroup
+	defer func() { cancel(); running.Wait() }()
 	var mu sync.Mutex
 	active := map[id.ID]bool{}
-	slots := make(chan struct{}, 4)
-	var running sync.WaitGroup
-	defer running.Wait()
-	offset := 0
+	// All permanent slots fit in a bounded FIFO. Busy workers must not cause
+	// healthy configured channels to be skipped for an entire polling interval.
+	queue := make(chan id.ID, 32)
+	for i := 0; i < 4; i++ {
+		running.Add(1)
+		go func() {
+			defer running.Done()
+			for {
+				select {
+				case <-work.Done():
+					return
+				case ch := <-queue:
+					sample, stop := context.WithTimeout(work, 25*time.Second)
+					err := s.Reconcile(sample, ch)
+					stop()
+					mu.Lock()
+					delete(active, ch)
+					mu.Unlock()
+					if err != nil && !errors.Is(err, channel.ErrExecutionBusy) && work.Err() == nil {
+						slog.Warn("recording reconciliation unavailable")
+					}
+				}
+			}
+		}()
+	}
 	for ctx.Err() == nil {
 		// Empty permanent slots have no media to observe. Keep cleanup candidates
 		// even when their channel is disabled/cleared, until its sessions close.
@@ -39,35 +63,17 @@ func (s *Service) Monitor(ctx context.Context) error {
 		if err := rows.Err(); err != nil {
 			return err
 		}
-		for i := range channels {
-			ch := channels[(i+offset)%len(channels)]
+		for _, ch := range channels {
 			mu.Lock()
-			busy := active[ch]
-			if !busy {
+			if !active[ch] {
+				active[ch] = true
 				select {
-				case slots <- struct{}{}:
-					active[ch] = true
+				case queue <- ch:
 				default:
-					busy = true
+					delete(active, ch)
 				}
 			}
 			mu.Unlock()
-			if busy {
-				continue
-			}
-			running.Add(1)
-			go func() {
-				defer running.Done()
-				defer func() { mu.Lock(); delete(active, ch); mu.Unlock(); <-slots }()
-				sample, cancel := context.WithTimeout(ctx, 25*time.Second)
-				defer cancel()
-				if err := s.Reconcile(sample, ch); err != nil && !errors.Is(err, channel.ErrExecutionBusy) && ctx.Err() == nil {
-					slog.Warn("recording reconciliation unavailable")
-				}
-			}()
-		}
-		if len(channels) > 0 {
-			offset = (offset + 4) % len(channels)
 		}
 		// These are transient rate samples, not camera reliability history.
 		if _, err := s.DB.Pool.Exec(ctx, "DELETE FROM recording_bitrate_samples WHERE observed_at<clock_timestamp()-interval '10 minutes'"); err != nil {

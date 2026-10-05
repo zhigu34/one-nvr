@@ -3824,6 +3824,10 @@
               "clear"
             ],
             "description": "Safe parsed password intent; never contains credentials."
+          },
+          "requires_initial_recording_mode": {
+            "type": "boolean",
+            "description": "Authoritative first successful source apply requirement for the mapped channel; safe metadata."
           }
         },
         "required": [
