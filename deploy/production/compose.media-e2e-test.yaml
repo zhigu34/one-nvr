@@ -1,0 +1,73 @@
+# Overlay on compose.e2e-test.yaml. Private synthetic cameras only; no host ports.
+services:
+  media-permissions:
+    image: one-nvr/app:ci
+    user: '0:0'
+    entrypoint: [sh, -ec]
+    command:
+      - |
+        mkdir -p /media-config
+        chown 10001:10001 /media-config
+        chmod 755 /media-config
+        cat > /media-config/camera.ini <<'INI'
+        [api]
+        apiDebug=0
+        secret=isolated-media-fixture-only
+        [http]
+        port=80
+        sslport=0
+        [rtsp]
+        port=554
+        sslport=0
+        [protocol]
+        enable_mp4=0
+        enable_hls=0
+        auto_close=0
+        continue_push_ms=0
+        [general]
+        mediaServerId=one-nvr-browser-camera
+        INI
+        chmod 644 /media-config/camera.ini
+    volumes: [runtime-media-config:/media-config]
+  camera:
+    image: zlmediakit/zlmediakit:master@sha256:25ecf6c4a55e72bc495be15c8480f0b0cef58c712e5c9f0596452777b41bf344
+    platform: linux/amd64
+    command: ['./MediaServer', '-c', '/opt/media/conf/camera.ini', '-l', '0']
+    volumes: [runtime-media-config:/opt/media/conf:ro]
+  fixture:
+    image: one-nvr/media-test:ci
+    entrypoint: [/usr/local/bin/media-test, fixture]
+    depends_on: [camera]
+  zlm:
+    image: zlmediakit/zlmediakit:master@sha256:25ecf6c4a55e72bc495be15c8480f0b0cef58c712e5c9f0596452777b41bf344
+    platform: linux/amd64
+    entrypoint: [/media-config/media-launcher]
+    command: ['/media-config/egress.json', './MediaServer', '-c', '/media-config/zlm.ini', '-l', '0', '--log-dir', '/tmp/one-nvr-media-log']
+    cap_add: [NET_ADMIN]
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: '0'
+    environment: {TZ: UTC}
+    volumes:
+      - runtime-media-config:/media-config:ro
+      - runtime-storage:/storage
+    depends_on: [worker]
+  runner:
+    environment:
+      ONE_NVR_CAMERA_CIDRS: '${ONE_NVR_E2E_CAMERA_CIDR:-}'
+    volumes:
+      - runtime-media-config:/media-config
+      - runtime-results:/results
+  api:
+    environment:
+      ONE_NVR_CAMERA_CIDRS: '${ONE_NVR_E2E_CAMERA_CIDR:-}'
+  worker:
+    environment:
+      ONE_NVR_CAMERA_CIDRS: '${ONE_NVR_E2E_CAMERA_CIDR:-}'
+  browser:
+    environment:
+      ONE_NVR_E2E_PHASE: media
+      ONE_NVR_E2E_MEDIA_FIXTURE: /results/media-fixture.json
+    volumes:
+      - runtime-media-config:/media-config:ro
+volumes:
+  runtime-media-config:
