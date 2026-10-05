@@ -122,3 +122,44 @@ func TestHealthUsesPrivatePOST(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRemoveProxyConfirmedAbsenceIsDistinct(t *testing.T) {
+	for _, body := range []string{`{"code":0,"data":{"flag":false}}`, `{"code":-1,"msg":"unavailable"}`} {
+		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(body)) }))
+		c, err := New(s.URL, "fixture", s.Client())
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = c.RemoveProxy(context.Background(), ProxyRef{Key: fixtureKey, OpaqueKey: "__defaultVhost__/one_nvr/" + fixtureStream})
+		if strings.HasPrefix(body, `{"code":0,`) {
+			if !errors.Is(err, ErrProxyAbsent) {
+				t.Fatal("confirmed missing proxy not distinguishable", err)
+			}
+		} else if err == nil || errors.Is(err, ErrProxyAbsent) {
+			t.Fatal("management failure incorrectly proved absence", err)
+		}
+		s.Close()
+	}
+}
+
+func TestInspectAbsenceRequiresSuccessfulOnlineResponse(t *testing.T) {
+	for _, body := range []string{`{"code":0,"online":false}`, `{"code":0}`, `{"code":-1,"msg":"unavailable"}`, `{"code":0,"online":true}`} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/index/api/isMediaOnline" {
+				w.Write([]byte(body))
+				return
+			}
+			w.Write([]byte(`{"code":-1,"msg":"not found"}`))
+		}))
+		client, _ := New(server.URL, "fixture", server.Client())
+		_, err := client.Inspect(context.Background(), fixtureKey)
+		if body == `{"code":0,"online":false}` {
+			if !errors.Is(err, ErrStreamAbsent) {
+				t.Fatal("confirmed absence not distinguishable", err)
+			}
+		} else if err == nil || errors.Is(err, ErrStreamAbsent) {
+			t.Fatal("outage/malformed response proved absence", err)
+		}
+		server.Close()
+	}
+}

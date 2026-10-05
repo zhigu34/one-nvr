@@ -78,3 +78,92 @@ func TestSourceDraftHTTPNoStoreAndVersion(t *testing.T) {
 		t.Fatal("decryption failure not distinguished safely", w.Code, w.Body.String())
 	}
 }
+
+func TestSourceTestHTTPQueuesWithoutExposingCredentials(t *testing.T) {
+	db, accounts, sites, admin := authFixture(t)
+	ctx := context.Background()
+	policy, _ := channel.ParseNetworkPolicy("192.168.33.0/24", nil)
+	sources := channel.NewSources(db, accounts, sites.Secrets, policy)
+	var ch id.ID
+	if err := db.Pool.QueryRow(ctx, "SELECT id FROM channels WHERE channel_no=1").Scan(&ch); err != nil {
+		t.Fatal(err)
+	}
+	password := "isolated-test-only-password"
+	revision, err := sources.CreateDraft(ctx, admin.Principal, ch, 1, channel.DraftInput{Config: channel.SourceConfig{IP: "192.168.33.20", MainPath: "/main"}, IdentityIntent: "replace", Credentials: channel.CredentialInput{PasswordAction: "replace", Password: &password}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := httpapi.NewHandler(httpapi.Dependencies{Auth: accounts, Site: sites, Sources: sources, PublicURL: "http://nvr.example.com"})
+	r := httptest.NewRequest("POST", "http://nvr.example.com/api/v1/channels/"+string(ch)+"/source-revisions/"+string(revision.ID)+"/test", bytes.NewBufferString(`{}`))
+	r.AddCookie(&http.Cookie{Name: "one_nvr_session", Value: admin.RawSession})
+	r.Header.Set("Origin", "http://nvr.example.com")
+	r.Header.Set("X-CSRF-Token", accounts.CSRF(admin.RawSession))
+	r.Header.Set("Idempotency-Key", "test-http")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 202 || w.Header().Get("Cache-Control") != "no-store" || strings.Contains(w.Body.String(), password) {
+		t.Fatal("test request route invalid or unsafe", w.Code, w.Body.String())
+	}
+	missing := httptest.NewRequest("POST", r.URL.String(), bytes.NewBufferString(`{}`))
+	missing.AddCookie(&http.Cookie{Name: "one_nvr_session", Value: admin.RawSession})
+	missing.Header.Set("Origin", "http://nvr.example.com")
+	missing.Header.Set("X-CSRF-Token", accounts.CSRF(admin.RawSession))
+	missingResponse := httptest.NewRecorder()
+	h.ServeHTTP(missingResponse, missing)
+	if missingResponse.Code != 422 {
+		t.Fatal("missing request key not rejected as invalid", missingResponse.Code)
+	}
+	var change struct {
+		Data channel.Change `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &change); err != nil {
+		t.Fatal(err)
+	}
+	var testID id.ID
+	if err := db.Pool.QueryRow(ctx, "SELECT id FROM source_tests WHERE job_id=$1", change.Data.JobID).Scan(&testID); err != nil {
+		t.Fatal(err)
+	}
+	if change.Data.TestID == nil || *change.Data.TestID != testID {
+		t.Fatal("queued test result cannot be queried before job completion")
+	}
+
+	r = httptest.NewRequest("GET", "http://nvr.example.com/api/v1/channels/"+string(ch)+"/source-tests/"+string(testID), nil)
+	r.AddCookie(&http.Cookie{Name: "one_nvr_session", Value: admin.RawSession})
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 200 || strings.Contains(w.Body.String(), password) || !strings.Contains(w.Body.String(), `"state":"queued"`) {
+		t.Fatal("test result route unavailable", w.Code, w.Body.String())
+	}
+}
+
+func TestSourceApplyAndClearHTTPAreDurableAndProtected(t *testing.T) {
+	f, _, test, revision := testedSource(t)
+	h := httpapi.NewHandler(httpapi.Dependencies{Auth: f.Auth, Site: f.Site, Sources: f.Service.Sources, PublicURL: "http://nvr.example.com"})
+	request := func(path, body, key, version string, csrf bool) *httptest.ResponseRecorder {
+		q := httptest.NewRequest("POST", "http://nvr.example.com/api/v1/channels/"+string(f.Channel)+path, bytes.NewBufferString(body))
+		q.AddCookie(&http.Cookie{Name: "one_nvr_session", Value: f.Session})
+		q.Header.Set("Origin", "http://nvr.example.com")
+		q.Header.Set("Idempotency-Key", key)
+		q.Header.Set("If-Match", version)
+		if csrf {
+			q.Header.Set("X-CSRF-Token", f.Auth.CSRF(f.Session))
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, q)
+		return w
+	}
+	body := `{"revision_id":"` + string(revision) + `","test_id":"` + string(*test.TestID) + `"}`
+	if w := request("/source/apply", body, "apply-http", `"3"`, false); w.Code != 403 {
+		t.Fatal("missing CSRF accepted", w.Code)
+	}
+	if w := request("/source/apply", body, "apply-http", `3`, true); w.Code != 422 {
+		t.Fatal("unquoted version admitted", w.Code)
+	}
+	if w := request("/source/apply", body, "apply-http", `"3"`, true); w.Code != 202 || w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatal("apply route unavailable", w.Code, w.Body.String())
+	}
+	executeChange(t, f, "source.apply")
+	if w := request("/source/clear", `{}`, "clear-http", `"5"`, true); w.Code != 202 {
+		t.Fatal("clear route unavailable", w.Code, w.Body.String())
+	}
+}

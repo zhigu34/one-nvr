@@ -86,8 +86,10 @@ func prepareMediaSession(purpose string) error {
 	}
 	ids.Revision = revision.ID
 	ids.Session, _ = id.New()
-	if _, err := db.Pool.Exec(ctx, `INSERT INTO stream_sessions(id,channel_id,source_revision_id,generation,app,stream,purpose) VALUES($1,$2,$3,1,'one_nvr',$1::uuid::text,$4)`, ids.Session, ids.Channel, ids.Revision, purpose); err != nil {
-		return err
+	if purpose != "switch" {
+		if _, err := db.Pool.Exec(ctx, `INSERT INTO stream_sessions(id,channel_id,source_revision_id,generation,app,stream,purpose) VALUES($1,$2,$3,1,'one_nvr',$1::uuid::text,$4)`, ids.Session, ids.Channel, ids.Revision, purpose); err != nil {
+			return err
+		}
 	}
 	rendered, err := zlm.RenderConfig(config.Config{MediaHost: "127.0.0.1", RTCPort: 8000}, secret)
 	if err != nil {

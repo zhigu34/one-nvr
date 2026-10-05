@@ -149,11 +149,11 @@
 
 **Interfaces:** `recording.StableID(siteID,poolID,runID id.ID,originalRelativePath string) (id.ID,error)`（UUIDv5）；`FreezePath(channelNo int,start time.Time,timezone string,recordingID id.ID) (FrozenPath,error)`；`Service.Publish(ctx,inboxID id.ID) (Segment,error)`、`Recover(ctx) error`、`List(ctx,p auth.Principal,q Query) (Page,error)`。`Query{ChannelID,Start,End,Cursor,Limit}` 单通道且≤31天，交集条件为 start<query.end且end>query.start。
 
-- [ ] **Step 1:** 写 `TestRecordingPathTimezoneAndIdentity`：UTC 2026-10-03T16:04:39Z→上海 `2026-10-04/CH01_20261004_000439_<id>.mp4`；同秒不同原片不同ID；DST重复小时仍唯一；重放与时区修改不改冻结路径。`TestPublishCrashAndNoOverwrite` 覆盖移动前、移动后提交前崩溃、目标冲突、跨设备和目录同步失败，原片/证据保留。
-- [ ] **Step 2:** 运行 `dev.sh test-go ./internal/recording`、`test-db ./tests/integration -run 'RecordingPublish|RecordingQuery'` 确认红灯。
-- [ ] **Step 3:** inbox→按run定位普通已关闭MP4→结构/大小校验→事务保存finalizing意图→同池原子不覆盖rename→fsync→事务ready/local location。publisher用DB claim/fence（30秒租约、10秒续期）领取inbox，唯一来源键与不覆盖移动同时约束重复执行，旧claim不能提交ready；不套用普通job有限尝试丢弃未发布片。Linux使用renameat2 RENAME_NOREPLACE；Darwin仅供本机测试用等价不覆盖原语，两者均无copy/unlink降级。对根、父目录/末端symlink和inode替换做受限核验；冲突不覆盖/删除。重试先查来源键，移动后用已冻结文件身份核对目标。
-- [ ] **Step 4:** 只扫描登记run/发布意图/登记业务位置，恢复丢Hook片经固定版本原生文件规则和媒体证据建立来源；缺可靠绝对时间的片标 provisional/待核查，不仅凭mtime就ready。写 `.meta/recording-runs/<UUID>.json` 无凭据描述并校验site/pool；不自动接管未知文件。测试旧源迟到、重复回调源路径已移走、正在写点号临时片、损坏/未知片、no当前源仍可按授权列出历史；池占用只统计实际ready local位置并标明未发布占用未知。GET metadata按playback授权，未授权404、缺失媒体状态真实；content保持501直到M1-C。重跑测试和 `test-media.sh --publish`。
-- [ ] **Step 5:** 提交 `feat: publish channel recordings with recoverable index`。
+- [x] **Step 1:** 写 `TestRecordingPathTimezoneAndIdentity`：UTC 2026-10-03T16:04:39Z→上海 `2026-10-04/CH01_20261004_000439_<id>.mp4`；同秒不同原片不同ID；DST重复小时仍唯一；重放与时区修改不改冻结路径。`TestPublishCrashAndNoOverwrite` 覆盖移动前、移动后提交前崩溃、目标冲突、跨设备和目录同步失败，原片/证据保留。
+- [x] **Step 2:** 运行 `dev.sh test-go ./internal/recording`、`test-db ./tests/integration -run 'RecordingPublish|RecordingQuery'` 确认红灯。
+- [x] **Step 3:** inbox→按run定位普通已关闭MP4→结构/大小校验→事务保存finalizing意图→同池原子不覆盖rename→fsync→事务ready/local location。publisher用DB claim/fence（30秒租约、10秒续期）领取inbox，唯一来源键与不覆盖移动同时约束重复执行，旧claim不能提交ready；不套用普通job有限尝试丢弃未发布片。Linux使用renameat2 RENAME_NOREPLACE；Darwin仅供本机测试用等价不覆盖原语，两者均无copy/unlink降级。对根、父目录/末端symlink和inode替换做受限核验；冲突不覆盖/删除。重试先查来源键，移动后用已冻结文件身份核对目标。
+- [x] **Step 4:** 只扫描登记run/发布意图/登记业务位置，恢复丢Hook片经固定版本原生文件规则和媒体证据建立来源；缺可靠绝对时间的片标 provisional/待核查，不仅凭mtime就ready。写 `.meta/recording-runs/<UUID>.json` 无凭据描述并校验site/pool；不自动接管未知文件。测试旧源迟到、重复回调源路径已移走、正在写点号临时片、损坏/未知片、no当前源仍可按授权列出历史；池占用只统计实际ready local位置并标明未发布占用未知。GET metadata按playback授权，未授权404、缺失媒体状态真实；content保持501直到M1-C。重跑测试和 `test-media.sh --publish`。
+- [x] **Step 5:** 提交 `feat: publish channel recordings with recoverable index`。
 
 ## Task 6: 测试、源切换与故障回滚
 
