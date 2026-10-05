@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -201,5 +202,75 @@ func TestRecordingPolicyAndSourceStatusHTTP(t *testing.T) {
 	}
 	if w := request("PUT", "/storage-pool", `{"pool_id":"`+string(f.Pool.ID)+`"}`, "pool-http", `"3"`, true); w.Code != 409 {
 		t.Fatal("stale pool version accepted", w.Code, w.Body.String())
+	}
+}
+
+func TestImportHTTPMultipartLimitNoStoreAndCSRF(t *testing.T) {
+	db, accounts, sites, admin := authFixture(t)
+	policy, _ := channel.ParseNetworkPolicy("192.168.33.0/24", nil)
+	h := httpapi.NewHandler(httpapi.Dependencies{Auth: accounts, Site: sites, PublicURL: "http://nvr.example.com", Sources: channel.NewSources(db, accounts, sites.Secrets, policy)})
+	request := func(content string, csrf bool) *httptest.ResponseRecorder {
+		var body bytes.Buffer
+		m := multipart.NewWriter(&body)
+		if err := m.WriteField("format", "csv"); err != nil {
+			t.Fatal(err)
+		}
+		f, err := m.CreateFormFile("file", "camera.csv")
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Write([]byte(content))
+		m.Close()
+		r := httptest.NewRequest("POST", "http://nvr.example.com/api/v1/source-imports/preview", &body)
+		r.AddCookie(&http.Cookie{Name: "one_nvr_session", Value: admin.RawSession})
+		r.Header.Set("Content-Type", m.FormDataContentType())
+		r.Header.Set("Origin", "http://nvr.example.com")
+		if csrf {
+			r.Header.Set("X-CSRF-Token", accounts.CSRF(admin.RawSession))
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	csv := "channel_no,channel_name,ip,rtsp_port,username,password,main_path,sub_path\n1,Front,192.168.33.20,554,admin,private-import-fixture,/main,\n"
+	if w := request(csv, false); w.Code != 403 {
+		t.Fatal("import missing CSRF accepted", w.Code)
+	}
+	if w := request(csv, true); w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" || strings.Contains(w.Body.String(), "private-import-fixture") {
+		t.Fatal("import preview unavailable/unsafe", w.Code, w.Body.String())
+	}
+	for _, bad := range []string{strings.Repeat("x", channel.MaxImportBytes), "channel_no,channel_name,ip,rtsp_port,username,password,main_path,sub_path\n1,\"unclosed,private-import-fixture"} {
+		if w := request(bad, true); w.Code < 400 || strings.Contains(w.Body.String(), "private-import-fixture") {
+			t.Fatal("import size/parse error exposed input", w.Code)
+		}
+	}
+}
+
+func TestImportCancelHTTPMatchesContract(t *testing.T) {
+	db, accounts, sites, admin := authFixture(t)
+	policy, _ := channel.ParseNetworkPolicy("192.168.33.0/24", nil)
+	sources := channel.NewSources(db, accounts, sites.Secrets, policy)
+	preview, err := sources.PreviewImport(context.Background(), admin.Principal, "csv", strings.NewReader("channel_no,channel_name,ip,rtsp_port,username,password,main_path,sub_path\n1,Front,192.168.33.20,554,,,/main,\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := httpapi.NewHandler(httpapi.Dependencies{Auth: accounts, Site: sites, PublicURL: "http://nvr.example.com", Sources: sources})
+	r := httptest.NewRequest("POST", "http://nvr.example.com/api/v1/source-imports/"+string(preview.BatchID)+"/cancel", strings.NewReader(`{}`))
+	r.AddCookie(&http.Cookie{Name: "one_nvr_session", Value: admin.RawSession})
+	r.Header.Set("Origin", "http://nvr.example.com")
+	r.Header.Set("X-CSRF-Token", accounts.CSRF(admin.RawSession))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	var response struct {
+		Data struct {
+			CancelRequested bool `json:"cancel_requested"`
+		} `json:"data"`
+	}
+	if err = json.Unmarshal(w.Body.Bytes(), &response); err != nil || w.Code != 200 || !response.Data.CancelRequested {
+		t.Fatal("cancel response differs from contract", w.Code, err)
+	}
+	progress, err := sources.GetImport(context.Background(), admin.Principal, preview.BatchID)
+	if err != nil || progress.State != "cancelled" {
+		t.Fatal("idle preview remained active after cancel", progress, err)
 	}
 }

@@ -128,7 +128,12 @@ func Run(name string) error {
 		for n := 0; n < 2; n++ {
 			go func() { defer background.Done(); runSourceTestJobs(ctx, recordings) }()
 		}
-		background.Add(4)
+		background.Add(6)
+		go func() { defer background.Done(); cleanupImportDrafts(ctx, recordings.Sources) }()
+		go func() {
+			defer background.Done()
+			runSourceJobs(ctx, recordings, "source.import", recordings.ExecuteImport)
+		}()
 		for _, kind := range []string{"source.apply", "source.clear", "source.policy_apply", "source.pool_switch"} {
 			go func() { defer background.Done(); runSourceChangeJobs(ctx, recordings, kind) }()
 		}
