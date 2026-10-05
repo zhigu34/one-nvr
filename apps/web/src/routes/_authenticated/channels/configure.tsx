@@ -1,6 +1,12 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { Forbidden } from '@/features/foundation/ui'
+import { ChannelConfigure } from '@/features/channels/configure'
 
 export const Route = createFileRoute('/_authenticated/channels/configure')({
-  component: Forbidden,
+  validateSearch: (search: Record<string, unknown>) => ({
+    channel: typeof search.channel === 'string' ? search.channel : '',
+  }),
+  component: function ConfigurePage() {
+    const { channel } = Route.useSearch()
+    return <ChannelConfigure initialId={channel} />
+  },
 })

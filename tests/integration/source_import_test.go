@@ -464,3 +464,36 @@ func TestExpiredImportPurgesEncryptedDraftButPreservesAcceptedWork(t *testing.T)
 		t.Fatal("purged expiry allowed a new test")
 	}
 }
+
+func TestImportPreviewProvidesSafePasswordIntent(t *testing.T) {
+	f := importFixture(t)
+	for _, tc := range []struct{ format, input, action string }{
+		{"csv", "channel_no,channel_name,ip,rtsp_port,username,password,main_path,sub_path\n1,Front,192.168.33.24,554,admin,,/main,/sub\n", "clear"},
+		{"csv", "channel_no,channel_name,ip,rtsp_port,username,password,main_path,sub_path\n1,Front,192.168.33.24,554,admin,isolated-intent-secret,/main,/sub\n", "replace"},
+		{"json", `{"format_version":1,"channels":[{"channel_no":1,"channel_name":"Front","ip":"192.168.33.24","rtsp_port":554,"main_path":"/main","sub_path":"/sub"}]}`, "keep"},
+	} {
+		preview, err := f.Service.Sources.PreviewImport(context.Background(), f.Admin, tc.format, strings.NewReader(tc.input))
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(preview.Items[0])
+		var item map[string]any
+		_ = json.Unmarshal(raw, &item)
+		if item["password_action"] != tc.action {
+			t.Fatalf("safe preview intent = %v, want %s", item["password_action"], tc.action)
+		}
+		progress, err := f.Service.Sources.GetImport(context.Background(), f.Admin, preview.BatchID)
+		if err != nil || progress.Items[0].PasswordAction != tc.action {
+			t.Fatal("progress lost parsed password intent", err)
+		}
+		progressJSON, _ := json.Marshal(progress)
+		var metadata map[string]any
+		_ = json.Unmarshal(progressJSON, &metadata)
+		if metadata["expires_at"] == nil {
+			t.Fatal("resumed preview has no server expiry")
+		}
+		if bytes.Contains(raw, []byte("isolated-intent-secret")) {
+			t.Fatal("preview contains plaintext")
+		}
+	}
+}

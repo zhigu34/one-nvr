@@ -24,6 +24,7 @@ wait_entry() {
 }
 wait_entry
 "${compose[@]}" run --rm browser
+"${compose[@]}" run --rm -e ONE_NVR_E2E_PHASE=sources browser
 # Recreate actual processes while preserving only this fixture's DB/private volumes.
 "${compose[@]}" up -d --no-deps --force-recreate api worker gateway
 wait_entry

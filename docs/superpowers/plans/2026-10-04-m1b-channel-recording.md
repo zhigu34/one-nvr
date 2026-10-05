@@ -185,11 +185,11 @@
 
 **Interfaces:** `channel.ParseImport(r io.Reader,format string) ([]ParsedItem,error)`；`SourceService.PreviewImport(ctx,p,format string,r io.Reader) (ImportPreview,error)`、`SubmitImport(ctx,p,batchID id.ID,[]ImportSelection,key string) (Change,error)`、`GetImport(ctx,p,batchID) (ImportProgress,error)`、`TestImport(ctx,p,batchID,rows []int,key string) (Change,error)`、`RetryImport(...) (Change,error)`、`CancelImport(ctx,p,batchID) error`；`app.ExecuteImport(ctx,Execution) (jobs.Result,error)`。
 
-- [ ] **Step 1:** 写 `TestImportCSVLimitsAndPasswordSemantics`：八列/BOM/引号/逗号/换行、可选onvif端口、1MiB/32条边界、重复/未知header；CSV空密码明确空，keep在预览显式选择；JSON缺失/空密码keep/clear，掩码拒绝。`TestExportRoundTripsForeignAndSameSite`：同站核验ID+编号，跨站仅用本地编号/映射，不写入外部UUID。
-- [ ] **Step 2:** 跑 `dev.sh test-go ./internal/channel`、`test-db ./tests/integration -run 'Import|RoundTrip'` 确认红灯。
-- [ ] **Step 3:** 请求限额作用于原始multipart整体与文件内容；UTF-8/格式version校验，解析错误不回显整行秘密。加密保存规范草稿而非原明文文件；预览不改current。空槽位空源行明确skip不清空；已配置目标必须确认更新与身份意图，重复目标拒绝、重复地址警告；策略/权限字段按导出元信息规则忽略并提示，任意未知顶层版本/核心字段拒绝。
-- [ ] **Step 4:** 测 `TestImportExpiryRevocationAndPartialRecovery`：30分钟后不能新提交/测试/重试，已提交事务冻结的行不因执行超过TTL突然取消；撤权/expected冲突逐行失败，只有未执行项取消、已开始安全终结；关页继续，重启/重复key不重放成功项，失败项重试须再测并复核最新版本，不silent覆盖；单行失败不回滚其他成功行。同配置且名称未变skip；仅改名称不重新拉流；已有源模式/池/事件开关保持不变。重跑DB和实际三行混合有效/失败/冲突场景。
-- [ ] **Step 5:** 提交 `feat: import and export channel source configurations`。
+- [x] **Step 1:** 写 `TestImportCSVLimitsAndPasswordSemantics`：八列/BOM/引号/逗号/换行、可选onvif端口、1MiB/32条边界、重复/未知header；CSV空密码明确空，keep在预览显式选择；JSON缺失/空密码keep/clear，掩码拒绝。`TestExportRoundTripsForeignAndSameSite`：同站核验ID+编号，跨站仅用本地编号/映射，不写入外部UUID。
+- [x] **Step 2:** 跑 `dev.sh test-go ./internal/channel`、`test-db ./tests/integration -run 'Import|RoundTrip'` 确认红灯。
+- [x] **Step 3:** 请求限额作用于原始multipart整体与文件内容；UTF-8/格式version校验，解析错误不回显整行秘密。加密保存规范草稿而非原明文文件；预览不改current。空槽位空源行明确skip不清空；已配置目标必须确认更新与身份意图，重复目标拒绝、重复地址警告；策略/权限字段按导出元信息规则忽略并提示，任意未知顶层版本/核心字段拒绝。
+- [x] **Step 4:** 测 `TestImportExpiryRevocationAndPartialRecovery`：30分钟后不能新提交/测试/重试，已提交事务冻结的行不因执行超过TTL突然取消；撤权/expected冲突逐行失败，只有未执行项取消、已开始安全终结；关页继续，重启/重复key不重放成功项，失败项重试须再测并复核最新版本，不silent覆盖；单行失败不回滚其他成功行。同配置且名称未变skip；仅改名称不重新拉流；已有源模式/池/事件开关保持不变。重跑DB和实际三行混合有效/失败/冲突场景。
+- [x] **Step 5:** 提交 `feat: import and export channel source configurations`。
 
 ## Task 9: 真实通道配置、导入进度与状态前端
 

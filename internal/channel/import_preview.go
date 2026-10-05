@@ -37,7 +37,7 @@ func (s *SourceService) PreviewImport(ctx context.Context, p auth.Principal, for
 		seen := map[id.ID]bool{}
 		addresses := map[string]bool{}
 		for _, input := range parsed {
-			summary := ImportItem{Row: input.Row, State: "draft", Differences: []string{}, Errors: []string{}, Warnings: append([]string{}, input.Warnings...)}
+			summary := ImportItem{Row: input.Row, PasswordAction: input.PasswordAction, State: "draft", Differences: []string{}, Errors: []string{}, Warnings: append([]string{}, input.Warnings...)}
 			var ch id.ID
 			var current *id.ID
 			var version int64

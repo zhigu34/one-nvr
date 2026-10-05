@@ -1193,6 +1193,11 @@ export interface components {
             errors: string[];
             warnings: string[];
             job_id: components["schemas"]["UUID"] | null;
+            /**
+             * @description Safe parsed password intent; never contains credentials.
+             * @enum {string}
+             */
+            password_action?: "keep" | "replace" | "clear";
         };
         ImportPreview: {
             batch_id: components["schemas"]["UUID"];
@@ -1205,6 +1210,11 @@ export interface components {
             /** @enum {string} */
             state: "preview" | "submitted" | "running" | "succeeded" | "partial" | "failed" | "cancelled";
             items: components["schemas"]["ImportItem"][];
+            /**
+             * Format: date-time
+             * @description Original server preview expiry; resuming never extends it.
+             */
+            expires_at?: string;
         };
         ImportSelection: {
             row: number;
