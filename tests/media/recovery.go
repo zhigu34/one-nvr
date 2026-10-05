@@ -203,13 +203,16 @@ func waitPhysicalAbsence(ctx context.Context, media *zlm.Client, key zlm.StreamK
 		if errors.Is(err, zlm.ErrStreamAbsent) {
 			return nil
 		}
-		if err != nil {
+		if err != nil && !errors.Is(err, zlm.ErrMediaOperation) {
 			return err
 		}
 		timer := time.NewTimer(100 * time.Millisecond)
 		select {
 		case <-wait.Done():
 			timer.Stop()
+			if err != nil {
+				return fmt.Errorf("bounded absence check: %w", err)
+			}
 			return wait.Err()
 		case <-timer.C:
 		}
