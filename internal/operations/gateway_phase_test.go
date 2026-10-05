@@ -34,3 +34,23 @@ runner_pid=1
 		t.Fatal("gateway phase discarded a still-running allowed lifecycle", err, string(out))
 	}
 }
+
+func TestGatewayFailureKeepsComponentDiagnostics(t *testing.T) {
+	raw, err := os.ReadFile("../../deploy/production/test-gateway.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := string(raw)
+	start, end := strings.Index(code, "phase() {"), strings.Index(code, "mark() {")
+	program := `set -Eeuo pipefail
+docker(){ if [[ ${1:-} == logs ]]; then printf 'fixture-component-diagnostics\n'; return 0; fi; return 1; }
+kill(){ return 1; }
+wait(){ return 1; }
+compose=(docker)
+runner_pid=1
+` + code[start:end] + `phase lifecycle-done`
+	out, err := exec.Command("bash", "-c", program).CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "fixture-component-diagnostics") {
+		t.Fatal("failed runner discarded component diagnostics", err, string(out))
+	}
+}

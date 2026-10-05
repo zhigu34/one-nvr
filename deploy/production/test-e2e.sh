@@ -3,7 +3,7 @@ set -Eeuo pipefail
 cd "$(dirname "$0")/../.."
 project="one-nvr-e2e-${GITHUB_RUN_ID:-local}-$$"
 compose=(docker compose -p "$project" -f deploy/production/compose.e2e-test.yaml)
-cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true; }
+cleanup() { local status=$?; if [[ $status -ne 0 ]]; then "${compose[@]}" logs --tail=60 api worker gateway || true; "${compose[@]}" exec -T postgres psql -U one_nvr_test -d one_nvr_test -At -c "SELECT kind,state,error_code FROM jobs WHERE kind='tls.apply' ORDER BY created_at" || true; fi; "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 if [[ ${1:-} != --no-build ]]; then
