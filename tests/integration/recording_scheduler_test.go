@@ -460,3 +460,30 @@ func TestRecordingOffIdlePoolDoesNotCreateAutomaticProbe(t *testing.T) {
 		t.Fatal("recording none spawned automatic pool trial", media.AddCalls)
 	}
 }
+
+func TestRecordingRecoveryIdentifiesFirstFrameFailureWithoutSecrets(t *testing.T) {
+	f, media, _, _ := testedSource(t)
+	ctx := context.Background()
+	var oldSession id.ID
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT stream_session_id FROM recording_runs WHERE id=$1", f.Run).Scan(&oldSession); err != nil {
+		t.Fatal(err)
+	}
+	media.mu.Lock()
+	delete(media.urls, string(oldSession))
+	delete(media.recording, string(oldSession))
+	media.mu.Unlock()
+	f.Service.Probe = controlledProbe{media: media, file: f.Service.Probe, BeforeFrame: func() {
+		media.mu.Lock()
+		for k := range media.urls {
+			delete(media.urls, k)
+		}
+		media.mu.Unlock()
+	}}
+	if err := f.Service.Reconcile(ctx, f.Channel); err != nil {
+		t.Fatal(err)
+	}
+	var reason string
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT reason_code FROM source_observations WHERE channel_id=$1 AND kind='main' ORDER BY observed_at DESC LIMIT 1", f.Channel).Scan(&reason); err != nil || reason != "source_recovery_first_frame_unavailable" {
+		t.Fatal("recovery failure stage missing", reason, err)
+	}
+}

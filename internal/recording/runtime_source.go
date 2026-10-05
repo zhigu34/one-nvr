@@ -45,14 +45,14 @@ func (s *Service) recoverRuntimeSource(ctx context.Context, e *channel.Execution
 	}
 	window, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	if err := s.connectSwitchStream(window, e, ss, "main"); err != nil {
+	if connectErr := s.connectSwitchStream(window, e, ss, "main"); connectErr != nil {
 		if err := e.Check(ctx); err != nil {
 			return err
 		}
 		if err := s.stopPhysical(ctx, e, ss); err != nil {
 			return err
 		}
-		return s.observation(ctx, e, ss, "main", "unavailable", "source_unavailable", nil)
+		return s.observation(ctx, e, ss, "main", "unavailable", recoveryFailureReason(connectErr), nil)
 	}
 	if _, err := s.sampleBitrate(ctx, e, ss, "", true); err != nil {
 		return err

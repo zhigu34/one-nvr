@@ -69,7 +69,7 @@ func (s *Service) connectSwitchStream(ctx context.Context, e *channel.Execution,
 	}
 	snapshot, err := s.Media.Inspect(ctx, ss.Key)
 	if err != nil && !errors.Is(err, zlm.ErrStreamAbsent) {
-		return err
+		return sourceFailure("inspect", err)
 	}
 	if errors.Is(err, zlm.ErrStreamAbsent) {
 		network, err := s.FreshNetwork(ctx)
@@ -78,14 +78,14 @@ func (s *Service) connectSwitchStream(ctx context.Context, e *channel.Execution,
 		}
 		input, err := s.Sources.PrivateConnection(ctx, e.ChannelID, ss.RevisionID, kind, network)
 		if err != nil {
-			return err
+			return sourceFailure("credentials", err)
 		}
 		input.Key = ss.Key
 		if err := e.Check(ctx); err != nil {
 			return err
 		}
 		if _, err := s.Media.AddProxy(ctx, input); err != nil {
-			return err
+			return sourceFailure("add_proxy", err)
 		}
 	} else if snapshot.Key != ss.Key {
 		return zlm.ErrMediaOperation
@@ -105,10 +105,10 @@ func (s *Service) connectSwitchStream(ctx context.Context, e *channel.Execution,
 	}
 	video, err := s.Probe.FirstFrame(ctx, privateURL)
 	if err != nil {
-		return err
+		return sourceFailure("first_frame", err)
 	}
 	if !video.FirstFrame {
-		return probe.ErrProbeFailed
+		return sourceFailure("first_frame", probe.ErrProbeFailed)
 	}
 	return e.Check(ctx)
 }
