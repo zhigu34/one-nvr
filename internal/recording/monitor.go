@@ -20,7 +20,9 @@ func (s *Service) Monitor(ctx context.Context) error {
 	defer running.Wait()
 	offset := 0
 	for ctx.Err() == nil {
-		rows, err := s.DB.Pool.Query(ctx, "SELECT id FROM channels ORDER BY channel_no")
+		// Empty permanent slots have no media to observe. Keep cleanup candidates
+		// even when their channel is disabled/cleared, until its sessions close.
+		rows, err := s.DB.Pool.Query(ctx, `SELECT c.id FROM channels c WHERE (c.enabled AND c.current_revision_id IS NOT NULL) OR EXISTS(SELECT 1 FROM stream_sessions ss WHERE ss.channel_id=c.id AND ss.purpose IN ('main','sub') AND ss.state NOT IN ('closed','failed')) ORDER BY c.channel_no`)
 		if err != nil {
 			return err
 		}
