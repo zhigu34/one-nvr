@@ -29,11 +29,20 @@ type SourceTask struct {
 
 func (s *SourceService) RequestTest(ctx context.Context, p auth.Principal, channelID, revisionID id.ID, key string) (Change, error) {
 	var out Change
+	err := s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
+		var err error
+		out, err = s.requestTestTx(tx, false, ctx, p, channelID, revisionID, key)
+		return err
+	})
+	return out, err
+}
+func (s *SourceService) requestTestTx(tx pgx.Tx, worker bool, ctx context.Context, p auth.Principal, channelID, revisionID id.ID, key string) (Change, error) {
+	var out Change
 	if !validSourceJobKey(key) {
 		return out, auth.ErrInvalid
 	}
-	err := s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
-		if err := s.Auth.RequireChannelTx(ctx, p, channelID, auth.Configure, tx); err != nil {
+	err := func(tx pgx.Tx) error {
+		if err := s.authorizeSourceTx(ctx, p, channelID, worker, tx); err != nil {
 			return err
 		}
 		if _, err := loadRevision(ctx, tx, channelID, revisionID); err != nil {
@@ -64,7 +73,7 @@ func (s *SourceService) RequestTest(ctx context.Context, p auth.Principal, chann
 		}
 		out.TestID = &resultID
 		return tx.QueryRow(ctx, "SELECT state FROM jobs WHERE id=$1", job).Scan(&out.State)
-	})
+	}(tx)
 	return out, err
 }
 func validSourceJobKey(key string) bool {

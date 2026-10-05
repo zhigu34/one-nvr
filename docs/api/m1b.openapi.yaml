@@ -1925,10 +1925,10 @@
         }
       }
     },
-    "/api/v1/channels/source-imports/preview": {
+    "/api/v1/source-imports/preview": {
       "post": {
         "operationId": "sourceImportPreview",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "admin+configure",
         "security": [
           {
@@ -2088,10 +2088,10 @@
         }
       }
     },
-    "/api/v1/channels/source-imports": {
+    "/api/v1/source-imports": {
       "post": {
         "operationId": "sourceImportSubmit",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "admin+configure",
         "security": [
           {
@@ -2261,10 +2261,10 @@
         }
       }
     },
-    "/api/v1/channels/source-imports/{batch_id}": {
+    "/api/v1/source-imports/{batch_id}": {
       "get": {
         "operationId": "sourceImportProgress",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "admin+configure",
         "security": [
           {
@@ -2396,10 +2396,10 @@
         }
       }
     },
-    "/api/v1/channels/source-imports/{batch_id}/test": {
+    "/api/v1/source-imports/{batch_id}/test": {
       "post": {
         "operationId": "sourceImportTest",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "admin+configure",
         "security": [
           {
@@ -2576,10 +2576,10 @@
         }
       }
     },
-    "/api/v1/channels/source-imports/{batch_id}/retry": {
+    "/api/v1/source-imports/{batch_id}/retry": {
       "post": {
         "operationId": "sourceImportRetry",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "admin+configure",
         "security": [
           {
@@ -2734,20 +2734,17 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "rows": {
+                  "items": {
                     "type": "array",
                     "items": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 32
+                      "$ref": "#/components/schemas/ImportSelection"
                     },
                     "minItems": 1,
-                    "maxItems": 32,
-                    "uniqueItems": true
+                    "maxItems": 32
                   }
                 },
                 "required": [
-                  "rows"
+                  "items"
                 ],
                 "additionalProperties": false
               }
@@ -2756,10 +2753,10 @@
         }
       }
     },
-    "/api/v1/channels/source-imports/{batch_id}/cancel": {
+    "/api/v1/source-imports/{batch_id}/cancel": {
       "post": {
         "operationId": "sourceImportCancel",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "admin+configure",
         "security": [
           {

@@ -58,12 +58,21 @@ func (s *SourceService) BindPool(ctx context.Context, p auth.Principal, ch, pool
 }
 func (s *SourceService) requestChange(ctx context.Context, p auth.Principal, task SourceTask, kind, key string) (Change, error) {
 	var out Change
+	err := s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
+		var err error
+		out, err = s.requestChangeTx(tx, false, ctx, p, task, kind, key)
+		return err
+	})
+	return out, err
+}
+func (s *SourceService) requestChangeTx(tx pgx.Tx, worker bool, ctx context.Context, p auth.Principal, task SourceTask, kind, key string) (Change, error) {
+	var out Change
 	if !validSourceJobKey(key) {
 		return out, auth.ErrInvalid
 	}
 	raw, _ := json.Marshal(task)
-	err := s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
-		if err := s.Auth.RequireChannelTx(ctx, p, task.ChannelID, auth.Configure, tx); err != nil {
+	err := func(tx pgx.Tx) error {
+		if err := s.authorizeSourceTx(ctx, p, task.ChannelID, worker, tx); err != nil {
 			return err
 		}
 		// Enqueue and the domain receipt share one transaction. A replay returns the
@@ -196,7 +205,7 @@ func (s *SourceService) requestChange(ctx context.Context, p auth.Principal, tas
 		}
 		out.State = "queued"
 		return nil
-	})
+	}(tx)
 	return out, err
 }
 

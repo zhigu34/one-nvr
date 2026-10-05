@@ -63,6 +63,15 @@ func usernameSummary(value string) string {
 // keys make HTTP retries idempotent without storing plaintext or fake jobs.
 func (s *SourceService) CreateDraft(ctx context.Context, p auth.Principal, channelID id.ID, expected int64, in DraftInput, requestKey ...string) (SourceRevision, error) {
 	var out SourceRevision
+	err := s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
+		var err error
+		out, err = s.createDraftTx(tx, false, ctx, p, channelID, expected, in, requestKey...)
+		return err
+	})
+	return out, err
+}
+func (s *SourceService) createDraftTx(tx pgx.Tx, worker bool, ctx context.Context, p auth.Principal, channelID id.ID, expected int64, in DraftInput, requestKey ...string) (SourceRevision, error) {
+	var out SourceRevision
 	if expected < 1 || len(requestKey) > 1 {
 		return out, auth.ErrInvalid
 	}
@@ -74,8 +83,8 @@ func (s *SourceService) CreateDraft(ctx context.Context, p auth.Principal, chann
 		}
 	}
 	in.Config = normalizedConfig(in.Config)
-	err := s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
-		if err := s.Auth.RequireChannelTx(ctx, p, channelID, auth.Configure, tx); err != nil {
+	err := func(tx pgx.Tx) error {
+		if err := s.authorizeSourceTx(ctx, p, channelID, worker, tx); err != nil {
 			return err
 		}
 		if err := in.Config.Validate(s.network); err != nil {
@@ -252,7 +261,7 @@ func (s *SourceService) CreateDraft(ctx context.Context, p auth.Principal, chann
 		stored, err := loadRevision(ctx, tx, channelID, revisionID)
 		out = stored.Revision
 		return err
-	})
+	}(tx)
 	if err != nil {
 		return SourceRevision{}, err
 	}

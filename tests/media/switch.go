@@ -22,9 +22,9 @@ import (
 	"github.com/zhigu34/one-nvr/internal/storage"
 )
 
-func switchAcceptance() error   { return sourceLifecycleAcceptance(false) }
-func recoveryAcceptance() error { return sourceLifecycleAcceptance(true) }
-func sourceLifecycleAcceptance(recovery bool) error {
+func switchAcceptance() error   { return sourceLifecycleAcceptance("switch") }
+func recoveryAcceptance() error { return sourceLifecycleAcceptance("recovery") }
+func sourceLifecycleAcceptance(mode string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	db, err := database.Open(ctx, fixtureDSN)
@@ -147,7 +147,10 @@ func sourceLifecycleAcceptance(recovery bool) error {
 	if err := db.Pool.QueryRow(ctx, "SELECT id,stream_session_id FROM recording_runs WHERE channel_id=$1 AND state='recording'", ids.Channel).Scan(&oldRun, &oldSession); err != nil {
 		return fmt.Errorf("initial recorder not verified")
 	}
-	if recovery {
+	if mode == "import" {
+		return recordingImportScenario(ctx, db, recordings, login.Principal, ids, oldRun, execute)
+	}
+	if mode == "recovery" {
 		return recordingRecoveryScenario(ctx, db, recordings, client, login.Principal, ids, oldRun, oldSession, execute)
 	}
 	config := ids.Config

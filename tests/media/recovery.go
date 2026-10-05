@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/jackc/pgx/v5"
 	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/database"
 	"github.com/zhigu34/one-nvr/internal/id"
@@ -76,12 +77,15 @@ func recordingRecoveryScenario(ctx context.Context, db *database.DB, s *recordin
 	if err := waitPhysicalAbsence(ctx, media, key(originalSession)); err != nil {
 		return fmt.Errorf("external source removal not observed: %w", err)
 	}
-	if err := s.Reconcile(ctx, ids.Channel); err != nil {
-		return err
-	}
-	var fresh id.ID
-	if err := db.Pool.QueryRow(ctx, "SELECT id FROM stream_sessions WHERE channel_id=$1 AND purpose='main' AND state='active'", ids.Channel).Scan(&fresh); err != nil || fresh == originalSession {
-		return fmt.Errorf("source recovery reused physical generation")
+	fresh, err := waitRecoveredSession(ctx, originalSession, func(ctx context.Context) error { return s.Reconcile(ctx, ids.Channel) }, func(ctx context.Context) (id.ID, error) {
+		var current id.ID
+		err := db.Pool.QueryRow(ctx, "SELECT id FROM stream_sessions WHERE channel_id=$1 AND purpose='main' AND state='active'", ids.Channel).Scan(&current)
+		return current, err
+	})
+	if err != nil {
+		var reason string
+		_ = db.Pool.QueryRow(ctx, "SELECT reason_code FROM source_observations WHERE channel_id=$1 AND kind='main' ORDER BY observed_at DESC LIMIT 1", ids.Channel).Scan(&reason)
+		return fmt.Errorf("source recovery did not reach a fresh active generation: %w (observed=%s)", err, reason)
 	}
 	timer := time.NewTimer(11 * time.Second)
 	defer timer.Stop()
@@ -207,6 +211,30 @@ func waitPhysicalAbsence(ctx context.Context, media *zlm.Client, key zlm.StreamK
 		case <-wait.Done():
 			timer.Stop()
 			return wait.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func waitRecoveredSession(ctx context.Context, previous id.ID, reconcile func(context.Context) error, find func(context.Context) (id.ID, error)) (id.ID, error) {
+	bounded, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	for {
+		if err := reconcile(bounded); err != nil {
+			return "", err
+		}
+		current, err := find(bounded)
+		if err == nil && current != "" && current != previous {
+			return current, nil
+		}
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return "", err
+		}
+		timer := time.NewTimer(10 * time.Second)
+		select {
+		case <-bounded.Done():
+			timer.Stop()
+			return "", bounded.Err()
 		case <-timer.C:
 		}
 	}

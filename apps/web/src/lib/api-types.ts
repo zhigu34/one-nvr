@@ -716,7 +716,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/channels/source-imports/preview": {
+    "/api/v1/source-imports/preview": {
         parameters: {
             query?: never;
             header?: never;
@@ -732,7 +732,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/channels/source-imports": {
+    "/api/v1/source-imports": {
         parameters: {
             query?: never;
             header?: never;
@@ -748,7 +748,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/channels/source-imports/{batch_id}": {
+    "/api/v1/source-imports/{batch_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -764,7 +764,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/channels/source-imports/{batch_id}/test": {
+    "/api/v1/source-imports/{batch_id}/test": {
         parameters: {
             query?: never;
             header?: never;
@@ -780,7 +780,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/channels/source-imports/{batch_id}/retry": {
+    "/api/v1/source-imports/{batch_id}/retry": {
         parameters: {
             query?: never;
             header?: never;
@@ -796,7 +796,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/channels/source-imports/{batch_id}/cancel": {
+    "/api/v1/source-imports/{batch_id}/cancel": {
         parameters: {
             query?: never;
             header?: never;
@@ -4371,7 +4371,7 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    rows: number[];
+                    items: components["schemas"]["ImportSelection"][];
                 };
             };
         };

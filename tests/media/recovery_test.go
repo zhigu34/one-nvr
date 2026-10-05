@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/jackc/pgx/v5"
 	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/media/zlm"
 	"net/http"
@@ -43,5 +44,27 @@ func TestRecoveryWaitsForObservedPhysicalAbsence(t *testing.T) {
 	}()
 	if err := waitPhysicalAbsence(ctx, client, key); err != nil || online.Load() {
 		t.Fatal("recovery fault not yet observed", err)
+	}
+}
+
+func TestRecoveryWaitsForNextBoundedReconciliation(t *testing.T) {
+	old, _ := id.New()
+	fresh, _ := id.New()
+	calls := 0
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	got, err := waitRecoveredSession(ctx, old, func(context.Context) error { calls++; return nil }, func(context.Context) (id.ID, error) {
+		if calls == 1 {
+			return "", pgx.ErrNoRows
+		}
+		return fresh, nil
+	})
+	if err != nil || got != fresh || calls != 2 {
+		t.Fatal("one unavailable recovery attempt incorrectly terminalized", got, calls, err)
+	}
+	expired, stop := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer stop()
+	if got, err := waitRecoveredSession(expired, old, func(context.Context) error { return nil }, func(context.Context) (id.ID, error) { return old, nil }); err == nil || got != "" {
+		t.Fatal("old generation accepted as recovered", got, err)
 	}
 }
