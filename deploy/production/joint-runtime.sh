@@ -32,6 +32,10 @@ joint_phase snapshot
 export ONE_NVR_E2E_MODULES=yes
 "${compose[@]}" up -d --no-deps --force-recreate api worker
 joint_phase modules
+# Optional DNS is absent; a new media connection must still recover.
+joint_phase snapshot
+"${compose[@]}" restart zlm
+joint_phase zlm
 "${compose[@]}" run --rm --no-deps runner go test -tags gateway_runtime ./tests/integration -run '^TestGatewayMediaRuntimeBoundaries$' -count=1 -v
 joint_phase snapshot
 # Freezing the real Worker preserves its network identity for private Hook
@@ -42,6 +46,10 @@ for phase in before after; do
 done
 "${compose[@]}" unpause worker
 joint_phase restart
+joint_phase snapshot
+joint_phase rollback-failure
+"${compose[@]}" up -d --no-deps --force-recreate fixture
+joint_phase rollback-recovery
 # Produced only after every real assertion above succeeded. No raw config,
 # completion payload, camera URL, PEM, trace or component credential is exported.
-"${compose[@]}" run --rm --no-deps --entrypoint sh runner -ec 'printf "%s\n" "{\"api_restart\":true,\"worker_restart\":true,\"both_restart\":true,\"database_outage_spool\":true,\"tls_rotation_two_recorders\":true,\"same_zlm_during_tls\":true,\"zlm_restart_new_runs\":true,\"optional_modules_absent\":true,\"publisher_sigkill_before_after_move\":true}" > /results/joint-runtime.json'
+"${compose[@]}" run --rm --no-deps --entrypoint sh runner -ec 'printf "%s\n" "{\"api_restart\":true,\"worker_restart\":true,\"both_restart\":true,\"database_outage_spool\":true,\"tls_rotation_two_recorders\":true,\"same_zlm_during_tls\":true,\"zlm_restart_new_runs\":true,\"optional_modules_absent\":true,\"optional_modules_reconnect\":true,\"both_source_rollback_failure\":true,\"publisher_sigkill_before_after_move\":true}" > /results/joint-runtime.json'

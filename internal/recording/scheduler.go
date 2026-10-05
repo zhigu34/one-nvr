@@ -85,6 +85,18 @@ func (s *Service) Reconcile(ctx context.Context, ch id.ID) error {
 	if err := s.reconcileRuntimeSub(ctx, e, *desired.Revision); err != nil {
 		return err
 	}
+	// Complete durable stop intents even if StopRecord succeeded before the
+	// previous owner lost its DB/context. Never adopt a stopping run as recording.
+	var stopping bool
+	if err := s.DB.Pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM recording_runs WHERE stream_session_id=$1 AND state='stopping')", ss.ID).Scan(&stopping); err != nil {
+		return err
+	}
+	if stopping {
+		if err := s.stopRecorder(ctx, e, ss); err != nil {
+			return err
+		}
+		actual.Recording = false
+	}
 	if desired.Mode == "none" {
 		if actual.Recording {
 			return s.stopRecorder(ctx, e, ss)
@@ -206,7 +218,7 @@ func (s *Service) runtimeFrameStatus(ctx context.Context, e *channel.Execution, 
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return "", "", err
 	}
-	if err == nil && snapshot.ObservedAt.Sub(previous) < 10*time.Second {
+	if err == nil && snapshot.ObservedAt.Sub(previous) < 10*time.Second && videoFrames(snapshot) <= frames {
 		return "unknown", "frame_progress_pending", nil
 	}
 	if err == nil && snapshot.ObservedAt.Sub(previous) <= 30*time.Second {

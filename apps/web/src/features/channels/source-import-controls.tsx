@@ -26,7 +26,7 @@ function selections(
             : 'modify',
           password_action: item.password_action || 'keep',
           import_name: true,
-          ...(item.differences.includes('new_source')
+          ...(item.requires_initial_recording_mode
             ? { first_recording_mode: 'continuous' as const }
             : {}),
         },
@@ -97,6 +97,7 @@ export function SourceImportControls({
     controller.current = abort
     setPending(true)
     setError('')
+    let chosenSelections: Selection[] = []
     let body: unknown = {},
       path = `/api/v1/source-imports/${preview.batch_id}/${kind}`
     if (kind === 'test') body = { rows: selectedRows }
@@ -109,6 +110,7 @@ export function SourceImportControls({
             : ['draft', 'tested'].includes(item.state))
       )
       const chosen = eligible.map((item) => selection[item.row])
+      chosenSelections = chosen
       if (
         chosen.some((value) => !value?.channel_id || !value.expected_version) ||
         chosen.length === 0
@@ -124,6 +126,27 @@ export function SourceImportControls({
       if (kind === 'submit') path = '/api/v1/source-imports'
     }
     try {
+      if (kind === 'submit' || kind === 'retry') {
+        const chosen: Selection[] = []
+        // Re-read the mapped target: a cleared channel is not necessarily new,
+        // and a user may have changed the original preview mapping.
+        for (const value of chosenSelections) {
+          const status = await apiRequest<Schema<'ChannelSourceStatus'>>(
+            `/api/v1/channels/${value.channel_id}/source/status`,
+            { signal: abort.signal }
+          )
+          const { first_recording_mode: first, ...rest } = value
+          chosen.push(
+            status.requires_initial_recording_mode
+              ? { ...rest, first_recording_mode: first || 'continuous' }
+              : rest
+          )
+        }
+        body =
+          kind === 'submit'
+            ? { batch_id: preview.batch_id, items: chosen }
+            : { items: chosen }
+      }
       await sourceCommand(path, body, undefined, abort.signal)
       if (!abort.signal.aborted) {
         setNotice(

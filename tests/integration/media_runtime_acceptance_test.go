@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -310,6 +311,10 @@ func TestGatewayMediaRuntimeJoint(t *testing.T) {
 		jointWrite(t, "/results/joint-before.json", current)
 		return
 	}
+	if phase == "rollback-failure" {
+		jointRollbackFailure(t, db)
+		return
+	}
 	if phase == "snapshot" {
 		current := jointCollect(t, db)
 		if !jointTwoRecording(t, media, current) {
@@ -345,7 +350,7 @@ func TestGatewayMediaRuntimeJoint(t *testing.T) {
 			t.Fatal("actual listener still uses old certificate")
 		}
 	}
-	if phase != "restart" && phase != "db" && phase != "zlm" && phase != "tls" && phase != "modules" {
+	if phase != "restart" && phase != "db" && phase != "zlm" && phase != "tls" && phase != "modules" && phase != "rollback-recovery" {
 		t.Fatal("unknown joint acceptance phase")
 	}
 	jointWait(t, 120, "actual runtime did not resume two recorders and new ready segments", func() bool {
@@ -357,7 +362,7 @@ func TestGatewayMediaRuntimeJoint(t *testing.T) {
 			if c.Channel != before.Channels[i].Channel || c.Ready <= before.Channels[i].Ready {
 				return false
 			}
-			if phase == "zlm" {
+			if phase == "zlm" || phase == "rollback-recovery" {
 				if c.Run == before.Channels[i].Run || c.Session == before.Channels[i].Session {
 					return false
 				}
@@ -447,4 +452,144 @@ func TestGatewayMediaRuntimeBoundaries(t *testing.T) {
 		receipt = filepath.Join(root, "joint-boundaries.json")
 	}
 	jointWrite(t, receipt, map[string]bool{"private_media_routes_denied": true})
+}
+
+// The candidate was actually tested while both source pairs were publishing.
+// Stop both old/new publishers only after proof; production must fail rollback
+// visibly and release its guard, then reconnect the original source on recovery.
+func jointRollbackFailure(t *testing.T, db *database.DB) {
+	a := jointLogin(t)
+	ctx := context.Background()
+	var fixture struct {
+		IP    string   `json:"camera_ip"`
+		Paths []string `json:"paths"`
+	}
+	jointRead(t, "/results/media-fixture.json", &fixture)
+	if len(fixture.Paths) != 4 {
+		t.Fatal("incomplete physical source fixture")
+	}
+	var ch, old id.ID
+	var version int64
+	if err := db.Pool.QueryRow(ctx, "SELECT id,current_revision_id,version FROM channels WHERE channel_no=2").Scan(&ch, &old, &version); err != nil {
+		t.Fatal("old source receipt unavailable")
+	}
+	var rev struct {
+		ID id.ID `json:"id"`
+	}
+	a.call("POST", "channels/"+string(ch)+"/source-revisions", map[string]any{"identity_intent": "replace", "config": map[string]any{"ip": fixture.IP, "rtsp_port": 554, "main_path": fixture.Paths[2], "sub_path": fixture.Paths[3], "transport": "tcp"}, "credentials": map[string]string{"password_action": "clear"}}, version, &rev)
+	var tested struct {
+		ID id.ID `json:"test_id"`
+	}
+	a.call("POST", "channels/"+string(ch)+"/source-revisions/"+string(rev.ID)+"/test", map[string]any{}, 0, &tested)
+	jointWait(t, 70, "candidate proof unavailable before both-source failure", func() bool {
+		var state struct {
+			State string `json:"state"`
+		}
+		a.call("GET", "channels/"+string(ch)+"/source-tests/"+string(tested.ID), nil, 0, &state)
+		if state.State == "failed" {
+			t.Fatal("candidate failed before fault injection")
+		}
+		return state.State == "succeeded"
+	})
+	response, err := (&http.Client{Timeout: 5 * time.Second}).Post("http://fixture:8557/stop-all", "application/json", nil)
+	if err != nil {
+		t.Fatal("physical publisher fault control unavailable")
+	}
+	response.Body.Close()
+	if response.StatusCode != 200 {
+		t.Fatal("publishers not stopped")
+	}
+	camera, err := zlm.New("http://camera", "isolated-media-fixture-only", nil)
+	if err != nil {
+		t.Fatal("camera verifier unavailable")
+	}
+	jointWait(t, 5, "both upstream sources still available", func() bool {
+		for _, path := range fixture.Paths {
+			bounded, cancel := context.WithTimeout(ctx, time.Second)
+			_, err := camera.Inspect(bounded, zlm.StreamKey{VHost: "__defaultVhost__", App: "one_nvr", Stream: strings.TrimPrefix(path, "/one_nvr/")})
+			cancel()
+			if !errors.Is(err, zlm.ErrStreamAbsent) {
+				return false
+			}
+		}
+		return true
+	})
+	var current struct {
+		Version int64 `json:"version"`
+	}
+	a.call("GET", "channels/"+string(ch), nil, 0, &current)
+	var job struct {
+		ID id.ID `json:"job_id"`
+	}
+	a.call("POST", "channels/"+string(ch)+"/source/apply", map[string]any{"revision_id": rev.ID, "test_id": tested.ID}, current.Version, &job)
+	jointWait(t, 95, "both-source failure did not terminate", func() bool {
+		var state struct {
+			State string `json:"state"`
+			Code  string `json:"error_code"`
+		}
+		a.call("GET", "jobs/"+string(job.ID), nil, 0, &state)
+		if state.State == "succeeded" {
+			t.Fatal("both absent sources falsely succeeded")
+		}
+		if state.State != "failed" {
+			return false
+		}
+		if state.Code != "source_rollback_failed" {
+			t.Fatalf("rollback failure misclassified: %s", state.Code)
+		}
+		return true
+	})
+	var active int
+	var actualOld id.ID
+	var phase string
+	if err := db.Pool.QueryRow(ctx, "SELECT current_revision_id FROM channels WHERE id=$1", ch).Scan(&actualOld); err != nil || actualOld != old {
+		t.Fatal("failed rollback rewrote source provenance")
+	}
+	if err := db.Pool.QueryRow(ctx, "SELECT phase FROM source_switches WHERE job_id=$1", job.ID).Scan(&phase); err != nil || phase != "failed" {
+		t.Fatal("rollback domain failure hidden")
+	}
+	if err := db.Pool.QueryRow(ctx, "SELECT count(*) FROM source_switches WHERE channel_id=$1 AND state IN ('queued','running')", ch).Scan(&active); err != nil || active != 0 {
+		t.Fatal("failed switch retained configuration guard")
+	}
+	if err := db.Pool.QueryRow(ctx, "SELECT count(*) FROM stream_sessions WHERE switch_id=(SELECT id FROM source_switches WHERE job_id=$1) AND state NOT IN ('closed','failed')", job.ID).Scan(&active); err != nil || active != 0 {
+		t.Fatal("candidate/rollback physical intent leaked")
+	}
+	var status struct {
+		Main struct {
+			State string `json:"state"`
+		} `json:"main"`
+	}
+	a.call("GET", "channels/"+string(ch)+"/source/status", nil, 0, &status)
+	if status.Main.State != "unavailable" {
+		t.Fatal("rollback outage falsely healthy")
+	}
+	rows, err := db.Pool.Query(ctx, "SELECT ss.stream FROM stream_sessions ss JOIN channels c ON c.id=ss.channel_id WHERE c.channel_no IN (1,2) AND ss.purpose='main'")
+	if err != nil {
+		t.Fatal("physical session receipts unavailable")
+	}
+	var streams []string
+	for rows.Next() {
+		var stream string
+		if rows.Scan(&stream) != nil {
+			t.Fatal("invalid physical receipt")
+		}
+		streams = append(streams, stream)
+	}
+	rows.Close()
+	if rows.Err() != nil {
+		t.Fatal("incomplete physical receipts")
+	}
+	runtime := jointMedia(t)
+	for _, stream := range streams {
+		bounded, cancel := context.WithTimeout(ctx, 3*time.Second)
+		ss, err := runtime.Inspect(bounded, zlm.StreamKey{VHost: "__defaultVhost__", App: "one_nvr", Stream: stream})
+		cancel()
+		if err != nil && !errors.Is(err, zlm.ErrStreamAbsent) {
+			t.Fatal("actual unavailable media state unknown")
+		}
+		if err == nil && ss.Recording {
+			t.Fatal("absent source still has a recorder")
+		}
+	}
+	jointWrite(t, "/results/joint-rollback-failure.json", map[string]any{"both_upstreams_absent": true, "terminal_rollback_failure": true, "original_revision_retained": true, "no_live_change_guard": true, "no_live_candidate_sessions": true})
 }

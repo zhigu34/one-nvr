@@ -42,7 +42,9 @@ func (s *Service) sampleBitrate(ctx context.Context, e *channel.Execution, ss ph
 			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 				return err
 			}
-			valid = valid && err == nil && frames > previousFrames && snapshot.ObservedAt.Sub(observed) >= 10*time.Second
+			// Individual samples describe positive frame progress. The capacity gate
+			// independently requires two fresh samples at least ten seconds apart.
+			valid = valid && err == nil && frames > previousFrames && snapshot.ObservedAt.After(observed)
 		}
 		sample, err := id.New()
 		if err != nil {

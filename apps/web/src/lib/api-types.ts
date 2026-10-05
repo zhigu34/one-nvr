@@ -1200,6 +1200,8 @@ export interface components {
              * @enum {string}
              */
             password_action?: "keep" | "replace" | "clear";
+            /** @description Authoritative first successful source apply requirement for the mapped channel; safe metadata. */
+            requires_initial_recording_mode?: boolean;
         };
         ImportPreview: {
             batch_id: components["schemas"]["UUID"];

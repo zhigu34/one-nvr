@@ -244,24 +244,31 @@ func Run(name string) error {
 }
 
 func freshCameraNetwork(ctx context.Context, c config.Config) (channel.NetworkPolicy, error) {
+	addresses, err := net.InterfaceAddrs()
+	if err != nil {
+		return channel.NetworkPolicy{}, fmt.Errorf("camera network boundary unavailable")
+	}
+	var connected []netip.Prefix
+	for _, address := range addresses {
+		prefix, err := netip.ParsePrefix(address.String())
+		if err == nil && !prefix.Addr().IsLoopback() {
+			connected = append(connected, prefix.Masked())
+		}
+	}
+	return freshCameraNetworkResolved(ctx, c, net.DefaultResolver.LookupNetIP, connected)
+}
+func freshCameraNetworkResolved(ctx context.Context, c config.Config, lookup func(context.Context, string, string) ([]netip.Addr, error), connected []netip.Prefix) (channel.NetworkPolicy, error) {
 	bounded, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	denied := []netip.Addr{}
+	var denied []netip.Addr
 	public, _ := url.Parse(c.PublicURL)
 	for _, host := range []string{public.Hostname(), c.MediaHost} {
 		if ip, err := netip.ParseAddr(host); err == nil {
 			denied = append(denied, ip)
 		}
 	}
-	hosts := []string{"api", "worker", "gateway", "postgres", "zlm"}
-	if c.FrigateEnabled {
-		hosts = append(hosts, "frigate", "mqtt")
-	}
-	if c.OpenListEnabled {
-		hosts = append(hosts, "openlist")
-	}
-	for _, host := range hosts {
-		ips, err := net.DefaultResolver.LookupNetIP(bounded, "ip", host)
+	for _, host := range []string{"api", "worker", "gateway", "postgres", "zlm"} {
+		ips, err := lookup(bounded, "ip", host)
 		if err != nil {
 			return channel.NetworkPolicy{}, fmt.Errorf("camera network boundary unavailable")
 		}
@@ -269,7 +276,28 @@ func freshCameraNetwork(ctx context.Context, c config.Config) (channel.NetworkPo
 			denied = append(denied, ip.Unmap())
 		}
 	}
-	return channel.ParseNetworkPolicy(c.CameraCIDRs, denied)
+	var optional []string
+	if c.FrigateEnabled {
+		optional = append(optional, "frigate", "mqtt")
+	}
+	if c.OpenListEnabled {
+		optional = append(optional, "openlist")
+	}
+	for _, host := range optional {
+		ips, err := lookup(bounded, "ip", host)
+		if err != nil {
+			continue
+		}
+		for _, ip := range ips {
+			denied = append(denied, ip.Unmap())
+		}
+	}
+	policy, err := channel.ParseNetworkPolicy(c.CameraCIDRs, denied)
+	// Connected container networks remain denied even when an optional endpoint
+	// has no DNS record. Explicit camera /32 or /128 fixture mappings may overlap,
+	// but resolved management IPs always take precedence.
+	policy.DeniedNetworks = append([]netip.Prefix(nil), connected...)
+	return policy, err
 }
 
 // Media operations own pinned connections while performing fenced external work.

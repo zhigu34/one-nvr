@@ -152,7 +152,16 @@ test('changing a revision clears typed credentials but preserves a saved-operati
   )
   await expect
     .element(view.getByLabelText('新密码', { exact: true }))
-    .toHaveValue('')
+    .not.toBeInTheDocument()
+  await userEvent.fill(
+    view.getByLabelText('主流路径', { exact: true }),
+    '/main-edited'
+  )
+  await userEvent.click(view.getByRole('button', { name: '保存草稿' }))
+  const nextBody = JSON.parse(calls.request.mock.calls[1][1].body)
+  expect(nextBody.credentials.password_action).toBe('keep')
+  expect(nextBody.credentials).not.toHaveProperty('password')
+  expect(nextBody.identity_intent).toBe('modify')
   await expect
     .element(view.getByText('草稿已保存，请先测试，再应用'))
     .toBeVisible()

@@ -12,6 +12,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/channel"
 	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/jobs"
+	"github.com/zhigu34/one-nvr/internal/media/zlm"
 	"github.com/zhigu34/one-nvr/internal/storage"
 )
 
@@ -541,5 +542,165 @@ func TestRecordingRecoveryIdentifiesFirstFrameFailureWithoutSecrets(t *testing.T
 	var reason string
 	if err := f.DB.Pool.QueryRow(ctx, "SELECT reason_code FROM source_observations WHERE channel_id=$1 AND kind='main' ORDER BY observed_at DESC LIMIT 1", f.Channel).Scan(&reason); err != nil || reason != "source_recovery_first_frame_unavailable" {
 		t.Fatal("recovery failure stage missing", reason, err)
+	}
+}
+
+func TestRecordingOffWithoutActiveMainCompletes(t *testing.T) {
+	f, media, _, _ := testedSource(t)
+	ctx := context.Background()
+	if _, err := f.DB.Pool.Exec(ctx, "UPDATE stream_sessions SET state='closed',closed_at=clock_timestamp() WHERE channel_id=$1 AND purpose='main'", f.Channel); err != nil {
+		t.Fatal(err)
+	}
+	media.mu.Lock()
+	clear(media.urls)
+	clear(media.recording)
+	media.mu.Unlock()
+	change, err := f.Service.Sources.SetPolicy(ctx, f.Admin, f.Channel, 3, "none", "off-absent-main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	executeChange(t, f, "source.policy_apply")
+	var state, mode string
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT s.state,p.mode FROM source_switches s JOIN recording_policies p ON p.channel_id=s.channel_id WHERE s.job_id=$1", change.JobID).Scan(&state, &mode); err != nil || state != "succeeded" || mode != "none" {
+		t.Fatal("absent main left policy guard active", state, mode, err)
+	}
+	var oldRun string
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT state FROM recording_runs WHERE id=$1", f.Run).Scan(&oldRun); err != nil || oldRun != "stopped" {
+		t.Fatal("absent main retained unfinished recorder receipt", oldRun, err)
+	}
+	if err := f.Service.Reconcile(ctx, f.Channel); err != nil {
+		t.Fatal("completed policy still blocks runtime", err)
+	}
+}
+
+func TestRecordingRecoveryCompletesInterruptedStop(t *testing.T) {
+	f, media, _, _ := testedSource(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	e, err := channel.NewRuntimeExecution(ctx, f.DB, f.Channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var h recording.Handle
+	h.RunID = f.Run
+	h.PoolID = f.Pool.ID
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT stream_session_id,work_relative_path FROM recording_runs WHERE id=$1", f.Run).Scan(&h.SessionID, &h.RelativePath); err != nil {
+		t.Fatal(err)
+	}
+	h.Key = zlm.StreamKey{VHost: "__defaultVhost__", App: "one_nvr", Stream: string(h.SessionID)}
+	media.AfterStop = cancel
+	if err := f.Service.Stop(ctx, e, h); err == nil {
+		t.Fatal("interrupted stop unexpectedly committed")
+	}
+	e.Close()
+	media.AfterStop = nil
+	ctx = context.Background()
+	var before string
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT state FROM recording_runs WHERE id=$1", f.Run).Scan(&before); err != nil || before != "stopping" {
+		t.Fatal("fault missed stop boundary", before, err)
+	}
+	seedCurrentBitrate(t, f, 1<<20)
+	if err := f.Service.Reconcile(ctx, f.Channel); err != nil {
+		t.Fatal(err)
+	}
+	var old string
+	var next int
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT state FROM recording_runs WHERE id=$1", f.Run).Scan(&old); err != nil || old != "stopped" {
+		t.Fatal("old stop intent not finished", old, err)
+	}
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT count(*) FROM recording_runs WHERE channel_id=$1 AND id<>$2 AND state='recording'", f.Channel, f.Run).Scan(&next); err != nil || next != 1 {
+		t.Fatal("no unique replacement run", next, err)
+	}
+}
+
+func TestRecordingMonitorQueuesAllConfiguredChannels(t *testing.T) {
+	f, media, _, _ := testedSource(t)
+	ctx := context.Background()
+	rows, err := f.DB.Pool.Query(ctx, "SELECT id,version FROM channels WHERE id<>$1 ORDER BY channel_no", f.Channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type slot struct {
+		ch      id.ID
+		version int64
+	}
+	var all []slot
+	for rows.Next() {
+		var v slot
+		if err := rows.Scan(&v.ch, &v.version); err != nil {
+			t.Fatal(err)
+		}
+		all = append(all, v)
+	}
+	rows.Close()
+	for _, v := range all {
+		draft, err := f.Service.Sources.CreateDraft(ctx, f.Admin, v.ch, v.version, channel.DraftInput{Config: channel.SourceConfig{IP: "192.168.33.20", MainPath: "/main"}, IdentityIntent: "replace", Credentials: channel.CredentialInput{PasswordAction: "clear"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ss, err := id.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.DB.Pool.Exec(ctx, "UPDATE channels SET current_revision_id=$2,source_generation=1 WHERE id=$1", v.ch, draft.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.DB.Pool.Exec(ctx, `INSERT INTO stream_sessions(id,channel_id,source_revision_id,generation,app,stream,purpose,state,proxy_key) VALUES($1,$2,$3,1,'one_nvr',$1::uuid::text,'main','active','__defaultVhost__/one_nvr/'||$1::uuid::text)`, ss, v.ch, draft.ID); err != nil {
+			t.Fatal(err)
+		}
+		media.urls[string(ss)] = "rtsp://192.168.33.20/main"
+	}
+	if _, err := f.DB.Pool.Exec(ctx, "UPDATE recording_policies SET mode='none'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.DB.Pool.Exec(ctx, "DELETE FROM recording_bitrate_samples"); err != nil {
+		t.Fatal(err)
+	}
+	media.InspectDelay = 40 * time.Millisecond
+	monitor, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- f.Service.Monitor(monitor) }()
+	t.Cleanup(func() { cancel(); <-done })
+	deadline := time.Now().Add(23 * time.Second)
+	for time.Now().Before(deadline) {
+		var paired int
+		if err := f.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM (SELECT channel_id FROM recording_bitrate_samples WHERE valid AND observed_at>clock_timestamp()-interval '30 seconds' GROUP BY channel_id HAVING max(observed_at)-min(observed_at)>=interval '10 seconds') q`).Scan(&paired); err != nil {
+			t.Fatal(err)
+		}
+		if paired == 16 {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("configured channels skipped instead of queued for fresh paired evidence")
+}
+
+func TestRecordingMonitorSamplingJitterKeepsFreshPair(t *testing.T) {
+	f, media, _, _ := testedSource(t)
+	ctx := context.Background()
+	if _, err := f.DB.Pool.Exec(ctx, "UPDATE recording_policies SET mode='none' WHERE channel_id=$1", f.Channel); err != nil {
+		t.Fatal(err)
+	}
+	var ss id.ID
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT stream_session_id FROM recording_runs WHERE id=$1", f.Run).Scan(&ss); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.DB.Pool.Exec(ctx, "DELETE FROM recording_bitrate_samples WHERE channel_id=$1", f.Channel); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	sample, _ := id.New()
+	if _, err := f.DB.Pool.Exec(ctx, `INSERT INTO recording_bitrate_samples(id,channel_id,source_revision_id,stream_session_id,bytes_per_second,frames,valid,observed_at) VALUES($1,$2,$3,$4,1048576,100,true,$5)`, sample, f.Channel, f.Revision, ss, now.Add(-30100*time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	for i, age := range []time.Duration{20200 * time.Millisecond, 10100 * time.Millisecond, 200 * time.Millisecond} {
+		media.ObservedAt = now.Add(-age)
+		media.FrozenFrames = int64(200 + i*100)
+		if err := f.Service.Reconcile(ctx, f.Channel); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var paired bool
+	if err := f.DB.Pool.QueryRow(ctx, `SELECT coalesce(max(observed_at)-min(observed_at)>=interval '10 seconds',false) FROM recording_bitrate_samples WHERE channel_id=$1 AND valid AND observed_at>clock_timestamp()-interval '30 seconds'`, f.Channel).Scan(&paired); err != nil || !paired {
+		t.Fatal("polling jitter discarded advancing frame evidence", paired, err)
 	}
 }

@@ -38,6 +38,9 @@ func (s *Service) verifyRecordingTarget(ctx context.Context, e *channel.Executio
 		revision, pool, mode = w.OldRevision, w.OldPool, w.OldMode
 	}
 	ss, err := s.currentMain(ctx, e, revision)
+	if mode == "none" && errors.Is(err, pgx.ErrNoRows) {
+		return physicalSession{}, nil
+	}
 	if err != nil {
 		return ss, err
 	}
@@ -129,8 +132,13 @@ func (s *Service) executeRecordingChange(ctx context.Context, e *channel.Executi
 	}
 	if w.Phase == "stopping_old" {
 		ss, err := s.currentMain(ctx, e, w.OldRevision)
-		if err != nil {
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return jobs.Result{}, err
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			if err := s.stopMappedRevisionRecorders(ctx, e, w.OldRevision); err != nil {
+				return jobs.Result{}, err
+			}
 		}
 		if ss.ID != "" {
 			if err := s.stopRecorder(ctx, e, ss); err != nil {
@@ -164,8 +172,13 @@ func (s *Service) executeRecordingChange(ctx context.Context, e *channel.Executi
 	}
 	if w.Phase == "rolling_back" {
 		ss, err := s.currentMain(ctx, e, w.OldRevision)
-		if err != nil {
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return jobs.Result{}, err
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			if err := s.stopMappedRevisionRecorders(ctx, e, w.OldRevision); err != nil {
+				return jobs.Result{}, err
+			}
 		}
 		if ss.ID != "" {
 			if err := s.stopRecorder(ctx, e, ss); err != nil {
@@ -195,4 +208,35 @@ func (s *Service) executeRecordingChange(ctx context.Context, e *channel.Executi
 		return switchJobResult(w)
 	}
 	return jobs.Result{}, ErrPublicationConflict
+}
+
+// A closed main receipt can still have a durable stop awaiting its final commit.
+// Stop only this revision's mapped run(s), retaining its proxy/history identity.
+func (s *Service) stopMappedRevisionRecorders(ctx context.Context, e *channel.Execution, revision *id.ID) error {
+	if revision == nil {
+		return nil
+	}
+	rows, err := s.DB.Pool.Query(ctx, "SELECT "+physicalColumns+" FROM stream_sessions WHERE channel_id=$1 AND source_revision_id=$2 AND purpose='main' AND id IN (SELECT stream_session_id FROM recording_runs WHERE state IN ('starting','recording','stopping'))", e.ChannelID, revision)
+	if err != nil {
+		return err
+	}
+	var all []physicalSession
+	for rows.Next() {
+		ss, err := scanSession(rows)
+		if err != nil {
+			rows.Close()
+			return err
+		}
+		all = append(all, ss)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, ss := range all {
+		if err := s.stopRecorder(ctx, e, ss); err != nil {
+			return err
+		}
+	}
+	return nil
 }
