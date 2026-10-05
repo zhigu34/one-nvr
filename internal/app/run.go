@@ -41,7 +41,12 @@ func Run(name string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	pool, err := pgxpool.New(ctx, c.DatabaseURL)
+	poolConfig, err := pgxpool.ParseConfig(c.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("invalid database configuration")
+	}
+	ConfigureDatabasePool(poolConfig, name)
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return fmt.Errorf("invalid database configuration")
 	}
@@ -260,4 +265,15 @@ func freshCameraNetwork(ctx context.Context, c config.Config) (channel.NetworkPo
 		}
 	}
 	return channel.ParseNetworkPolicy(c.CameraCIDRs, denied)
+}
+
+// Media operations own pinned connections while performing fenced external work.
+// pgxpool's CPU-derived default can be four on N5105/CI, leaving no connection for
+// their subsequent queries, lease renewals or TLS jobs. Keep eight spare above
+// the fifteen bounded Worker owners; connections are opened lazily.
+func ConfigureDatabasePool(c *pgxpool.Config, name string) {
+	c.MaxConns = 8
+	if name == "worker" {
+		c.MaxConns = 24
+	}
 }
