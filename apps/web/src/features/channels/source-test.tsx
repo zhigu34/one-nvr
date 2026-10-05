@@ -73,6 +73,7 @@ export function SourceTestControls({
         <label className='grid gap-2 text-sm'>
           首次普通录像
           <select
+            aria-label='首次普通录像'
             value={mode}
             onChange={(e) => setMode(e.target.value as typeof mode)}
             className='rounded-md border bg-background p-2'

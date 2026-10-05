@@ -28,7 +28,7 @@ test('missing pool blocks recording start and stopping preserves current source'
       onAccepted={vi.fn()}
     />
   )
-  await userEvent.selectOptions(view.getByLabelText('普通录像'), 'continuous')
+  await userEvent.selectOptions(view.getByLabelText('普通录像', { exact: true }), 'continuous')
   await expect
     .element(view.getByRole('button', { name: '保存录像策略', exact: true }))
     .toBeDisabled()
@@ -41,7 +41,7 @@ test('missing pool blocks recording start and stopping preserves current source'
       onAccepted={vi.fn()}
     />
   )
-  await userEvent.selectOptions(view.getByLabelText('普通录像'), 'none')
+  await userEvent.selectOptions(view.getByLabelText('普通录像', { exact: true }), 'none')
   await userEvent.click(
     view.getByRole('button', { name: '保存录像策略', exact: true })
   )

@@ -145,6 +145,7 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
         <label className='grid gap-2 text-sm'>
           传输方式
           <select
+            aria-label='传输方式'
             name='transport'
             defaultValue={revision?.config.transport || 'tcp'}
             className='rounded-md border bg-background p-2'
@@ -156,6 +157,7 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
         <label className='grid gap-2 text-sm'>
           身份意图
           <select
+            aria-label='身份意图'
             value={intent}
             onChange={(e) => setIntent(e.target.value as typeof intent)}
             className='rounded-md border bg-background p-2'
@@ -171,6 +173,7 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
           <label className='grid gap-2 text-sm'>
             历史摄像头
             <select
+              aria-label='历史摄像头'
               name='history_source_id'
               className='rounded-md border bg-background p-2'
             >
@@ -196,6 +199,7 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
         <label className='grid gap-2 text-sm'>
           密码处理
           <select
+            aria-label='密码处理'
             value={passwordAction}
             onChange={(e) =>
               setPasswordAction(e.target.value as typeof passwordAction)

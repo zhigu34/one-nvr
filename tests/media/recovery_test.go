@@ -94,3 +94,31 @@ func TestRecoveryWaitsForNextBoundedReconciliation(t *testing.T) {
 		t.Fatal("old generation accepted as recovered", got, err)
 	}
 }
+
+// Each production reconnect may consume its full 15-second window, followed
+// by a 10-second reconciliation interval. The fixture must allow two complete
+// bounded attempts rather than cancel the second inspect halfway through.
+func TestRecoveryBudgetAllowsTwoBoundedAttempts(t *testing.T) {
+	old, _ := id.New()
+	fresh, _ := id.New()
+	calls := 0
+	got, err := waitRecoveredSession(context.Background(), old, func(ctx context.Context) error {
+		calls++
+		timer := time.NewTimer(12 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return nil
+		}
+	}, func(context.Context) (id.ID, error) {
+		if calls == 1 {
+			return "", pgx.ErrNoRows
+		}
+		return fresh, nil
+	})
+	if err != nil || got != fresh || calls != 2 {
+		t.Fatal("second bounded reconciliation was cut off", got, calls, err)
+	}
+}

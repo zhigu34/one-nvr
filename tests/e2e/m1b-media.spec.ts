@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { expect, test, type Page } from '../../apps/web/tests/playwright'
 
 type Status = { channel_id: string; current_revision_id: string | null; storage_pool_id: string | null; main: {state: string}; recording: {state: string} }
+test.use({actionTimeout: 15000})
 const password = 'Browser-test-only-2026!'
 async function get<T>(page: Page, path: string): Promise<T> {
   return page.evaluate(async path => {
