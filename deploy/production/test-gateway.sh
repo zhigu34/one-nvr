@@ -18,7 +18,11 @@ phase() {
   local phase_deadline=$((SECONDS+240))
   while ((SECONDS<phase_deadline)); do
     if "${compose[@]}" exec -T api test -f "/data/test-phase/$name"; then return; fi
-    if ! kill -0 "$runner_pid" 2>/dev/null; then wait "$runner_pid"; return 1; fi
+    if ! kill -0 "$runner_pid" 2>/dev/null; then
+      "${compose[@]}" logs --tail=60 api worker gateway || true
+      "${compose[@]}" exec -T postgres psql -U one_nvr_test -d one_nvr_test -At -c "SELECT kind,state,error_code FROM jobs WHERE kind='tls.apply' ORDER BY created_at" || true
+      wait "$runner_pid"; return 1
+    fi
     sleep 0.2
   done
   printf 'Gateway acceptance phase timed out: %s\n' "$name" >&2
