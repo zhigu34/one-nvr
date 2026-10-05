@@ -173,3 +173,28 @@ func (s *Service) SetGrants(ctx context.Context, p Principal, userID id.ID, expe
 func roleAllows(role string, a Action) bool {
 	return validRole(role) && validAction(a) && !(role == "viewer" && a == Configure)
 }
+
+// RequireActorChannelTx is Worker-only authorization for an accepted job. Its
+// captured auth version prevents a queued job surviving grant/user revocation;
+// no raw session or camera credentials need to be stored in the job payload.
+func (s *Service) RequireActorChannelTx(ctx context.Context, actorID id.ID, authVersion int64, channelID id.ID, action Action, tx pgx.Tx) error {
+	if err := LockAuthorization(ctx, tx); err != nil {
+		return err
+	}
+	if !validAction(action) {
+		return ErrInvalid
+	}
+	var role string
+	var live, playback, export, configure bool
+	err := tx.QueryRow(ctx, `SELECT u.role,g.live,g.playback,g.export,g.configure FROM users u JOIN channel_grants g ON g.user_id=u.id WHERE u.id=$1 AND u.enabled AND u.auth_version=$2 AND g.channel_id=$3`, actorID, authVersion, channelID).Scan(&role, &live, &playback, &export, &configure)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrForbidden
+	}
+	if err != nil {
+		return err
+	}
+	if !roleAllows(role, action) || !map[Action]bool{Live: live, Playback: playback, Export: export, Configure: configure}[action] {
+		return ErrForbidden
+	}
+	return nil
+}

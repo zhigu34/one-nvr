@@ -45,6 +45,12 @@ func run() error {
 	if os.Args[1] == "publish" {
 		return publishAcceptance()
 	}
+	if os.Args[1] == "prepare-switch" {
+		return prepareMediaSession("switch")
+	}
+	if os.Args[1] == "switch" {
+		return switchAcceptance()
+	}
 	if os.Args[1] == "prepare-probe" {
 		return preparePoolProbe()
 	}
@@ -65,12 +71,16 @@ func fixture() error {
 	}
 	defer closeRedirect()
 	var processes []*exec.Cmd
+	var publishers sync.WaitGroup
 	defer func() {
 		cancel()
-		for _, c := range processes {
-			c.Wait()
-		}
+		publishers.Wait()
 	}()
+	type publisherExit struct {
+		index int
+		err   error
+	}
+	exits := make(chan publisherExit, len(streams))
 	for i, stream := range streams {
 		size := "320x180"
 		if i%2 != 0 {
@@ -82,13 +92,38 @@ func fixture() error {
 			return fmt.Errorf("synthetic publisher unavailable")
 		}
 		processes = append(processes, c)
+		publishers.Add(1)
+		go func() { defer publishers.Done(); exits <- publisherExit{index: i, err: c.Wait()} }()
 	}
-	for _, c := range processes {
-		if err := c.Wait(); err != nil {
-			return fmt.Errorf("synthetic publisher stopped")
+	// This isolated fixture can stop exactly publisher zero after a successful
+	// test, so the real source-switch rollback runs against a failed camera.
+	var requestedStop atomic.Bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /stop-one", func(w http.ResponseWriter, r *http.Request) {
+		requestedStop.Store(true)
+		if err := processes[0].Process.Signal(os.Interrupt); err != nil {
+			w.WriteHeader(503)
+			return
+		}
+		w.Write([]byte(`{"stopped":true}`))
+	})
+	listener, err := net.Listen("tcp", ":8557")
+	if err != nil {
+		return err
+	}
+	server := &http.Server{Handler: mux, ReadHeaderTimeout: time.Second}
+	go server.Serve(listener)
+	defer server.Close()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case result := <-exits:
+			if result.index != 0 || !requestedStop.Load() {
+				return fmt.Errorf("synthetic publisher stopped")
+			}
 		}
 	}
-	return nil
 }
 
 type completion struct {

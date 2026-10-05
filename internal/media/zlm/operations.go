@@ -15,6 +15,8 @@ import (
 )
 
 var ErrMediaOperation = errors.New("media_operation_unavailable")
+var ErrProxyAbsent = errors.New("media_proxy_absent")
+var ErrStreamAbsent = errors.New("media_stream_absent")
 var ErrInvalidMediaInput = errors.New("invalid_media_input")
 
 type StreamKey struct{ VHost, App, Stream string }
@@ -163,8 +165,11 @@ func (c *Client) RemoveProxy(ctx context.Context, ref ProxyRef) error {
 	if err := c.call(ctx, "delStreamProxy", url.Values{"key": {ref.OpaqueKey}}, &out); err != nil {
 		return err
 	}
-	if out.Data.Flag == nil || !*out.Data.Flag {
+	if out.Data.Flag == nil {
 		return ErrMediaOperation
+	}
+	if !*out.Data.Flag {
+		return ErrProxyAbsent
 	}
 	return nil
 }
@@ -188,6 +193,14 @@ func (c *Client) Inspect(ctx context.Context, key StreamKey) (StreamSnapshot, er
 		} `json:"tracks"`
 	}
 	if err := c.call(ctx, "getMediaInfo", key.values(), &out); err != nil {
+		if errors.Is(err, ErrMediaOperation) {
+			var online struct {
+				Online *bool `json:"online"`
+			}
+			if c.call(ctx, "isMediaOnline", key.values(), &online) == nil && online.Online != nil && !*online.Online {
+				return StreamSnapshot{}, ErrStreamAbsent
+			}
+		}
 		return StreamSnapshot{}, err
 	}
 	if out.VHost != key.VHost || out.App != key.App || out.Stream != key.Stream || out.Recording == nil || out.Bytes < 0 {

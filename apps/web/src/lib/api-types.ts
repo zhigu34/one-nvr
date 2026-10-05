@@ -1114,6 +1114,7 @@ export interface components {
         SourceChange: {
             job_id: components["schemas"]["UUID"];
             state: string;
+            test_id?: components["schemas"]["UUID"];
         };
         StreamTest: {
             /** @enum {string} */

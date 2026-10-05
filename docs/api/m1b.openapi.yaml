@@ -332,7 +332,7 @@
     "/api/v1/channels/{id}/source-revisions/{revision_id}/test": {
       "post": {
         "operationId": "sourceTest",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
         "security": [
           {
@@ -493,7 +493,7 @@
     "/api/v1/channels/{id}/source-tests/{test_id}": {
       "get": {
         "operationId": "sourceTestResult",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
         "security": [
           {
@@ -636,7 +636,7 @@
     "/api/v1/channels/{id}/source/apply": {
       "post": {
         "operationId": "sourceApply",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
         "security": [
           {
@@ -808,7 +808,7 @@
     "/api/v1/channels/{id}/source/clear": {
       "post": {
         "operationId": "sourceClear",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
         "security": [
           {
@@ -3392,6 +3392,9 @@
           },
           "state": {
             "type": "string"
+          },
+          "test_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
           }
         },
         "required": [

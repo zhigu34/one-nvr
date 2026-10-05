@@ -94,7 +94,7 @@ func Run(name string) error {
 		if err != nil {
 			return err
 		}
-		recordings.Sources = channel.NewSources(db, nil, secret, baseNetwork)
+		recordings.Sources = channel.NewSources(db, auth.NewService(db, secret, auth.NewPasswordHasher(2)), secret, baseNetwork)
 		recordings.FreshNetwork = func(ctx context.Context) (channel.NetworkPolicy, error) { return freshCameraNetwork(ctx, c) }
 		recordings.ProbeToken = probeKey
 		pools.MediaCheck = recordings.CheckPool
@@ -117,6 +117,16 @@ func Run(name string) error {
 		go func() { defer background.Done(); recordings.Replay(ctx) }()
 		background.Add(1)
 		go func() { defer background.Done(); recordings.RunPublisher(ctx) }()
+		background.Add(1)
+		go func() { defer background.Done(); recordings.RunSourceTestCleanup(ctx) }()
+		background.Add(2)
+		for n := 0; n < 2; n++ {
+			go func() { defer background.Done(); runSourceTestJobs(ctx, recordings) }()
+		}
+		background.Add(2)
+		for _, kind := range []string{"source.apply", "source.clear"} {
+			go func() { defer background.Done(); runSourceChangeJobs(ctx, recordings, kind) }()
+		}
 	}
 	if name == "worker" {
 		background.Add(1)

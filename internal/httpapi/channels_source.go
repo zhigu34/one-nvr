@@ -92,3 +92,99 @@ func (r *router) exportSourceConfig(w http.ResponseWriter, q *http.Request, p au
 	}
 	respond(w, q, 200, out)
 }
+
+func (r *router) requestSourceTest(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	channelID, err := pathID(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	revisionID, err := id.Parse(q.PathValue("revision_id"))
+	if err != nil {
+		fail(w, q, auth.ErrInvalid)
+		return
+	}
+	var empty struct{}
+	if err := decode(w, q, &empty); err != nil {
+		fail(w, q, err)
+		return
+	}
+	out, err := r.d.Sources.RequestTest(q.Context(), p, channelID, revisionID, q.Header.Get("Idempotency-Key"))
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 202, out)
+}
+func (r *router) sourceTestResult(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	channelID, err := pathID(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	testID, err := id.Parse(q.PathValue("test_id"))
+	if err != nil {
+		fail(w, q, auth.ErrInvalid)
+		return
+	}
+	out, err := r.d.Sources.TestResult(q.Context(), p, channelID, testID)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, out)
+}
+
+func (r *router) applySource(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	ch, err := pathID(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	version, err := expectedVersion(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	var in channel.SourceApplyInput
+	if err := decode(w, q, &in); err != nil {
+		fail(w, q, err)
+		return
+	}
+	for _, value := range []id.ID{in.RevisionID, in.TestID} {
+		if _, err := id.Parse(string(value)); err != nil {
+			fail(w, q, auth.ErrInvalid)
+			return
+		}
+	}
+	in.ExpectedVersion = version
+	out, err := r.d.Sources.RequestApply(q.Context(), p, ch, in, q.Header.Get("Idempotency-Key"))
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 202, out)
+}
+func (r *router) clearSource(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	ch, err := pathID(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	version, err := expectedVersion(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	var in struct{}
+	if err := decode(w, q, &in); err != nil {
+		fail(w, q, err)
+		return
+	}
+	out, err := r.d.Sources.RequestClear(q.Context(), p, ch, version, q.Header.Get("Idempotency-Key"))
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 202, out)
+}

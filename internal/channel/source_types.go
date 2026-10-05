@@ -52,8 +52,9 @@ type SourceApplyInput struct {
 	FirstRecordingMode *string `json:"first_recording_mode,omitempty"`
 }
 type Change struct {
-	JobID id.ID  `json:"job_id"`
-	State string `json:"state"`
+	TestID *id.ID `json:"test_id,omitempty"`
+	JobID  id.ID  `json:"job_id"`
+	State  string `json:"state"`
 }
 type StreamTest struct {
 	State      string  `json:"state"`
