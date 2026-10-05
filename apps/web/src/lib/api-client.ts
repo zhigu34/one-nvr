@@ -28,7 +28,8 @@ export async function apiRequest<T>(
     if (!csrfToken)
       await apiRequest<{ csrf_token: string }>('/api/v1/setup/status')
     headers.set('X-CSRF-Token', csrfToken)
-    if (init.body) headers.set('Content-Type', 'application/json')
+    if (init.body instanceof FormData) headers.delete('Content-Type')
+    else if (init.body) headers.set('Content-Type', 'application/json')
   }
   const response = await fetch(path, {
     ...init,

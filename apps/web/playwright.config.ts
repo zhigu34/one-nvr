@@ -7,7 +7,7 @@ if (process.env.ONE_NVR_E2E_SECRETS_FILE) {
 
 export default defineConfig({
   testDir: '../../tests/e2e',
-  testMatch: process.env.ONE_NVR_E2E_PHASE==='protocol'?'**/protocol.spec.ts':process.env.ONE_NVR_E2E_PHASE==='restart'?'**/restart.spec.ts':'**/m1a.spec.ts',
+  testMatch: process.env.ONE_NVR_E2E_PHASE==='sources'?'**/m1b.spec.ts':process.env.ONE_NVR_E2E_PHASE==='protocol'?'**/protocol.spec.ts':process.env.ONE_NVR_E2E_PHASE==='restart'?'**/restart.spec.ts':'**/m1a.spec.ts',
   timeout: 30000,
   workers: 1,
   retries: 0,

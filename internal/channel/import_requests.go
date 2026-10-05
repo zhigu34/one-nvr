@@ -77,6 +77,7 @@ func loadImportRows(ctx context.Context, tx pgx.Tx, batch id.ID) ([]importRow, e
 		r.Summary.Differences = safe.Differences
 		r.Summary.Errors = safe.Errors
 		r.Summary.Warnings = safe.Warnings
+		r.Summary.PasswordAction = safe.PasswordAction
 		if code != "" {
 			r.Summary.Errors = []string{code}
 		}
@@ -110,6 +111,7 @@ func (s *SourceService) GetImport(ctx context.Context, p auth.Principal, batch i
 			return err
 		}
 		out.State = b.State
+		out.ExpiresAt = b.Expires
 		rows, err := loadImportRows(ctx, tx, batch)
 		if err != nil {
 			return err

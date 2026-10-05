@@ -7,6 +7,7 @@ import (
 
 type ImportItem struct {
 	Row             int      `json:"row"`
+	PasswordAction  string   `json:"password_action"`
 	ChannelID       *id.ID   `json:"channel_id"`
 	ExpectedVersion *int64   `json:"expected_version"`
 	State           string   `json:"state"`
@@ -21,9 +22,10 @@ type ImportPreview struct {
 	Items     []ImportItem `json:"items"`
 }
 type ImportProgress struct {
-	BatchID id.ID        `json:"batch_id"`
-	State   string       `json:"state"`
-	Items   []ImportItem `json:"items"`
+	ExpiresAt time.Time    `json:"expires_at"`
+	BatchID   id.ID        `json:"batch_id"`
+	State     string       `json:"state"`
+	Items     []ImportItem `json:"items"`
 }
 type ImportSelection struct {
 	Row                int     `json:"row"`

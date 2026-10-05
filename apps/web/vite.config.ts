@@ -8,7 +8,7 @@ import { playwright } from '@vitest/browser-playwright'
 
 // https://vite.dev/config/
 export default defineConfig({
-  optimizeDeps: { include: ['zustand'] },
+  optimizeDeps: { include: ['zustand', '@tanstack/react-query'] },
   server: {
     proxy: {
       '/api': {
@@ -35,6 +35,7 @@ export default defineConfig({
     unstubEnvs: true,
     browser: {
       enabled: true,
+      screenshotFailures: false,
       provider: playwright(),
       instances: [{ browser: 'chromium' }],
     },
