@@ -46,7 +46,8 @@ jobs:
         run: |
           docker compose -f deploy/production/compose.test.yaml config --quiet
           docker compose -f deploy/production/compose.e2e-test.yaml -f deploy/production/compose.media-e2e-test.yaml config --quiet
-          bash -n deploy/production/test-media-e2e.sh deploy/production/test-e2e.sh
+          docker compose -f deploy/production/compose.e2e-test.yaml -f deploy/production/compose.media-e2e-test.yaml -f deploy/production/compose.acceptance-test.yaml config --quiet
+          bash -n deploy/production/test-media-e2e.sh deploy/production/joint-runtime.sh deploy/production/test-e2e.sh
           bash -n deploy/production/dev.sh
           sh -n deploy/production/web-tool.sh
       - name: Go unit race tests
@@ -157,6 +158,26 @@ jobs:
         with:
           name: media-browser-contract
           path: media-test-results/media-browser.json
+  joint-media-runtime:
+    needs: [backend, frontend, m0-regression]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Build pinned production and acceptance images
+        run: |
+          for image in app gateway browser; do docker build -f "deploy/production/Dockerfile.$image" -t "one-nvr/$image:ci" .; done
+          docker build -f deploy/production/Dockerfile.app --target media-test -t one-nvr/media-test:ci .
+          docker build -f deploy/production/Dockerfile.fixture-runner -t one-nvr/fixture-runner:ci .
+      - name: Actual two-channel process, database, certificate and publication faults
+        run: ./deploy/production/test-media-e2e.sh --acceptance --no-build
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: joint-media-contract
+          path: media-test-results/*.json
   production-runtime:
     needs: [backend, frontend, m0-regression]
     runs-on: ubuntu-24.04

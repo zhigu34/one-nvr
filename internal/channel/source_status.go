@@ -21,6 +21,9 @@ func (s *SourceService) GetStatus(ctx context.Context, p auth.Principal, ch id.I
 		if err := tx.QueryRow(ctx, `SELECT c.current_revision_id,c.desired_revision_id,c.storage_pool_id,c.enabled,c.version,p.mode,coalesce(r.sub_path,'') FROM channels c JOIN recording_policies p ON p.channel_id=c.id LEFT JOIN source_revisions r ON r.id=c.current_revision_id WHERE c.id=$1`, ch).Scan(&out.CurrentRevisionID, &out.DesiredRevisionID, &out.StoragePoolID, &out.Enabled, &out.Version, &mode, &subPath); err != nil {
 			return err
 		}
+		if err := tx.QueryRow(ctx, "SELECT $2::uuid IS NULL AND NOT EXISTS(SELECT 1 FROM source_switches WHERE channel_id=$1 AND kind='apply' AND state='succeeded')", ch, out.CurrentRevisionID).Scan(&out.RequiresInitialRecordingMode); err != nil {
+			return err
+		}
 		observed := func(kind string) (ObservedStatus, error) {
 			status := ObservedStatus{State: "unknown", Reason: "observation_missing"}
 			err := tx.QueryRow(ctx, `SELECT o.state,o.reason_code,o.observed_at,o.expires_at FROM source_observations o LEFT JOIN stream_sessions ss ON ss.id=o.session_id WHERE o.channel_id=$1 AND o.source_revision_id IS NOT DISTINCT FROM $2 AND o.kind=$3 AND (o.session_id IS NULL OR ss.purpose=$3 OR $3='recording') ORDER BY o.observed_at DESC,o.id DESC LIMIT 1`, ch, out.CurrentRevisionID, kind).Scan(&status.State, &status.Reason, &status.ObservedAt, &status.ExpiresAt)

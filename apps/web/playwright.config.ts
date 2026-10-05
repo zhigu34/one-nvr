@@ -13,5 +13,5 @@ export default defineConfig({
   retries: 0,
   reporter: 'list',
   // Screenshots/traces may contain setup token, passwords or PEM inputs.
-  use: { ignoreHTTPSErrors: process.env.ONE_NVR_E2E_PHASE==='protocol', baseURL: process.env.ONE_NVR_E2E_URL || 'http://gateway', screenshot:'off', trace:'off', video:'off' },
+  use: { ignoreHTTPSErrors: process.env.ONE_NVR_E2E_PHASE==='protocol' || process.env.ONE_NVR_E2E_URL?.startsWith('https://'), baseURL: process.env.ONE_NVR_E2E_URL || 'http://gateway', screenshot:'off', trace:'off', video:'off' },
 })

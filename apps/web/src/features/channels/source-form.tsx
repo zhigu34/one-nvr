@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { apiRequest, jsonRequest } from '@/lib/api-client'
+import { apiRequest, jsonRequest, newRequestKey } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Field, Notices } from '@/features/foundation/ui'
@@ -83,7 +83,7 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
                 ...init,
                 headers: {
                   ...init.headers,
-                  'Idempotency-Key': crypto.randomUUID(),
+                  'Idempotency-Key': newRequestKey(),
                 },
                 signal: abort.signal,
               }

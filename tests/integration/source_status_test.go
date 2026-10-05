@@ -2,10 +2,12 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
 	"github.com/zhigu34/one-nvr/internal/auth"
+	"github.com/zhigu34/one-nvr/internal/channel"
 	"github.com/zhigu34/one-nvr/internal/id"
 )
 
@@ -48,5 +50,50 @@ func TestSourceStatusExpiresEvidenceAndIgnoresDraftTests(t *testing.T) {
 	}
 	if _, err := f.Service.Sources.GetStatus(ctx, login.Principal, other); !errors.Is(err, auth.ErrNotFound) {
 		t.Fatal("ungranted channel status exposed", err)
+	}
+}
+
+func TestSourceStatusDistinguishesFirstSetupFromClearedChannel(t *testing.T) {
+	f, _, proof, revision := testedSource(t)
+	ctx := context.Background()
+	var empty id.ID
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT id FROM channels WHERE channel_no=2").Scan(&empty); err != nil {
+		t.Fatal(err)
+	}
+	requires := func(channelID id.ID, want bool) {
+		t.Helper()
+		status, err := f.Service.Sources.GetStatus(ctx, f.Admin, channelID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(status)
+		var view map[string]any
+		_ = json.Unmarshal(raw, &view)
+		if value, ok := view["requires_initial_recording_mode"].(bool); !ok || value != want {
+			t.Fatal("status cannot distinguish first setup from preserved policy", view["requires_initial_recording_mode"], want)
+		}
+	}
+	requires(empty, true)
+	requires(f.Channel, false)
+	if _, err := f.Service.Sources.RequestApply(ctx, f.Admin, f.Channel, channel.SourceApplyInput{RevisionID: revision, TestID: *proof.TestID, ExpectedVersion: 3}, "status-first-apply"); err != nil {
+		t.Fatal(err)
+	}
+	executeChange(t, f, "source.apply")
+	var version int64
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT version FROM channels WHERE id=$1", f.Channel).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Service.Sources.RequestClear(ctx, f.Admin, f.Channel, version, "status-clear"); err != nil {
+		t.Fatal(err)
+	}
+	executeChange(t, f, "source.clear")
+	requires(f.Channel, false)
+	status, err := f.Service.Sources.GetStatus(ctx, f.Admin, f.Channel)
+	if err != nil || status.CurrentRevisionID != nil {
+		t.Fatal("clear not completed")
+	}
+	// Existing policy must be restored without resubmitting a first-use choice.
+	if _, err := f.Service.Sources.RequestApply(ctx, f.Admin, f.Channel, channel.SourceApplyInput{RevisionID: revision, TestID: *proof.TestID, ExpectedVersion: status.Version}, "status-restore"); err != nil {
+		t.Fatal("cleared channel cannot restore its preserved policy", err)
 	}
 }

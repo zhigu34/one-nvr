@@ -1,0 +1,26 @@
+# Joint acceptance additionally uses real directory certificate renewal.
+x-joint: &joint
+  ONE_NVR_PUBLIC_URL: https://gateway
+  ONE_NVR_HTTPS_PORT: '443'
+  ONE_NVR_TLS_DIR: /tls-input
+services:
+  runner:
+    image: one-nvr/fixture-runner:ci
+    entrypoint: []
+    environment:
+      <<: *joint
+    volumes:
+      - runtime-storage:/storage
+  api:
+    environment:
+      <<: *joint
+  worker:
+    environment:
+      <<: *joint
+  gateway:
+    environment:
+      ONE_NVR_PUBLIC_URL: https://gateway
+  browser:
+    environment:
+      ONE_NVR_E2E_URL: https://gateway
+      ONE_NVR_E2E_TLS_DIR: /tls-input

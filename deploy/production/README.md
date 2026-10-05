@@ -1,12 +1,12 @@
-# one-nvr M1-A 正式部署
+# one-nvr M1-B 候选部署
 
-目前交付账号、固定通道槽位、目录存储池、时区、功能状态、证书和运维面板。摄像头源配置、录制与回放 UI 尚未交付，属于后续 M1-B/C；事件与云归档业务仍返回“尚未实现”。原 M0 可以继续独立运行，不复用其状态目录。同机并行运行时，M1-A 必须选择与 M0 不冲突的 Web 和 RTC 端口。
+本分支已实现账号、固定通道槽位、摄像头配置修订/测试/应用、批量导入与配置导出、目录池绑定、连续录像/仅取流、录像索引、时区及证书面板，正在执行 M1-B 联合验收。实时视频播放与录像内容回放仍待 M1-C；事件与云归档业务仍返回“尚未实现”。原 M0 可以继续独立运行，不复用其状态目录。同机并行运行时，本项目必须选择与 M0 不冲突的 Web 和 RTC 端口。
 
 Linux amd64，Docker Engine + Compose v2。宿主不安装 Go、Node、Python。首次部署构建 app/gateway，其他镜像全部按 [固定版本与摘要](../../docs/image-versions.md) 拉取。构建需要网络；更换包源不能解决 Docker Hub 鉴权网络失败。可用 `--admin-image registry/name:version@sha256:...` 指定事先构建并验证的工具镜像。
 
 ```bash
 cp deploy/production/.env.example deploy/production/.env
-# 修改 PUBLIC_URL、Web/RTC 端口和目录，保持数据目录独立。
+# 修改 PUBLIC_URL、Web/RTC 端口、目录和 CAMERA_CIDRS，保持数据目录独立。
 mkdir -p /srv/one-nvr-storage/disk1
 # 授予 API/Worker 运行 UID 10001 对实际池目录的访问权限；不由程序改底层磁盘权限。
 ./deploy/production/deploy.sh --check
@@ -19,7 +19,7 @@ mkdir -p /srv/one-nvr-storage/disk1
 
 ## 存储和时区
 
-程序只登记已有目录，`ONE_NVR_STORAGE_ROOT=/srv/one-nvr-storage` 映射为 `/storage`；界面填写 `/storage/disk1`。目录读写和身份标记由 API/Worker 独立检查；没有测试视频源时 ZLM 明确待验证。系统不会配置 NAS、RAID、挂载、热备或自动创建池目录。设置中的 IANA 时区控制显示，数据库时间保留 UTC；录像文件规则留 M1-B 实现。
+程序只登记已有目录，`ONE_NVR_STORAGE_ROOT=/srv/one-nvr-storage` 映射为 `/storage`；界面填写 `/storage/disk1`。目录读写和身份标记由 API/Worker 独立检查；没有测试视频源时 ZLM 明确待验证。系统不会配置 NAS、RAID、挂载、热备或自动创建池目录。设置中的 IANA 时区控制显示与新录制 run 的文件命名，数据库时间保留 UTC；历史 run 的规则冻结。正式录像规则见 [录像路径](../../docs/recording-file-layout.md)。
 
 ## 协议和证书
 
@@ -48,4 +48,26 @@ GitHub CI 使用真实 PostgreSQL、Nginx 与浏览器；开发入口：
 ./deploy/production/dev.sh e2e
 ```
 
-实际证据、失败与未测项记录在 [M1-A 验证报告](../../docs/M1-A-validation.md)。N5105 驱动/权限/模型自检需部署后报告，EPYC 推理和 16–32 路容量不是当前 CI 的证明。两路媒体连续性、真实录制/回放及事件业务退出项留后续，不以容器 ID 未变化代替录像连续性。
+实际证据、失败与未测项记录在 [M1-A 验证报告](../../docs/M1-A-validation.md)。N5105 驱动/权限/模型自检需部署后报告，EPYC 推理和 16–32 路容量不是当前 CI 的证明。M1-B 的真实媒体、页面与故障联合验收状态见 [M1-B 验证报告](../../docs/M1-B-validation.md) 和 [验收矩阵](../../docs/M1-B-decisions.md)。只有明确记录成功的精确提交通过对应门槛；不能以容器 ID 未变化代替录像连续性。内容回放和事件业务仍待后续。
+
+## 摄像头与普通录像
+
+`ONE_NVR_CAMERA_CIDRS` 是允许摄像头 IP 的范围，例如 `192.168.33.0/24,192.168.66.0/24`；空值允许初始化，但拒绝源配置。配置提交与实际连接都会检查最新地址边界；回环、链路本地和本项目内部组件不能成为摄像头源。更改部署范围后重新运行 deploy.sh。
+
+在通道管理进入“配置摄像头与录像”。编号与 UUID 固定；分别保存草稿、测试取流、应用配置。主/子流只填路径，如 `/main`、`/sub`。子流故障明确降级；主流失败回滚旧源。清空只移除当前摄像头，重新配置沿用原通道的录像策略和历史。
+
+首次可以选择“关闭录像，仅取流”。开启连续录像前登记目录池、通过真实媒体检查并绑定；码率、目录和可用空间证据均需有效。关闭录像保留取流与历史，不启动事件预录。连续录像目标 60 秒片，正式发布与索引由 Worker 校验。录制断点/未知状态会记录；M1 不自动清理录像，空间不足时阻断相关写入，恢复需连续健康确认。
+
+批量 CSV 模板为 `channel_no,channel_name,ip,rtsp_port,username,password,main_path,sub_path`，可追加 `onvif_port`。先预览、选择、测试，再确认应用；空源行跳过，不清空已有源。CSV 空密码明确清空，可在预览中改选保留；JSON 缺失密码表示保留。管理员导出的是包含明文密码的本地 JSON 文件，可重新导入。批任务链接可恢复进度，但不自动重试或再次应用。
+
+## 隔离联合验收
+
+以下只运行私有测试项目/合成摄像头，不能指向真实站点数据。需先构建 `one-nvr/app:ci`、`gateway:ci`、`browser:ci`、`media-test:ci` 和 `fixture-runner:ci`；CI 已提供完整构建步骤。
+
+```bash
+./deploy/production/test-media-e2e.sh --acceptance --no-build
+# 同时执行所有独立媒体合同和联合验收：
+./deploy/production/test-media.sh --acceptance
+```
+
+联合验收要求实际两路 RTSP/MP4、API/Worker/数据库/ZLM 故障、目录证书实际更新、发布进程在移动前后 SIGKILL、私有媒体边界和历史索引/文件恢复。缺失 fixture 或任一断言失败均非零退出；通过本机类型/静态检查不代表实际 Docker 验收通过。

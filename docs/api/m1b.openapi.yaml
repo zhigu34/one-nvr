@@ -3594,6 +3594,10 @@
           },
           "recording": {
             "$ref": "#/components/schemas/ObservedStatus"
+          },
+          "requires_initial_recording_mode": {
+            "type": "boolean",
+            "description": "True only before the first successful source application; clearing a previously configured channel preserves its recording policy."
           }
         },
         "required": [
@@ -3605,7 +3609,8 @@
           "version",
           "main",
           "sub",
-          "recording"
+          "recording",
+          "requires_initial_recording_mode"
         ],
         "additionalProperties": false
       },

@@ -81,13 +81,14 @@ type ObservedStatus struct {
 	ExpiresAt  *time.Time `json:"expires_at"`
 }
 type Status struct {
-	ChannelID         id.ID          `json:"channel_id"`
-	CurrentRevisionID *id.ID         `json:"current_revision_id"`
-	DesiredRevisionID *id.ID         `json:"desired_revision_id"`
-	StoragePoolID     *id.ID         `json:"storage_pool_id"`
-	Enabled           bool           `json:"enabled"`
-	Version           int64          `json:"version"`
-	Main              ObservedStatus `json:"main"`
-	Sub               ObservedStatus `json:"sub"`
-	Recording         ObservedStatus `json:"recording"`
+	RequiresInitialRecordingMode bool           `json:"requires_initial_recording_mode"`
+	ChannelID                    id.ID          `json:"channel_id"`
+	CurrentRevisionID            *id.ID         `json:"current_revision_id"`
+	DesiredRevisionID            *id.ID         `json:"desired_revision_id"`
+	StoragePoolID                *id.ID         `json:"storage_pool_id"`
+	Enabled                      bool           `json:"enabled"`
+	Version                      int64          `json:"version"`
+	Main                         ObservedStatus `json:"main"`
+	Sub                          ObservedStatus `json:"sub"`
+	Recording                    ObservedStatus `json:"recording"`
 }

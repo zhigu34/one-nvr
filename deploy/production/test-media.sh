@@ -2,6 +2,10 @@
 set -Eeuo pipefail
 cd "$(dirname "$0")/../.."
 mode=${1:---contract}
+if [[ $mode == --acceptance ]]; then
+ for stage in contract probe publish switch recovery import; do "$0" "--$stage"; done
+ exec ./deploy/production/test-media-e2e.sh --acceptance --no-build
+fi
 [[ $mode == --contract || $mode == --probe || $mode == --publish || $mode == --switch || $mode == --recovery || $mode == --import ]] || { echo 'Unknown media acceptance stage' >&2; exit 2; }
 export ONE_NVR_MEDIA_TEST_MODE=${mode#--}
 export ONE_NVR_MEDIA_TEST_LOG_LEVEL=0
