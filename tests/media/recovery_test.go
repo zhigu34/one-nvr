@@ -47,6 +47,32 @@ func TestRecoveryWaitsForObservedPhysicalAbsence(t *testing.T) {
 	}
 }
 
+func TestRecoveryWaitsThroughTransientManagementFailure(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/index/api/getMediaInfo" {
+			fmt.Fprint(w, `{"code":-1}`)
+			return
+		}
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		fmt.Fprint(w, `{"code":0,"online":false}`)
+	}))
+	defer server.Close()
+	client, _ := zlm.New(server.URL, "fixture-only", server.Client())
+	session, _ := id.New()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := waitPhysicalAbsence(ctx, client, zlm.StreamKey{VHost: "__defaultVhost__", App: "one_nvr", Stream: string(session)}); err != nil {
+		t.Fatal("transient outage mistaken for terminal absence check", err)
+	}
+	if calls.Load() < 2 {
+		t.Fatal("absence accepted before successful management evidence")
+	}
+}
+
 func TestRecoveryWaitsForNextBoundedReconciliation(t *testing.T) {
 	old, _ := id.New()
 	fresh, _ := id.New()
