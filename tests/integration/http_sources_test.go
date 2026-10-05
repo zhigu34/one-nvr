@@ -167,3 +167,39 @@ func TestSourceApplyAndClearHTTPAreDurableAndProtected(t *testing.T) {
 		t.Fatal("clear route unavailable", w.Code, w.Body.String())
 	}
 }
+
+func TestRecordingPolicyAndSourceStatusHTTP(t *testing.T) {
+	f, _, _, _ := testedSource(t)
+	ctx := context.Background()
+	_ = ctx
+	h := httpapi.NewHandler(httpapi.Dependencies{Auth: f.Auth, Site: f.Site, Sources: f.Service.Sources, PublicURL: "http://nvr.example.com"})
+	request := func(method, path, body, key, version string, csrf bool) *httptest.ResponseRecorder {
+		q := httptest.NewRequest(method, "http://nvr.example.com/api/v1/channels/"+string(f.Channel)+path, strings.NewReader(body))
+		q.AddCookie(&http.Cookie{Name: "one_nvr_session", Value: f.Session})
+		q.Header.Set("Content-Type", "application/json")
+		q.Header.Set("Origin", "http://nvr.example.com")
+		q.Header.Set("Idempotency-Key", key)
+		q.Header.Set("If-Match", version)
+		if csrf {
+			q.Header.Set("X-CSRF-Token", f.Auth.CSRF(f.Session))
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, q)
+		return w
+	}
+	for _, path := range []string{"/source/status", "/recording-policy"} {
+		w := request("GET", path, "", "", "", false)
+		if w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("state route unavailable", path, w.Code, w.Body.String())
+		}
+	}
+	if w := request("PUT", "/recording-policy", `{"mode":"none"}`, "policy-http", `"3"`, false); w.Code != 403 {
+		t.Fatal("policy lacks CSRF", w.Code)
+	}
+	if w := request("PUT", "/recording-policy", `{"mode":"none"}`, "policy-http", `"3"`, true); w.Code != 202 {
+		t.Fatal("policy not queued", w.Code, w.Body.String())
+	}
+	if w := request("PUT", "/storage-pool", `{"pool_id":"`+string(f.Pool.ID)+`"}`, "pool-http", `"3"`, true); w.Code != 409 {
+		t.Fatal("stale pool version accepted", w.Code, w.Body.String())
+	}
+}

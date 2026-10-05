@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 cd "$(dirname "$0")/../.."
 mode=${1:---contract}
-[[ $mode == --contract || $mode == --probe || $mode == --publish || $mode == --switch ]] || { echo 'Unknown media acceptance stage' >&2; exit 2; }
+[[ $mode == --contract || $mode == --probe || $mode == --publish || $mode == --switch || $mode == --recovery ]] || { echo 'Unknown media acceptance stage' >&2; exit 2; }
 export ONE_NVR_MEDIA_TEST_MODE=${mode#--}
 export ONE_NVR_MEDIA_TEST_LOG_LEVEL=0
 if [[ $mode != --contract ]]; then ONE_NVR_MEDIA_TEST_LOG_LEVEL=4; fi

@@ -123,10 +123,13 @@ func Run(name string) error {
 		for n := 0; n < 2; n++ {
 			go func() { defer background.Done(); runSourceTestJobs(ctx, recordings) }()
 		}
-		background.Add(2)
-		for _, kind := range []string{"source.apply", "source.clear"} {
+		background.Add(4)
+		for _, kind := range []string{"source.apply", "source.clear", "source.policy_apply", "source.pool_switch"} {
 			go func() { defer background.Done(); runSourceChangeJobs(ctx, recordings, kind) }()
 		}
+		background.Add(2)
+		go func() { defer background.Done(); runRecordingMonitor(ctx, recordings) }()
+		go func() { defer background.Done(); recordings.MonitorIdlePools(ctx) }()
 	}
 	if name == "worker" {
 		background.Add(1)

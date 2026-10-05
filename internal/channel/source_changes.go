@@ -40,6 +40,22 @@ func (s *SourceService) RequestClear(ctx context.Context, p auth.Principal, ch i
 	}
 	return s.requestChange(ctx, p, SourceTask{ChannelID: ch, ActorID: p.UserID, AuthVersion: p.AuthVersion, ExpectedVersion: expected}, "clear", key)
 }
+
+func (s *SourceService) SetPolicy(ctx context.Context, p auth.Principal, ch id.ID, expected int64, mode, key string) (Change, error) {
+	if expected < 1 || mode != "none" && mode != "continuous" {
+		return Change{}, auth.ErrInvalid
+	}
+	return s.requestChange(ctx, p, SourceTask{ChannelID: ch, ActorID: p.UserID, AuthVersion: p.AuthVersion, ExpectedVersion: expected, RecordingMode: &mode}, "policy_apply", key)
+}
+func (s *SourceService) BindPool(ctx context.Context, p auth.Principal, ch, pool id.ID, expected int64, key string) (Change, error) {
+	if expected < 1 {
+		return Change{}, auth.ErrInvalid
+	}
+	if _, err := id.Parse(string(pool)); err != nil {
+		return Change{}, auth.ErrInvalid
+	}
+	return s.requestChange(ctx, p, SourceTask{ChannelID: ch, ActorID: p.UserID, AuthVersion: p.AuthVersion, ExpectedVersion: expected, PoolID: &pool}, "pool_switch", key)
+}
 func (s *SourceService) requestChange(ctx context.Context, p auth.Principal, task SourceTask, kind, key string) (Change, error) {
 	var out Change
 	if !validSourceJobKey(key) {
@@ -89,6 +105,37 @@ func (s *SourceService) requestChange(ctx context.Context, p auth.Principal, tas
 		} // clear preserves the stored policy; no planned activation is requested.
 		var next *id.ID
 		var test *id.ID
+		if kind == "policy_apply" || kind == "pool_switch" {
+			next = current
+			if task.RecordingMode != nil {
+				desired = *task.RecordingMode
+			}
+			if task.PoolID != nil {
+				pool = task.PoolID
+			}
+			if desired == "continuous" && (current == nil || !enabled) {
+				return auth.ErrConflict
+			}
+			if pool == nil && desired == "continuous" {
+				var value id.ID
+				if err := tx.QueryRow(ctx, "SELECT id FROM storage_pools WHERE site_id=$1 AND is_default AND enabled", site).Scan(&value); err != nil {
+					if errors.Is(err, pgx.ErrNoRows) {
+						return storage.ErrMediaProof
+					}
+					return err
+				}
+				pool = &value
+			}
+			if pool != nil && (desired == "continuous" || kind == "pool_switch") {
+				var ready bool
+				if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM storage_pools p WHERE p.id=$1 AND p.site_id=$2 AND p.enabled AND (SELECT count(*) FROM storage_pool_checks WHERE pool_id=p.id AND state='healthy' AND expires_at>clock_timestamp())=3)`, pool, site).Scan(&ready); err != nil {
+					return err
+				}
+				if !ready {
+					return storage.ErrMediaProof
+				}
+			}
+		}
 		if kind == "apply" {
 			if !enabled {
 				return auth.ErrConflict
@@ -160,7 +207,7 @@ func (s *SourceService) PrepareChange(ctx context.Context, e *Execution) (Switch
 		return out, err
 	}
 	out.Task = task
-	if task.ChannelID != e.ChannelID || e.Lease.Kind != "source.apply" && e.Lease.Kind != "source.clear" {
+	if task.ChannelID != e.ChannelID || e.Lease.Kind != "source.apply" && e.Lease.Kind != "source.clear" && e.Lease.Kind != "source.policy_apply" && e.Lease.Kind != "source.pool_switch" {
 		return out, auth.ErrInvalid
 	}
 	err = e.WithinTx(ctx, func(ctx context.Context, tx pgx.Tx) error {

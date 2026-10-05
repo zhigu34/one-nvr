@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/zhigu34/one-nvr/internal/channel"
+	"github.com/zhigu34/one-nvr/internal/fault"
 	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/jobs"
 	"github.com/zhigu34/one-nvr/internal/media/probe"
@@ -129,6 +130,14 @@ func (s *Service) checkTestStream(ctx context.Context, e *channel.Execution, wor
 			snapshot, err := s.Media.Inspect(ctx, ss.Key)
 			if err == nil && !snapshot.Recording {
 				out = channel.StreamTest{State: "healthy", FirstFrame: true, Codec: video.Codec, Width: video.Width, Height: video.Height, FPS: video.FPS}
+				if kind == "main" {
+					if err := s.sampleBitratePair(ctx, e, ss, work.TestID); err != nil {
+						var problem *fault.Error
+						if !errors.As(err, &problem) || problem.Code != "bitrate_unknown" {
+							return out, err
+						}
+					}
+				}
 			}
 		}
 	}

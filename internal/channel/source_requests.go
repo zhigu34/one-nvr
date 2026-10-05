@@ -23,6 +23,8 @@ type SourceTask struct {
 	TestID             id.ID   `json:"test_id,omitempty"`
 	ExpectedVersion    int64   `json:"expected_version,omitempty"`
 	FirstRecordingMode *string `json:"first_recording_mode,omitempty"`
+	RecordingMode      *string `json:"recording_mode,omitempty"`
+	PoolID             *id.ID  `json:"pool_id,omitempty"`
 }
 
 func (s *SourceService) RequestTest(ctx context.Context, p auth.Principal, channelID, revisionID id.ID, key string) (Change, error) {

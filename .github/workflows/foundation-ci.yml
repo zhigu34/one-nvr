@@ -25,6 +25,7 @@ jobs:
           ./deploy/production/test-media.sh --probe
           ./deploy/production/test-media.sh --publish
           ./deploy/production/test-media.sh --switch
+          ./deploy/production/test-media.sh --recovery
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -45,7 +46,7 @@ jobs:
       - name: Go unit race tests
         run: ./deploy/production/dev.sh test-go -race ./internal/... ./cmd/... ./migrations
       - name: PostgreSQL 17.11 integration race tests
-        run: ./deploy/production/dev.sh test-db -race ./tests/integration
+        run: ./deploy/production/dev.sh test-db -race -timeout 20m ./tests/integration
       - name: Vet
         run: docker compose -p one-nvr-dev -f deploy/production/compose.test.yaml run --rm go go vet ./...
       - name: Cleanup development containers
