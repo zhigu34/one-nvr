@@ -197,11 +197,11 @@
 
 **Interfaces:** 只消费生成 OpenAPI DTO 与同源 apiRequest；复用固定ChannelID。`SourceForm` 保存密码仅组件内存；`CredentialReveal` 使用独立POST不走useQuery/useMutation共享缓存，响应只存本地state。批任务进度通过现有job/新增import状态查询，每次HTTP按当前会话验证。
 
-- [ ] **Step 1:** 写 `source-form.test.tsx` 断言keep/replace/clear不提交掩码，revision结果晚到不能覆盖新通道；`source-credentials.test.tsx` 断言隐藏、切页、退出/撤权清空明文，普通接口/缓存无明文；`source-import.test.tsx` 断言预览无副作用、失败/冲突/skip逐行明确。
-- [ ] **Step 2:** `dev.sh web test` 红灯；e2e在真实API/PG上暂不能创建草稿/测试/应用而失败，不Mock业务完成。
-- [ ] **Step 3:** 通道页增加源摘要/分项状态与按权限显示配置入口；配置页真实八列字段（编号只读），主/子路径直接填`/main`、身份意图、草稿历史/测试结果/应用/清空、池和普通录像开关。保存、测试、应用为不同动作；异步按真实job呈现，sub失败明确降级，continuous无池提示先添加或改选关闭。组件row key只用channelUUID，字段可按revision更新，任务notice不能随version remount丢失。
-- [ ] **Step 4:** 增加导入模板下载、文件预览/选择/映射/密码意图/是否导入名称、测试/应用/取消/失败重试、管理员明文JSON导出；导出用局部Blob立即revokeURL且无服务端公开文件。界面显示M1无自动清理及录像元数据可查、播放M1-C待交付。真实浏览器测试正常换源、回滚、无录制取流、权限拒绝、明文清除、晚响应、导出回导；`web api:generate/build/lint/test`通过且类型无漂移。
-- [ ] **Step 5:** 提交 `feat: expose channel sources imports and recording controls`。
+- [x] **Step 1:** 写 `source-form.test.tsx` 断言keep/replace/clear不提交掩码，revision结果晚到不能覆盖新通道；`source-credentials.test.tsx` 断言隐藏、切页、退出/撤权清空明文，普通接口/缓存无明文；`source-import.test.tsx` 断言预览无副作用、失败/冲突/skip逐行明确。
+- [x] **Step 2:** `dev.sh web test` 红灯；e2e在真实API/PG上暂不能创建草稿/测试/应用而失败，不Mock业务完成。
+- [x] **Step 3:** 通道页增加源摘要/分项状态与按权限显示配置入口；配置页真实八列字段（编号只读），主/子路径直接填`/main`、身份意图、草稿历史/测试结果/应用/清空、池和普通录像开关。保存、测试、应用为不同动作；异步按真实job呈现，sub失败明确降级，continuous无池提示先添加或改选关闭。组件row key只用channelUUID，字段可按revision更新，任务notice不能随version remount丢失。
+- [x] **Step 4:** 增加导入模板下载、文件预览/选择/映射/密码意图/是否导入名称、测试/应用/取消/失败重试、管理员明文JSON导出；导出用局部Blob立即revokeURL且无服务端公开文件。界面显示M1无自动清理及录像元数据可查、播放M1-C待交付。真实浏览器测试正常换源、回滚、无录制取流、权限拒绝、明文清除、晚响应、导出回导；`web api:generate/build/lint/test`通过且类型无漂移。
+- [x] **Step 5:** 提交 `feat: expose channel sources imports and recording controls`。
 
 ## Task 10: CI 联合验收、部署与最终评审
 

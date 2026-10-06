@@ -130,6 +130,12 @@ Final: Ruling: Joint bootstrap reads channel version through the existing author
 
 Final: Ruling: Supersede the fixture-only CI37406888801 early after discovering a third identical nonexistent channel GET in its final rollback phase, rather than waiting for a certain404. Prior mandatory-media Linux PG819.601s proves unchanged production code; final exact new candidate still requires all12 gates. Cost if wrong: the interrupted candidate has no complete acceptance receipt and its media recovery observation must be repeated.
 
+Final: Ruling: Final Task10 task-done validates the exact published all12-job CI receipt instead of attempting local test-media.sh --acceptance without a Docker daemon, following the user-selected GitHub CI environment. It checks actual workflow completion, required job names and native/remote tree identity; missing/incomplete/moved candidates fail. Cost if wrong: final acceptance depends on GitHub API availability and trustworthy completed job receipts; it cannot claim an unexecuted local Docker run.
+
+Final: Ruling: Actual-media off acceptance first waits for both decoded main/sub streams after rollback, then requires both within the existing30s readiness window after none; policy jobs stop only recorders while optional sub recovery is periodic. Refresh the UI after pool bind and none before another versioned mutation, extending the already chosen sequential-operator rule. Cost if wrong: brief sub readiness recovery up to30s is accepted, but persistent loss still fails; precondition proves both were available before testing off, and production optimistic versions/deadlines remain unchanged.
+
+Final: Ruling: Independent browser-runtime/media-browser-runtime/joint-media-runtime jobs depend on frontend/M0 but run alongside full backend PG; each builds its own exact-source isolated images and consumes no backend artifact. All12 exact gates remain required. Cost if wrong: a backend failure may waste concurrent runtime compute, but cannot produce accepted CI or deploy production. This removes serial waiting from fixture-only iterations.
+
 ## Deferred minors
 
 Final: minor (deferred): M1-B-decisions run-timezone wording conflicts with the binding spec's first-publication-intent freeze; runtime follows the binding spec. Cost if deferred: readers of the summary may misunderstand the freeze boundary; no runtime/path change is authorized by this documentation discrepancy. Existing M1-A users/pools feedback remount and timezone search/preview remain deferred.
