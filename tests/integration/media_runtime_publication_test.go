@@ -108,7 +108,7 @@ func TestGatewayMediaRuntimePublishCrash(t *testing.T) {
 	}
 	var segment, run, revision, pool id.ID
 	var base, original, target, zone string
-	if err = db.Pool.QueryRow(context.Background(), `SELECT s.id,s.run_id,s.source_revision_id,s.pool_id,p.path,s.original_relative_path,s.target_relative_path,s.naming_timezone FROM recording_segments s JOIN storage_pools p ON p.id=s.pool_id WHERE s.state='finalizing' AND s.original_relative_path=$1 AND s.target_relative_path=$2`, checkpoint.Original, checkpoint.Target).Scan(&segment, &run, &revision, &pool, &base, &original, &target, &zone); err != nil {
+	if err = db.Pool.QueryRow(context.Background(), runtimeFinalizingFileQuery, checkpoint.Original, checkpoint.Target).Scan(&segment, &run, &revision, &pool, &base, &original, &target, &zone); err != nil {
 		t.Fatal("crash lost durable finalizing identity")
 	}
 	_, originalErr := os.Stat(filepath.Join(base, original))

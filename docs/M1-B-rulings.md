@@ -136,6 +136,8 @@ Final: Ruling: Actual-media off acceptance first waits for both decoded main/sub
 
 Final: Ruling: Independent browser-runtime/media-browser-runtime/joint-media-runtime jobs depend on frontend/M0 but run alongside full backend PG; each builds its own exact-source isolated images and consumes no backend artifact. All12 exact gates remain required. Cost if wrong: a backend failure may waste concurrent runtime compute, but cannot produce accepted CI or deploy production. This removes serial waiting from fixture-only iterations.
 
+Final: Ruling: Joint file and SIGKILL finalizing-identity acceptance use storage_pools.canonical_path, not the API DTO path alias, and share their exact SQL with a real-migration PostgreSQL regression. Cost if wrong: acceptance queries must evolve with schema changes, but no production migration or file verification is bypassed. CI37410251912 joint passed bootstrap/two full files and first API restart/new ready observations, then RED on SQL; both queries independently RED SQLSTATE42703 in native migrated schema.
+
 ## Deferred minors
 
 Final: minor (deferred): M1-B-decisions run-timezone wording conflicts with the binding spec's first-publication-intent freeze; runtime follows the binding spec. Cost if deferred: readers of the summary may misunderstand the freeze boundary; no runtime/path change is authorized by this documentation discrepancy. Existing M1-A users/pools feedback remount and timezone search/preview remain deferred.
