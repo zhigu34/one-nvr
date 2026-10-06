@@ -49,7 +49,7 @@ jobs:
           docker compose -f deploy/production/compose.e2e-test.yaml -f deploy/production/compose.media-e2e-test.yaml config --quiet
           docker compose -f deploy/production/compose.e2e-test.yaml -f deploy/production/compose.media-e2e-test.yaml -f deploy/production/compose.acceptance-test.yaml config --quiet
           bash -n deploy/production/test-media-e2e.sh deploy/production/joint-runtime.sh deploy/production/test-e2e.sh
-          bash -n deploy.sh deploy/production/test-deployment.sh deploy/production/test-compose-entry.sh deploy/production/dev.sh
+          bash -n deploy.sh deploy/production/build-settings.sh deploy/production/test-deployment.sh deploy/production/test-compose-entry.sh deploy/production/dev.sh
           ./deploy/production/test-compose-entry.sh
           python3 -m unittest discover -s deploy/production/tests -v
           sh -n deploy/production/web-tool.sh

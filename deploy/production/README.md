@@ -77,3 +77,11 @@ ZLM 与 Worker 另有专用内部回调网络，Worker 使用固定私有地址�
 ## 已有部署更新
 
 之前使用 `deploy/production/.env` 的站点可执行 `cp -n deploy/production/.env .env`，保留已有配置，再从根目录执行 `./deploy.sh --check` 和 `./deploy.sh`。数据目录、存储根、端口及项目名必须沿用原值，不会因为源码入口移动而迁移或删除数据。M0 的 `.env` 与正式格式不同，不能直接复制。
+
+## Go 依赖下载与构建缓存
+
+生产 app/gateway 默认使用 `https://goproxy.cn,direct` 下载 Go 依赖，保留 `go.sum` 和校验数据库验证。可在根目录 `.env` 设置 `ONE_NVR_GOPROXY=https://proxy.golang.org,direct` 或内部 HTTPS Go 代理；为空或省略时使用默认值。该配置在首次构建管理镜像前读取，不执行 shell 表达式，不支持带账号密码的代理 URL。
+
+部署构建显式启用 BuildKit，Go 依赖和编译缓存由同一 builder 上的 app/gateway 共享。生产 Dockerfile 使用内置前端，避免额外拉取 `docker/dockerfile:1`。缓存不是录像数据，不要为重试构建执行 `docker builder prune`。镜像层和已完成步骤可在再次执行 `./deploy.sh --check` 时复用。
+
+此设置仅改变 Go 下载代理。Docker Hub 基础镜像下载由 Docker daemon 的网络/镜像仓库配置决定；FFmpeg 依赖仍使用固定签名 Debian 快照与包哈希锁，未切换到浮动软件包源。

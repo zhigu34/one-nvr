@@ -28,6 +28,12 @@ env_file=$(cd "$(dirname "$env_file")" && printf '%s/%s' "$PWD" "$(basename "$en
 arch=$(docker info --format '{{.Architecture}}')
 [[ $arch == x86_64 || $arch == amd64 ]] || { printf 'Production supports Linux amd64 only.\n' >&2; exit 2; }
 source_tree=$(git rev-parse HEAD^{tree} 2>/dev/null || printf unknown)
+build_local_image() {
+ local kind=$1 image=$2 one_nvr_build_proxy
+ source ./deploy/production/build-settings.sh
+ read_build_proxy "$env_file"
+ DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --label "org.one-nvr.source-tree=$source_tree" --build-arg "GOPROXY=$one_nvr_build_proxy" -f "deploy/production/Dockerfile.$kind" -t "$image" .
+}
 ensure_image() {
  local image=$1
  if [[ $image == one-nvr/app:m1a || $image == one-nvr/gateway:m1a ]]; then
@@ -35,13 +41,13 @@ ensure_image() {
   label=$(docker image inspect "$image" --format '{{index .Config.Labels "org.one-nvr.source-tree"}}' 2>/dev/null || true)
   if [[ $label != "$source_tree" || $source_tree == unknown ]]; then
    local kind=${image#one-nvr/}; kind=${kind%:m1a}
-   docker build --platform linux/amd64 --label "org.one-nvr.source-tree=$source_tree" -f "deploy/production/Dockerfile.$kind" -t "$image" .
+   build_local_image "$kind" "$image"
   fi
  fi
  if ! docker image inspect "$image" >/dev/null 2>&1; then
   case "$image" in
-   one-nvr/app:m1a) docker build --platform linux/amd64 -f deploy/production/Dockerfile.app -t "$image" . ;;
-   one-nvr/gateway:m1a) docker build --platform linux/amd64 -f deploy/production/Dockerfile.gateway -t "$image" . ;;
+   one-nvr/app:m1a) build_local_image app "$image" ;;
+   one-nvr/gateway:m1a) build_local_image gateway "$image" ;;
    *) docker pull --platform linux/amd64 "$image" ;;
   esac
  fi
