@@ -141,3 +141,5 @@ run37411879424 普通/媒体浏览器和固定媒体六阶段通过，联合媒�
 联合回调诊断在API/Worker/共同重启后实际完成回调累计14→16→18→20，恢复扫描计数为0；数据库停机25.01s观测到私有spool，恢复31.20s重放并验证新文件。早期80秒未观测到spool的精确原因仍未确认，失败记录保留，不声称改动过spool实现。最终候选通过实际落盘与恢复断言；后续最终分支检查提供额外复验。
 
 草稿 [PR #2](https://github.com/zhigu34/one-nvr/pull/2) 已创建并附加，base为尚未合并的M1-A分支；未部署用户真机。
+
+Final documentation candidate CI `37436956900` passed 11/12 jobs (full Linux/PostgreSQL race 877.551s), including real database outage spool 24.01s/recovery 31.19s and SIGKILL boundaries 88.50s/59.39s. The joint job failed at synthetic upstream absence confirmation before rollback apply. Its exact response classification was not recorded. A deterministic delayed-media-info regression reproduced the one-second full Inspect returning unknown before it could make its separate online query (RED 1.440s; direct successful online=false evidence race GREEN 1.510s). The fixture now requests only isMediaOnline, still rejecting unknown/error/malformed responses and keeping the five-second observation budget; production code is unchanged. The next exact published candidate must pass all12 actual gates.

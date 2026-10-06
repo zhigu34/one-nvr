@@ -153,3 +153,5 @@ Final: minor (deferred): M1-B-decisions run-timezone wording conflicts with the 
 Final: minor (deferred): Existing M1-A users/pools feedback remount. Cost if deferred: operation success/error may disappear when a version change remounts the card.
 
 Final: minor (deferred): Existing M1-A timezone search/preview. Cost if deferred: selecting a timezone is less convenient; actual IANA timezone choice remains available.
+
+Final: Ruling: Confirm synthetic upstream absence directly with a successful isMediaOnline response, retaining the five-second fault-observation window and rejecting timeouts, malformed responses, missing fields or online=true — the one-second full Inspect can exhaust its budget before its second absence request; deterministic delayed-media-info regression reproduced false unknown, while the precise final CI response was not captured — cost if wrong: fixture online-status semantics must match the pinned ZLM; only actual joint fault acceptance can establish success, and no production recorder or timeout changes.
