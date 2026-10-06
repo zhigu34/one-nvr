@@ -28,8 +28,10 @@ FROM ${NGINX_IMAGE}
 COPY --from=control-build /gateway-control /usr/local/bin/gateway-control
 COPY deploy/production/gateway-entrypoint.sh /usr/local/bin/gateway-entrypoint
 COPY --from=build /src/dist/ /usr/share/nginx/html/
-# Bind-mounted source modes must not repeat the M0 nginx permission failure.
-RUN find /usr/share/nginx/html -type d -exec chmod 755 {} \; && \
+# COPY retains checkout modes; NAS source files may only be executable by root.
+# Both entry points must be readable/executable by the final runtime UID 10001.
+RUN chmod 755 /usr/local/bin/gateway-entrypoint /usr/local/bin/gateway-control && \
+    find /usr/share/nginx/html -type d -exec chmod 755 {} \; && \
     find /usr/share/nginx/html -type f -exec chmod 644 {} \;
 
 USER 10001:10001

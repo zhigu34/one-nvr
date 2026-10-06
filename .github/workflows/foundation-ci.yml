@@ -95,7 +95,21 @@ jobs:
         with:
           persist-credentials: false
       - name: Build pinned Linux amd64 image
-        run: docker build --platform linux/amd64 --file "deploy/production/Dockerfile.${{ matrix.image }}" --tag "one-nvr/${{ matrix.image }}:ci" .
+        run: |
+          # NAS checkouts may restrict other-user access while Git still sees +x.
+          if [[ '${{ matrix.image }}' == gateway ]]; then chmod 700 deploy/production/gateway-entrypoint.sh; fi
+          docker build --platform linux/amd64 --file "deploy/production/Dockerfile.${{ matrix.image }}" --tag "one-nvr/${{ matrix.image }}:ci" .
+      - name: Gateway entry points usable by runtime UID after restrictive checkout
+        if: matrix.image == 'gateway'
+        run: |
+          docker run --rm --network none --entrypoint sh one-nvr/gateway:ci -ec '
+            test "$(id -u)" = 10001
+            for entry in /usr/local/bin/gateway-entrypoint /usr/local/bin/gateway-control; do
+              test -r "$entry"
+              test -x "$entry"
+              test "$(stat -c %a "$entry")" = 755
+            done
+          '
   gateway-runtime:
     needs: [backend, frontend]
     runs-on: ubuntu-24.04
