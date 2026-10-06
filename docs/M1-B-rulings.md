@@ -126,6 +126,8 @@ Final: Ruling: Before each continuous source apply, real browser acceptance requ
 
 Final: Ruling: Isolated waitRecoveredSession retries typed zlm.ErrMediaOperation on the existing10s cadence within the unchanged75s budget, matching production Monitor's periodic management-uncertainty behavior. It never evaluates a session after unsuccessful reconciliation, and other errors remain terminal. Cost if wrong: a transient management failure may consume another bounded attempt; persistent uncertainty still fails with no recovery receipt. CI37404369875 actual recovery RED at one management error despite earlier successful switch; TestRecoveryWaitsThroughTransientReconcileFailure RED0.518s→whole media fixture GREEN55.961s includes persistent-unknown rejection. This adjusts the acceptance observer, not source absence classification or production deadlines.
 
+Final: Ruling: Joint bootstrap reads channel version through the existing authorized source/status endpoint instead of a nonexistent single-channel GET. Cost if wrong: the acceptance client depends on the published status DTO version; no new API surface, authorization bypass or production behavior change. CI37404369875 joint RED404 at bootstrap; actual isolated API confirms old GET404 and source/status200 with positive version.
+
 ## Deferred minors
 
 Final: minor (deferred): M1-B-decisions run-timezone wording conflicts with the binding spec's first-publication-intent freeze; runtime follows the binding spec. Cost if deferred: readers of the summary may misunderstand the freeze boundary; no runtime/path change is authorized by this documentation discrepancy. Existing M1-A users/pools feedback remount and timezone search/preview remain deferred.
