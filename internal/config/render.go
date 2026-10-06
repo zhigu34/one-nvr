@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -34,10 +35,12 @@ type Service struct {
 	Sysctls     map[string]string            `json:"sysctls,omitempty"`
 	Devices     []string                     `json:"devices,omitempty"`
 	ShmSize     string                       `json:"shm_size,omitempty"`
+	Networks    map[string]map[string]any    `json:"networks,omitempty"`
 	CapAdd      []string                     `json:"cap_add,omitempty"`
 }
 type Deployment struct {
 	Services map[string]Service `json:"services"`
+	Networks map[string]any     `json:"networks,omitempty"`
 }
 
 var imagePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/:-]*@sha256:[a-f0-9]{64}$`)
@@ -56,6 +59,15 @@ func BuildDeployment(v map[string]string) (Deployment, error) {
 	}
 	if e = c.Validate(); e != nil {
 		return Deployment{}, e
+	}
+	subnet, err := netip.ParsePrefix(c.HookSubnet)
+	if err != nil || !subnet.Addr().Is4() || !subnet.Addr().IsPrivate() || subnet.Bits() != 29 || subnet != subnet.Masked() {
+		return Deployment{}, fmt.Errorf("ONE_NVR_HOOK_SUBNET requires a private, aligned IPv4 /29")
+	}
+	for _, raw := range strings.Split(c.CameraCIDRs, ",") {
+		if camera, err := netip.ParsePrefix(strings.TrimSpace(raw)); err == nil && subnet.Overlaps(camera) {
+			return Deployment{}, fmt.Errorf("Hook subnet overlaps camera network")
+		}
 	}
 	u, _ := url.Parse(c.PublicURL)
 	if c.MediaHost == "" {
@@ -93,7 +105,10 @@ func BuildDeployment(v map[string]string) (Deployment, error) {
 		common["ONE_NVR_TLS_DIR"] = "/tls-input"
 		vols = append(vols, mount(c.TLSDir, "/tls-input", true))
 	}
-	d := Deployment{Services: map[string]Service{}}
+	d := Deployment{Services: map[string]Service{}, Networks: map[string]any{
+		"default":        map[string]any{},
+		"recording-hook": map[string]any{"internal": true, "ipam": map[string]any{"config": []map[string]string{{"subnet": subnet.String(), "ip_range": netip.PrefixFrom(subnet.Addr().Next().Next().Next().Next(), 30).String()}}}},
+	}}
 	appImage := v["ONE_NVR_APP_IMAGE"]
 	if appImage == "" {
 		appImage = "one-nvr/app:m1a"
@@ -134,6 +149,15 @@ func BuildDeployment(v map[string]string) (Deployment, error) {
 		return d, e
 	}
 	d.Services["zlm"] = Service{Image: zlm, Environment: map[string]string{"TZ": "UTC"}, EntryPoint: []string{"/usr/local/bin/media-launcher"}, Command: []string{"/opt/media/conf/egress.json", "./MediaServer", "-c", "/opt/media/conf/config.ini", "-l", "4", "--log-dir", "/tmp/one-nvr-media-log"}, CapAdd: []string{"NET_ADMIN"}, Sysctls: map[string]string{"net.ipv4.ip_unprivileged_port_start": "0"}, Volumes: []Mount{mount(filepath.Join(runtime, "zlm.ini"), "/opt/media/conf/config.ini", true), mount(filepath.Join(runtime, "zlm-egress.json"), "/opt/media/conf/egress.json", true), mount(filepath.Join(runtime, "zlm-launcher"), "/usr/local/bin/media-launcher", true), mount(poolRoot, "/storage", false)}, Ports: []string{fmt.Sprintf("%d:%d/tcp", c.RTCPort, c.RTCPort), fmt.Sprintf("%d:%d/udp", c.RTCPort, c.RTCPort)}, Restart: "unless-stopped"}
+	// The callback peer is outside the dynamic allocation range. Ordinary
+	// addresses may change on restart without invalidating the fixed firewall.
+	worker := d.Services["worker"]
+	worker.Networks = map[string]map[string]any{"default": {}, "recording-hook": {"ipv4_address": subnet.Addr().Next().Next().String(), "aliases": []string{"worker-hook"}}}
+	d.Services["worker"] = worker
+	media := d.Services["zlm"]
+	media.Networks = map[string]map[string]any{"default": {}, "recording-hook": {}}
+	media.DependsOn = map[string]map[string]string{"worker": {"condition": "service_healthy"}}
+	d.Services["zlm"] = media
 	if c.FrigateEnabled {
 		fg, e := image("frigate")
 		if e != nil {

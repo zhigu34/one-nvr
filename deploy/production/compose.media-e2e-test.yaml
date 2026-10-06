@@ -53,6 +53,9 @@ services:
       - runtime-media-config:/media-config:ro
       - runtime-storage:/storage
     depends_on: [worker]
+    networks:
+      default: {}
+      recording-hook: {}
   runner:
     environment:
       ONE_NVR_CAMERA_CIDRS: '${ONE_NVR_E2E_CAMERA_CIDR:-}'
@@ -63,6 +66,11 @@ services:
     environment:
       ONE_NVR_CAMERA_CIDRS: '${ONE_NVR_E2E_CAMERA_CIDR:-}'
   worker:
+    networks:
+      default: {}
+      recording-hook:
+        ipv4_address: 172.30.254.2
+        aliases: [worker-hook]
     environment:
       ONE_NVR_CAMERA_CIDRS: '${ONE_NVR_E2E_CAMERA_CIDR:-}'
   browser:
@@ -73,3 +81,15 @@ services:
       - runtime-media-config:/media-config:ro
 volumes:
   runtime-media-config:
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.253.0/24
+  recording-hook:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.254.0/29
+          ip_range: 172.30.254.4/30

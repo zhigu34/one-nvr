@@ -2,6 +2,8 @@
 set -Eeuo pipefail
 cd "$(dirname "$0")/../.."
 joint=no
+peer_reservation=
+initial_hook_ip=
 initial_worker_ip=
 if [[ ${1:-} == --acceptance ]]; then joint=yes; shift; fi
 project="one-nvr-media-e2e-${GITHUB_RUN_ID:-local}-$$"
@@ -19,14 +21,17 @@ cleanup() {
 	"${compose[@]}" logs --no-log-prefix worker 2>/dev/null | awk '/recording completion (received|durable|database deferred|spooled|rejected)/ { print }' || true
   # Report only whether the original firewall peer still identifies Worker.
   if [[ -n $initial_worker_ip ]]; then
-   current_worker_ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$("${compose[@]}" ps -q worker)" 2>/dev/null) || current_worker_ip=
+   current_worker_ip=$(docker inspect --format "{{range \$name, \$network := .NetworkSettings.Networks}}{{if eq \$name \"${project}_default\"}}{{\$network.IPAddress}}{{end}}{{end}}" "$("${compose[@]}" ps -q worker)" 2>/dev/null) || current_worker_ip=
    [[ -n $current_worker_ip && $current_worker_ip == "$initial_worker_ip" ]] && peer_same=true || peer_same=false
-   printf 'hook peer diagnostics: initial_worker_identity_unchanged=%s\n' "$peer_same"
+   current_hook_ip=$(docker inspect --format "{{range \$name, \$network := .NetworkSettings.Networks}}{{if eq \$name \"${project}_recording-hook\"}}{{\$network.IPAddress}}{{end}}{{end}}" "$("${compose[@]}" ps -q worker)" 2>/dev/null) || current_hook_ip=
+   [[ -n $current_hook_ip && $current_hook_ip == "$initial_hook_ip" ]] && hook_same=true || hook_same=false
+   printf 'hook peer diagnostics: ordinary_worker_identity_unchanged=%s fixed_hook_identity_unchanged=%s\n' "$peer_same" "$hook_same"
   fi
-  "${compose[@]}" logs --no-log-prefix zlm 2>/dev/null | awk '/hook http:\/\/worker:8083\/on_record_mp4/ && /failed/ {failed++; if (/timeout/) timedout++; if (/refused/) refused++} END {printf "completion transport diagnostics: failed=%d timeout=%d refused=%d\n", failed, timedout, refused}' || true
+  "${compose[@]}" logs --no-log-prefix zlm 2>/dev/null | awk '/hook http:\/\/worker(-hook)?:8083\/on_record_mp4/ && /failed/ {failed++; if (/timeout/) timedout++; if (/refused/) refused++} END {printf "completion transport diagnostics: failed=%d timeout=%d refused=%d\n", failed, timedout, refused}' || true
   # Safe domain states only. No source URLs, media keys, credential payloads or raw ZLM logs.
   "${compose[@]}" exec -T postgres psql -U one_nvr_test -d one_nvr_test -At -c "SELECT kind,attempt,state,error_code FROM jobs ORDER BY created_at; SELECT c.channel_no,s.kind,s.phase,s.state,s.error_code FROM source_switches s JOIN channels c ON c.id=s.channel_id ORDER BY s.created_at; SELECT service,state,reason_code,expires_at>clock_timestamp() FROM storage_pool_checks ORDER BY pool_id,service; SELECT kind,state,reason_code,expires_at>clock_timestamp() FROM source_observations ORDER BY observed_at DESC LIMIT 12; SELECT c.channel_no,b.reason_code,b.healthy_samples FROM recording_capacity_blocks b JOIN channels c ON c.id=b.channel_id ORDER BY c.channel_no" || true
  fi
+ [[ -z $peer_reservation ]] || docker rm -f "$peer_reservation" >/dev/null 2>&1 || true
  "${compose[@]}" unpause worker >/dev/null 2>&1 || true
  "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
 }
@@ -50,7 +55,9 @@ ONE_NVR_E2E_CAMERA_CIDR="$camera_ip/32"
 "${compose[@]}" run --rm runner go build -trimpath -buildvcs=false -o /media-config/media-launcher ./cmd/media-launcher
 sleep 2
 "${compose[@]}" up -d fixture api worker gateway zlm
-initial_worker_ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$("${compose[@]}" ps -q worker)")
+initial_worker_ip=$(docker inspect --format "{{range \$name, \$network := .NetworkSettings.Networks}}{{if eq \$name \"${project}_default\"}}{{\$network.IPAddress}}{{end}}{{end}}" "$("${compose[@]}" ps -q worker)")
+initial_hook_ip=$(docker inspect --format "{{range \$name, \$network := .NetworkSettings.Networks}}{{if eq \$name \"${project}_recording-hook\"}}{{\$network.IPAddress}}{{end}}{{end}}" "$("${compose[@]}" ps -q worker)")
+[[ "$initial_hook_ip" == 172.30.254.2 ]] || exit 1
 [[ "$initial_worker_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
 entry=http://127.0.0.1
 if [[ $joint == yes ]]; then entry=https://127.0.0.1; fi

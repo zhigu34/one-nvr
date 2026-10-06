@@ -28,11 +28,12 @@ import (
 )
 
 type jointChannel struct {
-	Channel id.ID `json:"channel_id"`
-	Run     id.ID `json:"run_id"`
-	Session id.ID `json:"session_id"`
-	Ready   int   `json:"ready_count"`
-	Frames  int64 `json:"frames"`
+	Channel   id.ID `json:"channel_id"`
+	Run       id.ID `json:"run_id"`
+	Session   id.ID `json:"session_id"`
+	Ready     int   `json:"ready_count"`
+	Frames    int64 `json:"frames"`
+	Delivered int   `json:"delivered_count"`
 }
 type jointSnapshot struct {
 	Channels   []jointChannel `json:"channels"`
@@ -156,13 +157,13 @@ func jointCollect(t *testing.T, db *database.DB) jointSnapshot {
 	t.Helper()
 	ctx := context.Background()
 	out := jointSnapshot{Channels: []jointChannel{}}
-	rows, err := db.Pool.Query(ctx, `SELECT c.id,r.id,r.stream_session_id,(SELECT count(*) FROM recording_segments s WHERE s.channel_id=c.id AND s.state='ready') FROM channels c JOIN recording_runs r ON r.channel_id=c.id WHERE c.channel_no IN (1,2) AND r.state='recording' AND r.purpose='continuous' ORDER BY c.channel_no`)
+	rows, err := db.Pool.Query(ctx, runtimeChannelSnapshotQuery)
 	if err != nil {
 		t.Fatal("runtime snapshot unavailable")
 	}
 	for rows.Next() {
 		var c jointChannel
-		if rows.Scan(&c.Channel, &c.Run, &c.Session, &c.Ready) != nil {
+		if rows.Scan(&c.Channel, &c.Run, &c.Session, &c.Ready, &c.Delivered) != nil {
 			t.Fatal("runtime snapshot invalid")
 		}
 		out.Channels = append(out.Channels, c)
@@ -425,13 +426,13 @@ func TestGatewayMediaRuntimeJoint(t *testing.T) {
 	if phase != "restart" && phase != "db" && phase != "zlm" && phase != "tls" && phase != "modules" && phase != "rollback-recovery" {
 		t.Fatal("unknown joint acceptance phase")
 	}
-	jointWait(t, 120, "actual runtime did not resume two recorders and new ready segments", func() bool {
+	jointWait(t, 120, "actual runtime did not resume two recorders, delivered callbacks and new ready segments", func() bool {
 		current := jointCollect(t, db)
 		if !jointTwoRecording(t, media, current) {
 			return false
 		}
 		for i, c := range current.Channels {
-			if c.Channel != before.Channels[i].Channel || c.Ready <= before.Channels[i].Ready {
+			if c.Channel != before.Channels[i].Channel || c.Ready <= before.Channels[i].Ready || c.Delivered <= before.Channels[i].Delivered {
 				return false
 			}
 			if phase == "zlm" || phase == "rollback-recovery" {

@@ -71,3 +71,5 @@ GitHub CI 使用真实 PostgreSQL、Nginx 与浏览器；开发入口：
 ```
 
 联合验收要求实际两路 RTSP/MP4、API/Worker/数据库/ZLM 故障、目录证书实际更新、发布进程在移动前后 SIGKILL、私有媒体边界和历史索引/文件恢复。缺失 fixture 或任一断言失败均非零退出；通过本机类型/静态检查不代表实际 Docker 验收通过。
+
+ZLM 与 Worker 另有专用内部回调网络，Worker 使用固定私有地址和 `worker-hook` 名称；普通 Docker 地址变化不会使启动时的媒体访问规则失效。没有增加常驻容器或公开 8083 端口，媒体进程仍在安装规则后放弃 NET_ADMIN。默认内部子网 `172.30.254.0/29`；若与现有 Docker/局域网冲突，可在 `.env` 用 `ONE_NVR_HOOK_SUBNET` 指定其他对齐的私有 IPv4 `/29`，不能覆盖摄像头网段。同一 Docker 主机部署多个项目时，各项目需使用不同的回调子网。

@@ -41,7 +41,7 @@ func TestGatewayMediaRuntimeE2EInit(t *testing.T) {
 	if err = os.WriteFile("/media-config/zlm.ini", []byte(rendered), 0600); err != nil {
 		t.Fatal(err)
 	}
-	boundary, _ := json.Marshal(egress.Config{CameraCIDRs: cidr, DeniedHosts: []string{"api", "worker", "postgres", "gateway", "browser", "runner", "zlm", "fixture"}, HookHost: "worker"})
+	boundary, _ := json.Marshal(egress.Config{CameraCIDRs: cidr, DeniedHosts: []string{"api", "worker", "postgres", "gateway", "browser", "runner", "zlm", "fixture"}, HookHost: "worker-hook"})
 	if err = os.WriteFile("/media-config/egress.json", boundary, 0600); err != nil {
 		t.Fatal(err)
 	}
