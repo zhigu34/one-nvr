@@ -260,7 +260,7 @@ func TestGatewayMediaRuntimeJoint(t *testing.T) {
 			var current struct {
 				Version int64 `json:"version"`
 			}
-			a.call("GET", "channels/"+string(ch.ID), nil, 0, &current)
+			a.call("GET", "channels/"+string(ch.ID)+"/source/status", nil, 0, &current)
 			var rev struct {
 				ID id.ID `json:"id"`
 			}
@@ -280,7 +280,7 @@ func TestGatewayMediaRuntimeJoint(t *testing.T) {
 				}
 				return result.State == "succeeded"
 			})
-			a.call("GET", "channels/"+string(ch.ID), nil, 0, &current)
+			a.call("GET", "channels/"+string(ch.ID)+"/source/status", nil, 0, &current)
 			a.change("POST", "channels/"+string(ch.ID)+"/source/apply", map[string]any{"revision_id": rev.ID, "test_id": tested.TestID, "first_recording_mode": "none"}, current.Version)
 		}
 		a.change("POST", "storage-pools/"+string(pool)+"/test", map[string]any{}, 0)

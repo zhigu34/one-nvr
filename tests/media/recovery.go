@@ -223,15 +223,20 @@ func waitRecoveredSession(ctx context.Context, previous id.ID, reconcile func(co
 	bounded, cancel := context.WithTimeout(ctx, 75*time.Second)
 	defer cancel()
 	for {
-		if err := reconcile(bounded); err != nil {
-			return "", err
+		reconcileErr := reconcile(bounded)
+		if reconcileErr != nil && !errors.Is(reconcileErr, zlm.ErrMediaOperation) {
+			return "", reconcileErr
 		}
-		current, err := find(bounded)
-		if err == nil && current != "" && current != previous {
-			return current, nil
-		}
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return "", err
+		// Production Monitor records management uncertainty and retries next
+		// tick. Never accept any session from an unsuccessful observation.
+		if reconcileErr == nil {
+			current, err := find(bounded)
+			if err == nil && current != "" && current != previous {
+				return current, nil
+			}
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return "", err
+			}
 		}
 		timer := time.NewTimer(10 * time.Second)
 		select {
