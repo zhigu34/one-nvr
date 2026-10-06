@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/recording"
+	"os"
 	"testing"
 	"time"
 
@@ -191,6 +192,45 @@ func TestRecordingPolicyMaintainsFreshBitrateDuringCapacityRecovery(t *testing.T
 	var state, reason, mode string
 	if err := f.DB.Pool.QueryRow(ctx, "SELECT j.state,coalesce(j.error_code,''),p.mode FROM jobs j JOIN recording_policies p ON p.channel_id=$2 WHERE j.id=$1", change.JobID, f.Channel).Scan(&state, &reason, &mode); err != nil || state != "succeeded" || mode != "continuous" {
 		t.Fatal("owned policy let valid bitrate expire while awaiting two capacity recovery observations", state, reason, mode, err)
+	}
+}
+
+func TestRecordingPolicyRefreshesWriteProofDuringCapacityRecovery(t *testing.T) {
+	f, media, _, _ := testedSource(t)
+	ctx := context.Background()
+	data, err := os.ReadFile(f.Completion.FilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Service.Media = poolWritingMedia{media, f, data}
+	if _, err := f.Service.Sources.SetPolicy(ctx, f.Admin, f.Channel, 3, "none", "recovery-proof-off"); err != nil {
+		t.Fatal(err)
+	}
+	executeChange(t, f, "source.policy_apply")
+	// Admission and preflight see a valid real-write proof. It expires while
+	// the owned job waits for the second mandatory capacity recovery sample.
+	if _, err := f.DB.Pool.Exec(ctx, "UPDATE storage_pool_checks SET expires_at=clock_timestamp()+interval '5 seconds' WHERE pool_id=$1 AND service='zlm'", f.Pool.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.DB.Pool.Exec(ctx, "INSERT INTO recording_capacity_blocks(channel_id,reason_code) VALUES($1,'pool_unavailable')", f.Channel); err != nil {
+		t.Fatal(err)
+	}
+	var version int64
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT version FROM channels WHERE id=$1", f.Channel).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	change, err := f.Service.Sources.SetPolicy(ctx, f.Admin, f.Channel, version, "continuous", "recovery-proof-on")
+	if err != nil {
+		t.Fatal(err)
+	}
+	executeChange(t, f, "source.policy_apply")
+	var state, code, mode string
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT j.state,coalesce(j.error_code,''),p.mode FROM jobs j JOIN recording_policies p ON p.channel_id=$2 WHERE j.id=$1", change.JobID, f.Channel).Scan(&state, &code, &mode); err != nil || state != "succeeded" || mode != "continuous" {
+		t.Fatal("owned recovery let its write proof expire instead of verifying a fresh pool file", state, code, mode, err)
+	}
+	var fresh bool
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT state='healthy' AND reason_code='zlm_media_verified' AND expires_at>clock_timestamp() FROM storage_pool_checks WHERE pool_id=$1 AND service='zlm'", f.Pool.ID).Scan(&fresh); err != nil || !fresh {
+		t.Fatal("recording started without fresh actual pool file proof", fresh, err)
 	}
 }
 
