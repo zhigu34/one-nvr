@@ -8,6 +8,8 @@ __pycache__/
 .DS_Store
 
 # Formal deployment secrets and build outputs
+/data/
+/storage/
 /deploy/production/.env
 /deploy/production/state/
 /bin/

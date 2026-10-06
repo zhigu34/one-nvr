@@ -109,6 +109,7 @@ fi
 # Only the dedicated application root is created. Pool and TLS input roots are never created.
 mkdir -p "$data"
 [[ ! -L $data ]] || { printf 'Data root must not be a symbolic link.\n' >&2; exit 2; }
+printf 'Initializing application data in %s (keys are generated automatically).\n' "$data"
 docker run --rm --network none --user 0:0 --mount "type=bind,source=$data,target=/data" --entrypoint /usr/local/bin/admin "$admin_image" init-runtime
 runtime=$data/runtime
 previous=()

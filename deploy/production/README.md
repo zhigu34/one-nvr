@@ -13,6 +13,8 @@ mkdir -p /srv/one-nvr-storage/disk1
 ./deploy.sh
 ```
 
+`ONE_NVR_DATA_DIR` 是宿主机专用应用数据目录，例如 NAS 上的 `/vol1/1000/docker/one-nvr/data`，首次可以不存在。脚本自动创建目录、内部密钥、数据库及运行配置，无需手工生成密钥或填写内部密码。请使用专用目录，不能填项目根目录或录像根目录；更新时沿用原值。初始化会校验并恢复有效密钥文件的私有权限，保留原密钥内容；文件损坏、类型异常或已有数据库却丢失密钥时仍停止并报告原因。
+
 `.env` 只按字面量解析，不执行 shell，不展开 `$()` 或变量，不保存秘密。数据目录和内部凭据首次生成后持久保存；不要删除 `secrets/`、`postgres/` 或 `tls/`。根目录 `compose.yaml` 加载私有运行配置和经过验证的硬件覆盖。使用 `./deploy.sh compose ps`、`./deploy.sh compose logs --tail=100 api worker zlm` 查看状态；不要直接 `docker compose up` 绕过初始化、迁移和探测。生产配置是 `DATA_DIR/runtime/compose-<hash>.json` 的不可变版本；`compose.json` 指向最近渲染内容，权限 0600，包含内部数据库凭据，不要上传。
 
 脚本打印获取一次性初始化令牌的命令；令牌只在未初始化站点时可取。打开 PUBLIC_URL，填令牌，创建站点管理员和 16/32 槽位。正常运行 5 容器：gateway（含前端）、api、worker、postgres、zlm。启用 Frigate 增加 frigate/mqtt，启用 OpenList 增加 openlist，因此为 5/7/6/8。临时迁移、初始化和探测容器会结束退出。

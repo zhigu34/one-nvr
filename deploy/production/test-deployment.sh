@@ -36,9 +36,14 @@ ids=$(docker ps -q --filter "label=com.docker.compose.project=$project")
 [[ $(printf '%s\n' "$ids" | wc -l) -eq 5 ]]
 zlm_before=$(docker ps -q --filter "label=com.docker.compose.project=$project" --filter label=com.docker.compose.service=zlm)
 secret_before=$(docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data,readonly" --entrypoint sha256sum "$admin" /data/secrets/one-nvr.json)
+# Simulate file permissions left by filesystem defaults or a failed first run.
+# The real deployment must repair only metadata, preserving every key byte.
+docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --entrypoint chmod "$admin" 644 /data/secrets/one-nvr.json
 ./deploy.sh --project "$project" --env-file "$root/env"
 secret_after=$(docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data,readonly" --entrypoint sha256sum "$admin" /data/secrets/one-nvr.json)
 [[ $secret_before == "$secret_after" ]]
+secret_mode=$(docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data,readonly" --entrypoint stat "$admin" -c %a /data/secrets/one-nvr.json)
+[[ $secret_mode == 600 ]]
 [[ $zlm_before == $(docker ps -q --filter "label=com.docker.compose.project=$project" --filter label=com.docker.compose.service=zlm) ]]
 # Only configuration changes; actual certificate activation remains verified by the gateway suite.
 for flags in 'yes no' 'no yes' 'yes yes'; do
