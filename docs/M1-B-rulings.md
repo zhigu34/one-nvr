@@ -1,6 +1,6 @@
 # M1-B execution rulings
 
-Chronological author rulings and their cost if wrong. Acceptance remains pending until the final exact-candidate CI gates pass.
+Chronological author rulings and their cost if wrong. The implementation candidate passed all12 exact-candidate CI gates; final branch check links are in its draft PR. Deferred minors remain unchanged.
 
 Ruling: Keep the user's established shared checkout, using a new development branch and explicit commits rather than a second checkout — previous inline development and existing dependencies are here; no main edits — cost if wrong: concurrent manual checkout changes would need reconciliation.
 
