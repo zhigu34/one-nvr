@@ -15,11 +15,26 @@ async function command(page: Page, name: string, endpoint: string) {
   const response = page.waitForResponse(r => r.request().method() !== 'GET' && r.url().endsWith(endpoint))
   await page.getByRole('button', {name, exact: true}).click()
   const actual = await response
-  expect(actual.status()).toBe(202)
+  if (actual.status() !== 202) {
+    const failed = await actual.json()
+    expect(actual.status(), 'command rejected: ' + (failed.error?.code || 'unknown')).toBe(202)
+  }
   return (await actual.json()).data as {job_id: string}
 }
 async function finished(page: Page, job: {job_id: string}, state = 'succeeded') {
   await expect.poll(async () => (await get<{state: string}>(page, 'jobs/' + job.job_id)).state, {timeout: 90000}).toBe(state)
+}
+async function freshPoolProof(page: Page, poolId: string) {
+  // Pool evidence expires at30s; 60s recording completions do not guarantee
+  // current write proof. Use the real storage UI in another tab, retaining
+  // this tab's selected tested revision and plaintext-free form state.
+  const poolPage = await page.context().newPage()
+  try {
+    await poolPage.goto('/storage-pools')
+    await finished(poolPage, await command(poolPage, '立即检查', '/storage-pools/' + poolId + '/test'))
+  } finally {
+    await poolPage.close()
+  }
 }
 async function saveAndTest(page: Page, ip: string, main: string, sub: string) {
   await page.getByLabel('IP 地址', {exact: true}).fill(ip)
@@ -29,7 +44,10 @@ async function saveAndTest(page: Page, ip: string, main: string, sub: string) {
   const saved = page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/source-revisions'))
   await page.getByRole('button', {name: '保存草稿', exact: true}).click()
   const response = await saved
-  expect(response.status()).toBe(201)
+  if (response.status() !== 201) {
+    const failed = await response.json()
+    expect(response.status(), 'draft rejected: ' + (failed.error?.code || 'unknown')).toBe(201)
+  }
   const revision = (await response.json()).data as {id: string}
   await expect(page.getByText('草稿已保存，请先测试，再应用')).toBeVisible()
   const job = await command(page, '测试取流', '/source-revisions/' + revision.id + '/test')
@@ -103,19 +121,27 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   expect(historical.source_revision_id).toBe(initial)
   expect(historical.pool_id).toBe(pool.id)
   const changed = await saveAndTest(page, fixture.camera_ip, fixture.paths[0], fixture.paths[1])
+  await freshPoolProof(page, pool.id)
   await finished(page, await command(page, '应用配置', '/source/apply'))
   await expect.poll(async () => (await status()).current_revision_id, {timeout: 20000}).toBe(changed)
+  // API polling can observe a committed job before the page's query refresh.
+  // Reload as an operator may do, preserving optimistic conflict protection.
+  await page.reload()
   const restored = await saveAndTest(page, fixture.camera_ip, fixture.paths[2], fixture.paths[3])
+  await freshPoolProof(page, pool.id)
   await finished(page, await command(page, '应用配置', '/source/apply'))
   await expect.poll(async () => (await status()).current_revision_id, {timeout: 20000}).toBe(restored)
+  await page.reload()
   // Lose the actual candidate publisher AFTER proof, so the switch must roll back.
   await saveAndTest(page, fixture.camera_ip, fixture.paths[0], fixture.paths[1])
+  await freshPoolProof(page, pool.id)
   const stopped = await request.post('http://fixture:8557/stop-one')
   expect(stopped.status()).toBe(200)
   await finished(page, await command(page, '应用配置', '/source/apply'), 'failed')
   await expect(page.getByText(/^执行失败：/)).toBeVisible({timeout: 15000})
   expect((await status()).current_revision_id).toBe(restored)
   await expect.poll(async () => (await physical()).filter(s => s.isRecordingMP4).length, {timeout: 30000}).toBe(1)
+  await page.reload()
   await page.getByLabel('普通录像', {exact: true}).selectOption('none')
   await finished(page, await command(page, '保存录像策略', '/recording-policy'))
   await expect.poll(async () => (await physical()).some(s => s.isRecordingMP4), {timeout: 20000}).toBe(false)
@@ -127,6 +153,7 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   await page.getByLabel('确认清空此通道摄像头', {exact: true}).check()
   await finished(page, await command(page, '清空摄像头', '/source/clear'))
   await expect.poll(async () => (await status()).current_revision_id, {timeout: 20000}).toBeNull()
+  await page.reload()
   const reconfigured = await saveAndTest(page, fixture.camera_ip, fixture.paths[2], fixture.paths[3])
   await expect(page.getByLabel('首次普通录像', {exact: true})).toHaveCount(0)
   await finished(page, await command(page, '应用配置', '/source/apply'))
