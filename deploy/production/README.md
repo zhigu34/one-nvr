@@ -2,7 +2,7 @@
 
 本分支已实现账号、固定通道槽位、摄像头配置修订/测试/应用、批量导入与配置导出、目录池绑定、连续录像/仅取流、录像索引、时区及证书面板，已通过隔离 M1-B 联合验收。实时视频播放与录像内容回放仍待 M1-C；事件与云归档业务仍返回“尚未实现”。M0 测试代码已从仓库移除；旧机器上的实验数据不迁移、不删除。接管摄像头前停止旧 M0 服务。
 
-Linux amd64，Docker Engine + Compose v2.20.0 或以上（需要 include）。宿主不安装 Go、Node、Python。首次部署构建 app/gateway，其他镜像全部按 [固定版本与摘要](../../docs/image-versions.md) 拉取。构建需要网络；更换包源不能解决 Docker Hub 鉴权网络失败。可用 `--admin-image registry/name:version@sha256:...` 指定事先构建并验证的工具镜像。
+Linux amd64，Docker Engine + Compose v2.20.0 或以上（需要 include）。宿主不安装 Go、Node、Python。首次部署构建 app/gateway，其他镜像全部按 [固定版本与摘要](../../docs/image-versions.md) 拉取。构建需要网络；更换包源不能解决 Docker Hub 鉴权网络失败。可用 `--admin-image registry/name:version@sha256:...` 指定事先构建并验证的工具镜像；后续 `compose` 运维命令也传入同一参数，脚本打印的初始化令牌命令会自动保留它。
 
 ```bash
 cp -n .env.example .env
