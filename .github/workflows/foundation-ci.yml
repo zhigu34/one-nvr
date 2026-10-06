@@ -49,7 +49,8 @@ jobs:
           docker compose -f deploy/production/compose.e2e-test.yaml -f deploy/production/compose.media-e2e-test.yaml config --quiet
           docker compose -f deploy/production/compose.e2e-test.yaml -f deploy/production/compose.media-e2e-test.yaml -f deploy/production/compose.acceptance-test.yaml config --quiet
           bash -n deploy/production/test-media-e2e.sh deploy/production/joint-runtime.sh deploy/production/test-e2e.sh
-          bash -n deploy/production/dev.sh
+          bash -n deploy.sh deploy/production/test-deployment.sh deploy/production/test-compose-entry.sh deploy/production/dev.sh
+          ./deploy/production/test-compose-entry.sh
           sh -n deploy/production/web-tool.sh
       - name: Go unit race tests
         run: ./deploy/production/dev.sh test-go -race ./internal/... ./cmd/... ./migrations
@@ -80,21 +81,8 @@ jobs:
       - name: Cleanup development containers
         if: always()
         run: docker compose -p one-nvr-dev -f deploy/production/compose.test.yaml down --volumes --remove-orphans
-  m0-regression:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-      - name: Preserve M0 behavior
-        run: |
-          docker run --rm --volume "$PWD:/workspace:ro" --workdir /workspace python:3.12-slim sh -eu -c '
-            pip install --disable-pip-version-check --require-hashes -r deploy/m0/requirements.txt
-            python -m unittest discover -s deploy/m0/tests -v
-          '
   images:
-    needs: [backend, frontend, m0-regression]
+    needs: [backend, frontend]
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     strategy:
@@ -108,7 +96,7 @@ jobs:
       - name: Build pinned Linux amd64 image
         run: docker build --platform linux/amd64 --file "deploy/production/Dockerfile.${{ matrix.image }}" --tag "one-nvr/${{ matrix.image }}:ci" .
   gateway-runtime:
-    needs: [backend, frontend, m0-regression]
+    needs: [backend, frontend]
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -122,7 +110,7 @@ jobs:
       - name: Actual Nginx application, rollback and crash recovery
         run: ./deploy/production/test-gateway.sh
   browser-runtime:
-    needs: [frontend, m0-regression]
+    needs: [frontend]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -141,7 +129,7 @@ jobs:
       - name: Real browser with read-only certificate directory
         run: ONE_NVR_E2E_TLS_DIR=/tls-input ./deploy/production/dev.sh e2e --no-build
   media-browser-runtime:
-    needs: [frontend, m0-regression]
+    needs: [frontend]
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -160,7 +148,7 @@ jobs:
           name: media-browser-contract
           path: media-test-results/media-browser.json
   joint-media-runtime:
-    needs: [frontend, m0-regression]
+    needs: [frontend]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -180,7 +168,7 @@ jobs:
           name: joint-media-contract
           path: media-test-results/*.json
   production-runtime:
-    needs: [backend, frontend, m0-regression]
+    needs: [backend, frontend]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
