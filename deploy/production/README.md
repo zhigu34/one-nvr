@@ -84,4 +84,20 @@ ZLM 与 Worker 另有专用内部回调网络，Worker 使用固定私有地址�
 
 部署构建显式启用 BuildKit，Go 依赖和编译缓存由同一 builder 上的 app/gateway 共享。生产 Dockerfile 使用内置前端，避免额外拉取 `docker/dockerfile:1`。缓存不是录像数据，不要为重试构建执行 `docker builder prune`。镜像层和已完成步骤可在再次执行 `./deploy.sh --check` 时复用。
 
-此设置仅改变 Go 下载代理。Docker Hub 基础镜像下载由 Docker daemon 的网络/镜像仓库配置决定；FFmpeg 依赖仍使用固定签名 Debian 快照与包哈希锁，未切换到浮动软件包源。
+`ONE_NVR_GOPROXY` 仅改变 Go 模块下载源；FFmpeg 依赖仍使用固定签名 Debian 快照与包哈希锁，未切换到浮动软件包源。
+
+## HTTP／混合代理
+
+已有 HTTP 或混合代理端口时，在 `.env` 添加以下设置，将示例地址换成代理服务器的局域网 IP 与端口：
+
+```dotenv
+ONE_NVR_HTTP_PROXY=http://192.168.1.2:7890
+ONE_NVR_HTTPS_PROXY=
+ONE_NVR_NO_PROXY=localhost,127.0.0.1,::1
+```
+
+HTTPS 为空时复用 HTTP 地址，通过 CONNECT 隧道下载 HTTPS 内容。也可为两者分别指定 `http://` 或 `https://` 代理端点；当前支持不带账号密码的地址。HTTP/HTTPS 都为空或省略时关闭构建代理。内部包源需要直连时，将其域名/IP 添加到 `ONE_NVR_NO_PROXY` 的逗号分隔列表（为空/省略使用上述默认值）。代理必须允许 Docker 构建容器访问；这里的 `127.0.0.1` 指构建容器自身，通常应填代理服务器局域网地址。
+
+`./deploy.sh --check` 和首次部署构建 app/gateway 时自动读取这些设置，作用于 Go、npm/pnpm 与 apt 的依赖下载。脚本通过 Docker 的预定义构建参数传递代理，不通过 Dockerfile `ARG`/`ENV` 保存，也不改变 Docker 客户端连接 Docker 服务的环境。运行中的 NVR 容器不添加这些环境变量。调整下载代理不会强制重建已匹配版本的镜像，失败后直接重试原命令，可复用已有缓存。
+
+Docker Hub 鉴权、`FROM` 基础镜像与 `docker pull` 属于 Docker daemon 的网络请求，上述构建参数不控制这些请求。如果卡在镜像元数据/拉取阶段，还需按 [Docker 服务代理说明](https://docs.docker.com/engine/daemon/proxy/) 配置 Docker 服务（NAS 使用其管理界面提供的代理设置）。脚本不会修改或重启宿主 Docker 服务。

@@ -14,6 +14,9 @@ import json,os,sys,subprocess
 from pathlib import Path
 args=sys.argv[1:]; fixture=Path(os.environ['ONE_NVR_CLI_FIXTURE'])
 with (fixture/'calls.jsonl').open('a') as f: f.write(json.dumps(args)+'\n')
+if args[0]=='build':
+ with (fixture/'build-env.jsonl').open('a') as f:
+  f.write(json.dumps({k:os.environ.get(k) for k in ['HTTP_PROXY','HTTPS_PROXY','NO_PROXY','http_proxy','https_proxy','no_proxy','ALL_PROXY','all_proxy']})+'\n')
 if args[0]=='info': print('amd64')
 elif args[:2]==['image','inspect']:
  state=json.loads((fixture/'built.json').read_text()) if (fixture/'built.json').exists() else {}
@@ -51,7 +54,9 @@ elif args[0]=='run':
   p=mounts['/output']; p.mkdir(exist_ok=True)
   (p/'compose.json').write_text(json.dumps({'services':{'api':{'image':os.environ['ONE_NVR_CLI_ADMIN']}}}))
   (p/'services').write_text('api\nworker\npostgres\nzlm\ngateway\n')
-  (p/'images').write_text(os.environ['ONE_NVR_CLI_ADMIN']+'\n')
+  images=[os.environ['ONE_NVR_CLI_ADMIN']]
+  if (fixture/'built.json').exists(): images=['one-nvr/app:m1a','one-nvr/gateway:m1a']
+  (p/'images').write_text('\n'.join(images)+'\n')
  elif 'discover-hardware' in tail: print('{}')
  elif 'hardware-nodes' in tail: pass
 else: raise RuntimeError(args)
@@ -70,6 +75,9 @@ class DeployCLI(unittest.TestCase):
         docker.chmod(0o755)
         self.env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ["PATH"],
                         ONE_NVR_CLI_FIXTURE=str(self.root), ONE_NVR_CLI_ADMIN=PIN)
+        for key in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']:
+            self.env[key] = 'http://ambient.example:9999'
+        self.env['NO_PROXY'] = self.env['no_proxy'] = 'ambient.example'
         self.data = self.root / "data"
         self.data.mkdir()
         (self.root / "storage").mkdir()
@@ -131,6 +139,55 @@ class DeployCLI(unittest.TestCase):
                 self.assertNotEqual(run.returncode, 0)
                 self.assertEqual(self.build_calls(), [])
                 self.assertFalse((REPO / "sentinel").exists())
+
+    def build_environments(self):
+        return [json.loads(x) for x in (self.root / 'build-env.jsonl').read_text().splitlines()]
+
+    def test_http_proxy_reaches_both_builds_and_defaults_https(self):
+        run = self.build_default_admin(' ONE_NVR_HTTP_PROXY = "http://192.168.1.2:7890" # mixed port\r\n'
+                                       'ONE_NVR_NO_PROXY=localhost,127.0.0.1,.internal.example\n')
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(len(self.build_calls()), 2)
+        for args, environment in zip(self.build_calls(), self.build_environments()):
+            for key in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
+                self.assertIn(key + '=http://192.168.1.2:7890', args)
+            for key in ['NO_PROXY', 'no_proxy']:
+                self.assertIn(key + '=localhost,127.0.0.1,.internal.example', args)
+            self.assertEqual(environment, {key: self.env[key] for key in environment},
+                             'dependency proxy changed Docker client transport environment')
+
+    def test_blank_proxy_disables_inherited_proxy_settings(self):
+        run = self.build_default_admin('ONE_NVR_HTTP_PROXY= # disabled\nONE_NVR_HTTPS_PROXY=""\n')
+        self.assertEqual(run.returncode, 0, run.stderr)
+        for args, environment in zip(self.build_calls(), self.build_environments()):
+            for key in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']:
+                self.assertIn(key + '=', args)
+            self.assertIn('NO_PROXY=localhost,127.0.0.1,::1', args)
+            self.assertEqual(environment, {key: self.env[key] for key in environment})
+
+    def test_https_proxy_can_override_http_proxy(self):
+        run = self.build_default_admin("ONE_NVR_HTTP_PROXY='http://proxy.internal:8080'\n"
+                                       "ONE_NVR_HTTPS_PROXY=https://proxy.internal:8443/\n")
+        self.assertEqual(run.returncode, 0, run.stderr)
+        for args in self.build_calls():
+            self.assertIn('http_proxy=http://proxy.internal:8080', args)
+            self.assertIn('https_proxy=https://proxy.internal:8443/', args)
+
+    def test_invalid_forward_proxy_is_rejected_without_executing_env(self):
+        marker = self.root / 'executed'
+        for extra in ['ONE_NVR_HTTP_PROXY=socks5://proxy:1080\n',
+                      'ONE_NVR_HTTP_PROXY=http://user:password@proxy:8080\n',
+                      'ONE_NVR_HTTPS_PROXY=http://proxy:99999\n',
+                      'ONE_NVR_NO_PROXY="$(touch ' + str(marker) + ')"\n',
+                      'ONE_NVR_HTTP_PROXY=http://proxy:8080\nONE_NVR_HTTP_PROXY=\n']:
+            with self.subTest(extra=extra):
+                self.settings.write_text(f'ONE_NVR_DATA_DIR={self.data}\nONE_NVR_STORAGE_ROOT={self.root / "storage"}\n')
+                log = self.root / 'calls.jsonl'
+                if log.exists(): log.unlink()
+                run = self.build_default_admin(extra)
+                self.assertNotEqual(run.returncode, 0)
+                self.assertEqual(self.build_calls(), [])
+                self.assertFalse(marker.exists())
 
     def test_hardware_selection_ignores_ambient_project_dotenv(self):
         standalone = os.environ.get("ONE_NVR_TEST_COMPOSE_BIN")

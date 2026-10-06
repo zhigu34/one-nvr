@@ -29,10 +29,19 @@ arch=$(docker info --format '{{.Architecture}}')
 [[ $arch == x86_64 || $arch == amd64 ]] || { printf 'Production supports Linux amd64 only.\n' >&2; exit 2; }
 source_tree=$(git rev-parse HEAD^{tree} 2>/dev/null || printf unknown)
 build_local_image() {
- local kind=$1 image=$2 one_nvr_build_proxy
+ local kind=$1 image=$2 one_nvr_build_proxy one_nvr_http_proxy one_nvr_https_proxy one_nvr_no_proxy
  source ./deploy/production/build-settings.sh
- read_build_proxy "$env_file"
- DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --label "org.one-nvr.source-tree=$source_tree" --build-arg "GOPROXY=$one_nvr_build_proxy" -f "deploy/production/Dockerfile.$kind" -t "$image" .
+ read_build_settings "$env_file"
+ # Predefined build arguments: no Dockerfile ARG/ENV; endpoints have no credentials.
+ # Explicit empty values override ambient Docker client proxy defaults. Both
+ # cases support Go, npm/pnpm and apt. Leave Docker client transport env intact.
+ DOCKER_BUILDKIT=1 docker build --platform linux/amd64 \
+  --label "org.one-nvr.source-tree=$source_tree" --build-arg "GOPROXY=$one_nvr_build_proxy" \
+  --build-arg "HTTP_PROXY=$one_nvr_http_proxy" --build-arg "http_proxy=$one_nvr_http_proxy" \
+  --build-arg "HTTPS_PROXY=$one_nvr_https_proxy" --build-arg "https_proxy=$one_nvr_https_proxy" \
+  --build-arg "NO_PROXY=$one_nvr_no_proxy" --build-arg "no_proxy=$one_nvr_no_proxy" \
+  --build-arg ALL_PROXY= --build-arg all_proxy= \
+  -f "deploy/production/Dockerfile.$kind" -t "$image" .
 }
 ensure_image() {
  local image=$1
