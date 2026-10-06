@@ -138,6 +138,8 @@ Final: Ruling: Independent browser-runtime/media-browser-runtime/joint-media-run
 
 Final: Ruling: Joint file and SIGKILL finalizing-identity acceptance use storage_pools.canonical_path, not the API DTO path alias, and share their exact SQL with a real-migration PostgreSQL regression. Cost if wrong: acceptance queries must evolve with schema changes, but no production migration or file verification is bypassed. CI37410251912 joint passed bootstrap/two full files and first API restart/new ready observations, then RED on SQL; both queries independently RED SQLSTATE42703 in native migrated schema.
 
+Final: Ruling: Joint bootstrap obtains a fresh actual source test and real pool check separately for each requested continuous channel, rather than reusing one pre-loop proof across sequential policy jobs. Existing30s rate/pool gates and20s bounded policy refresh are unchanged; diagnostics include only channel number, domain phase, attempt count and proof-valid booleans. Cost if wrong: setup performs extra bounded real tests/checks and takes longer, but no fresh evidence is fabricated or queued failure suppressed. CI37411879424 bootstrap RED130.47s with policy_apply still testing/running and job queued handler_failed before any stop/start; precise failure cause remains unconfirmed until diagnostic/fresh-precondition CI.
+
 ## Deferred minors
 
 Final: minor (deferred): M1-B-decisions run-timezone wording conflicts with the binding spec's first-publication-intent freeze; runtime follows the binding spec. Cost if deferred: readers of the summary may misunderstand the freeze boundary; no runtime/path change is authorized by this documentation discrepancy. Existing M1-A users/pools feedback remount and timezone search/preview remain deferred.

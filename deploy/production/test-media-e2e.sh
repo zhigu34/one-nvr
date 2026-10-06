@@ -14,7 +14,7 @@ cleanup() {
  if [[ $status -ne 0 ]]; then
   "${compose[@]}" logs --tail=40 api worker gateway fixture || true
   # Safe domain states only. No source URLs, media keys, credential payloads or raw ZLM logs.
-  "${compose[@]}" exec -T postgres psql -U one_nvr_test -d one_nvr_test -At -c "SELECT kind,state,error_code FROM jobs ORDER BY created_at; SELECT kind,phase,state,error_code FROM source_switches ORDER BY created_at; SELECT kind,state,reason_code FROM source_observations ORDER BY observed_at DESC LIMIT 12" || true
+  "${compose[@]}" exec -T postgres psql -U one_nvr_test -d one_nvr_test -At -c "SELECT kind,attempt,state,error_code FROM jobs ORDER BY created_at; SELECT c.channel_no,s.kind,s.phase,s.state,s.error_code FROM source_switches s JOIN channels c ON c.id=s.channel_id ORDER BY s.created_at; SELECT service,state,reason_code,expires_at>clock_timestamp() FROM storage_pool_checks ORDER BY pool_id,service; SELECT kind,state,reason_code,expires_at>clock_timestamp() FROM source_observations ORDER BY observed_at DESC LIMIT 12" || true
  fi
  "${compose[@]}" unpause worker >/dev/null 2>&1 || true
  "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true

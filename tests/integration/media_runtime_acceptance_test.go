@@ -106,6 +106,7 @@ func jointWait(t *testing.T, seconds int, reason string, check func() bool) {
 	t.Fatal(reason)
 }
 func (a *jointAPI) change(method, path string, body any, version int64) {
+	a.t.Helper()
 	var job struct {
 		ID id.ID `json:"job_id"`
 	}
@@ -283,15 +284,23 @@ func TestGatewayMediaRuntimeJoint(t *testing.T) {
 			a.call("GET", "channels/"+string(ch.ID)+"/source/status", nil, 0, &current)
 			a.change("POST", "channels/"+string(ch.ID)+"/source/apply", map[string]any{"revision_id": rev.ID, "test_id": tested.TestID, "first_recording_mode": "none"}, current.Version)
 		}
-		a.change("POST", "storage-pools/"+string(pool)+"/test", map[string]any{}, 0)
 		for _, ch := range channels.Items {
 			if ch.No != 1 && ch.No != 2 {
 				continue
 			}
 			var state struct {
-				Version int64  `json:"version"`
-				Pool    *id.ID `json:"storage_pool_id"`
+				Version  int64  `json:"version"`
+				Pool     *id.ID `json:"storage_pool_id"`
+				Revision *id.ID `json:"current_revision_id"`
 			}
+			a.call("GET", "channels/"+string(ch.ID)+"/source/status", nil, 0, &state)
+			if state.Revision == nil {
+				t.Fatal("continuous bootstrap source missing")
+			}
+			// Each continuous mutation needs its own fresh real rate/write
+			// proof. One earlier pool check cannot cover sequential channels.
+			a.change("POST", "channels/"+string(ch.ID)+"/source-revisions/"+string(*state.Revision)+"/test", map[string]any{}, 0)
+			a.change("POST", "storage-pools/"+string(pool)+"/test", map[string]any{}, 0)
 			a.call("GET", "channels/"+string(ch.ID)+"/source/status", nil, 0, &state)
 			if state.Pool == nil {
 				a.change("PUT", "channels/"+string(ch.ID)+"/storage-pool", map[string]any{"pool_id": pool}, state.Version)
