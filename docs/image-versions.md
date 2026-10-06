@@ -40,15 +40,9 @@ openlistteam/openlist:v4.2.6@sha256:c555c6e1c8af2aead38ed12ec761ac077fdf046d19cf
 
 2026-10-03 通过 Docker Hub / GHCR Registry API 读取上述九个引用的 manifest，确认返回的 digest 和 `linux/amd64` 条目。新版本查询具体标签；M0 沿用版本查询已有不可变 digest，以保留当时的实际构建。查询仅读取元数据，没有拉取并启动这些镜像。已核对可拉取的 manifest 不代表正式构建、数据库兼容或云归档验收通过。
 
-## M0 保持原部署
+## 历史实验
 
-本次不修改 `deploy/m0/compose.yaml` 或 `deploy/m0/Dockerfile`，现有真机结果仍对应原实验包。M0 Nginx 继续使用：
-
-```text
-nginx:1.28.0-alpine@sha256:30f1c0d78e0ad60901648be663a710bdadf19e4c10ac6782c235200619158284
-```
-
-按用户已有本地镜像的要求，M0 工具构建保留 `python:3.12-slim`。这是实验包的明确例外：未冻结 Python 补丁版本、Debian 变体和 digest；不同时间准备的同名镜像可能不同。M0 报告应记录本机实际 image ID / RepoDigests；正式 Go 服务不使用 Python，不能把上述例外带入正式发布镜像。
+M0 验证包已于 2026-10-06 从当前源码移除，可从 Git 历史恢复。正式版沿用已核对的 ZLM/Frigate 摘要，构建和运行版本见上表；不再构建 Python M0 工具镜像。旧机器上的实验容器和数据不由源码清理操作删除。
 
 ## 构建、部署与升级约束
 

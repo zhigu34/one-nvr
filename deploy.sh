@@ -1,26 +1,32 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
-cd "$(dirname "$0")/../.."
-env_file=deploy/production/.env
+cd "$(dirname "$0")"
+env_file=.env
 admin_image=one-nvr/app:m1a
 check=no
 project=one-nvr
+operation=deploy
+compose_args=()
 for ((i=1; i<=$#; i++)); do
  arg=${!i}
  case "$arg" in
+  compose) operation=compose; compose_args=("${@:i+1}"); break ;;
   --check) check=yes ;;
   --env-file|--admin-image|--project) ((i+=1)); [[ $i -le $# ]] || exit 2; value=${!i}; if [[ $arg == --env-file ]]; then env_file=$value; elif [[ $arg == --project ]]; then project=$value; else admin_image=$value; fi ;;
   *) printf 'Unknown option: %s\n' "$arg" >&2; exit 2 ;;
  esac
 done
+if [[ $operation == compose ]]; then
+ [[ $check == no && ${#compose_args[@]} -gt 0 ]] || { printf 'Usage: ./deploy.sh [--env-file FILE] [--project NAME] compose COMMAND [ARGS...]\n' >&2; exit 2; }
+fi
 [[ $project =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]] || { printf 'Invalid project name.\n' >&2; exit 2; }
 command -v docker >/dev/null
-[[ -f $env_file ]] || { printf 'Missing env file; copy deploy/production/.env.example first.\n' >&2; exit 2; }
+[[ -f $env_file ]] || { printf 'Missing env file; copy .env.example to .env first.\n' >&2; exit 2; }
 env_file=$(cd "$(dirname "$env_file")" && printf '%s/%s' "$PWD" "$(basename "$env_file")")
 [[ $admin_image == one-nvr/app:m1a || $admin_image =~ ^[a-zA-Z0-9][a-zA-Z0-9._/:-]*@sha256:[a-f0-9]{64}$ ]] || { printf 'Custom admin image must be digest pinned.\n' >&2; exit 2; }
 arch=$(docker info --format '{{.Architecture}}')
-[[ $arch == x86_64 || $arch == amd64 ]] || { printf 'M1-A production supports Linux amd64 only.\n' >&2; exit 2; }
+[[ $arch == x86_64 || $arch == amd64 ]] || { printf 'Production supports Linux amd64 only.\n' >&2; exit 2; }
 source_tree=$(git rev-parse HEAD^{tree} 2>/dev/null || printf unknown)
 ensure_image() {
  local image=$1
@@ -41,9 +47,36 @@ ensure_image() {
  fi
  [[ $(docker image inspect "$image" --format '{{.Architecture}}') == amd64 ]] || { printf 'Image architecture mismatch: %s\n' "$image" >&2; return 1; }
 }
-ensure_image "$admin_image"
+# Public .env is literal admin input; never let Compose interpolate it.
+load_compose() {
+ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+ docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/compose.json > "$tmp/compose.json"
+ printf '{"services":{}}\n' > "$tmp/hardware.compose.json"
+ export ONE_NVR_COMPOSE_FILE="$tmp/compose.json"
+ export ONE_NVR_HARDWARE_COMPOSE_FILE="$tmp/hardware.compose.json"
+ compose=(docker compose --env-file /dev/null -p "$project" -f "$PWD/compose.yaml")
+}
+if [[ $operation == compose ]]; then
+ docker image inspect "$admin_image" >/dev/null 2>&1 || { printf 'Admin image unavailable; run ./deploy.sh first.\n' >&2; exit 2; }
+else
+ ensure_image "$admin_image"
+fi
 public_value() { docker run --rm --network none --user "$(id -u):$(id -g)" --mount "type=bind,source=$env_file,target=/settings.env,readonly" --entrypoint /usr/local/bin/admin "$admin_image" env-value --env-file /settings.env --key "$1"; }
 data=$(public_value data)
+if [[ $operation == compose ]]; then
+ runtime=$data/runtime
+ docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint test "$admin_image" -f /output/compose.json || { printf 'No deployment manifest; run ./deploy.sh first.\n' >&2; exit 2; }
+ load_compose
+ docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/services > "$tmp/services"
+ while IFS= read -r service; do
+  if [[ $service == frigate ]]; then
+   docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint test "$admin_image" -f /output/hardware.compose.json || { printf 'Hardware validation incomplete; rerun ./deploy.sh.\n' >&2; exit 2; }
+   docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/hardware.compose.json > "$tmp/hardware.compose.json"
+  fi
+ done < "$tmp/services"
+ "${compose[@]}" "${compose_args[@]}"
+ exit
+fi
 storage=$(public_value storage)
 tls=$(public_value tls)
 [[ -d $storage ]] || { printf 'Storage root must already exist: %s\n' "$storage" >&2; exit 2; }
@@ -52,7 +85,9 @@ tls=$(public_value tls)
 if [[ $check == yes ]]; then
  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
  docker run --rm --network none --user "$(id -u):$(id -g)" --mount "type=bind,source=$env_file,target=/settings.env,readonly" --mount "type=bind,source=$tmp,target=/output" --entrypoint /usr/local/bin/admin "$admin_image" render-deployment --env-file /settings.env --output-dir /output --check
- docker compose -p "$project" -f "$tmp/compose.json" config --quiet
+ printf '{"services":{}}\n' > "$tmp/hardware.compose.json"
+ export ONE_NVR_COMPOSE_FILE="$tmp/compose.json" ONE_NVR_HARDWARE_COMPOSE_FILE="$tmp/hardware.compose.json"
+ docker compose --env-file /dev/null -p "$project" -f "$PWD/compose.yaml" config --quiet
  printf 'Configuration valid. Required services:\n'; cat "$tmp/services"
  exit
 fi
@@ -69,10 +104,8 @@ docker run --rm --network none --user 0:0 --mount "type=bind,source=$env_file,ta
 services=(); images=()
 while IFS= read -r name; do services+=("$name"); done < <(docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/services)
 while IFS= read -r image; do images+=("$image"); done < <(docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/images)
-# Read private manifest via Docker. The local caller owns this short-lived copy.
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/compose.json > "$tmp/compose.json"
-compose=(docker compose -p "$project" -f "$tmp/compose.json")
+# Load the generated manifest through the public root Compose entry.
+load_compose
 "${compose[@]}" config --quiet
 for image in "${images[@]}"; do ensure_image "$image"; done
 # Identify only disabled optional containers by project/service labels, never prune or down.
@@ -100,7 +133,6 @@ if [[ " ${services[*]} " == *' frigate '* ]]; then
  if ! ./deploy/production/probe-hardware.sh "$admin_image" "$data" "$tmp/compose.json" "$project"; then optional_failed=yes; printf 'Intelligence hardware validation failed; core remains available.\n' >&2
  else
   docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/hardware.compose.json > "$tmp/hardware.compose.json"
-  compose+=(-f "$tmp/hardware.compose.json")
   "${compose[@]}" config --quiet
   "${compose[@]}" up -d mqtt frigate || optional_failed=yes
  fi
@@ -108,5 +140,5 @@ fi
 if [[ " ${services[*]} " == *' openlist '* ]]; then "${compose[@]}" up -d openlist || optional_failed=yes; fi
 if [[ $optional_failed == yes ]]; then exit 1; fi
 "${compose[@]}" run --rm --no-deps --entrypoint /usr/local/bin/admin api verify-optional
-printf 'M1-A services started. Get the one-time token with:\n'
-printf 'docker compose -p %q -f %q run --rm --entrypoint /usr/local/bin/admin api setup-token\n' "$project" "$runtime/compose.json"
+printf 'Services started. Get the one-time token with:\n'
+printf './deploy.sh --env-file %q --project %q compose run --rm --no-deps --entrypoint /usr/local/bin/admin api setup-token\n' "$env_file" "$project"

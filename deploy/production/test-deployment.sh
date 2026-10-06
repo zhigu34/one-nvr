@@ -25,14 +25,18 @@ ONE_NVR_STORAGE_ROOT=$root/storage
 ONE_NVR_FRIGATE_ENABLE=no
 ONE_NVR_OPENLIST_ENABLE=no
 ENV
-./deploy/production/deploy.sh --project "$project" --env-file "$root/env" --check
+./deploy.sh --project "$project" --env-file "$root/env" --check
 [[ ! -e $root/data ]] || { printf 'Check created production state.\n' >&2; exit 1; }
-./deploy/production/deploy.sh --project "$project" --env-file "$root/env"
+./deploy.sh --project "$project" --env-file "$root/env"
+# Root Compose must expose the complete selected services.
+services=$(./deploy.sh --project "$project" --env-file "$root/env" compose config --services | sort)
+[[ $services == $(printf '%s\n' api gateway postgres worker zlm | sort) ]]
+./deploy.sh --project "$project" --env-file "$root/env" compose ps --all
 ids=$(docker ps -q --filter "label=com.docker.compose.project=$project")
 [[ $(printf '%s\n' "$ids" | wc -l) -eq 5 ]]
 zlm_before=$(docker ps -q --filter "label=com.docker.compose.project=$project" --filter label=com.docker.compose.service=zlm)
 secret_before=$(docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data,readonly" --entrypoint sha256sum "$admin" /data/secrets/one-nvr.json)
-./deploy/production/deploy.sh --project "$project" --env-file "$root/env"
+./deploy.sh --project "$project" --env-file "$root/env"
 secret_after=$(docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data,readonly" --entrypoint sha256sum "$admin" /data/secrets/one-nvr.json)
 [[ $secret_before == "$secret_after" ]]
 [[ $zlm_before == $(docker ps -q --filter "label=com.docker.compose.project=$project" --filter label=com.docker.compose.service=zlm) ]]
@@ -40,11 +44,11 @@ secret_after=$(docker run --rm --network none --user 0:0 --mount "type=bind,sour
 for flags in 'yes no' 'no yes' 'yes yes'; do
  read -r f o <<< "$flags"
  sed -e "s/ONE_NVR_FRIGATE_ENABLE=no/ONE_NVR_FRIGATE_ENABLE=$f/" -e "s/ONE_NVR_OPENLIST_ENABLE=no/ONE_NVR_OPENLIST_ENABLE=$o/" "$root/env" > "$root/check-env"
- ./deploy/production/deploy.sh --project "$project" --env-file "$root/check-env" --check
+ ./deploy.sh --project "$project" --env-file "$root/check-env" --check
 done
 # An optional container failure remains outside the core; disabling stops only it.
 docker run -d --name "$optional_container" --label "com.docker.compose.project=$project" --label com.docker.compose.service=openlist --entrypoint sleep "$admin" 300 >/dev/null
-./deploy/production/deploy.sh --project "$project" --env-file "$root/env"
+./deploy.sh --project "$project" --env-file "$root/env"
 [[ $(docker inspect "$optional_container" --format '{{.State.Running}}') == false ]]
 [[ $zlm_before == $(docker ps -q --filter "label=com.docker.compose.project=$project" --filter label=com.docker.compose.service=zlm) ]]
 docker rm "$optional_container" >/dev/null

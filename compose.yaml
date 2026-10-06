@@ -1,0 +1,9 @@
+# Public entrypoint. deploy.sh loads private runtime configuration and the
+# validated hardware overlay; neither file belongs in the source repository.
+# Initialize with ./deploy.sh; then use ./deploy.sh compose ps/logs/restart.
+name: one-nvr
+include:
+  - path:
+      - ${ONE_NVR_COMPOSE_FILE:?Run ./deploy.sh first; use ./deploy.sh compose COMMAND for operations}
+      - ${ONE_NVR_HARDWARE_COMPOSE_FILE:?Use ./deploy.sh compose COMMAND to load validated hardware}
+    env_file: /dev/null

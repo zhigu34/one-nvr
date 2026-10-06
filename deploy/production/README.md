@@ -1,19 +1,19 @@
 # one-nvr M1-B 部署
 
-本分支已实现账号、固定通道槽位、摄像头配置修订/测试/应用、批量导入与配置导出、目录池绑定、连续录像/仅取流、录像索引、时区及证书面板，已通过隔离 M1-B 联合验收。实时视频播放与录像内容回放仍待 M1-C；事件与云归档业务仍返回“尚未实现”。原 M0 可以继续独立运行，不复用其状态目录。同机并行运行时，本项目必须选择与 M0 不冲突的 Web 和 RTC 端口。
+本分支已实现账号、固定通道槽位、摄像头配置修订/测试/应用、批量导入与配置导出、目录池绑定、连续录像/仅取流、录像索引、时区及证书面板，已通过隔离 M1-B 联合验收。实时视频播放与录像内容回放仍待 M1-C；事件与云归档业务仍返回“尚未实现”。M0 测试代码已从仓库移除；旧机器上的实验数据不迁移、不删除。接管摄像头前停止旧 M0 服务。
 
-Linux amd64，Docker Engine + Compose v2。宿主不安装 Go、Node、Python。首次部署构建 app/gateway，其他镜像全部按 [固定版本与摘要](../../docs/image-versions.md) 拉取。构建需要网络；更换包源不能解决 Docker Hub 鉴权网络失败。可用 `--admin-image registry/name:version@sha256:...` 指定事先构建并验证的工具镜像。
+Linux amd64，Docker Engine + Compose v2.20.0 或以上（需要 include）。宿主不安装 Go、Node、Python。首次部署构建 app/gateway，其他镜像全部按 [固定版本与摘要](../../docs/image-versions.md) 拉取。构建需要网络；更换包源不能解决 Docker Hub 鉴权网络失败。可用 `--admin-image registry/name:version@sha256:...` 指定事先构建并验证的工具镜像。
 
 ```bash
-cp deploy/production/.env.example deploy/production/.env
+cp -n .env.example .env
 # 修改 PUBLIC_URL、Web/RTC 端口、目录和 CAMERA_CIDRS，保持数据目录独立。
 mkdir -p /srv/one-nvr-storage/disk1
 # 授予 API/Worker 运行 UID 10001 对实际池目录的访问权限；不由程序改底层磁盘权限。
-./deploy/production/deploy.sh --check
-./deploy/production/deploy.sh
+./deploy.sh --check
+./deploy.sh
 ```
 
-`.env` 只按字面量解析，不执行 shell，不展开 `$()` 或变量，不保存秘密。数据目录和内部凭据首次生成后持久保存；不要删除 `secrets/`、`postgres/` 或 `tls/`。生产 Compose 是 `DATA_DIR/runtime/compose-<hash>.json` 的不可变版本；`compose.json` 指向最近渲染内容，权限 0600，包含内部数据库凭据，不要上传。
+`.env` 只按字面量解析，不执行 shell，不展开 `$()` 或变量，不保存秘密。数据目录和内部凭据首次生成后持久保存；不要删除 `secrets/`、`postgres/` 或 `tls/`。根目录 `compose.yaml` 加载私有运行配置和经过验证的硬件覆盖。使用 `./deploy.sh compose ps`、`./deploy.sh compose logs --tail=100 api worker zlm` 查看状态；不要直接 `docker compose up` 绕过初始化、迁移和探测。生产配置是 `DATA_DIR/runtime/compose-<hash>.json` 的不可变版本；`compose.json` 指向最近渲染内容，权限 0600，包含内部数据库凭据，不要上传。
 
 脚本打印获取一次性初始化令牌的命令；令牌只在未初始化站点时可取。打开 PUBLIC_URL，填令牌，创建站点管理员和 16/32 槽位。正常运行 5 容器：gateway（含前端）、api、worker、postgres、zlm。启用 Frigate 增加 frigate/mqtt，启用 OpenList 增加 openlist，因此为 5/7/6/8。临时迁移、初始化和探测容器会结束退出。
 
@@ -35,7 +35,7 @@ HTTP 是显式选择：`ONE_NVR_PUBLIC_URL=http://服务器IP:8080`，保持 HTT
 
 启用检测才枚举目标 Docker daemon 的只读 sysfs，然后在同一固定 Frigate 镜像中自检。使用固定生成命令的短 H.264 样本并记录样本和模型 SHA256，分别运行 FFmpeg 解码、CPU TFLite/Intel OpenVINO 推理；不是通道容量或实际摄像头认证。按 PCI 身份匹配 Intel render 节点，ASPEED 显示卡不当加速器。`auto` 优先实测的 Intel，初次 CPU 也需要自检；曾选中 GPU 失败报告故障，保留期望，不静默降级。可显式指定 `epyc-cpu` 选择 CPU。Nvidia/未认证 AMD 不自动使用。
 
-报告写 `DATA_DIR/hardware/latest.json`；`.env` 不写入运行结果。有效设备最小覆盖写 `runtime/hardware.compose.json`，手动 Compose 操作启用检测时需同时 `-f` 这个文件；日常使用 deploy.sh。Frigate 模板 `record.enabled=false`，无摄像头时保持无业务检测源，不能误报产生事件。OpenList 仅持久保存自身配置，不默认映射录像根；未来仍允许外部 WebDAV。
+报告写 `DATA_DIR/hardware/latest.json`；`.env` 不写入运行结果。有效设备最小覆盖写 `runtime/hardware.compose.json`，`./deploy.sh compose` 会自动加载这个文件；日常配置变更重新运行根目录 deploy.sh。Frigate 模板 `record.enabled=false`，无摄像头时保持无业务检测源，不能误报产生事件。OpenList 仅持久保存自身配置，不默认映射录像根；未来仍允许外部 WebDAV。
 
 ## 验收
 
@@ -73,3 +73,7 @@ GitHub CI 使用真实 PostgreSQL、Nginx 与浏览器；开发入口：
 联合验收要求实际两路 RTSP/MP4、API/Worker/数据库/ZLM 故障、目录证书实际更新、发布进程在移动前后 SIGKILL、私有媒体边界和历史索引/文件恢复。缺失 fixture 或任一断言失败均非零退出；通过本机类型/静态检查不代表实际 Docker 验收通过。
 
 ZLM 与 Worker 另有专用内部回调网络，Worker 使用固定私有地址和 `worker-hook` 名称；普通 Docker 地址变化不会使启动时的媒体访问规则失效。没有增加常驻容器或公开 8083 端口，媒体进程仍在安装规则后放弃 NET_ADMIN。默认内部子网 `172.30.254.0/29`；若与现有 Docker/局域网冲突，可在 `.env` 用 `ONE_NVR_HOOK_SUBNET` 指定其他对齐的私有 IPv4 `/29`，不能覆盖摄像头网段。同一 Docker 主机部署多个项目时，各项目需使用不同的回调子网。
+
+## 已有部署更新
+
+之前使用 `deploy/production/.env` 的站点可执行 `cp -n deploy/production/.env .env`，保留已有配置，再从根目录执行 `./deploy.sh --check` 和 `./deploy.sh`。数据目录、存储根、端口及项目名必须沿用原值，不会因为源码入口移动而迁移或删除数据。M0 的 `.env` 与正式格式不同，不能直接复制。
