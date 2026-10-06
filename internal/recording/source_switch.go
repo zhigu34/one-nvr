@@ -304,6 +304,7 @@ func (s *Service) observeSwitch(ctx context.Context, e *channel.Execution, w cha
 				subState, subReason = "healthy", "decoded_first_frame"
 			} else {
 				subReason = subFailureReason(err)
+				logSubFailure(err)
 				if err := e.Check(ctx); err != nil {
 					return err
 				}
