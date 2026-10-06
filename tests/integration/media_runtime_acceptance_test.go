@@ -491,6 +491,16 @@ func jointRollbackFailure(t *testing.T, db *database.DB) {
 		}
 		return state.State == "succeeded"
 	})
+	// Like continuous UI applies, failure injection needs real current pool
+	// proof before disconnecting both publishers. Never seed or extend proof.
+	var pool struct {
+		ID *id.ID `json:"storage_pool_id"`
+	}
+	a.call("GET", "channels/"+string(ch)+"/source/status", nil, 0, &pool)
+	if pool.ID == nil {
+		t.Fatal("continuous rollback fixture has no bound pool")
+	}
+	a.change("POST", "storage-pools/"+string(*pool.ID)+"/test", map[string]any{}, 0)
 	response, err := (&http.Client{Timeout: 5 * time.Second}).Post("http://fixture:8557/stop-all", "application/json", nil)
 	if err != nil {
 		t.Fatal("physical publisher fault control unavailable")
@@ -517,7 +527,7 @@ func jointRollbackFailure(t *testing.T, db *database.DB) {
 	var current struct {
 		Version int64 `json:"version"`
 	}
-	a.call("GET", "channels/"+string(ch), nil, 0, &current)
+	a.call("GET", "channels/"+string(ch)+"/source/status", nil, 0, &current)
 	var job struct {
 		ID id.ID `json:"job_id"`
 	}

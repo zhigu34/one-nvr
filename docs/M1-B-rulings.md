@@ -128,6 +128,8 @@ Final: Ruling: Isolated waitRecoveredSession retries typed zlm.ErrMediaOperation
 
 Final: Ruling: Joint bootstrap reads channel version through the existing authorized source/status endpoint instead of a nonexistent single-channel GET. Cost if wrong: the acceptance client depends on the published status DTO version; no new API surface, authorization bypass or production behavior change. CI37404369875 joint RED404 at bootstrap; actual isolated API confirms old GET404 and source/status200 with positive version.
 
+Final: Ruling: Supersede the fixture-only CI37406888801 early after discovering a third identical nonexistent channel GET in its final rollback phase, rather than waiting for a certain404. Prior mandatory-media Linux PG819.601s proves unchanged production code; final exact new candidate still requires all12 gates. Cost if wrong: the interrupted candidate has no complete acceptance receipt and its media recovery observation must be repeated.
+
 ## Deferred minors
 
 Final: minor (deferred): M1-B-decisions run-timezone wording conflicts with the binding spec's first-publication-intent freeze; runtime follows the binding spec. Cost if deferred: readers of the summary may misunderstand the freeze boundary; no runtime/path change is authorized by this documentation discrepancy. Existing M1-A users/pools feedback remount and timezone search/preview remain deferred.
