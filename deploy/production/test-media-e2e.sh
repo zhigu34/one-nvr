@@ -12,7 +12,10 @@ fi
 cleanup() {
  local status=$?
  if [[ $status -ne 0 ]]; then
-  "${compose[@]}" logs --tail=40 api worker gateway fixture || true
+	"${compose[@]}" logs --tail=40 api worker gateway fixture || true
+	# These application messages contain only fixed stages/booleans, never raw
+	# completion bodies or upstream credentials; retain the entire fault window.
+	"${compose[@]}" logs --no-log-prefix worker 2>/dev/null | awk '/recording completion (received|durable|database deferred|spooled|rejected)/ { print }' || true
   # Safe domain states only. No source URLs, media keys, credential payloads or raw ZLM logs.
   "${compose[@]}" exec -T postgres psql -U one_nvr_test -d one_nvr_test -At -c "SELECT kind,attempt,state,error_code FROM jobs ORDER BY created_at; SELECT c.channel_no,s.kind,s.phase,s.state,s.error_code FROM source_switches s JOIN channels c ON c.id=s.channel_id ORDER BY s.created_at; SELECT service,state,reason_code,expires_at>clock_timestamp() FROM storage_pool_checks ORDER BY pool_id,service; SELECT kind,state,reason_code,expires_at>clock_timestamp() FROM source_observations ORDER BY observed_at DESC LIMIT 12; SELECT c.channel_no,b.reason_code,b.healthy_samples FROM recording_capacity_blocks b JOIN channels c ON c.id=b.channel_id ORDER BY c.channel_no" || true
  fi

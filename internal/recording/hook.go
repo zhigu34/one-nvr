@@ -82,6 +82,7 @@ func NewHookHandler(service *Service, token string, probeTokens ...string) http.
 		}
 		seconds, fraction := math.Modf(input.Start)
 		c := Completion{Key: zlm.StreamKey{VHost: input.VHost, App: input.App, Stream: input.Stream}, MediaServerID: input.MediaServerID, FilePath: input.FilePath, Size: input.Size, StartTime: time.Unix(int64(seconds), int64(fraction*1e9)).UTC(), Duration: time.Duration(input.Duration * float64(time.Second))}
+		slog.Info("recording completion received")
 		if err := service.Accept(r.Context(), c); err != nil {
 			if errors.Is(err, ErrCompletionInvalid) {
 				slog.Warn("recording completion rejected", "reason", "invalid_completion")
@@ -92,6 +93,7 @@ func NewHookHandler(service *Service, token string, probeTokens ...string) http.
 			}
 			return
 		}
+		slog.Info("recording completion durable")
 		w.Write([]byte(`{"code":0,"msg":"success"}`))
 	})
 }

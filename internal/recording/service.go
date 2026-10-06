@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,9 +111,11 @@ func (s *Service) Accept(ctx context.Context, c Completion) error {
 	} else if errors.Is(err, ErrCompletionInvalid) {
 		return err
 	}
+	slog.Warn("recording completion database deferred", "context_cancelled", ctx.Err() != nil)
 	if err := (&Spool{Dir: filepath.Join(s.DataDir, "recording-spool")}).Put(ctx, c); err != nil {
 		return ErrCompletionUnavailable
 	}
+	slog.Info("recording completion spooled")
 	return nil
 }
 func (s *Service) acceptDB(ctx context.Context, c Completion) error {
