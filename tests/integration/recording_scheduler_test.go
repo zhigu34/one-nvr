@@ -157,6 +157,43 @@ func TestRecordingPolicyPreflightFailureReleasesChannel(t *testing.T) {
 	}
 }
 
+func TestRecordingPolicyMaintainsFreshBitrateDuringCapacityRecovery(t *testing.T) {
+	f, _, _, _ := testedSource(t)
+	ctx := context.Background()
+	if _, err := f.Service.Sources.SetPolicy(ctx, f.Admin, f.Channel, 3, "none", "recovery-rate-off"); err != nil {
+		t.Fatal(err)
+	}
+	executeChange(t, f, "source.policy_apply")
+	if _, err := f.DB.Pool.Exec(ctx, "DELETE FROM recording_bitrate_samples WHERE channel_id=$1", f.Channel); err != nil {
+		t.Fatal(err)
+	}
+	for _, age := range []int{28, 18} {
+		sample, err := id.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.DB.Pool.Exec(ctx, `INSERT INTO recording_bitrate_samples(id,channel_id,source_revision_id,stream_session_id,bytes_per_second,frames,valid,observed_at) SELECT $2,channel_id,source_revision_id,id,1048576,1,true,clock_timestamp()-make_interval(secs=>$3) FROM stream_sessions WHERE channel_id=$1 AND purpose='main' AND state='active'`, f.Channel, sample, age); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.DB.Pool.Exec(ctx, "INSERT INTO recording_capacity_blocks(channel_id,reason_code) VALUES($1,'pool_unavailable')", f.Channel); err != nil {
+		t.Fatal(err)
+	}
+	var version int64
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT version FROM channels WHERE id=$1", f.Channel).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	change, err := f.Service.Sources.SetPolicy(ctx, f.Admin, f.Channel, version, "continuous", "recovery-rate-on")
+	if err != nil {
+		t.Fatal(err)
+	}
+	executeChange(t, f, "source.policy_apply")
+	var state, reason, mode string
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT j.state,coalesce(j.error_code,''),p.mode FROM jobs j JOIN recording_policies p ON p.channel_id=$2 WHERE j.id=$1", change.JobID, f.Channel).Scan(&state, &reason, &mode); err != nil || state != "succeeded" || mode != "continuous" {
+		t.Fatal("owned policy let valid bitrate expire while awaiting two capacity recovery observations", state, reason, mode, err)
+	}
+}
+
 func TestRecordingMonitorCleansDisabledRuntimeSessions(t *testing.T) {
 	f, media, _, _ := testedSource(t)
 	ctx := context.Background()

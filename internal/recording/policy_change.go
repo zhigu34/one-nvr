@@ -67,6 +67,12 @@ func (s *Service) verifyRecordingTarget(ctx context.Context, e *channel.Executio
 	if pool == nil {
 		return ss, storage.ErrMediaProof
 	}
+	// This change owns the channel, so Monitor cannot sample while Start
+	// waits for capacity recovery. Keep observing actual frame/rate progress
+	// on each bounded attempt; SafetyLine still requires a fresh ten-second pair.
+	if _, err := s.sampleBitrate(ctx, e, ss, "", false); err != nil {
+		return ss, err
+	}
 	_, err = s.Start(ctx, e, StartInput{SessionID: ss.ID, PoolID: *pool})
 	return ss, err
 }
