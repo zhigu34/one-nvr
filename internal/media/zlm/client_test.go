@@ -72,6 +72,8 @@ func TestZLMTypedOperationsAndSanitizedSnapshot(t *testing.T) {
 			w.Write([]byte(`{"code":0,"data":{"flag":true}}`))
 		case "/index/api/getMediaInfo":
 			w.Write([]byte(`{"code":0,"schema":"rtsp","vhost":"__defaultVhost__","app":"one_nvr","stream":"` + fixtureStream + `","originUrl":"rtsp://private@192.168.1.2/main","bytesSpeed":1024,"isRecordingMP4":true,"tracks":[{"codec_type":0,"codec_id_name":"H264","ready":true,"width":320,"height":180,"fps":5,"frames":10}]}`))
+		case "/index/api/isMediaOnline":
+			w.Write([]byte(`{"code":0,"online":true}`))
 		default:
 			w.Write([]byte(`{"code":0,"result":true}`))
 		}
@@ -161,5 +163,25 @@ func TestInspectAbsenceRequiresSuccessfulOnlineResponse(t *testing.T) {
 			t.Fatal("outage/malformed response proved absence", err)
 		}
 		server.Close()
+	}
+}
+
+func TestInspectConfirmsOfflineBeforeWaitingForMediaDetails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/index/api/isMediaOnline" {
+			w.Write([]byte(`{"code":0,"online":false}`))
+			return
+		}
+		// Detail lookup may be waiting on the old media owner's thread. It
+		// cannot be a prerequisite for a separate successful offline proof.
+		time.Sleep(200 * time.Millisecond)
+		w.Write([]byte(`{"code":-1}`))
+	}))
+	defer server.Close()
+	client, _ := New(server.URL, "fixture", server.Client())
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := client.Inspect(ctx, fixtureKey); !errors.Is(err, ErrStreamAbsent) {
+		t.Fatal("confirmed offline source stayed unknown behind a delayed detail query", err)
 	}
 }

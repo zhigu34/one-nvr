@@ -177,6 +177,21 @@ func (c *Client) Inspect(ctx context.Context, key StreamKey) (StreamSnapshot, er
 	if err := key.Validate(); err != nil {
 		return StreamSnapshot{}, err
 	}
+	// The detailed response runs on the media owner's thread. Establish
+	// registry presence first so an absent stream does not consume a bounded
+	// reconnect window waiting for details of a previous physical source.
+	var presence struct {
+		Online *bool `json:"online"`
+	}
+	if err := c.call(ctx, "isMediaOnline", key.values(), &presence); err != nil {
+		return StreamSnapshot{}, err
+	}
+	if presence.Online == nil {
+		return StreamSnapshot{}, ErrMediaOperation
+	}
+	if !*presence.Online {
+		return StreamSnapshot{}, ErrStreamAbsent
+	}
 	var out struct {
 		VHost     string `json:"vhost"`
 		App       string `json:"app"`

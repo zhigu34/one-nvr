@@ -84,6 +84,7 @@ func (s *Service) reconcileRuntimeSub(ctx context.Context, e *channel.Execution,
 			}
 			return s.observation(ctx, e, ss, "sub", "unknown", "frame_progress_pending", nil)
 		}
+		logSubFailure(err)
 		if err := e.Check(ctx); err != nil {
 			return err
 		}

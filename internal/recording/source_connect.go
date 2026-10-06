@@ -1,6 +1,12 @@
 package recording
 
-import "errors"
+import (
+	"context"
+	"errors"
+	"log/slog"
+
+	"github.com/zhigu34/one-nvr/internal/media/zlm"
+)
 
 // Only fixed stage codes may reach observations. The underlying error remains
 // available to ownership checks, but its text (which can include a URL) is hidden.
@@ -31,4 +37,9 @@ func subFailureReason(err error) string {
 		}
 	}
 	return "sub_source_unavailable"
+}
+
+func logSubFailure(err error) {
+	// Never include raw upstream errors, addresses or decrypted input.
+	slog.Warn("substream connection unavailable", "reason", subFailureReason(err), "deadline_exceeded", errors.Is(err, context.DeadlineExceeded), "media_unavailable", errors.Is(err, zlm.ErrMediaOperation))
 }
