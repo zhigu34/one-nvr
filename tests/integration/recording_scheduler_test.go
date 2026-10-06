@@ -100,6 +100,63 @@ func TestRecordingPolicyRefreshesExpiredBitrateBeforeStart(t *testing.T) {
 	}
 }
 
+func TestRecordingPolicyPreflightFailureReleasesChannel(t *testing.T) {
+	for _, missing := range []string{"main", "capacity_peers", "zlm_proof"} {
+		t.Run(missing, func(t *testing.T) {
+			reason := "pool_unavailable"
+			if missing == "main" {
+				reason = "source_unavailable"
+			}
+			f, _, _, _ := testedSource(t)
+			ctx := context.Background()
+			if _, err := f.Service.Sources.SetPolicy(ctx, f.Admin, f.Channel, 3, "none", "preflight-off"); err != nil {
+				t.Fatal(err)
+			}
+			executeChange(t, f, "source.policy_apply")
+			var version int64
+			if err := f.DB.Pool.QueryRow(ctx, "SELECT version FROM channels WHERE id=$1", f.Channel).Scan(&version); err != nil {
+				t.Fatal(err)
+			}
+			change, err := f.Service.Sources.SetPolicy(ctx, f.Admin, f.Channel, version, "continuous", "preflight-on")
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Evidence can disappear after admission but before the durable job runs.
+			if missing == "main" {
+				if _, err := f.DB.Pool.Exec(ctx, "UPDATE stream_sessions SET state='closed' WHERE channel_id=$1 AND purpose='main'", f.Channel); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := f.DB.Pool.Exec(ctx, "DELETE FROM recording_bitrate_samples WHERE channel_id=$1", f.Channel); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				statement := "UPDATE storage_pool_checks SET expires_at=clock_timestamp()-interval '1 second' WHERE pool_id=$1"
+				if missing == "zlm_proof" {
+					statement += " AND service='zlm'"
+				}
+				if _, err := f.DB.Pool.Exec(ctx, statement, f.Pool.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			executeChange(t, f, "source.policy_apply")
+			var state, code, phase, mode string
+			if err := f.DB.Pool.QueryRow(ctx, "SELECT j.state,coalesce(j.error_code,''),s.phase,p.mode FROM jobs j JOIN source_switches s ON s.job_id=j.id JOIN recording_policies p ON p.channel_id=s.channel_id WHERE j.id=$1", change.JobID).Scan(&state, &code, &phase, &mode); err != nil {
+				t.Fatal(err)
+			}
+			if state != "failed" || code != reason || phase != "rolled_back" || mode != "none" {
+				t.Fatal("preflight failure retained a durable channel guard instead of preserving the old policy", state, code, phase, mode)
+			}
+			var live, recorders int
+			if err := f.DB.Pool.QueryRow(ctx, "SELECT count(*) FROM source_switches WHERE channel_id=$1 AND state='running'", f.Channel).Scan(&live); err != nil || live != 0 {
+				t.Fatal("monitor recovery remains blocked", live, err)
+			}
+			if err := f.DB.Pool.QueryRow(ctx, "SELECT count(*) FROM recording_runs WHERE channel_id=$1 AND state IN ('starting','recording','stopping')", f.Channel).Scan(&recorders); err != nil || recorders != 0 {
+				t.Fatal("failed enable changed recording state", recorders, err)
+			}
+		})
+	}
+}
+
 func TestRecordingMonitorCleansDisabledRuntimeSessions(t *testing.T) {
 	f, media, _, _ := testedSource(t)
 	ctx := context.Background()

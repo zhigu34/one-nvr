@@ -209,6 +209,28 @@ func TestGatewayMediaRuntimeJoint(t *testing.T) {
 	if phase == "spool" {
 		var before jointSnapshot
 		jointRead(t, "/results/joint-before.json", &before)
+		t.Cleanup(func() {
+			if !t.Failed() {
+				return
+			}
+			entries, err := os.ReadDir("/data/recording-spool")
+			complete, pending := 0, 0
+			for _, entry := range entries {
+				if filepath.Ext(entry.Name()) == ".json" {
+					complete++
+				} else if filepath.Ext(entry.Name()) == ".tmp" {
+					pending++
+				}
+			}
+			mediaFiles := 0
+			_ = filepath.Walk("/storage", func(_ string, info os.FileInfo, err error) error {
+				if err == nil && info.Mode().IsRegular() && filepath.Ext(info.Name()) == ".mp4" {
+					mediaFiles++
+				}
+				return nil
+			})
+			t.Logf("outage diagnostics: spool_readable=%t complete=%d pending=%d media_files=%d two_upstream_recorders=%t", err == nil, complete, pending, mediaFiles, jointTwoRecording(t, media, before))
+		})
 		jointWait(t, 80, "actual DB outage produced no durable completion spool", func() bool { names, _ := filepath.Glob("/data/recording-spool/*.json"); return len(names) > 0 })
 		if !jointTwoRecording(t, media, before) {
 			t.Fatal("DB outage stopped upstream recorders")
@@ -330,6 +352,11 @@ func TestGatewayMediaRuntimeJoint(t *testing.T) {
 			t.Fatal("cannot snapshot two actual recorders")
 		}
 		jointWrite(t, "/results/joint-before.json", current)
+		var delivered, recovered int
+		if err := db.Pool.QueryRow(context.Background(), runtimeCompletionCountsQuery).Scan(&delivered, &recovered); err != nil {
+			t.Fatal("completion delivery diagnostics unavailable")
+		}
+		t.Logf("completion diagnostics: delivered=%d recovered=%d", delivered, recovered)
 		return
 	}
 	var before jointSnapshot

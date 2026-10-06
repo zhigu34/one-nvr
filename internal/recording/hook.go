@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/url"
@@ -83,8 +84,10 @@ func NewHookHandler(service *Service, token string, probeTokens ...string) http.
 		c := Completion{Key: zlm.StreamKey{VHost: input.VHost, App: input.App, Stream: input.Stream}, MediaServerID: input.MediaServerID, FilePath: input.FilePath, Size: input.Size, StartTime: time.Unix(int64(seconds), int64(fraction*1e9)).UTC(), Duration: time.Duration(input.Duration * float64(time.Second))}
 		if err := service.Accept(r.Context(), c); err != nil {
 			if errors.Is(err, ErrCompletionInvalid) {
+				slog.Warn("recording completion rejected", "reason", "invalid_completion")
 				reject(400)
 			} else {
+				slog.Warn("recording completion rejected", "reason", "durability_unavailable")
 				reject(503)
 			}
 			return

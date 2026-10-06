@@ -92,6 +92,12 @@ func (s *Service) observeRecordingChange(ctx context.Context, e *channel.Executi
 
 func (s *Service) executeRecordingChange(ctx context.Context, e *channel.Execution, w channel.SwitchWork) (jobs.Result, error) {
 	if w.Phase == "testing" {
+		rejectPreflight := func(reason string) (jobs.Result, error) {
+			if err := s.finishSwitch(ctx, e, &w, "rolled_back", reason); err != nil {
+				return jobs.Result{}, err
+			}
+			return jobs.Result{}, &jobs.PermanentFailure{Code: reason}
+		}
 		samePool := w.OldPool == nil && w.NewPool == nil || w.OldPool != nil && w.NewPool != nil && *w.OldPool == *w.NewPool
 		if w.OldMode == w.DesiredMode && samePool {
 			if err := s.finishSwitch(ctx, e, &w, "committed", ""); err != nil {
@@ -105,6 +111,10 @@ func (s *Service) executeRecordingChange(ctx context.Context, e *channel.Executi
 			}
 			capacity, err := s.capacityFor(ctx, e.ChannelID, *w.NewRevision, *w.NewPool)
 			if err != nil {
+				var unavailable *fault.Error
+				if errors.As(err, &unavailable) && unavailable.Code == "capacity_unknown" {
+					return rejectPreflight("pool_unavailable")
+				}
 				return jobs.Result{}, err
 			}
 			if !capacity.Known {
@@ -112,6 +122,11 @@ func (s *Service) executeRecordingChange(ctx context.Context, e *channel.Executi
 				// samples. Gather real frame/rate evidence before deciding to stop
 				// the old recorder; the shared-filesystem capacity gate stays intact.
 				ss, err := s.currentMain(ctx, e, w.NewRevision)
+				if errors.Is(err, pgx.ErrNoRows) {
+					// No recording side effect has started. Release the durable
+					// change guard so Monitor can recover the missing main stream.
+					return rejectPreflight("source_unavailable")
+				}
 				if err != nil {
 					return jobs.Result{}, err
 				}
@@ -127,6 +142,10 @@ func (s *Service) executeRecordingChange(ctx context.Context, e *channel.Executi
 				if refreshErr == nil {
 					capacity, err = s.capacityFor(ctx, e.ChannelID, *w.NewRevision, *w.NewPool)
 					if err != nil {
+						var unavailable *fault.Error
+						if errors.As(err, &unavailable) && unavailable.Code == "capacity_unknown" {
+							return rejectPreflight("pool_unavailable")
+						}
 						return jobs.Result{}, err
 					}
 				}
@@ -148,7 +167,7 @@ func (s *Service) executeRecordingChange(ctx context.Context, e *channel.Executi
 				return jobs.Result{}, err
 			}
 			if !proof {
-				return jobs.Result{}, fault.New(409, "pool_unavailable", "目标池缺少新鲜写入证据")
+				return rejectPreflight("pool_unavailable")
 			}
 		}
 		if err := s.changePhase(ctx, e, &w, "stopping_old"); err != nil {
