@@ -215,5 +215,5 @@ func poolProbeAcceptance() error {
 }
 
 func replaceWorkerHost(text string) string {
-	return strings.ReplaceAll(text, "http://worker:8083/", "http://runner:8083/")
+	return strings.ReplaceAll(text, "http://worker-hook:8083/", "http://runner:8083/")
 }

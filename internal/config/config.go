@@ -15,7 +15,7 @@ type Config struct {
 	PublicURL                                                               string
 	HTTPPort, HTTPSPort, RTCPort                                            int
 	MediaHost, DataDir, DatabaseURL, TLSDir, HardwareProfile, ListenAddress string
-	CameraCIDRs                                                             string
+	CameraCIDRs, HookSubnet                                                 string
 	FrigateEnabled, OpenListEnabled                                         bool
 }
 

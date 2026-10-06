@@ -38,7 +38,7 @@ func writeComponentConfigs(v map[string]string, secret secrets.State) error {
 	if e = replaceFile("/data/runtime/zlm-launcher", launcher, 0755); e != nil {
 		return e
 	}
-	boundary := egress.Config{CameraCIDRs: c.CameraCIDRs, HookHost: "worker", DeniedHosts: []string{"api", "worker", "gateway", "postgres", "zlm"}}
+	boundary := egress.Config{CameraCIDRs: c.CameraCIDRs, HookHost: "worker-hook", DeniedHosts: []string{"api", "worker", "worker-hook", "gateway", "postgres", "zlm"}}
 	for _, address := range []string{host, u.Hostname()} {
 		if ip, e := netip.ParseAddr(address); e == nil {
 			boundary.DeniedIPs = append(boundary.DeniedIPs, ip.String())

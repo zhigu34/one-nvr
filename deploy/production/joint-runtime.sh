@@ -11,10 +11,25 @@ joint_phase bootstrap
 for service in api worker both; do
  joint_phase snapshot
  case "$service" in
-  api|worker) "${compose[@]}" restart "$service" ;;
+  api) "${compose[@]}" restart api ;;
+  worker)
+   # Occupy the released ordinary address to deterministically reproduce Docker
+   # peer relocation. The private Hook alias must survive without restarting ZLM.
+   old_peer=$(docker inspect --format "{{range \$name, \$network := .NetworkSettings.Networks}}{{if eq \$name \"${project}_default\"}}{{\$network.IPAddress}}{{end}}{{end}}" "$("${compose[@]}" ps -q worker)")
+   [[ "$old_peer" =~ ^172\.30\.253\.[0-9]+$ ]] || return 1
+   "${compose[@]}" stop worker
+   "${compose[@]}" rm -f worker
+   peer_reservation=$(docker run -d --network "${project}_default" --ip "$old_peer" --entrypoint sleep one-nvr/app:ci 300)
+   "${compose[@]}" up -d --no-deps worker
+   new_peer=$(docker inspect --format "{{range \$name, \$network := .NetworkSettings.Networks}}{{if eq \$name \"${project}_default\"}}{{\$network.IPAddress}}{{end}}{{end}}" "$("${compose[@]}" ps -q worker)")
+   [[ -n $new_peer && $new_peer != "$old_peer" ]] || { printf 'Worker peer relocation not exercised.\n' >&2; return 1; }
+   printf 'Worker ordinary address changed; private callback continuity required.\n'
+   ;;
+
   both) "${compose[@]}" restart api worker ;;
  esac
  joint_phase restart
+ if [[ -n $peer_reservation ]]; then docker rm -f "$peer_reservation" >/dev/null; peer_reservation=; fi
 done
 joint_phase snapshot
 "${compose[@]}" stop postgres
