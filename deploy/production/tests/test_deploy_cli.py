@@ -16,8 +16,14 @@ args=sys.argv[1:]; fixture=Path(os.environ['ONE_NVR_CLI_FIXTURE'])
 with (fixture/'calls.jsonl').open('a') as f: f.write(json.dumps(args)+'\n')
 if args[0]=='info': print('amd64')
 elif args[:2]==['image','inspect']:
- if args[2]!=os.environ['ONE_NVR_CLI_ADMIN']: sys.exit(1)
- print('amd64' if '--format' in args else '{}')
+ state=json.loads((fixture/'built.json').read_text()) if (fixture/'built.json').exists() else {}
+ if args[2]!=os.environ['ONE_NVR_CLI_ADMIN'] and args[2] not in state: sys.exit(1)
+ if '--format' in args and 'source-tree' in args[-1]: print(state.get(args[2],''))
+ else: print('amd64' if '--format' in args else '{}')
+elif args[0]=='build':
+ state=json.loads((fixture/'built.json').read_text()) if (fixture/'built.json').exists() else {}
+ state[args[args.index('-t')+1]]=args[args.index('--label')+1].split('=',1)[1]
+ (fixture/'built.json').write_text(json.dumps(state))
 elif args[0]=='ps': pass
 elif args[0]=='compose':
  if os.environ.get('ONE_NVR_REAL_COMPOSE') and 'run' in args:
@@ -86,6 +92,45 @@ class DeployCLI(unittest.TestCase):
         self.assertIn("one-nvr-cli-contract", last_compose)
         self.assertIn("--env-file", last_compose)
         self.assertIn("/dev/null", last_compose)
+
+    def build_default_admin(self, extra=""):
+        with self.settings.open("a") as f:
+            f.write(extra)
+        return subprocess.run([str(REPO / "deploy.sh"), "--env-file", str(self.settings),
+                               "--project", "one-nvr-build-contract"], env=self.env,
+                              cwd=self.root, capture_output=True, text=True)
+
+    def build_calls(self):
+        return [c for c in (json.loads(x) for x in (self.root / "calls.jsonl").read_text().splitlines())
+                if c[0] == "build"]
+
+    def test_local_build_passes_reachable_default_proxy(self):
+        run = self.build_default_admin()
+        self.assertEqual(run.returncode, 0, run.stderr)
+        builds = self.build_calls()
+        self.assertTrue(builds)
+        self.assertIn("GOPROXY=https://goproxy.cn,direct", builds[0])
+
+    def test_local_build_reads_quoted_proxy_without_expansion(self):
+        marker = self.root / "env-executed"
+        run = self.build_default_admin('OTHER_BUILD_VALUE=$(touch ' + str(marker) + ')\n'
+                                       '  ONE_NVR_GOPROXY = "https://proxy.golang.org,direct" # override\n')
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn("GOPROXY=https://proxy.golang.org,direct", self.build_calls()[0])
+        self.assertFalse(marker.exists())
+
+    def test_invalid_or_duplicate_proxy_fails_before_build(self):
+        for extra in ["ONE_NVR_GOPROXY='$(touch sentinel)'\n",
+                      "ONE_NVR_GOPROXY=https://goproxy.cn\nONE_NVR_GOPROXY=https://other.example\n"]:
+            with self.subTest(extra=extra):
+                self.settings.write_text(f"ONE_NVR_DATA_DIR={self.data}\nONE_NVR_STORAGE_ROOT={self.root / 'storage'}\n")
+                log = self.root / "calls.jsonl"
+                if log.exists():
+                    log.unlink()
+                run = self.build_default_admin(extra)
+                self.assertNotEqual(run.returncode, 0)
+                self.assertEqual(self.build_calls(), [])
+                self.assertFalse((REPO / "sentinel").exists())
 
     def test_hardware_selection_ignores_ambient_project_dotenv(self):
         standalone = os.environ.get("ONE_NVR_TEST_COMPOSE_BIN")
