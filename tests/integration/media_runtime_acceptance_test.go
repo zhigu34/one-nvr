@@ -376,7 +376,7 @@ func TestGatewayMediaRuntimeJoint(t *testing.T) {
 		jointWait(t, 30, "completion spool did not drain", func() bool { names, _ := filepath.Glob("/data/recording-spool/*.json"); return len(names) == 0 })
 	}
 	// Verify actual indexed bytes with the locked FFprobe, not just database state.
-	rows, err := db.Pool.Query(context.Background(), `SELECT DISTINCT ON(c.id) p.path,l.relative_path,l.size_bytes FROM recording_locations l JOIN storage_pools p ON p.id=l.pool_id JOIN recording_segments s ON s.id=l.segment_id JOIN channels c ON c.id=s.channel_id WHERE c.channel_no IN (1,2) AND s.state='ready' ORDER BY c.id,s.ready_at DESC`)
+	rows, err := db.Pool.Query(context.Background(), runtimePublishedFilesQuery)
 	if err != nil {
 		t.Fatal("published files unavailable")
 	}
