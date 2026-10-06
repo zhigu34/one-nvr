@@ -545,16 +545,12 @@ func jointRollbackFailure(t *testing.T, db *database.DB) {
 	if response.StatusCode != 200 {
 		t.Fatal("publishers not stopped")
 	}
-	camera, err := zlm.New("http://camera", "isolated-media-fixture-only", nil)
-	if err != nil {
-		t.Fatal("camera verifier unavailable")
-	}
 	jointWait(t, 5, "both upstream sources still available", func() bool {
 		for _, path := range fixture.Paths {
 			bounded, cancel := context.WithTimeout(ctx, time.Second)
-			_, err := camera.Inspect(bounded, zlm.StreamKey{VHost: "__defaultVhost__", App: "one_nvr", Stream: strings.TrimPrefix(path, "/one_nvr/")})
+			absent := runtimeUpstreamAbsent(bounded, "http://camera", zlm.StreamKey{VHost: "__defaultVhost__", App: "one_nvr", Stream: strings.TrimPrefix(path, "/one_nvr/")})
 			cancel()
-			if !errors.Is(err, zlm.ErrStreamAbsent) {
+			if !absent {
 				return false
 			}
 		}
