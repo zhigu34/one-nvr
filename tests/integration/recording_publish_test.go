@@ -40,14 +40,8 @@ type publishFixture struct {
 
 func newPublicationFixture(t *testing.T) publishFixture {
 	t.Helper()
-	ffmpeg, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("native media tools unavailable; actual media publication is a CI gate")
-	}
-	ffprobe, err := exec.LookPath("ffprobe")
-	if err != nil {
-		t.Skip("native media tools unavailable; actual media publication is a CI gate")
-	}
+	ffmpeg := mediaTestTool(t, "ffmpeg")
+	ffprobe := mediaTestTool(t, "ffprobe")
 	dir := t.TempDir()
 	db, accounts, sites, admin := authFixture(t, dir)
 	ctx := context.Background()

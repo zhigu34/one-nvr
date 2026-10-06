@@ -37,7 +37,8 @@ jobs:
           path: media-test-results/*.json
   backend:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Up to20m for the complete media/PG suite, plus locked tool build and unit/vet.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:

@@ -1,0 +1,5 @@
+# Isolated CI/development Go tooling with the same locked media tools as app.
+FROM golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195
+ARG ONE_NVR_DEBIAN_SNAPSHOT_URL=https://snapshot.debian.org/archive/debian/20260919T000000Z/
+COPY deploy/production/media-packages.lock deploy/production/install-media.sh /tmp/
+RUN sh /tmp/install-media.sh && rm /tmp/install-media.sh /tmp/media-packages.lock

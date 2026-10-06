@@ -318,14 +318,8 @@ func TestPoolCheckWithoutSourceRemainsPending(t *testing.T) {
 }
 
 func TestPoolMediaStructureDoesNotRequireLiveDecodedFrame(t *testing.T) {
-	ffmpeg, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("native media tools unavailable; required by actual media CI")
-	}
-	ffprobe, err := exec.LookPath("ffprobe")
-	if err != nil {
-		t.Skip("native media tools unavailable; required by actual media CI")
-	}
+	ffmpeg := mediaTestTool(t, "ffmpeg")
+	ffprobe := mediaTestTool(t, "ffprobe")
 	dir := t.TempDir()
 	db, accounts, sites, admin := authFixture(t, dir)
 	ctx := context.Background()
