@@ -48,6 +48,58 @@ func TestRecordingMonitorEmptySlotsDoNotExpireConfiguredSource(t *testing.T) {
 	t.Fatal("empty permanent slots starved fresh paired observations of the configured source")
 }
 
+func TestRecordingPolicyRefreshesExpiredBitrateBeforeStart(t *testing.T) {
+	for _, stalled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "advancing", true: "stalled"}[stalled], func(t *testing.T) {
+			f, media, _, _ := testedSource(t)
+			ctx := context.Background()
+			if _, err := f.Service.Sources.SetPolicy(ctx, f.Admin, f.Channel, 3, "none", "fresh-policy-off"); err != nil {
+				t.Fatal(err)
+			}
+			executeChange(t, f, "source.policy_apply")
+			// A user may spend longer than the 30-second freshness window in settings.
+			// Once the policy job owns this channel, Monitor cannot refresh it for us.
+			if _, err := f.DB.Pool.Exec(ctx, "UPDATE recording_bitrate_samples SET observed_at=clock_timestamp()-interval '1 minute' WHERE channel_id=$1", f.Channel); err != nil {
+				t.Fatal(err)
+			}
+			if stalled {
+				media.FrozenFrames = 100
+			}
+			var version int64
+			if err := f.DB.Pool.QueryRow(ctx, "SELECT version FROM channels WHERE id=$1", f.Channel).Scan(&version); err != nil {
+				t.Fatal(err)
+			}
+			change, err := f.Service.Sources.SetPolicy(ctx, f.Admin, f.Channel, version, "continuous", "fresh-policy-on")
+			if err != nil {
+				t.Fatal(err)
+			}
+			executeChange(t, f, "source.policy_apply")
+			var state, reason, mode string
+			expectedState, expectedMode, expectedCount := "succeeded", "continuous", 1
+			if stalled {
+				expectedState, expectedMode, expectedCount = "failed", "none", 0
+			}
+			if err := f.DB.Pool.QueryRow(ctx, "SELECT j.state,coalesce(j.error_code,''),p.mode FROM jobs j JOIN recording_policies p ON p.channel_id=$2 WHERE j.id=$1", change.JobID, f.Channel).Scan(&state, &reason, &mode); err != nil || state != expectedState || mode != expectedMode {
+				t.Fatal("policy did not collect fresh evidence under its own channel lock", state, reason, mode, err)
+			}
+			if stalled && reason != "bitrate_unknown" {
+				t.Fatal("stalled source accepted as fresh", reason)
+			}
+			media.mu.Lock()
+			defer media.mu.Unlock()
+			var recordingCount int
+			for _, active := range media.recording {
+				if active {
+					recordingCount++
+				}
+			}
+			if recordingCount != expectedCount {
+				t.Fatal("policy did not start exactly one verified recorder", recordingCount)
+			}
+		})
+	}
+}
+
 func TestRecordingMonitorCleansDisabledRuntimeSessions(t *testing.T) {
 	f, media, _, _ := testedSource(t)
 	ctx := context.Background()

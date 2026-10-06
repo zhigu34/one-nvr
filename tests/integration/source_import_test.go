@@ -513,6 +513,17 @@ func TestImportClearedChannelRetainsFirstApplyHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	executeChange(t, f, "source.clear")
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT version FROM channels WHERE id=$1", f.Channel).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Service.Sources.SetPolicy(ctx, f.Admin, f.Channel, version, "none", "import-cleared-policy"); err != nil {
+		t.Fatal(err)
+	}
+	executeChange(t, f, "source.policy_apply")
+	historical, err := f.Service.Publish(ctx, f.Inbox)
+	if err != nil {
+		t.Fatal(err)
+	}
 	input := "channel_no,channel_name,ip,rtsp_port,username,password,main_path,sub_path\n1,Front,192.168.33.24,554,admin,,/main,\n2,Second,192.168.33.25,554,admin,,/main,\n"
 	preview, err := f.Service.Sources.PreviewImport(ctx, f.Admin, "csv", strings.NewReader(input))
 	if err != nil {
@@ -537,5 +548,46 @@ func TestImportClearedChannelRetainsFirstApplyHistory(t *testing.T) {
 	saved, _ := json.Marshal(progress)
 	if !bytes.Contains(saved, []byte(`"requires_initial_recording_mode":true`)) {
 		t.Fatal("progress lost first-configuration metadata")
+	}
+
+	selection := channel.ImportSelection{Row: 1, ChannelID: f.Channel, ExpectedVersion: *preview.Items[0].ExpectedVersion, IdentityIntent: "replace", PasswordAction: "clear"}
+	if _, err := f.Service.Sources.SubmitImport(ctx, f.Admin, preview.BatchID, []channel.ImportSelection{selection}, "cleared-import-apply"); err != nil {
+		t.Fatal(err)
+	}
+	repo := jobs.Repository{DB: f.DB}
+	parent, err := repo.Claim(ctx, "source.import")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done, err := f.Service.Sources.AdvanceImport(ctx, parent); err != nil || done {
+		t.Fatal("import did not schedule actual test", done, err)
+	}
+	child, err := repo.Claim(ctx, "source.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := jobs.Execute(ctx, repo, child, f.Service.ExecuteSourceTest); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := f.Service.Sources.AdvanceImport(ctx, parent); err != nil || done {
+		t.Fatal("import did not schedule apply", done, err)
+	}
+	executeChange(t, f, "source.apply")
+	if err := jobs.Execute(ctx, repo, parent, f.Service.ExecuteImport); err != nil {
+		t.Fatal(err)
+	}
+	progress, err = f.Service.Sources.GetImport(ctx, f.Admin, preview.BatchID)
+	if err != nil || progress.Items[0].State != "succeeded" {
+		t.Fatal("cleared target import failed", progress, err)
+	}
+	var mode string
+	var event bool
+	var pool id.ID
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT p.mode,p.event_recording,c.storage_pool_id FROM recording_policies p JOIN channels c ON c.id=p.channel_id WHERE c.id=$1", f.Channel).Scan(&mode, &event, &pool); err != nil || mode != "none" || !event || pool != f.Pool.ID {
+		t.Fatal("import reset existing policy", mode, event, pool, err)
+	}
+	var retained bool
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM recording_segments WHERE id=$1 AND state='ready' AND source_revision_id=$2 AND run_id=$3)", historical.ID, f.Revision, f.Run).Scan(&retained); err != nil || !retained {
+		t.Fatal("cleared-channel import lost historical file", retained, err)
 	}
 }

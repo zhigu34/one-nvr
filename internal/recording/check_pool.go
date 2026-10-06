@@ -29,8 +29,8 @@ func (s *Service) CheckPool(ctx context.Context, poolID id.ID) error {
 		return err
 	}
 	rows, err := s.DB.Pool.Query(ctx, `SELECT DISTINCT c.id,r.revision_id,GREATEST(c.source_generation,1),r.priority,c.channel_no FROM channels c JOIN LATERAL (
- SELECT c.current_revision_id AS revision_id,1 AS priority WHERE c.current_revision_id IS NOT NULL
- UNION ALL SELECT t.revision_id,0 FROM (SELECT revision_id FROM source_tests WHERE channel_id=c.id AND state='succeeded' AND expires_at>clock_timestamp() ORDER BY observed_at DESC LIMIT 1) t
+ SELECT c.current_revision_id AS revision_id,0 AS priority WHERE c.current_revision_id IS NOT NULL
+ UNION ALL SELECT t.revision_id,1 FROM (SELECT revision_id FROM source_tests WHERE channel_id=c.id AND state='succeeded' AND expires_at>clock_timestamp() ORDER BY observed_at DESC LIMIT 1) t
  ) r ON true WHERE c.site_id=$1 AND c.enabled ORDER BY r.priority,c.channel_no LIMIT 64`, s.siteID)
 	if err != nil {
 		return err

@@ -8,6 +8,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/recording"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -70,5 +71,35 @@ func TestPoolCheckUsesReachableCandidate(t *testing.T) {
 				t.Fatal("probe candidates leaked", open, err)
 			}
 		})
+	}
+}
+
+type unavailableDraftPoolMedia struct{ poolWritingMedia }
+
+func (m unavailableDraftPoolMedia) AddProxy(ctx context.Context, in zlm.ProxyInput) (zlm.ProxyRef, error) {
+	if strings.Contains(in.URL, "192.168.33.21:") {
+		<-ctx.Done()
+		return zlm.ProxyRef{}, ctx.Err()
+	}
+	return m.controlledMedia.AddProxy(ctx, in)
+}
+
+func TestPoolCheckKeepsRecoveryBudgetForConfiguredSource(t *testing.T) {
+	f, media, _, _ := testedSource(t)
+	data, err := os.ReadFile(f.Completion.FilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The last successful draft is now unreachable, while the configured source
+	// is available. Do not spend the recovery window on a historical test first.
+	f.Service.Media = unavailableDraftPoolMedia{poolWritingMedia{media, f, data}}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if err := f.Service.CheckPool(ctx, f.Pool.ID); err != nil {
+		t.Fatal("unavailable historical draft consumed configured-source recovery budget", err)
+	}
+	var healthy bool
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT state='healthy' FROM storage_pool_checks WHERE pool_id=$1 AND service='zlm'", f.Pool.ID).Scan(&healthy); err != nil || !healthy {
+		t.Fatal("configured source did not produce actual pool file proof", healthy, err)
 	}
 }
