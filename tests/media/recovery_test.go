@@ -95,6 +95,34 @@ func TestRecoveryWaitsForNextBoundedReconciliation(t *testing.T) {
 	}
 }
 
+func TestRecoveryWaitsThroughTransientReconcileFailure(t *testing.T) {
+	old, _ := id.New()
+	fresh, _ := id.New()
+	calls := 0
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	got, err := waitRecoveredSession(ctx, old, func(context.Context) error {
+		calls++
+		if calls == 1 {
+			return zlm.ErrMediaOperation
+		}
+		return nil
+	}, func(context.Context) (id.ID, error) {
+		if calls == 1 {
+			t.Fatal("failed observation accepted as recovery")
+		}
+		return fresh, nil
+	})
+	if err != nil || got != fresh || calls != 2 {
+		t.Fatal("transient reconcile failure ended periodic recovery", got, calls, err)
+	}
+	bounded, stop := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer stop()
+	if got, err := waitRecoveredSession(bounded, old, func(context.Context) error { return zlm.ErrMediaOperation }, func(context.Context) (id.ID, error) { t.Fatal("unknown became recovery"); return fresh, nil }); err == nil || got != "" {
+		t.Fatal("persistent unknown management state passed recovery", got, err)
+	}
+}
+
 // Each production reconnect may consume its full 15-second window, followed
 // by a 10-second reconciliation interval. The fixture must allow two complete
 // bounded attempts rather than cancel the second inspect halfway through.
