@@ -1,4 +1,6 @@
 .git
+data
+storage
 .superpowers
 .agents
 **/node_modules

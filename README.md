@@ -20,6 +20,8 @@ chown 10001:10001 /srv/one-nvr-storage/disk1
 ./deploy.sh
 ```
 
+`ONE_NVR_DATA_DIR` 是宿主机专用应用数据目录。例如 NAS 上可以填 `/vol1/1000/docker/one-nvr/data`，该目录首次可以不存在。`deploy.sh` 自动创建目录、生成内部密钥并初始化数据库和运行配置；不需要手工创建密钥文件或填写内部密码。目录必须沿用并保留，不能填写项目根目录。`ONE_NVR_STORAGE_ROOT` 则是录像存储池所在的已有根目录，两者用途不同。
+
 首次构建 app/gateway，其他镜像固定 digest。脚本打印一次性初始化令牌获取命令；打开 `.env` 的 `ONE_NVR_PUBLIC_URL` 初始化管理员和 16/32 个通道。`.env` 不填写摄像头密码，摄像头在通道界面配置，批量导入字段如下：
 
 ```csv
