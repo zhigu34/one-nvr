@@ -19,4 +19,4 @@ while IFS=$'\t' read -r identifier node; do [[ -z $identifier ]] || probe "$iden
 # Reuse precisely the API service's validated deployment environment.
 # Selection writes its own detailed failure report.
 trap - ERR
-docker compose -p "$project" -f "$compose_file" run --rm --no-deps --user 0:0 --entrypoint /usr/local/bin/admin api select-hardware
+docker compose --env-file /dev/null -p "$project" -f "$compose_file" run --rm --no-deps --user 0:0 --entrypoint /usr/local/bin/admin api select-hardware

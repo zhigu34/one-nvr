@@ -141,4 +141,4 @@ if [[ " ${services[*]} " == *' openlist '* ]]; then "${compose[@]}" up -d openli
 if [[ $optional_failed == yes ]]; then exit 1; fi
 "${compose[@]}" run --rm --no-deps --entrypoint /usr/local/bin/admin api verify-optional
 printf 'Services started. Get the one-time token with:\n'
-printf './deploy.sh --env-file %q --project %q compose run --rm --no-deps --entrypoint /usr/local/bin/admin api setup-token\n' "$env_file" "$project"
+printf './deploy.sh --env-file %q --admin-image %q --project %q compose run --rm --no-deps --entrypoint /usr/local/bin/admin api setup-token\n' "$env_file" "$admin_image" "$project"
