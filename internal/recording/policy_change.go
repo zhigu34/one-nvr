@@ -67,6 +67,21 @@ func (s *Service) verifyRecordingTarget(ctx context.Context, e *channel.Executio
 	if pool == nil {
 		return ss, storage.ErrMediaProof
 	}
+	// Like a source switch, a policy/pool change owns the channel while it
+	// waits. Refresh expired proof through the actual write/MP4 probe within
+	// this phase's original deadline; never extend a stored proof's lifetime.
+	var ready bool
+	if err := s.DB.Pool.QueryRow(ctx, "SELECT count(*)=3 FROM storage_pool_checks WHERE pool_id=$1 AND state='healthy' AND expires_at>clock_timestamp()", pool).Scan(&ready); err != nil {
+		return ss, err
+	}
+	if !ready {
+		if err := e.Check(ctx); err != nil {
+			return ss, err
+		}
+		if err := s.CheckPool(ctx, *pool); err != nil {
+			return ss, err
+		}
+	}
 	// This change owns the channel, so Monitor cannot sample while Start
 	// waits for capacity recovery. Keep observing actual frame/rate progress
 	// on each bounded attempt; SafetyLine still requires a fresh ten-second pair.
