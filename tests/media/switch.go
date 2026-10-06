@@ -252,8 +252,9 @@ func sourceLifecycleAcceptance(mode string) error {
 	if err := execute("source.apply", recordings.ExecuteSourceChange); err != nil {
 		return err
 	}
-	if err := db.Pool.QueryRow(ctx, "SELECT phase FROM source_switches WHERE job_id=$1", rolled.JobID).Scan(&phase); err != nil || phase != "rolled_back" {
-		return fmt.Errorf("actual failed new source did not rollback")
+	var rollbackCode string
+	if err := db.Pool.QueryRow(ctx, "SELECT phase,coalesce(error_code,'') FROM source_switches WHERE job_id=$1", rolled.JobID).Scan(&phase, &rollbackCode); err != nil || phase != "rolled_back" {
+		return fmt.Errorf("actual failed new source did not rollback: phase=%s code=%s", phase, rollbackCode)
 	}
 	if err := db.Pool.QueryRow(ctx, "SELECT current_revision_id FROM channels WHERE id=$1", ids.Channel).Scan(&current); err != nil || current != second.ID {
 		return fmt.Errorf("rollback current revision incorrect")

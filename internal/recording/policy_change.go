@@ -3,6 +3,7 @@ package recording
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/zhigu34/one-nvr/internal/channel"
@@ -105,6 +106,30 @@ func (s *Service) executeRecordingChange(ctx context.Context, e *channel.Executi
 			capacity, err := s.capacityFor(ctx, e.ChannelID, *w.NewRevision, *w.NewPool)
 			if err != nil {
 				return jobs.Result{}, err
+			}
+			if !capacity.Known {
+				// This job owns the channel, so Monitor cannot refresh its stale
+				// samples. Gather real frame/rate evidence before deciding to stop
+				// the old recorder; the shared-filesystem capacity gate stays intact.
+				ss, err := s.currentMain(ctx, e, w.NewRevision)
+				if err != nil {
+					return jobs.Result{}, err
+				}
+				window, cancel := context.WithTimeout(ctx, 20*time.Second)
+				refreshErr := s.connectSwitchStream(window, e, ss, "main")
+				if refreshErr == nil {
+					refreshErr = s.sampleBitratePair(window, e, ss, "")
+				}
+				cancel()
+				if err := e.Check(ctx); err != nil {
+					return jobs.Result{}, err
+				}
+				if refreshErr == nil {
+					capacity, err = s.capacityFor(ctx, e.ChannelID, *w.NewRevision, *w.NewPool)
+					if err != nil {
+						return jobs.Result{}, err
+					}
+				}
 			}
 			reason := ""
 			if !capacity.Known {
