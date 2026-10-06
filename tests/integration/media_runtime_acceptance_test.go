@@ -32,10 +32,12 @@ type jointChannel struct {
 	Run     id.ID `json:"run_id"`
 	Session id.ID `json:"session_id"`
 	Ready   int   `json:"ready_count"`
+	Frames  int64 `json:"frames"`
 }
 type jointSnapshot struct {
-	Channels []jointChannel `json:"channels"`
-	TLS      string         `json:"tls_id"`
+	Channels   []jointChannel `json:"channels"`
+	TLS        string         `json:"tls_id"`
+	MediaFiles int            `json:"media_files"`
 }
 type jointAPI struct {
 	t          *testing.T
@@ -222,6 +224,21 @@ func TestGatewayMediaRuntimeJoint(t *testing.T) {
 					pending++
 				}
 			}
+			observed, advancing := 0, 0
+			for _, channel := range before.Channels {
+				bounded, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				snapshot, inspectErr := media.Inspect(bounded, zlm.StreamKey{VHost: "__defaultVhost__", App: "one_nvr", Stream: string(channel.Session)})
+				cancel()
+				if inspectErr == nil {
+					observed++
+					for _, track := range snapshot.Tracks {
+						if track.Ready && track.Frames > channel.Frames && channel.Frames > 0 {
+							advancing++
+							break
+						}
+					}
+				}
+			}
 			mediaFiles := 0
 			_ = filepath.Walk("/storage", func(_ string, info os.FileInfo, err error) error {
 				if err == nil && info.Mode().IsRegular() && filepath.Ext(info.Name()) == ".mp4" {
@@ -229,7 +246,7 @@ func TestGatewayMediaRuntimeJoint(t *testing.T) {
 				}
 				return nil
 			})
-			t.Logf("outage diagnostics: spool_readable=%t complete=%d pending=%d media_files=%d two_upstream_recorders=%t", err == nil, complete, pending, mediaFiles, jointTwoRecording(t, media, before))
+			t.Logf("outage diagnostics: spool_readable=%t complete=%d pending=%d media_files_before=%d media_files=%d observed=%d advancing=%d two_upstream_recorders=%t", err == nil, complete, pending, before.MediaFiles, mediaFiles, observed, advancing, jointTwoRecording(t, media, before))
 		})
 		jointWait(t, 80, "actual DB outage produced no durable completion spool", func() bool { names, _ := filepath.Glob("/data/recording-spool/*.json"); return len(names) > 0 })
 		if !jointTwoRecording(t, media, before) {
@@ -351,6 +368,25 @@ func TestGatewayMediaRuntimeJoint(t *testing.T) {
 		if !jointTwoRecording(t, media, current) {
 			t.Fatal("cannot snapshot two actual recorders")
 		}
+		for i := range current.Channels {
+			bounded, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			snapshot, err := media.Inspect(bounded, zlm.StreamKey{VHost: "__defaultVhost__", App: "one_nvr", Stream: string(current.Channels[i].Session)})
+			cancel()
+			if err != nil {
+				t.Fatal("physical frame diagnostics unavailable")
+			}
+			for _, track := range snapshot.Tracks {
+				if track.Ready && track.Frames > current.Channels[i].Frames {
+					current.Channels[i].Frames = track.Frames
+				}
+			}
+		}
+		_ = filepath.Walk("/storage", func(_ string, info os.FileInfo, err error) error {
+			if err == nil && info.Mode().IsRegular() && filepath.Ext(info.Name()) == ".mp4" {
+				current.MediaFiles++
+			}
+			return nil
+		})
 		jointWrite(t, "/results/joint-before.json", current)
 		var delivered, recovered int
 		if err := db.Pool.QueryRow(context.Background(), runtimeCompletionCountsQuery).Scan(&delivered, &recovered); err != nil {
