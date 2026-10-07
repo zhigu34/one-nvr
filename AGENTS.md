@@ -47,8 +47,10 @@
 
 ## 当前交接快照（2026-10-07）
 
-- 当前主题：简化摄像头接入。用户反馈原界面暴露了太多内部步骤，普通添加难用。
-- 已实现“保存并连接”：自动保存、取流测试、校验有效主流画面并应用；首次接入默认只预览，不要求先建录像池。已有连续录像的通道会自动检查存储池并沿用录像策略。失败可保留表单与凭据重试。手工分步测试和历史配置应用放在高级诊断内。
-- 仓库提交 `0e55fb8`（发布到 GitHub 对应提交 `b59e613`），分支 `codex/m1b-channel-recording`，草稿 PR [#2](https://github.com/zhigu34/one-nvr/pull/2)。先核对远端 HEAD 与 PR 状态；这只是接手快照。
-- CI run [37596104311](https://github.com/zhigu34/one-nvr/actions/runs/37596104311)：11 个 job 全部成功，含 PostgreSQL 集成、双通道故障验收和真实媒体浏览器验收；其中一键接入及“更换后继续录像”写入 `media-browser-contract` receipt。接手时仍需先检查最新分支和 PR 状态。
-- 本地没有可用 Docker daemon；真实 Docker/摄像头验收通过 GitHub CI 运行。两台 NAS 尚需用户部署新镜像后做现场验证；CI 成功不能代表这一步已完成。
+- 当前主题：M1-C 历史录像回放。M1-B 的固定通道接入、录像与索引留在 `codex/m1b-channel-recording`（草稿 PR [#2](https://github.com/zhigu34/one-nvr/pull/2)）。
+- M1-C 已完成读路径与回放工作区：`GET /api/v1/recordings/{id}/content` 由 501 变为受授权的单区间 Range 交付——授权与解析同事务、五类失败语义（404/409/503）、只服务单区间、审计先于第一个媒体字节；前端新增 `/recordings` 回放工作区（时间轴、缺口提示、±10 秒、0.5/1/2/4 倍速、跨分片续播、即时回放入口），侧边栏新增「录像回放」并改为声明式 `everyRole` 可见性。决策与边界见 `docs/M1-C-decisions.md`，验证矩阵待 `docs/M1-C-validation.md`。
+- 本地开发分支 `codex/m1c-playback`，提交 `ec7ffd6`（发布到 GitHub 对应提交 `f86cf7e`，远端分支 `codex/m1c-playback`；跟踪远端用本地分支 `codex/m1c-ci`）。
+- CI run [37655395677](https://github.com/zhigu34/one-nvr/actions/runs/37655395677)：接手时先看它的最终结论，不要假定通过。
+- 未完成：M1-C 的真实容器与浏览器验收（206 与 `Content-Range` 断言、浏览器实际解码帧增长、网关是否原样透传 `Range`/206）与 `docs/M1-C-validation.md`；两台 NAS 上的真机部署验证仍需用户执行，CI 通过不代表现场完成。
+- 本地没有可用的 Docker daemon，也没有真实摄像头：真实容器与媒体验收只能在 GitHub CI 运行。单元测试和 mock 过的 UI 不能替代端到端媒体验收。
+- 早前记录的“保存并连接”一键接入（提交 `0e55fb8` / 发布 `b59e613`，CI run `37596104311` 11 个 job 全绿）仍是 M1-B 的现场验证入口，未被本轮改动取代。
