@@ -74,11 +74,19 @@ Files: `apps/web/src/features/playback/*`、`apps/web/src/routes/_authenticated/
 
 ## Task 4: 真实容器与浏览器验收（B4）
 
-Files: `tests/e2e/*`、`deploy/production/test-media*.sh`（如需）、`docs/M1-C-validation.md`（新增）
+Files: `tests/e2e/m1b-media.spec.ts`、`docs/M1-C-validation.md`（新增）
 
-- [ ] 固定 ZLM 生成真实 MP4 → 经授权 API 播放：CI 断言 206 响应且浏览器实际解码帧增长；未授权/跨通道请求 404。
-- [ ] 网关边界：私有媒体路径不可经公共路由访问（沿用既有断言）。
-- [ ] 记录成功证据、失败与未测项（16–32 路容量、云端统一播放仍属未测）。
+- [x] 在既有真实媒体规格末尾追加回放验收：`Range: bytes=0-` 的 206 与 `Content-Range`、区间窗口摘要与整段同窗口一致、起点越界 416、浏览器实际解码帧与画面尺寸、播放期间只命中 `/content`。
+- [x] 未授权等于不存在：新建只对 CH02 持有回放权的 viewer，用独立浏览器上下文登录，读取 CH01 片段与不存在的 UUID 都回 404 且体内无 `ftyp`；同时断言该 viewer 的回放页只列出 CH02。
+- [x] 网关边界沿用 M1-B 既有断言，不再重复。
+- [ ] **CI 结论与回执摘要待记录**：`docs/M1-C-validation.md` 已写明矩阵，容器验收一栏在拿到实际 run 结果前不宣称通过。
+
+**落地偏差（执行中修正）**
+
+- 验收放在既有 `m1b-media.spec.ts` 末尾而不是新建规格：Playwright 配置按 `ONE_NVR_E2E_PHASE` 只跑一个规格，媒体阶段要重建真实 ZLM、合成摄像头与等到第一个 `ready` 片段（分钟级）；新建规格要么重复这套昂贵准备，要么依赖跨规格共享状态。放在末尾还能复用那里已经建立的真实片段与管理员会话。
+- 用「播放首个可用片段」按钮而不是双击片段条触发播放：24 小时窗口下几十秒的片段只有亚像素宽，点击在几何上不可靠。顺带修了产品本身——片段条加 3px 最小宽度，否则现场操作员看到的就是一条看不见的线。
+- 字节摘要用页内 FNV-1a 而不是 `crypto.subtle`：隔离入口是纯 HTTP，`crypto.subtle` 在非安全上下文里不存在；同一原因，不存在的 segment id 用固定 UUID 而不是 `crypto.randomUUID()`。
+- `tests/e2e` 不在任何 tsconfig 的 include 里，CI 也不会对它做类型检查。本次用一次性 `tsc --noEmit --ignoreConfig` 显式过了一遍（并因此发现两处真实错误：与既有变量 `denied` 重名、以及对 `APIResponse.body` 方法的误用）。
 
 ## 范围外（本批不承诺）
 
