@@ -3,6 +3,7 @@ import { apiRequest, jsonRequest, newRequestKey } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Field, Notices } from '@/features/foundation/ui'
+import { connectionError, type SaveConnection } from './source-connect'
 
 type Props = {
   channel: Schema<'Channel'>
@@ -10,8 +11,9 @@ type Props = {
   history: Schema<'SourceRevision'>[]
   onSaved: (
     value: Schema<'SourceRevision'>,
-    signal: AbortSignal
-  ) => void | Promise<void>
+    signal: AbortSignal,
+    context: SaveConnection
+  ) => void | string | Promise<void | string>
 }
 export function SourceForm(props: Props) {
   return <SourceEditor key={props.channel.id} {...props} />
@@ -44,7 +46,7 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
     <section className='grid gap-4'>
       <Notices error={error} notice={notice} />
       <p className='text-sm text-muted-foreground'>
-        填写摄像头连接信息，测试通过后再应用。
+        填写连接信息后保存，系统自动检测并连接。录像方式在“录像设置”中调整。
       </p>
       <form
         key={revision?.id || 'empty'}
@@ -52,6 +54,11 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
         onSubmit={async (event) => {
           event.preventDefault()
           if (pending) return
+          setError('')
+          setNotice('')
+          const submitter = (event.nativeEvent as SubmitEvent)
+            .submitter as HTMLButtonElement | null
+          const action = submitter?.value === 'test' ? 'test' : 'connect'
           const data = new FormData(event.currentTarget),
             value = (name: string) => String(data.get(name) || '')
           if (passwordAction === 'replace' && /^[*•●]{3,}$/u.test(password)) {
@@ -99,166 +106,188 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
               }
             )
             if (!abort.signal.aborted && result.channel_id === channel.id) {
-              await onSaved(result, abort.signal)
-              if (!abort.signal.aborted) setNotice('配置已保存')
+              const message = await onSaved(result, abort.signal, {
+                action,
+                version: channel.version + 1,
+                progress: (message) => {
+                  if (!abort.signal.aborted) setNotice(message)
+                },
+              })
+              if (!abort.signal.aborted) setNotice(message || '配置已保存')
             }
           } catch (e) {
-            if (!abort.signal.aborted)
-              setError(e instanceof Error ? e.message : '保存失败')
+            if (!abort.signal.aborted) {
+              setNotice('')
+              setError(connectionError(e))
+            }
           } finally {
             if (!abort.signal.aborted) setPending(false)
           }
         }}
       >
-        <Field
-          label='IP 地址'
-          name='ip'
-          defaultValue={revision?.config.ip || ''}
-          required
-          placeholder='192.168.33.20'
-        />
-        <Field
-          label='用户名'
-          name='username'
-          autoComplete='off'
-          placeholder={
-            revision
-              ? `已保存 ${revision.username_summary || '用户名'}，留空保留`
-              : '摄像头用户名'
-          }
-        />
-        {passwordAction !== 'clear' && (
+        <fieldset disabled={pending} className='contents'>
           <Field
-            label='新密码'
-            name='password'
-            type='password'
-            autoComplete='new-password'
-            placeholder={revision ? '留空保留已保存的密码' : '摄像头密码'}
-            value={password}
-            onChange={(event) => {
-              setPassword(event.target.value)
-              setPasswordAction(
-                revision && !event.target.value ? 'keep' : 'replace'
-              )
-            }}
+            label='IP 地址'
+            name='ip'
+            defaultValue={revision?.config.ip || ''}
+            required
+            placeholder='192.168.33.20'
           />
-        )}
-        <Field
-          label='主流路径'
-          name='main_path'
-          defaultValue={revision?.config.main_path || '/main'}
-          required
-        />
-        <Field
-          label='子流路径'
-          name='sub_path'
-          defaultValue={revision?.config.sub_path || ''}
-          placeholder='/sub'
-        />
-        <details className='rounded-lg border p-4 md:col-span-2'>
-          <summary className='cursor-pointer text-sm font-medium'>
-            高级连接设置
-          </summary>
-          <div className='mt-4 grid gap-4 md:grid-cols-2'>
+          <Field
+            label='用户名'
+            name='username'
+            autoComplete='off'
+            placeholder={
+              revision
+                ? `已保存 ${revision.username_summary || '用户名'}，留空保留`
+                : '摄像头用户名'
+            }
+          />
+          {passwordAction !== 'clear' && (
             <Field
-              label='RTSP 端口'
-              name='rtsp_port'
-              type='number'
-              min={1}
-              max={65535}
-              defaultValue={revision?.config.rtsp_port || 554}
-              required
+              label='密码'
+              name='password'
+              type='password'
+              autoComplete='new-password'
+              placeholder={revision ? '留空保留已保存的密码' : '摄像头密码'}
+              value={password}
+              onChange={(event) => {
+                setPassword(event.target.value)
+                setPasswordAction(
+                  revision && !event.target.value ? 'keep' : 'replace'
+                )
+              }}
             />
-            <Field
-              label='ONVIF 端口（可选）'
-              name='onvif_port'
-              type='number'
-              min={1}
-              max={65535}
-              defaultValue={revision?.config.onvif_port || ''}
-            />
-            <label className='grid gap-2 text-sm'>
-              传输方式
-              <select
-                aria-label='传输方式'
-                name='transport'
-                defaultValue={revision?.config.transport || 'tcp'}
-                className='rounded-md border bg-background p-2'
-              >
-                <option value='tcp'>TCP</option>
-                <option value='udp'>UDP</option>
-              </select>
-            </label>
-            <label className='grid gap-2 text-sm'>
-              摄像头操作
-              <select
-                aria-label='摄像头操作'
-                value={intent}
-                onChange={(e) => setIntent(e.target.value as typeof intent)}
-                className='rounded-md border bg-background p-2'
-              >
-                {revision && <option value='modify'>修改当前摄像头配置</option>}
-                <option value='replace'>更换摄像头</option>
-                {identities.length > 0 && (
-                  <option value='history'>恢复历史摄像头身份</option>
-                )}
-              </select>
-            </label>
-            {intent === 'history' && (
+          )}
+          <Field
+            label='主流路径'
+            name='main_path'
+            defaultValue={revision?.config.main_path || '/main'}
+            required
+          />
+          <Field
+            label='子流路径'
+            name='sub_path'
+            defaultValue={revision?.config.sub_path || ''}
+            placeholder='/sub'
+          />
+          <div className='order-last flex flex-wrap items-center justify-between gap-3 border-t pt-4 md:col-span-2'>
+            <span className='text-xs text-muted-foreground'>
+              测试期间继续使用当前配置
+            </span>
+            <Button disabled={pending}>
+              {pending ? '正在连接…' : '保存并连接'}
+            </Button>
+          </div>
+          <details className='rounded-lg border p-4 md:col-span-2'>
+            <summary className='cursor-pointer text-sm font-medium'>
+              高级连接设置
+            </summary>
+            <div className='mt-4 grid gap-4 md:grid-cols-2'>
+              <Field
+                label='RTSP 端口'
+                name='rtsp_port'
+                type='number'
+                min={1}
+                max={65535}
+                defaultValue={revision?.config.rtsp_port || 554}
+                required
+              />
+              <Field
+                label='ONVIF 端口（可选）'
+                name='onvif_port'
+                type='number'
+                min={1}
+                max={65535}
+                defaultValue={revision?.config.onvif_port || ''}
+              />
               <label className='grid gap-2 text-sm'>
-                历史摄像头
+                传输方式
                 <select
-                  aria-label='历史摄像头'
-                  name='history_source_id'
+                  aria-label='传输方式'
+                  name='transport'
+                  defaultValue={revision?.config.transport || 'tcp'}
                   className='rounded-md border bg-background p-2'
                 >
-                  {identities.map((value) => (
-                    <option key={value.source_id} value={value.source_id}>
-                      身份 {value.source_id.slice(0, 8)} · 修订 {value.number}
-                    </option>
-                  ))}
+                  <option value='tcp'>TCP</option>
+                  <option value='udp'>UDP</option>
                 </select>
               </label>
-            )}
-            <div className='grid gap-2'>
-              <label className='flex gap-2 text-sm'>
-                <input
-                  type='checkbox'
-                  name='update_username'
-                  defaultChecked={!revision}
-                />
-                允许清空用户名（普通编辑留空保留）
+              <label className='grid gap-2 text-sm'>
+                摄像头操作
+                <select
+                  aria-label='摄像头操作'
+                  value={intent}
+                  onChange={(e) => setIntent(e.target.value as typeof intent)}
+                  className='rounded-md border bg-background p-2'
+                >
+                  {revision && (
+                    <option value='modify'>修改当前摄像头配置</option>
+                  )}
+                  <option value='replace'>更换摄像头</option>
+                  {identities.length > 0 && (
+                    <option value='history'>恢复历史摄像头身份</option>
+                  )}
+                </select>
+              </label>
+              {intent === 'history' && (
+                <label className='grid gap-2 text-sm'>
+                  历史摄像头
+                  <select
+                    aria-label='历史摄像头'
+                    name='history_source_id'
+                    className='rounded-md border bg-background p-2'
+                  >
+                    {identities.map((value) => (
+                      <option key={value.source_id} value={value.source_id}>
+                        身份 {value.source_id.slice(0, 8)} · 修订 {value.number}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <div className='grid gap-2'>
+                <label className='flex gap-2 text-sm'>
+                  <input
+                    type='checkbox'
+                    name='update_username'
+                    defaultChecked={!revision}
+                  />
+                  允许清空用户名（普通编辑留空保留）
+                </label>
+              </div>
+              <label className='grid gap-2 text-sm'>
+                密码处理
+                <select
+                  aria-label='密码处理'
+                  value={passwordAction}
+                  onChange={(e) => {
+                    setPasswordAction(e.target.value as typeof passwordAction)
+                    setPassword('')
+                  }}
+                  className='rounded-md border bg-background p-2'
+                >
+                  {revision && <option value='keep'>保留当前密码</option>}
+                  <option value='replace'>输入新密码</option>
+                  <option value='clear'>清空密码</option>
+                </select>
               </label>
             </div>
-            <label className='grid gap-2 text-sm'>
-              密码处理
-              <select
-                aria-label='密码处理'
-                value={passwordAction}
-                onChange={(e) => {
-                  setPasswordAction(e.target.value as typeof passwordAction)
-                  setPassword('')
-                }}
-                className='rounded-md border bg-background p-2'
-              >
-                {revision && <option value='keep'>保留当前密码</option>}
-                <option value='replace'>输入新密码</option>
-                <option value='clear'>清空密码</option>
-              </select>
-            </label>
-          </div>
-          <p className='mt-4 text-xs text-muted-foreground'>
-            更换摄像头仍保留通道编号、权限与历史录像。ONVIF 端口目前只保存配置。
-          </p>
-        </details>
-        <div className='flex flex-wrap items-center justify-between gap-3 border-t pt-4 md:col-span-2'>
-          <span className='text-xs text-muted-foreground'>
-            测试期间继续使用当前配置
-          </span>
-          <Button disabled={pending}>
-            {pending ? '正在保存并测试…' : '保存并测试'}
-          </Button>
-        </div>
+            <Button
+              className='mt-4'
+              type='submit'
+              value='test'
+              variant='outline'
+              disabled={pending}
+            >
+              仅保存并测试
+            </Button>
+            <p className='mt-4 text-xs text-muted-foreground'>
+              更换摄像头仍保留通道编号、权限与历史录像。ONVIF
+              端口目前只保存配置。
+            </p>
+          </details>
+        </fieldset>
       </form>
     </section>
   )

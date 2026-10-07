@@ -56,55 +56,73 @@ const revision: Schema<'SourceRevision'> = {
   password_state: 'saved',
   created_at: '2026-10-07T00:00:00Z',
 }
-function fixture(testFails = false) {
-  useAuthStore
-    .getState()
-    .setUser({
-      id: 'admin',
-      username: 'admin',
-      role: 'admin',
-      enabled: true,
-      version: 1,
-    })
-  let saved = false
-  const mutations: string[] = []
+function fixture(
+  options: { testFails?: boolean; stale?: boolean; continuous?: boolean } = {}
+) {
+  useAuthStore.getState().setUser({
+    id: 'admin',
+    username: 'admin',
+    role: 'admin',
+    enabled: true,
+    version: 1,
+  })
+  let saved = 0,
+    applied = false
+  const mutations: { path: string; init: RequestInit }[] = []
   calls.request.mockImplementation(async (path: string, init?: RequestInit) => {
     if (init?.method === 'POST') {
-      mutations.push(path)
+      mutations.push({ path, init })
       if (path.endsWith('/source-revisions')) {
-        saved = true
+        saved++
         return revision
       }
       if (path.endsWith('/test')) {
-        if (testFails) throw new Error('连接测试暂时无法提交')
+        if (options.testFails) throw new Error('连接测试暂时无法提交')
         return { job_id: 'test-job', test_id: 'test-proof', state: 'queued' }
+      }
+      if (path.endsWith('/source/apply')) {
+        applied = true
+        return { job_id: 'apply-job', state: 'queued' }
       }
       throw new Error('Unexpected mutation ' + path)
     }
     if (path.startsWith('/api/v1/channels?'))
       return { items: [channel], next_cursor: null }
-    if (path.endsWith('/source/status')) return status
+    if (path.endsWith('/source/status'))
+      return {
+        ...status,
+        version: 1 + saved + (options.stale && saved ? 1 : 0),
+        current_revision_id: applied || options.continuous ? revision.id : null,
+        requires_initial_recording_mode: !options.continuous,
+        storage_pool_id: options.continuous ? 'pool-1' : null,
+      }
     if (path.includes('/source-revisions?'))
-      return { items: saved ? [revision] : [], next_cursor: null }
+      return {
+        items: saved || options.continuous ? [revision] : [],
+        next_cursor: null,
+      }
     if (path.endsWith('/recording-policy'))
       return {
         channel_id: channel.id,
         version: 1,
-        mode: 'none',
+        mode: options.continuous ? 'continuous' : 'none',
         event_recording_enabled: false,
       }
+    if (path.includes('/recordings')) return { items: [], next_cursor: null }
     if (path.startsWith('/api/v1/storage-pools'))
       return { items: [], next_cursor: null }
     if (path.endsWith('/source-tests/test-proof'))
       return {
         id: 'test-proof',
         revision_id: revision.id,
-        state: 'queued',
-        main: { state: 'unknown', first_frame: false },
-        sub: { state: 'unknown', first_frame: false },
-        observed_at: null,
-        expires_at: null,
+        state: 'succeeded',
+        main: { state: 'healthy', first_frame: true },
+        sub: { state: 'healthy', first_frame: true },
+        observed_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 120000).toISOString(),
       }
+    if (path.startsWith('/api/v1/jobs/'))
+      return { id: path.split('/').pop(), state: 'succeeded' }
     throw new Error('Unexpected query ' + path)
   })
   const client = new QueryClient({
@@ -120,59 +138,106 @@ function fixture(testFails = false) {
     ),
   }
 }
-
-test('saving a connection queues its test without applying the source', async () => {
-  const setup = fixture()
-  const view = await render(setup.view)
+async function fill(view: Awaited<ReturnType<typeof render>>) {
   await userEvent.fill(
     view.getByLabelText('IP 地址', { exact: true }),
     '192.168.33.20'
   )
   await userEvent.fill(
-    view.getByLabelText('新密码', { exact: true }),
+    view.getByLabelText('密码', { exact: true }),
     'isolated-fixture-password'
   )
+}
+test('one click tests and connects a first camera without requiring storage or recording', async () => {
+  const setup = fixture(),
+    view = await render(setup.view)
+  await fill(view)
   await userEvent.click(
-    view.getByRole('button', { name: '保存并测试', exact: true })
+    view.getByRole('button', { name: '保存并连接', exact: true })
   )
   await expect
-    .poll(() => setup.mutations)
-    .toEqual([
-      `/api/v1/channels/${channel.id}/source-revisions`,
-      `/api/v1/channels/${channel.id}/source-revisions/${revision.id}/test`,
-    ])
+    .element(view.getByText('摄像头已连接', { exact: true }))
+    .toBeVisible()
+  const apply = setup.mutations.find((m) => m.path.endsWith('/source/apply'))!
+  expect(JSON.parse(apply.init.body as string)).toEqual({
+    revision_id: revision.id,
+    test_id: 'test-proof',
+    first_recording_mode: 'none',
+  })
+  expect(new Headers(apply.init.headers).get('If-Match')).toBe('"2"')
+  expect(
+    setup.mutations.filter((m) => m.path.endsWith('/source/apply'))
+  ).toHaveLength(1)
+  setup.client.clear()
+})
+test('failed connection retains the first form credentials and retries as add, not modify', async () => {
+  const setup = fixture({ testFails: true }),
+    view = await render(setup.view)
+  await fill(view)
+  await userEvent.click(
+    view.getByRole('button', { name: '保存并连接', exact: true })
+  )
   await expect
-    .element(view.getByRole('button', { name: '应用配置', exact: true }))
-    .toBeDisabled()
-  expect(setup.mutations.some((path) => path.endsWith('/source/apply'))).toBe(
+    .element(view.getByRole('alert'))
+    .toHaveTextContent('连接测试暂时无法提交')
+  await expect
+    .element(view.getByLabelText('密码', { exact: true }))
+    .toHaveValue('isolated-fixture-password')
+  await userEvent.click(
+    view.getByRole('button', { name: '保存并连接', exact: true })
+  )
+  await expect
+    .poll(
+      () =>
+        setup.mutations.filter((m) => m.path.endsWith('/source-revisions'))
+          .length
+    )
+    .toBe(2)
+  const drafts = setup.mutations.filter((m) =>
+    m.path.endsWith('/source-revisions')
+  )
+  expect(JSON.parse(drafts[1].init.body as string)).toMatchObject({
+    identity_intent: 'replace',
+    credentials: {
+      password_action: 'replace',
+      password: 'isolated-fixture-password',
+    },
+  })
+  expect(setup.mutations.some((m) => m.path.endsWith('/source/apply'))).toBe(
     false
   )
   setup.client.clear()
 })
-
-test('a failed test submission keeps the saved draft available for retry', async () => {
-  const setup = fixture(true)
-  const view = await render(setup.view)
-  await userEvent.fill(
-    view.getByLabelText('IP 地址', { exact: true }),
-    '192.168.33.20'
-  )
-  await userEvent.fill(
-    view.getByLabelText('新密码', { exact: true }),
-    'isolated-fixture-password'
-  )
+test('does not overwrite a concurrently changed channel after connection test', async () => {
+  const setup = fixture({ stale: true }),
+    view = await render(setup.view)
+  await fill(view)
   await userEvent.click(
-    view.getByRole('button', { name: '保存并测试', exact: true })
+    view.getByRole('button', { name: '保存并连接', exact: true })
   )
   await expect
-    .element(view.getByText('连接测试暂时无法提交', { exact: false }))
+    .element(view.getByRole('alert'))
+    .toHaveTextContent('通道配置已改变')
+  expect(setup.mutations.some((m) => m.path.endsWith('/source/apply'))).toBe(
+    false
+  )
+  setup.client.clear()
+})
+test('editing a recording camera automatically checks its pool and preserves recording mode', async () => {
+  const setup = fixture({ continuous: true }),
+    view = await render(setup.view)
+  await userEvent.click(
+    view.getByRole('button', { name: '保存并连接', exact: true })
+  )
+  await expect
+    .element(view.getByText('摄像头已连接', { exact: true }))
     .toBeVisible()
-  await expect
-    .element(view.getByRole('button', { name: '测试取流', exact: true }))
-    .toBeEnabled()
-  await expect
-    .element(view.getByLabelText('IP 地址', { exact: true }))
-    .toHaveValue('192.168.33.20')
-  expect(setup.mutations).toHaveLength(2)
+  expect(
+    setup.mutations.some((m) => m.path === '/api/v1/storage-pools/pool-1/test')
+  ).toBe(true)
+  const apply = setup.mutations.find((m) => m.path.endsWith('/source/apply'))!
+  expect(JSON.parse(apply.init.body as string)).not.toHaveProperty(
+    'first_recording_mode'
+  )
   setup.client.clear()
 })
