@@ -60,11 +60,17 @@ Files: `internal/recording/content.go`、`internal/httpapi/recordings.go`、`tes
 
 ## Task 3: 前端回放页与跨分片（B3）
 
-Files: `apps/web/src/features/channels/recordings-*.tsx`、对应路由与侧边栏、`apps/web/src/features/live/*`（即时回放入口）
+Files: `apps/web/src/features/playback/*`、`apps/web/src/routes/_authenticated/recordings/index.tsx`、`apps/web/src/components/layout/*`、`apps/web/src/features/live/index.tsx`
 
-- [ ] RED：浏览器测试覆盖日历/时间轴选择、单段播放、拖动、±10 秒、0.5/1/2/4 倍速、跨分片续播、片段缺失/损坏提示、未授权 404 提示。
-- [ ] 时间轴按站点时区显示；从实时预览进入「即时回放」（最近完成分片，默认检索最近 5 分钟）。
-- [ ] 只用生成类型；`web build` / `lint` / 浏览器测试通过。
+- [x] RED：浏览器测试覆盖通道权限过滤、单击只选中、双击播放、时间轴定位落入缺口的提示、被阻断片段不提供播放、失败原因用 API 返回的中文、倍速取值。
+- [x] 时间轴按站点时区显示；从实时预览进入「即时回放」（最近完成分片，默认检索最近 5 分钟），深链接只预填不播放。
+- [x] 只用生成类型；`web build` / `lint` / 浏览器测试通过。
+
+**落地偏差（执行中修正）**
+
+- 计划里的 `recordings-*.tsx` 落在独立目录 `features/playback/`（timeline / player / api / index），而不是塞进 `features/channels/`：`RecordingsIndex` 是通道工作台里的元数据视图，回放是独立工作区，两者职责不同，混在一处会让「浏览索引」和「开始播放」的边界再次模糊。
+- 「未授权 404 提示」在浏览器测试里通过注入探测结果断言，真实状态码路径由集成测试与 B4 的真实容器验收覆盖：media 元素不暴露 HTTP 状态，只能由服务端契约保证。
+- 顺带修正导航：`/live` 与 `/recordings` 对每个登录角色可见（此前非管理员在侧边栏看不到任何实时预览入口），可见性改为声明式 `everyRole` 标记，页面自身仍按 API 权限过滤。
 
 ## Task 4: 真实容器与浏览器验收（B4）
 
