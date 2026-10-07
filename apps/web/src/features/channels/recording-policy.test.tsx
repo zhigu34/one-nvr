@@ -28,7 +28,10 @@ test('missing pool blocks recording start and stopping preserves current source'
       onAccepted={vi.fn()}
     />
   )
-  await userEvent.selectOptions(view.getByLabelText('普通录像', { exact: true }), 'continuous')
+  await userEvent.selectOptions(
+    view.getByLabelText('普通录像', { exact: true }),
+    'continuous'
+  )
   await expect
     .element(view.getByRole('button', { name: '保存录像策略', exact: true }))
     .toBeDisabled()
@@ -41,7 +44,10 @@ test('missing pool blocks recording start and stopping preserves current source'
       onAccepted={vi.fn()}
     />
   )
-  await userEvent.selectOptions(view.getByLabelText('普通录像', { exact: true }), 'none')
+  await userEvent.selectOptions(
+    view.getByLabelText('普通录像', { exact: true }),
+    'none'
+  )
   await userEvent.click(
     view.getByRole('button', { name: '保存录像策略', exact: true })
   )
@@ -51,6 +57,8 @@ test('missing pool blocks recording start and stopping preserves current source'
     mode: 'none',
   })
   await expect
-    .element(view.getByText('关闭录像保留取流和历史录像'))
+    .element(
+      view.getByText('关闭录像后仍可取流，已有录像保留。', { exact: false })
+    )
     .toBeVisible()
 })

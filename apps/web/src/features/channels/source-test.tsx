@@ -3,6 +3,7 @@ import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Notices } from '@/features/foundation/ui'
 import { sourceCommand } from './api'
+import { StatusLabel } from './channel-status'
 import { useNow } from './use-now'
 
 type Props = {
@@ -100,9 +101,14 @@ export function SourceTestControls({
               }[proof.state]
             }
           </p>
-          <p>
-            主流：{proof.main.state} · 子流：{proof.sub.state}
-          </p>
+          <div className='mt-2 flex flex-wrap gap-4'>
+            <span className='flex items-center gap-2'>
+              主流 <StatusLabel value={proof.main} />
+            </span>
+            <span className='flex items-center gap-2'>
+              子流 <StatusLabel value={proof.sub} />
+            </span>
+          </div>
           {valid && proof.sub.state === 'unavailable' && (
             <p>子流不可用，可降级应用主流</p>
           )}

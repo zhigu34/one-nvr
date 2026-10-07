@@ -50,6 +50,28 @@ function wrapper(
     </QueryClientProvider>
   )
 }
+test('normal editing keeps untouched credentials and accepts a typed replacement without extra switches', async () => {
+  calls.request.mockResolvedValue(revision)
+  const view = await render(wrapper())
+  await userEvent.click(view.getByRole('button', { name: '保存并测试' }))
+  let body = JSON.parse(calls.request.mock.calls[0][1].body)
+  expect(body.credentials).toEqual({ password_action: 'keep' })
+  await userEvent.fill(
+    view.getByLabelText('用户名', { exact: true }),
+    'new-camera-user'
+  )
+  await userEvent.fill(
+    view.getByLabelText('新密码', { exact: true }),
+    'new-isolated-password'
+  )
+  await userEvent.click(view.getByRole('button', { name: '保存并测试' }))
+  body = JSON.parse(calls.request.mock.calls[1][1].body)
+  expect(body.credentials).toEqual({
+    username: 'new-camera-user',
+    password_action: 'replace',
+    password: 'new-isolated-password',
+  })
+})
 test('draft save works when ordinary HTTP has no crypto.randomUUID', async () => {
   const descriptor = Object.getOwnPropertyDescriptor(crypto, 'randomUUID')
   Object.defineProperty(crypto, 'randomUUID', {
@@ -59,7 +81,7 @@ test('draft save works when ordinary HTTP has no crypto.randomUUID', async () =>
   try {
     calls.request.mockResolvedValue(revision)
     const view = await render(wrapper())
-    await userEvent.click(view.getByRole('button', { name: '保存草稿' }))
+    await userEvent.click(view.getByRole('button', { name: '保存并测试' }))
     expect(calls.request).toHaveBeenCalledOnce()
     expect(calls.request.mock.calls[0][1].headers['Idempotency-Key']).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -72,15 +94,16 @@ test('draft save works when ordinary HTTP has no crypto.randomUUID', async () =>
 test('keep and clear submit explicit intent without a masked password', async () => {
   calls.request.mockResolvedValue(revision)
   const view = await render(wrapper())
-  await userEvent.click(view.getByRole('button', { name: '保存草稿' }))
+  await userEvent.click(view.getByRole('button', { name: '保存并测试' }))
   let body = JSON.parse(calls.request.mock.calls[0][1].body)
   expect(body.credentials.password_action).toBe('keep')
   expect(body.credentials).not.toHaveProperty('password')
+  await userEvent.click(view.getByText('高级连接设置', { exact: true }))
   await userEvent.selectOptions(
     view.getByLabelText('密码处理', { exact: true }),
     'clear'
   )
-  await userEvent.click(view.getByRole('button', { name: '保存草稿' }))
+  await userEvent.click(view.getByRole('button', { name: '保存并测试' }))
   body = JSON.parse(calls.request.mock.calls[1][1].body)
   expect(body.credentials.password_action).toBe('clear')
   expect(body.credentials.password || '').toBe('')
@@ -88,12 +111,13 @@ test('keep and clear submit explicit intent without a masked password', async ()
 test('replace rejects mask and sends only an explicitly entered real password', async () => {
   calls.request.mockResolvedValue(revision)
   const view = await render(wrapper())
+  await userEvent.click(view.getByText('高级连接设置', { exact: true }))
   await userEvent.selectOptions(
     view.getByLabelText('密码处理', { exact: true }),
     'replace'
   )
   await userEvent.fill(view.getByLabelText('新密码', { exact: true }), '••••••')
-  await userEvent.click(view.getByRole('button', { name: '保存草稿' }))
+  await userEvent.click(view.getByRole('button', { name: '保存并测试' }))
   expect(calls.request).not.toHaveBeenCalled()
   await expect
     .element(view.getByRole('alert'))
@@ -102,7 +126,7 @@ test('replace rejects mask and sends only an explicitly entered real password', 
     view.getByLabelText('新密码', { exact: true }),
     'isolated-source-password'
   )
-  await userEvent.click(view.getByRole('button', { name: '保存草稿' }))
+  await userEvent.click(view.getByRole('button', { name: '保存并测试' }))
   expect(
     JSON.parse(calls.request.mock.calls[0][1].body).credentials.password
   ).toBe('isolated-source-password')
@@ -117,7 +141,7 @@ test('late saved revision cannot fill or activate a different selected channel',
   )
   const saved = vi.fn(),
     view = await render(wrapper(channel, revision, saved))
-  await userEvent.click(view.getByRole('button', { name: '保存草稿' }))
+  await userEvent.click(view.getByRole('button', { name: '保存并测试' }))
   const next = {
     ...channel,
     id: '00000000-0000-4000-8000-000000000002',
@@ -132,6 +156,7 @@ test('late saved revision cannot fill or activate a different selected channel',
 test('changing a revision clears typed credentials but preserves a saved-operation notice', async () => {
   calls.request.mockResolvedValue(revision)
   const view = await render(wrapper())
+  await userEvent.click(view.getByText('高级连接设置', { exact: true }))
   await userEvent.selectOptions(
     view.getByLabelText('密码处理', { exact: true }),
     'replace'
@@ -140,10 +165,8 @@ test('changing a revision clears typed credentials but preserves a saved-operati
     view.getByLabelText('新密码', { exact: true }),
     'isolated-draft-secret'
   )
-  await userEvent.click(view.getByRole('button', { name: '保存草稿' }))
-  await expect
-    .element(view.getByText('草稿已保存，请先测试，再应用'))
-    .toBeVisible()
+  await userEvent.click(view.getByRole('button', { name: '保存并测试' }))
+  await expect.element(view.getByText('配置已保存')).toBeVisible()
   await view.rerender(
     wrapper(
       { ...channel, version: 4 },
@@ -152,17 +175,15 @@ test('changing a revision clears typed credentials but preserves a saved-operati
   )
   await expect
     .element(view.getByLabelText('新密码', { exact: true }))
-    .not.toBeInTheDocument()
+    .toHaveValue('')
   await userEvent.fill(
     view.getByLabelText('主流路径', { exact: true }),
     '/main-edited'
   )
-  await userEvent.click(view.getByRole('button', { name: '保存草稿' }))
+  await userEvent.click(view.getByRole('button', { name: '保存并测试' }))
   const nextBody = JSON.parse(calls.request.mock.calls[1][1].body)
   expect(nextBody.credentials.password_action).toBe('keep')
   expect(nextBody.credentials).not.toHaveProperty('password')
   expect(nextBody.identity_intent).toBe('modify')
-  await expect
-    .element(view.getByText('草稿已保存，请先测试，再应用'))
-    .toBeVisible()
+  await expect.element(view.getByText('配置已保存')).toBeVisible()
 })

@@ -37,20 +37,26 @@ async function freshPoolProof(page: Page, poolId: string) {
   }
 }
 async function saveAndTest(page: Page, ip: string, main: string, sub: string) {
+  await page.getByRole('tab', {name: '摄像头连接', exact: true}).click()
   await page.getByLabel('IP 地址', {exact: true}).fill(ip)
   await page.getByLabel('主流路径', {exact: true}).fill(main)
   await page.getByLabel('子流路径', {exact: true}).fill(sub)
+  const advanced = page.locator('details').filter({has: page.locator('summary', {hasText: '高级连接设置'})})
+  if (!(await advanced.evaluate(el => el.hasAttribute('open')))) await advanced.locator('summary').click()
   await page.getByLabel('密码处理', {exact: true}).selectOption('clear')
   const saved = page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/source-revisions'))
-  await page.getByRole('button', {name: '保存草稿', exact: true}).click()
+  const tested = page.waitForResponse(r => r.request().method() === 'POST' && /\/source-revisions\/[^/]+\/test$/.test(new URL(r.url()).pathname))
+  await page.getByRole('button', {name: '保存并测试', exact: true}).click()
   const response = await saved
   if (response.status() !== 201) {
     const failed = await response.json()
     expect(response.status(), 'draft rejected: ' + (failed.error?.code || 'unknown')).toBe(201)
   }
   const revision = (await response.json()).data as {id: string}
-  await expect(page.getByText('草稿已保存，请先测试，再应用')).toBeVisible()
-  const job = await command(page, '测试取流', '/source-revisions/' + revision.id + '/test')
+  const testResponse = await tested
+  expect(testResponse.status()).toBe(202)
+  expect(new URL(testResponse.url()).pathname.endsWith('/source-revisions/' + revision.id + '/test')).toBe(true)
+  const job = (await testResponse.json()).data as {job_id: string}
   await finished(page, job)
   await expect(page.getByText('测试状态：通过')).toBeVisible({timeout: 15000})
   return revision.id
@@ -110,10 +116,12 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   await page.goto('/storage-pools')
   await finished(page, await command(page, '立即检查', '/storage-pools/' + pool.id + '/test'))
   await page.goto('/channels/configure?channel=' + channel.id)
+  await page.getByRole('tab', {name: '录像设置', exact: true}).click()
   await page.getByLabel('录像存储池', {exact: true}).selectOption(pool.id)
   await finished(page, await command(page, '绑定存储池', '/storage-pool'))
   await expect.poll(async () => (await status()).storage_pool_id, {timeout: 15000}).toBe(pool.id)
   await page.reload()
+  await page.getByRole('tab', {name: '录像设置', exact: true}).click()
   await page.getByLabel('普通录像', {exact: true}).selectOption('continuous')
   await finished(page, await command(page, '保存录像策略', '/recording-policy'))
   await expect.poll(async () => (await physical()).filter(s => s.isRecordingMP4).length, {timeout: 30000}).toBe(1)
@@ -146,15 +154,19 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   // visible degradation. Establish both readable streams before testing off.
   await expect.poll(async () => (await physical()).filter(s => s.tracks.some(t => t.ready && t.frames > 0)).length, {timeout: 30000}).toBe(2)
   await page.reload()
+  await page.getByRole('tab', {name: '录像设置', exact: true}).click()
   await page.getByLabel('普通录像', {exact: true}).selectOption('none')
   await finished(page, await command(page, '保存录像策略', '/recording-policy'))
   await expect.poll(async () => (await physical()).some(s => s.isRecordingMP4), {timeout: 20000}).toBe(false)
   await expect.poll(async () => (await physical()).filter(s => s.tracks.some(t => t.ready && t.frames > 0)).length, {timeout: 30000}).toBe(2)
   expect((await recordings()).items.find(s => s.id === historical.id)?.state).toBe('ready')
   await page.reload()
+  await page.getByRole('tab', {name: '录像设置', exact: true}).click()
   await page.getByLabel('录像结束时间', {exact: true}).fill(new Date(Date.now() + 60000).toISOString())
   await page.getByRole('button', {name: '检索录像索引', exact: true}).click()
   await expect(page.getByRole('cell', {name: '可用', exact: true}).first()).toBeVisible()
+  await page.getByRole('tab', {name: '历史与诊断', exact: true}).click()
+  await page.locator('summary', {hasText: '清空摄像头配置'}).click()
   await page.getByLabel('确认清空此通道摄像头', {exact: true}).check()
   await finished(page, await command(page, '清空摄像头', '/source/clear'))
   await expect.poll(async () => (await status()).current_revision_id, {timeout: 20000}).toBeNull()
