@@ -34,7 +34,7 @@ export function RecordingsIndex({ channelId }: { channelId: string }) {
     <section className='grid gap-4'>
       <p className='text-xs text-muted-foreground'>
         结果按站点时区 {zone} 显示。查询时间带时区偏移，例如
-        2026-10-05T08:00:00+08:00。录像内容播放将在 M1-C 接入。
+        2026-10-05T08:00:00+08:00。播放此通道的历史录像请到「录像回放」页面。
       </p>
       <form
         className='grid gap-3 md:grid-cols-3'
