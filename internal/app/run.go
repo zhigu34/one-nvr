@@ -11,6 +11,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/config"
 	"github.com/zhigu34/one-nvr/internal/database"
 	"github.com/zhigu34/one-nvr/internal/httpapi"
+	"github.com/zhigu34/one-nvr/internal/live"
 	"github.com/zhigu34/one-nvr/internal/media/probe"
 	"github.com/zhigu34/one-nvr/internal/media/zlm"
 	"github.com/zhigu34/one-nvr/internal/operations"
@@ -100,6 +101,10 @@ func Run(name string) error {
 			return err
 		}
 		recordings.Sources = channel.NewSources(db, auth.NewService(db, secret, auth.NewPasswordHasher(2)), secret, baseNetwork)
+		viewers := &live.Service{DB: db, Auth: recordings.Sources.Auth, Media: media}
+		recordings.AuthorizeLive = viewers.AuthorizePlay
+		background.Add(1)
+		go func() { defer background.Done(); viewers.Monitor(ctx) }()
 		recordings.FreshNetwork = func(ctx context.Context) (channel.NetworkPolicy, error) { return freshCameraNetwork(ctx, c) }
 		recordings.ProbeToken = probeKey
 		pools.MediaCheck = recordings.CheckPool
@@ -199,7 +204,15 @@ func Run(name string) error {
 			return err
 		}
 		sources := channel.NewSources(db, accounts, secret, network)
-		handler = httpapi.NewHandler(httpapi.Dependencies{Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, Sources: sources, PublicURL: c.PublicURL, TrustedProxyToken: proxyKey, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled})
+		apiKey, err := secret.ComponentCredential("zlm")
+		if err != nil {
+			return err
+		}
+		media, err = zlm.New("http://zlm", apiKey, nil)
+		if err != nil {
+			return err
+		}
+		handler = httpapi.NewHandler(httpapi.Dependencies{Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, Sources: sources, Live: &live.Service{DB: db, Auth: accounts, Media: media}, PublicURL: c.PublicURL, TrustedProxyToken: proxyKey, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled})
 	}
 	if name == "worker" {
 		prober := &operations.Prober{Checks: map[string]func(context.Context) error{"zlm": media.Health}, Operations: operations.New(db, nil, c.FrigateEnabled, c.OpenListEnabled), Client: operations.NewProbeClient(), Targets: map[string]operations.ProbeTarget{

@@ -112,6 +112,38 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   await expect.poll(async () => (await physical()).filter(s => s.tracks.some(t => t.ready && t.frames > 0)).length, {timeout: 30000}).toBe(2)
   expect((await physical()).some(s => s.isRecordingMP4)).toBe(false)
   expect((await recordings()).items).toHaveLength(0)
+  // Actual browser decoding is required; an SDP answer alone is not proof.
+  await page.goto('/live')
+  await expect(page.getByRole('heading', {name:'实时预览',exact:true})).toBeVisible()
+  const negotiation=page.waitForRequest(r=>r.method()==='POST' && new URL(r.url()).pathname===`/api/v1/channels/${channel.id}/live`)
+  await page.getByRole('button',{name:'CH01 通道 01',exact:true}).click()
+  const offer=(await negotiation).postDataJSON().sdp as string
+  const tile=page.getByRole('region',{name:'预览 CH01 通道 01',exact:true})
+  const video=tile.getByTestId('live-video')
+  await expect.poll(async()=>video.evaluate((el:HTMLVideoElement)=>el.getVideoPlaybackQuality().totalVideoFrames),{timeout:45000,message:'real WebRTC decoded frames required'}).toBeGreaterThan(5)
+  const firstFrames=await video.evaluate((el:HTMLVideoElement)=>el.getVideoPlaybackQuality().totalVideoFrames)
+  await expect.poll(async()=>video.evaluate((el:HTMLVideoElement)=>el.getVideoPlaybackQuality().totalVideoFrames),{timeout:10000}).toBeGreaterThan(firstFrames+5)
+  expect((await physical()).some(s=>s.isRecordingMP4)).toBe(false)
+  const currentStreams=await physical()
+  const denied=await request.post('http://zlm/index/api/whep',{params:{app:'one_nvr',stream:currentStreams[0].stream,vhost:'__defaultVhost__'},headers:{'Content-Type':'application/sdp'},data:offer})
+  expect(denied.status(),'unauthorized media access must be denied').not.toBe(201)
+  await tile.getByLabel('CH01 通道 01 码流').selectOption('main')
+  await expect(tile.getByText('主流 · 播放中',{exact:true})).toBeVisible({timeout:30000})
+  await expect.poll(async()=>video.evaluate((el:HTMLVideoElement)=>el.getVideoPlaybackQuality().totalVideoFrames),{timeout:10000}).toBeGreaterThan(5)
+  await page.getByRole('button',{name:'4 画面',exact:true}).click()
+  await expect(page.getByRole('region',{name:/预览 CH|空闲画面/})).toHaveCount(4)
+  await page.getByRole('button',{name:'停止全部',exact:true}).click()
+  await expect.poll(async()=>video.count()).toBe(0)
+  await expect.poll(async()=>{
+    let count=0
+    for(const stream of await physical()){
+      const response=await request.get('http://zlm/index/api/getMediaPlayerList',{params:{secret,schema:'rtsp',app:'one_nvr',stream:stream.stream,vhost:'__defaultVhost__'}})
+      expect(response.status()).toBe(200)
+      const body=await response.json();expect(body.code).toBe(0);count+=(body.data || []).length
+    }
+    return count
+  },{timeout:20000,message:'stopping preview must remove actual media readers'}).toBe(0)
+  expect((await recordings()).items).toHaveLength(0)
   // The first pool is verified by real private temporary media, never seeded proof rows.
   await page.goto('/storage-pools')
   await finished(page, await command(page, '立即检查', '/storage-pools/' + pool.id + '/test'))
@@ -178,5 +210,5 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   expect((await status()).recording.state).toBe('disabled')
   expect((await recordings()).items.find(s => s.id === historical.id)?.state).toBe('ready')
   expect((await status()).channel_id).toBe(channel.id)
-  writeFileSync('/results/media-browser.json', JSON.stringify({actual_media: true, slots: 32, active_channels: 1, synthetic_camera_pairs: 2, no_recording_keeps_pull: true, real_ready_segment: true, switch_and_rollback: true, clear_and_reconfigure_preserves_policy: true, channel_id: channel.id, historical_segment_id: historical.id}))
+  writeFileSync('/results/media-browser.json', JSON.stringify({actual_media: true, webrtc_decoded_frames: firstFrames, live_main_sub_switch: true, live_no_recording: true, live_unauthorized_denied: true, live_readers_released: true, live_grid_cells: 4, slots: 32, active_channels: 1, synthetic_camera_pairs: 2, no_recording_keeps_pull: true, real_ready_segment: true, switch_and_rollback: true, clear_and_reconfigure_preserves_policy: true, channel_id: channel.id, historical_segment_id: historical.id}))
 })

@@ -54,7 +54,8 @@ services:
       - runtime-storage:/storage
     depends_on: [worker]
     networks:
-      default: {}
+      default:
+        ipv4_address: 172.30.253.10
       recording-hook: {}
   runner:
     environment:
@@ -87,6 +88,7 @@ networks:
     ipam:
       config:
         - subnet: 172.30.253.0/24
+          ip_range: 172.30.253.128/25
   recording-hook:
     internal: true
     ipam:

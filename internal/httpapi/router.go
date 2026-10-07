@@ -10,6 +10,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/channel"
 	"github.com/zhigu34/one-nvr/internal/fault"
 	"github.com/zhigu34/one-nvr/internal/id"
+	"github.com/zhigu34/one-nvr/internal/live"
 	"github.com/zhigu34/one-nvr/internal/operations"
 	"github.com/zhigu34/one-nvr/internal/recording"
 	"github.com/zhigu34/one-nvr/internal/site"
@@ -32,6 +33,7 @@ type Dependencies struct {
 	Channels                        *channel.Service
 	Sources                         *channel.SourceService
 	Recordings                      *recording.Service
+	Live                            *live.Service
 	Storage                         *storage.Service
 	TLS                             *tlsmanager.Service
 	Operations                      *operations.Service
@@ -83,6 +85,9 @@ func NewHandler(d Dependencies) http.Handler {
 		d.Recordings = &recording.Service{DB: d.Auth.DB, Auth: d.Auth, Pools: d.Storage}
 	}
 	r.d = d
+	if r.d.Live == nil {
+		r.d.Live = &live.Service{DB: d.Auth.DB, Auth: d.Auth}
+	}
 	r.mux.Handle("/health/", Health(d.HealthCheck))
 	r.mux.HandleFunc("GET /api/v1/setup/status", r.setupStatus)
 	r.mux.HandleFunc("POST /api/v1/setup", r.anonymous(r.setup))
@@ -101,6 +106,9 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("POST /api/v1/site/expand", r.protected(r.expandSite))
 	r.mux.HandleFunc("GET /api/v1/timezones", r.timezones)
 	r.mux.HandleFunc("GET /api/v1/channels", r.protected(r.listChannels))
+	r.mux.HandleFunc("POST /api/v1/channels/{id}/live", r.protected(r.openLive))
+	r.mux.HandleFunc("POST /api/v1/live-sessions/{id}/renew", r.protectedPassive(r.renewLive))
+	r.mux.HandleFunc("DELETE /api/v1/live-sessions/{id}", r.protectedPassive(r.closeLive))
 	r.mux.HandleFunc("GET /api/v1/settings/hardware", r.protected(r.hardwareReport))
 	r.mux.HandleFunc("GET /api/v1/channel-slots", r.protected(r.channelSlots))
 	r.mux.HandleFunc("PATCH /api/v1/channels/{id}", r.protected(r.updateChannel))
@@ -194,6 +202,16 @@ func (r *router) anonymous(next http.HandlerFunc) http.HandlerFunc {
 type protectedHandler func(http.ResponseWriter, *http.Request, auth.Principal, string)
 
 func (r *router) protected(next protectedHandler) http.HandlerFunc {
+	return r.protect(next, true)
+}
+
+// Automated playback renewals/cleanup authenticate and enforce CSRF, without
+// extending the user-activity idle deadline.
+func (r *router) protectedPassive(next protectedHandler) http.HandlerFunc {
+	return r.protect(next, false)
+}
+
+func (r *router) protect(next protectedHandler, activity bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, q *http.Request) {
 		cookie, err := q.Cookie(r.cookieName(sessionCookie))
 		if err != nil {
@@ -209,7 +227,7 @@ func (r *router) protected(next protectedHandler) http.HandlerFunc {
 			fail(w, q, fault.New(403, "csrf_rejected", "请求来源或安全令牌无效"))
 			return
 		}
-		if q.Method != "GET" && q.Method != "HEAD" && q.Method != "OPTIONS" {
+		if activity && q.Method != "GET" && q.Method != "HEAD" && q.Method != "OPTIONS" {
 			p, err = r.d.Auth.Authenticate(q.Context(), cookie.Value)
 			if err != nil {
 				fail(w, q, err)
