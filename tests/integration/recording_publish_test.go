@@ -255,8 +255,14 @@ func TestRecordingQueryHTTPDoesNotExposeRawMedia(t *testing.T) {
 			t.Fatal("private media path exposed")
 		}
 	}
-	if response := request("/api/v1/recordings/" + string(segment.ID) + "/content"); response.Code != 501 || !strings.Contains(response.Body.String(), "feature_not_available") {
-		t.Fatal("content capability incorrectly enabled", response.Code)
+	response = request("/api/v1/recordings/" + string(segment.ID) + "/content")
+	if response.Code != 200 || response.Header().Get("Content-Type") != "video/mp4" {
+		t.Fatal("authorized content unavailable", response.Code, response.Body.String())
+	}
+	for _, private := range []string{fixture.Pool.Path, "original_relative_path", "target_relative_path", ".work/", "rtsp://"} {
+		if strings.Contains(response.Body.String(), private) || strings.Contains(response.Header().Get("Content-Range"), private) {
+			t.Fatal("private media path exposed by content response")
+		}
 	}
 	unknown, _ := id.New()
 	if response := request("/api/v1/recordings/" + string(unknown) + "/content"); response.Code != 404 {
@@ -556,7 +562,7 @@ func TestRecordingQueryRequiresPlaybackGrantOnEachRequest(t *testing.T) {
 	if _, err := f.Service.List(ctx, login.Principal, q); !errors.Is(err, auth.ErrNotFound) {
 		t.Fatal("ungranted historical recording disclosed", err)
 	}
-	if err := f.Service.AuthorizeSegment(ctx, login.Principal, segment.ID); !errors.Is(err, auth.ErrNotFound) {
+	if _, err := f.Service.OpenSegment(ctx, login.Principal, segment.ID); !errors.Is(err, auth.ErrNotFound) {
 		t.Fatal("ungranted media ID disclosed", err)
 	}
 	if err := f.Auth.SetGrants(ctx, f.Admin, user.ID, 1, []auth.Grant{{ChannelID: f.Channel, Actions: []auth.Action{auth.Playback}}}); err != nil {
@@ -582,7 +588,7 @@ func TestRecordingQueryRequiresPlaybackGrantOnEachRequest(t *testing.T) {
 	if _, err := f.Service.List(ctx, login.Principal, q); !errors.Is(err, auth.ErrNotFound) {
 		t.Fatal("revoked history remains accessible", err)
 	}
-	if err := f.Service.AuthorizeSegment(ctx, login.Principal, segment.ID); !errors.Is(err, auth.ErrNotFound) {
+	if _, err := f.Service.OpenSegment(ctx, login.Principal, segment.ID); !errors.Is(err, auth.ErrNotFound) {
 		t.Fatal("revoked recording remains accessible", err)
 	}
 }
