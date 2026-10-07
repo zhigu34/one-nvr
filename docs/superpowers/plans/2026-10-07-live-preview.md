@@ -52,6 +52,6 @@ Files: apps/web/src/features/live/*、apps/web/src/routes/_authenticated/live.ts
 
 Files: tests/e2e/m1b-media.spec.ts、tests/integration/gateway_media_e2e_test.go、相关隔离 Compose/egress 配置、部署说明。
 
-- [ ] 隔离浏览器实际连接 ZLM 地址，验证 decoded frames 增长；验证关闭录像仍能播放、主子流切换、4 画面及释放。
-- [ ] 验证未授权、登出后的服务端关闭；既有媒体录制、换源回滚与恢复检查继续执行。
-- [ ] 独立审查后修复关键问题，推送当前开发分支；完成 CI 并准确记录真机边界。
+- [x] 隔离浏览器实际连接 ZLM 地址，验证 decoded frames 增长；验证关闭录像仍能播放、主子流切换、4 画面及释放。
+- [x] 验证媒体端口未授权拒绝；PG验证登出/撤销后租约失效并调用关闭。既有媒体录制、换源回滚与恢复检查通过。
+- [x] 独立审查后修复关键问题，推送当前开发分支；完成业务CI和网关专项验收，分别记录提交与真机边界，见 docs/live-preview-validation.md。
