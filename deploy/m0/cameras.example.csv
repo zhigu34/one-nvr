@@ -1,3 +1,0 @@
-channel_no,channel_name,ip,rtsp_port,username,password,main_path,sub_path
-CH01,入口,192.168.1.101,554,admin,replace-camera-password,/main,/sub
-CH02,走廊,192.168.1.102,554,admin,replace-camera-password,/main,/sub

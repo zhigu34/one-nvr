@@ -84,6 +84,12 @@ services:
       - runtime-control:/control
       - runtime-tls:/certs:ro
     depends_on: [api]
+networks:
+  default:
+    ipam:
+      config:
+        # Isolated CI subnet permits reserving the old API peer explicitly.
+        - subnet: 172.30.252.0/24
 volumes:
   runtime-db:
   runtime-data:

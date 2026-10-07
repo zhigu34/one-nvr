@@ -249,15 +249,8 @@ func initRuntime() error {
 	if e = validateRuntimeIdentity(root); e != nil {
 		return e
 	}
-	entries, readErr := os.ReadDir(root)
-	if readErr != nil {
-		return readErr
-	}
-	allowed := map[string]bool{"secrets": true, "gateway": true, "tls": true, "runtime": true, "hardware": true, "postgres": true, "mqtt": true, "frigate": true, "openlist": true}
-	for _, entry := range entries {
-		if !allowed[entry.Name()] {
-			return fmt.Errorf("data root contains unrelated entries; choose a dedicated directory")
-		}
+	if e = validateRuntimeEntries(root); e != nil {
+		return e
 	}
 	for _, name := range []string{"", "secrets", "gateway", "tls", "tls/versions", "runtime", "hardware", "postgres", "mqtt", "frigate", "openlist"} {
 		path := filepath.Join(root, name)
@@ -318,6 +311,23 @@ func validateRuntimeIdentity(root string) error {
 		}
 		if len(entries) > 0 {
 			return fmt.Errorf("persistent state exists but secrets are missing; restore the original secrets")
+		}
+	}
+	return nil
+}
+
+func validateRuntimeEntries(root string) error {
+	entries, readErr := os.ReadDir(root)
+	if readErr != nil {
+		return readErr
+	}
+	allowed := map[string]bool{"secrets": true, "gateway": true, "tls": true, "runtime": true, "hardware": true, "postgres": true, "mqtt": true, "frigate": true, "openlist": true, "recording-spool": true}
+	for _, entry := range entries {
+		if !allowed[entry.Name()] {
+			return fmt.Errorf("data root contains unrelated entries; choose a dedicated directory")
+		}
+		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("dedicated data path must be a real directory")
 		}
 	}
 	return nil

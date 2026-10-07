@@ -81,12 +81,12 @@ func (r Repository) Claim(ctx context.Context, kind string) (Lease, error) {
 		return lease, err
 	}
 	err = r.DB.WithinTx(ctx, func(tx pgx.Tx) error {
-		// Ordinary jobs have bounded retries. TLS has durable external intent:
+		// Ordinary jobs have bounded retries. TLS and explicit source changes have durable external intent:
 		// retain reconciliation until its handler verifies and commits a terminal
 		// domain result, even after a last-attempt crash. Backoff remains bounded.
 		// Terminalize ordinary exhausted jobs even when no job is claimable.
 		if _, err := tx.Exec(ctx, `WITH exhausted AS (
-   SELECT id FROM jobs WHERE kind <> 'tls.apply' AND state='running' AND attempt>=max_attempts AND lease_expires_at<=clock_timestamp()
+   SELECT id FROM jobs WHERE kind NOT IN ('tls.apply','source.apply','source.clear','source.pool_switch','source.policy_apply','source.import') AND state='running' AND attempt>=max_attempts AND lease_expires_at<=clock_timestamp()
    FOR UPDATE SKIP LOCKED
   ), terminal AS (
    UPDATE jobs SET state='failed',error_code='lease_expired',lease_expires_at=NULL,updated_at=clock_timestamp()
@@ -96,7 +96,11 @@ func (r Repository) Claim(ctx context.Context, kind string) (Lease, error) {
 			return err
 		}
 		err := tx.QueryRow(ctx, `WITH candidate AS (
-   SELECT id FROM jobs WHERE kind=$1 AND (kind='tls.apply' OR attempt<max_attempts) AND
+   SELECT id FROM jobs pending WHERE kind=$1 AND (kind IN ('tls.apply','source.apply','source.clear','source.pool_switch','source.policy_apply','source.import') OR attempt<max_attempts) AND
+    (kind<>'source.test' OR (
+     NOT EXISTS(SELECT 1 FROM source_switches sw WHERE sw.channel_id=pending.object_id AND sw.state IN ('queued','running')) AND
+     NOT EXISTS(SELECT 1 FROM jobs busy WHERE busy.object_id=pending.object_id AND busy.id<>pending.id AND busy.state='running' AND busy.lease_expires_at>clock_timestamp() AND busy.kind IN ('source.test','source.apply','source.clear','source.pool_switch','source.policy_apply'))
+    )) AND
     ((state='queued' AND available_at<=clock_timestamp()) OR (state='running' AND lease_expires_at<=clock_timestamp()))
    ORDER BY available_at,created_at,id FOR UPDATE SKIP LOCKED LIMIT 1
   ) UPDATE jobs SET state='running',attempt=attempt+1,fencing_token=$2,
@@ -107,6 +111,38 @@ func (r Repository) Claim(ctx context.Context, kind string) (Lease, error) {
 		}
 		if err != nil {
 			return err
+		}
+		if kind == "source.test" {
+			// Serialize the capacity decision with the actual pinned execution
+			// lock. A concurrent same-channel claimant rolls back without an attempt.
+			var channelID id.ID
+			if err := tx.QueryRow(ctx, "SELECT object_id FROM jobs WHERE id=$1", lease.ID).Scan(&channelID); err != nil {
+				return err
+			}
+			var free bool
+			if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1,170019))`, string(channelID)).Scan(&free); err != nil {
+				return err
+			}
+			if !free {
+				return ErrNoJob
+			}
+			if err := tx.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM jobs WHERE object_id=$1 AND id<>$2 AND state='running' AND lease_expires_at>clock_timestamp() AND kind IN ('source.test','source.apply','source.clear','source.pool_switch','source.policy_apply'))`, channelID, lease.ID).Scan(&free); err != nil {
+				return err
+			}
+			if !free {
+				return ErrNoJob
+			}
+			var slot int
+			err := tx.QueryRow(ctx, `SELECT slot FROM source_test_slots s WHERE s.job_id=$1 OR s.job_id IS NULL OR NOT EXISTS(SELECT 1 FROM jobs j WHERE j.id=s.job_id AND j.state='running' AND j.fencing_token=s.fencing_token AND j.lease_expires_at>clock_timestamp()) ORDER BY (s.job_id=$1) DESC NULLS LAST,s.slot FOR UPDATE SKIP LOCKED LIMIT 1`, lease.ID).Scan(&slot)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNoJob
+			}
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE source_test_slots SET job_id=$2,fencing_token=$3 WHERE slot=$1`, slot, lease.ID, lease.FencingToken); err != nil {
+				return err
+			}
 		}
 		if _, err = tx.Exec(ctx, "UPDATE job_attempts SET state='lease_expired',finished_at=clock_timestamp() WHERE job_id=$1 AND state='running'", lease.ID); err != nil {
 			return err
@@ -156,7 +192,7 @@ func (r Repository) finish(ctx context.Context, l Lease, payload []byte, code st
 		}
 		delay := backoff(l.Attempt)
 		var actual string
-		err := tx.QueryRow(ctx, `UPDATE jobs SET state=CASE WHEN $4='queued' AND ((kind <> 'tls.apply' AND attempt>=max_attempts) OR $8) THEN 'failed' ELSE $4 END,
+		err := tx.QueryRow(ctx, `UPDATE jobs SET state=CASE WHEN $4='queued' AND ((kind NOT IN ('tls.apply','source.apply','source.clear','source.pool_switch','source.policy_apply','source.import') AND attempt>=max_attempts) OR $8) THEN 'failed' ELSE $4 END,
    result=$5,error_code=NULLIF($6,''),available_at=clock_timestamp()+make_interval(secs=>$7),
    lease_expires_at=NULL,updated_at=clock_timestamp()
    WHERE id=$1 AND fencing_token=$2 AND attempt=$3 AND state='running' AND lease_expires_at>clock_timestamp() RETURNING state`, l.ID, l.FencingToken, l.Attempt, state, payload, code, delay, permanent).Scan(&actual)

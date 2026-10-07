@@ -32,9 +32,13 @@ export function StoragePools() {
     <>
       <PageTitle
         title='存储池'
-        description='登记 /storage 下已经挂载的目录。底层 NAS、RAID 或文件系统由部署环境管理。'
+        description='添加已挂载的目录作为录像存储池，再在通道中选择使用。'
       />
       <Panel title='添加存储池'>
+        <p className='mb-4 text-sm text-muted-foreground'>
+          填写容器内的挂载路径：部署时 ONE_NVR_STORAGE_ROOT 对应 /storage，例如
+          /storage/disk1。无需配置底层磁盘。
+        </p>
         <Notices {...action} />
         <form
           className='grid gap-4 md:grid-cols-3'
@@ -74,13 +78,13 @@ export function StoragePools() {
       {query.data && (
         <>
           <p className='mb-4 text-sm text-muted-foreground'>
-            按文件系统去重：{query.data.capacity.filesystem_count} 个 · 总容量{' '}
+            可用存储：{query.data.capacity.filesystem_count} 个文件系统 · 总容量{' '}
             {bytes(query.data.capacity.total_bytes)} · 可用{' '}
             {bytes(query.data.capacity.free_bytes)}
           </p>
           {query.data.items.length === 0 && <Empty>尚未添加存储池。</Empty>}
           {query.data.items.map((pool) => (
-            <PoolRow key={`${pool.id}:${pool.version}`} pool={pool} />
+            <PoolRow key={pool.id} pool={pool} />
           ))}
           {query.data.next_cursor && (
             <Button onClick={() => setCursor(query.data!.next_cursor!)}>
@@ -109,67 +113,24 @@ function PoolRow({ pool }: { pool: Schema<'Pool'> }) {
     <Panel title={`${pool.name}${pool.is_default ? ' · 默认池' : ''}`}>
       <p className='mb-2 font-mono text-sm break-all'>{pool.path}</p>
       <p className='mb-3 text-sm text-muted-foreground'>
-        状态：{pool.state} · 业务占用：
-        {pool.used_bytes === null ? '尚未提供索引' : bytes(pool.used_bytes)}
+        状态：
+        {
+          {
+            ready: '可用',
+            pending: '待检查',
+            unavailable: '不可用',
+            low_space: '空间不足',
+            disabled: '已停用',
+          }[pool.state]
+        }{' '}
+        · 业务占用：
+        {pool.used_bytes === null ? '待统计' : bytes(pool.used_bytes)}
+        <span className='ms-1 text-xs text-muted-foreground'>
+          （仅已索引录像；未发布占用未知）
+        </span>
       </p>
-      <div className='mb-4 grid gap-2 md:grid-cols-3'>
-        {pool.checks.map((check) => (
-          <div key={check.service} className='rounded-lg border p-3 text-sm'>
-            <p>
-              {check.service} · {check.state}
-            </p>
-            <p className='mt-1 text-xs text-muted-foreground'>
-              {check.reason === 'test_source_required'
-                ? '待 ZLM 测试视频源'
-                : check.reason}
-            </p>
-          </div>
-        ))}
-      </div>
       <Notices {...action} />
-      <form
-        className='flex flex-wrap items-end gap-4'
-        onSubmit={(event) => {
-          event.preventDefault()
-          const data = fields(event.currentTarget)
-          void action.run(
-            () =>
-              apiRequest(
-                `/api/v1/storage-pools/${pool.id}`,
-                jsonRequest(
-                  'PATCH',
-                  {
-                    name: text(data, 'name'),
-                    enabled: data.has('enabled'),
-                    is_default: data.has('is_default'),
-                  },
-                  pool.version
-                )
-              ),
-            '存储池设置已保存'
-          )
-        }}
-      >
-        <Field
-          label='名称'
-          id={`pool-${pool.id}`}
-          name='name'
-          defaultValue={pool.name}
-          required
-        />
-        <label className='flex items-center gap-2 pb-2'>
-          <input type='checkbox' name='enabled' defaultChecked={pool.enabled} />
-          启用
-        </label>
-        <label className='flex items-center gap-2 pb-2'>
-          <input
-            type='checkbox'
-            name='is_default'
-            defaultChecked={pool.is_default}
-          />
-          默认池
-        </label>
-        <Button disabled={action.pending}>保存设置</Button>
+      <div className='mb-3 flex flex-wrap items-center gap-3'>
         <Button
           type='button'
           variant='outline'
@@ -186,27 +147,127 @@ function PoolRow({ pool }: { pool: Schema<'Pool'> }) {
         >
           立即检查
         </Button>
-        <Button
-          type='button'
-          variant='destructive'
-          disabled={action.pending}
-          onClick={() => {
-            if (
-              window.confirm('移除这个空存储池的登记？目录与池身份文件将保留。')
+      </div>
+      <details className='rounded-lg border p-3'>
+        <summary className='cursor-pointer text-sm font-medium'>
+          存储池设置
+        </summary>
+        <form
+          key={pool.version}
+          className='mt-4 flex flex-wrap items-end gap-4'
+          onSubmit={(event) => {
+            event.preventDefault()
+            const data = fields(event.currentTarget)
+            void action.run(
+              () =>
+                apiRequest(
+                  `/api/v1/storage-pools/${pool.id}`,
+                  jsonRequest(
+                    'PATCH',
+                    {
+                      name: text(data, 'name'),
+                      enabled: data.has('enabled'),
+                      is_default: data.has('is_default'),
+                    },
+                    pool.version
+                  )
+                ),
+              '存储池设置已保存'
             )
-              void action.run(
-                () =>
-                  apiRequest(
-                    `/api/v1/storage-pools/${pool.id}`,
-                    jsonRequest('DELETE', undefined, pool.version)
-                  ),
-                '登记已移除'
-              )
           }}
         >
-          移除登记
-        </Button>
-      </form>
+          <Field
+            label='名称'
+            id={`pool-${pool.id}`}
+            name='name'
+            defaultValue={pool.name}
+            required
+          />
+          <label className='flex items-center gap-2 pb-2'>
+            <input
+              type='checkbox'
+              name='enabled'
+              defaultChecked={pool.enabled}
+            />
+            启用
+          </label>
+          <label className='flex items-center gap-2 pb-2'>
+            <input
+              type='checkbox'
+              name='is_default'
+              defaultChecked={pool.is_default}
+            />
+            默认池
+          </label>
+          <Button disabled={action.pending}>保存设置</Button>
+          <Button
+            type='button'
+            variant='destructive'
+            disabled={action.pending}
+            onClick={() => {
+              if (
+                window.confirm(
+                  '移除这个空存储池的登记？目录与池身份文件将保留。'
+                )
+              )
+                void action.run(
+                  () =>
+                    apiRequest(
+                      `/api/v1/storage-pools/${pool.id}`,
+                      jsonRequest('DELETE', undefined, pool.version)
+                    ),
+                  '登记已移除'
+                )
+            }}
+          >
+            移除登记
+          </Button>
+        </form>
+      </details>
+      <details className='mt-3 text-sm'>
+        <summary className='cursor-pointer text-muted-foreground'>
+          检查详情
+        </summary>
+        <div className='mb-4 grid gap-2 md:grid-cols-3'>
+          {pool.checks.map((check) => (
+            <div key={check.service} className='rounded-lg border p-3 text-sm'>
+              <p>
+                {
+                  { api: '目录访问', worker: '后台写入', zlm: '录像写入' }[
+                    check.service
+                  ]
+                }{' '}
+                ·{' '}
+                {
+                  {
+                    healthy: '正常',
+                    unavailable: '不可用',
+                    pending: '待检查',
+                    expired: '检查已过期',
+                  }[check.state]
+                }
+              </p>
+              <p className='mt-1 text-xs text-muted-foreground'>
+                {check.reason === 'test_source_required'
+                  ? '需先完成摄像头连接测试'
+                  : check.state === 'healthy'
+                    ? '检查通过'
+                    : '请重新检查或查看诊断'}
+              </p>
+            </div>
+          ))}
+        </div>
+        <div className='grid gap-2 text-xs text-muted-foreground'>
+          {pool.checks.map((check) => (
+            <p key={check.service}>
+              {check.service} · {check.reason || '无附加诊断'}
+            </p>
+          ))}
+        </div>
+      </details>
+      {pool.checks.some((check) => check.reason === 'test_source_required') && (
+        <p className='mt-3 text-sm text-amber-600'>等待摄像头连接测试</p>
+      )}
       {job && (
         <div className='mt-3 text-xs'>
           <QueryState
@@ -215,7 +276,15 @@ function PoolRow({ pool }: { pool: Schema<'Pool'> }) {
             retry={() => status.refetch()}
           />
           <p>
-            任务 {job} · {status.data?.state || '等待查询'}
+            检查状态：
+            {status.data
+              ? {
+                  queued: '排队中',
+                  running: '检查中',
+                  succeeded: '完成',
+                  failed: '失败',
+                }[status.data.state]
+              : '等待查询'}
           </p>
           {status.data?.error_code && <p>{status.data.error_code}</p>}
         </div>

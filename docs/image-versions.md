@@ -1,18 +1,18 @@
 # one-nvr 镜像版本基线
 
-确定日期：2026-10-03。适用范围：正式版单机 Docker Compose，Linux `amd64`（AMD EPYC 7402 / Intel N5105）。这是设计阶段的镜像冻结记录，正式 Dockerfile / Compose 尚未交付。
+确定日期：2026-10-03。适用范围：正式版单机 Docker Compose，Linux `amd64`（不限定机型；首批真机验证样本为 AMD EPYC 7402 与 Intel N5105）。M1-A 已交付正式 Dockerfile / Compose 并通过 GitHub CI 的构建、基础部署和网关验证；M1-B 媒体能力仍在实测中。
 
 ## 版本选择
 
 | 组件 | 固定标签 | 用途 | 验证范围 |
 | --- | --- | --- | --- |
-| Go | `1.27.1-bookworm` | 构建 API / Worker / admin | 仓库与架构已核对，正式构建未测 |
-| Node.js | `24.21.0-bookworm-slim` | 构建 shadcn-admin 前端 | 仓库与架构已核对，正式构建未测 |
-| Debian | `bookworm-20260918-slim` | 自建 Go 应用运行基础 | 仓库与架构已核对，正式运行未测 |
-| PostgreSQL | `17.11-bookworm` | 基础模块数据库 | 仓库与架构已核对，业务迁移未测 |
-| Nginx | `1.30.5-alpine3.24` | 自建 gateway 的运行基础 | 仓库与架构已核对，正式网关未测 |
+| Go | `1.27.1-bookworm` | 构建 API / Worker / admin | M1-A/M1-B CI 实际构建通过 |
+| Node.js | `24.21.0-bookworm-slim` | 构建 shadcn-admin 前端 | M1-A/M1-B CI 实际构建通过 |
+| Debian | `bookworm-20260918-slim` | 自建 Go 应用运行基础 | CI 核心实际运行/重复部署通过 |
+| PostgreSQL | `17.11-bookworm` | 基础模块数据库 | CI PostgreSQL 实际迁移/集成通过 |
+| Nginx | `1.30.5-alpine3.24` | 自建 gateway 的运行基础 | CI 实际网关/换证/恢复通过 |
 | ZLMediaKit | `master + 固定 digest` | 基础模块取流与录像 | 沿用 M0 两机每机两路直播/录像/回放的构建 |
-| Frigate | `0.17.2` | 可选智能检测 | 沿用 M0 N5105 事件/抓拍验证构建；AMD 检测未验收 |
+| Frigate | `0.17.2` | 可选智能检测 | 沿用 M0 样本机 N5105 的事件/抓拍验证构建；EPYC 检测未验收 |
 | Mosquitto | `2.0.22` | 可选智能检测的 MQTT | 沿用 M0 消息链路构建 |
 | OpenList | `v4.2.6` | 可选云归档的自带服务 | 仓库与架构已核对，归档链路未测 |
 
@@ -20,7 +20,7 @@ Go / Node 仅用于构建，不增加常驻容器。API、Worker 与一次性 ad
 
 Go 沿用设计的 1.27 系列；Node 采用 24 系列 LTS 构建前端；PostgreSQL 保持已选 17 系列，固定其补丁版本。Go、Node、PostgreSQL 和应用运行基础统一选择 Bookworm 变体，减少构建与运行环境差异。Nginx 正式版选稳定分支 1.30.5。OpenList 使用标准 v4.2.6 镜像。
 
-ZLM 当前基线没有记录可对应的语义版本号，直接沿用 M0 构建的 digest；`master@sha256:…` 按 digest 寻址，不随 master 标签更新。Frigate 与 Mosquitto 同样沿用已测构建，不因上游发布新版本自动升级。两台机器用同一 Frigate 基础镜像，Intel 核显通过设备映射和硬件配置处理；不凭 CPU 品牌切换 TensorRT 镜像。
+ZLM 当前基线没有记录可对应的语义版本号，直接沿用 M0 构建的 digest；`master@sha256:…` 按 digest 寻址，不随 master 标签更新。Frigate 与 Mosquitto 同样沿用已测构建，不因上游发布新版本自动升级。各部署机器共用同一 Frigate 基础镜像，Intel 核显通过设备映射和硬件配置处理；不凭 CPU 品牌切换 TensorRT 镜像。
 
 ## 完整镜像引用
 
@@ -40,19 +40,13 @@ openlistteam/openlist:v4.2.6@sha256:c555c6e1c8af2aead38ed12ec761ac077fdf046d19cf
 
 2026-10-03 通过 Docker Hub / GHCR Registry API 读取上述九个引用的 manifest，确认返回的 digest 和 `linux/amd64` 条目。新版本查询具体标签；M0 沿用版本查询已有不可变 digest，以保留当时的实际构建。查询仅读取元数据，没有拉取并启动这些镜像。已核对可拉取的 manifest 不代表正式构建、数据库兼容或云归档验收通过。
 
-## M0 保持原部署
+## 历史实验
 
-本次不修改 `deploy/m0/compose.yaml` 或 `deploy/m0/Dockerfile`，现有真机结果仍对应原实验包。M0 Nginx 继续使用：
-
-```text
-nginx:1.28.0-alpine@sha256:30f1c0d78e0ad60901648be663a710bdadf19e4c10ac6782c235200619158284
-```
-
-按用户已有本地镜像的要求，M0 工具构建保留 `python:3.12-slim`。这是实验包的明确例外：未冻结 Python 补丁版本、Debian 变体和 digest；不同时间准备的同名镜像可能不同。M0 报告应记录本机实际 image ID / RepoDigests；正式 Go 服务不使用 Python，不能把上述例外带入正式发布镜像。
+M0 验证包已于 2026-10-06 从当前源码移除，可从 Git 历史恢复。正式版沿用已核对的 ZLM/Frigate 摘要，构建和运行版本见上表；不再构建 Python M0 工具镜像。旧机器上的实验容器和数据不由源码清理操作删除。
 
 ## 构建、部署与升级约束
 
-- 正式 Dockerfile 的各个 FROM 与上游运行镜像引用采用上述 digest。自建应用/gateway 发布镜像还须记录源码 commit、构建参数和最终 digest；尚未构建，不能用基础镜像 digest 代替最终产品镜像 digest。
+- 正式 Dockerfile 的各个 FROM 与上游运行镜像引用采用上述 digest。自建应用/gateway 发布镜像还须记录源码 commit、构建参数和最终 digest；CI 已实际构建；尚未发布产品镜像，不能用基础镜像 digest 代替最终产品镜像 digest。
 - 前端导入时记录 shadcn-admin commit、固定包管理器版本并保留 `pnpm-lock.yaml`，后端保留 `go.sum`。ffmpeg/ffprobe、CA 证书等通过系统包安装时还须记录包版本和来源；基础镜像固定不等于 apt 安装结果已冻结，发布构建需固定包版本与可获取的仓库快照。
 - `.env` 可覆盖镜像引用以使用离线/内部仓库，但发布基线保留可读版本和已核对的不可变摘要。内部镜像搬运后核对 manifest 与架构，不能仅检查同名标签存在；`docker save/load` 导入须核对本机实际 ID / RepoDigests，不能假定 digest 引用一定保留。
 - 部署脚本仅准备启用模块所需镜像；Frigate 关闭时不要求 Frigate/MQTT，云归档关闭时不要求 OpenList。Go/Node 构建镜像只有需要构建自建镜像时才准备。
@@ -68,3 +62,9 @@ nginx:1.28.0-alpine@sha256:30f1c0d78e0ad60901648be663a710bdadf19e4c10ac6782c2352
 - [Mosquitto 官方镜像清单](https://github.com/docker-library/official-images/blob/master/library/eclipse-mosquitto)。
 - [Frigate 0.17.2](https://github.com/blakeblackshear/frigate/releases/tag/v0.17.2)、[ZLM 上游](https://github.com/ZLMediaKit/ZLMediaKit)。
 - [OpenList Docker 部署说明](https://doc.oplist.org/guide/installation/docker)。
+
+## M1-B 媒体工具
+
+2026-10-05 增加 FFmpeg/ffprobe：Debian Bookworm 签名快照 `20260919T000000Z`，包 `ffmpeg=7:5.1.9-0+deb12u1`。`deploy/production/media-packages.lock` 记录该包及可用依赖备选包的版本、架构和 SHA256；安装脚本验证每个实际下载的 deb 后才安装。基础镜像已安装的软件由原 digest 固定，构建不执行浮动全系统升级。
+
+构建可通过 `--build-arg ONE_NVR_DEBIAN_SNAPSHOT_URL=https://内部快照镜像/路径/` 指定保留同一签名索引和软件包内容的镜像地址。仓库签名和 TLS 校验均开启；历史快照仅关闭索引的时效检查，不关闭签名认证。修改来源不能绕过包哈希锁。最终运行镜像包含媒体工具，但仍由 API / Worker 共用，不增加常驻容器。固定镜像的真实媒体契约见 [M1-B 验证记录](M1-B-validation.md)。

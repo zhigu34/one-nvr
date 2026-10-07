@@ -17,5 +17,5 @@ test('restartPreservesSiteChannelPoolAndCredentials', async ({page})=>{
  expect(after.pool_ids).toEqual(before.pool_ids)
  expect(after.timezone).toBe('America/New_York')
  await page.goto('/channels')
- await expect(page.getByTestId('channel-row').first().getByLabel('通道名称')).toHaveValue('大门验证槽位')
+ await expect(page.getByTestId('channel-row').first()).toContainText('大门验证槽位')
 })

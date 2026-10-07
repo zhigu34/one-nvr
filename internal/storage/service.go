@@ -26,7 +26,7 @@ type Pool struct {
 	Version   int64   `json:"version"`
 	Checks    []Check `json:"checks"`
 	State     string  `json:"state"`
-	// Indexed business usage is unavailable until the M1-B media index exists.
+	// Verified indexed local usage; raw working/unpublished media usage is unknown.
 	UsedBytes *int64 `json:"used_bytes"`
 }
 type Page struct {
@@ -44,13 +44,15 @@ type UpdateInput struct {
 	IsDefault *bool   `json:"is_default"`
 }
 type Service struct {
-	DB    *database.DB
-	Auth  *auth.Service
-	Roots []string
+	DB             *database.DB
+	Auth           *auth.Service
+	Roots          []string
+	MediaInspector MediaInspector
+	MediaCheck     func(context.Context, id.ID) error
 }
 
 func New(db *database.DB, a *auth.Service, roots []string) *Service {
-	return &Service{db, a, append([]string(nil), roots...)}
+	return &Service{DB: db, Auth: a, Roots: append([]string(nil), roots...)}
 }
 
 const poolColumns = "id,site_id,name,canonical_path,enabled,is_default,version"
@@ -222,10 +224,12 @@ func (s *Service) ListPage(ctx context.Context, p auth.Principal, cursor id.ID, 
 	if err != nil {
 		return out, err
 	}
+	usageContext, cancelUsage := context.WithTimeout(ctx, 3*time.Second)
+	defer cancelUsage()
 	start := 0
 	found := cursor == ""
 	for i, pool := range pools {
-		pool, err = s.withChecks(ctx, pool)
+		pool, err = s.withChecks(ctx, pool, usageContext)
 		if err != nil {
 			return out, err
 		}
@@ -266,7 +270,7 @@ func (s *Service) pools(ctx context.Context) ([]Pool, error) {
 	}
 	return out, rows.Err()
 }
-func (s *Service) withChecks(ctx context.Context, p Pool) (Pool, error) {
+func (s *Service) withChecks(ctx context.Context, p Pool, usageContexts ...context.Context) (Pool, error) {
 	p.Checks = []Check{}
 	now := time.Now()
 	for _, name := range []string{"api", "worker", "zlm"} {
@@ -289,6 +293,19 @@ func (s *Service) withChecks(ctx context.Context, p Pool) (Pool, error) {
 		p.Checks = append(p.Checks, c)
 	}
 	p.State = p.Readiness(now)
+	usageCtx := ctx
+	if len(usageContexts) == 1 {
+		usageCtx = usageContexts[0]
+	}
+	usage, err := s.verifiedUsage(usageCtx, p)
+	if err != nil && usageCtx.Err() != nil && ctx.Err() == nil {
+		err = nil
+		usage = nil
+	}
+	if err != nil {
+		return Pool{}, err
+	}
+	p.UsedBytes = usage
 	return p, nil
 }
 
@@ -308,6 +325,13 @@ func (s *Service) Delete(ctx context.Context, p auth.Principal, poolID id.ID, ex
 			return err
 		}
 		if pool.Version != expected {
+			return auth.ErrConflict
+		}
+		var referenced bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM channels WHERE storage_pool_id=$1) OR EXISTS(SELECT 1 FROM recording_runs WHERE pool_id=$1) OR EXISTS(SELECT 1 FROM recording_locations WHERE pool_id=$1) OR EXISTS(SELECT 1 FROM source_switches WHERE old_pool_id=$1 OR new_pool_id=$1) OR EXISTS(SELECT 1 FROM pool_probe_intents pi JOIN stream_sessions ss ON ss.id=pi.session_id WHERE pi.pool_id=$1 AND ss.state<>'closed')`, poolID).Scan(&referenced); err != nil {
+			return err
+		}
+		if referenced {
 			return auth.ErrConflict
 		}
 		var active bool
@@ -340,6 +364,9 @@ func (s *Service) Delete(ctx context.Context, p auth.Principal, poolID id.ID, ex
 			return auth.ErrConflict
 		})
 		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, "DELETE FROM pool_probe_intents WHERE pool_id=$1", poolID); err != nil {
 			return err
 		}
 		if _, err = tx.Exec(ctx, "DELETE FROM storage_pool_checks WHERE pool_id=$1", poolID); err != nil {

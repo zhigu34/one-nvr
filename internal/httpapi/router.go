@@ -10,7 +10,9 @@ import (
 	"github.com/zhigu34/one-nvr/internal/channel"
 	"github.com/zhigu34/one-nvr/internal/fault"
 	"github.com/zhigu34/one-nvr/internal/id"
+	"github.com/zhigu34/one-nvr/internal/live"
 	"github.com/zhigu34/one-nvr/internal/operations"
+	"github.com/zhigu34/one-nvr/internal/recording"
 	"github.com/zhigu34/one-nvr/internal/site"
 	"github.com/zhigu34/one-nvr/internal/storage"
 	"github.com/zhigu34/one-nvr/internal/tlsmanager"
@@ -29,6 +31,9 @@ type Dependencies struct {
 	TrustedProxyToken               string
 	HealthCheck                     func(context.Context) error
 	Channels                        *channel.Service
+	Sources                         *channel.SourceService
+	Recordings                      *recording.Service
+	Live                            *live.Service
 	Storage                         *storage.Service
 	TLS                             *tlsmanager.Service
 	Operations                      *operations.Service
@@ -64,6 +69,9 @@ func NewHandler(d Dependencies) http.Handler {
 	if d.Channels == nil {
 		d.Channels = &channel.Service{DB: d.Auth.DB, Auth: d.Auth}
 	}
+	if d.Sources == nil {
+		d.Sources = channel.NewSources(d.Auth.DB, d.Auth, d.Site.Secrets, channel.NetworkPolicy{})
+	}
 	if d.Operations == nil {
 		d.Operations = operations.New(d.Auth.DB, d.Auth, d.FrigateEnabled, d.OpenListEnabled)
 	}
@@ -73,7 +81,13 @@ func NewHandler(d Dependencies) http.Handler {
 	if d.Storage == nil {
 		d.Storage = storage.New(d.Auth.DB, d.Auth, []string{"/storage"})
 	}
+	if d.Recordings == nil {
+		d.Recordings = &recording.Service{DB: d.Auth.DB, Auth: d.Auth, Pools: d.Storage}
+	}
 	r.d = d
+	if r.d.Live == nil {
+		r.d.Live = &live.Service{DB: d.Auth.DB, Auth: d.Auth}
+	}
 	r.mux.Handle("/health/", Health(d.HealthCheck))
 	r.mux.HandleFunc("GET /api/v1/setup/status", r.setupStatus)
 	r.mux.HandleFunc("POST /api/v1/setup", r.anonymous(r.setup))
@@ -92,9 +106,32 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("POST /api/v1/site/expand", r.protected(r.expandSite))
 	r.mux.HandleFunc("GET /api/v1/timezones", r.timezones)
 	r.mux.HandleFunc("GET /api/v1/channels", r.protected(r.listChannels))
+	r.mux.HandleFunc("POST /api/v1/channels/{id}/live", r.protected(r.openLive))
+	r.mux.HandleFunc("POST /api/v1/live-sessions/{id}/renew", r.protectedPassive(r.renewLive))
+	r.mux.HandleFunc("DELETE /api/v1/live-sessions/{id}", r.protectedPassive(r.closeLive))
 	r.mux.HandleFunc("GET /api/v1/settings/hardware", r.protected(r.hardwareReport))
 	r.mux.HandleFunc("GET /api/v1/channel-slots", r.protected(r.channelSlots))
 	r.mux.HandleFunc("PATCH /api/v1/channels/{id}", r.protected(r.updateChannel))
+	r.mux.HandleFunc("GET /api/v1/channels/{id}/source-revisions", r.protected(r.listSourceRevisions))
+	r.mux.HandleFunc("POST /api/v1/channels/{id}/source-revisions", r.protected(r.createSourceDraft))
+	r.mux.HandleFunc("POST /api/v1/channels/{id}/source-revisions/{revision_id}/test", r.protected(r.requestSourceTest))
+	r.mux.HandleFunc("GET /api/v1/channels/{id}/source-tests/{test_id}", r.protected(r.sourceTestResult))
+	r.mux.HandleFunc("POST /api/v1/channels/{id}/source/apply", r.protected(r.applySource))
+	r.mux.HandleFunc("POST /api/v1/channels/{id}/source/clear", r.protected(r.clearSource))
+	r.mux.HandleFunc("GET /api/v1/channels/{id}/source/status", r.protected(r.sourceStatus))
+	r.mux.HandleFunc("GET /api/v1/channels/{id}/recording-policy", r.protected(r.recordingPolicy))
+	r.mux.HandleFunc("PUT /api/v1/channels/{id}/recording-policy", r.protected(r.setRecordingPolicy))
+	r.mux.HandleFunc("PUT /api/v1/channels/{id}/storage-pool", r.protected(r.bindChannelPool))
+	r.mux.HandleFunc("POST /api/v1/channels/{id}/source/credentials/reveal", r.protected(r.revealSourceCredentials))
+	r.mux.HandleFunc("POST /api/v1/channels/source-config-export", r.protected(r.exportSourceConfig))
+	r.mux.HandleFunc("POST /api/v1/source-imports/preview", r.protected(r.importPreview))
+	r.mux.HandleFunc("POST /api/v1/source-imports", r.protected(r.importSubmit))
+	r.mux.HandleFunc("GET /api/v1/source-imports/{batch_id}", r.protected(r.importProgress))
+	r.mux.HandleFunc("POST /api/v1/source-imports/{batch_id}/test", r.protected(r.importTest))
+	r.mux.HandleFunc("POST /api/v1/source-imports/{batch_id}/retry", r.protected(r.importRetry))
+	r.mux.HandleFunc("POST /api/v1/source-imports/{batch_id}/cancel", r.protected(r.importCancel))
+	r.mux.HandleFunc("GET /api/v1/recordings", r.protected(r.recordings))
+	r.mux.HandleFunc("GET /api/v1/recordings/{id}/content", r.protected(r.recordingContent))
 	r.mux.HandleFunc("GET /api/v1/storage-pools", r.protected(r.listPools))
 	r.mux.HandleFunc("POST /api/v1/storage-pools", r.protected(r.registerPool))
 	r.mux.HandleFunc("PATCH /api/v1/storage-pools/{id}", r.protected(r.updatePool))
@@ -165,6 +202,16 @@ func (r *router) anonymous(next http.HandlerFunc) http.HandlerFunc {
 type protectedHandler func(http.ResponseWriter, *http.Request, auth.Principal, string)
 
 func (r *router) protected(next protectedHandler) http.HandlerFunc {
+	return r.protect(next, true)
+}
+
+// Automated playback renewals/cleanup authenticate and enforce CSRF, without
+// extending the user-activity idle deadline.
+func (r *router) protectedPassive(next protectedHandler) http.HandlerFunc {
+	return r.protect(next, false)
+}
+
+func (r *router) protect(next protectedHandler, activity bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, q *http.Request) {
 		cookie, err := q.Cookie(r.cookieName(sessionCookie))
 		if err != nil {
@@ -180,7 +227,7 @@ func (r *router) protected(next protectedHandler) http.HandlerFunc {
 			fail(w, q, fault.New(403, "csrf_rejected", "请求来源或安全令牌无效"))
 			return
 		}
-		if q.Method != "GET" && q.Method != "HEAD" && q.Method != "OPTIONS" {
+		if activity && q.Method != "GET" && q.Method != "HEAD" && q.Method != "OPTIONS" {
 			p, err = r.d.Auth.Authenticate(q.Context(), cookie.Value)
 			if err != nil {
 				fail(w, q, err)

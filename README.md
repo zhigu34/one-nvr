@@ -1,93 +1,82 @@
 # one-nvr
 
-面向单站点本地部署的 NVR 项目，以固定通道管理视频源。ZLMediaKit 负责取流与正式录制，Frigate 负责智能检测，one-nvr 负责录像与事件管理。
+面向单站点、16–32 个固定通道的本地 NVR。Go + PostgreSQL 管理通道、录像索引和任务，ZLMediaKit 负责取流与录像，控制面基于 shadcn-admin。Frigate 和 OpenList 为可选模块，按 `.env` 开关启停。
 
-当前提供 **M0 真机验证部署包**：单个 Docker Compose、`.env` 完整 RTSP URL 配置、ZLM MP4 分片录制、Frigate 人车检测、SQLite 索引和 HTTPS 测试页面。正式控制面板、云归档、自动清理和完整可靠性指标尚未实现，产品目标见 [PRD](docs/PRD.md)。
+当前 M1-B 可部署测试：站点初始化、账号权限、固定通道、摄像头一键接入/替换、批量导入导出、目录存储池、连续录像或仅取流、录像索引、时区与证书管理。已增加 WebRTC 实时预览（1/4/9/16 分屏、主子流切换），容器出画面验收记录见实时预览验证文档。录像内容回放待后续实现；智能事件接入、云归档业务仍待开发。开启可选容器不代表这些业务已经完成。
 
-正式后端采用 **Go + PostgreSQL**，前端基于固定版本 shadcn-admin 修改。M1-A 已实现账号与通道权限、固定槽位命名、目录存储池、时区、功能状态、证书管理和运维面板，代码在 [开发草稿 PR #1](https://github.com/zhigu34/one-nvr/pull/1)。摄像头源配置、正式录制和回放 UI 留在 M1-B/C；当前进度与实际 CI 证据见 [验证记录](docs/M1-A-validation.md)。
-
-正式部署入口见 [部署说明](deploy/production/README.md)。默认运行 5 个核心容器；`.env` 中 `ONE_NVR_FRIGATE_ENABLE=yes/no`、`ONE_NVR_OPENLIST_ENABLE=yes/no` 分别控制 Frigate/MQTT 和 OpenList，默认关闭，全部开启共 8 个。关闭只停止本项目相应可选服务，保留数据与核心。面板区分功能未启用、依赖故障和业务尚未实现；智能事件与云归档业务将在 M2/M2.1 接入，外部 WebDAV 目标独立验证。
-
-启用智能检测才自动枚举目标 Docker 宿主，并分别自检解码和推理，`ONE_NVR_HARDWARE_PROFILE=auto` 为默认值。CPU 样本自检已由 CI 验证，N5105 的实际 GPU/驱动仍需真机检查；范围见 [硬件自动探测](docs/hardware-auto-detection.md)。具体镜像版本/digest 见 [镜像基线](docs/image-versions.md)，现有 M0 保持独立。
-
-正式版录像直接采用 `<存储池目录>/recordings/CH01/YYYY-MM-DD/`，池 ID 保存在隐藏标识文件中；目录日期和文件名使用“系统设置 → 站点设置”选择的时区（默认北京时间），文件名如 `CH01_20261003_160439_<录像ID>.mp4`；ZLM 完成后由 Worker 在同池发布标准文件，云端保持同名。完整路径与恢复规则见 [录像文件规则](docs/recording-file-layout.md)，当前为设计，现有 M0 文件不自动迁移。
-
-正式版部署参数包含独立的 `ONE_NVR_RTC_PORT`（默认 8000，UDP/TCP），与选定的 HTTP/HTTPS 入口端口分开。`ONE_NVR_MEDIA_HOST` 可选，IP 直连时沿用 PUBLIC_URL 的主机 IP。完整设计示例见 [PRD 第 14.4 节](docs/PRD.md#144-env-与界面配置边界)，现有 M0 仍使用 `M0_RTC_PORT`。
-
-正式版默认 HTTPS，也可通过 PUBLIC_URL 选择 HTTP；“系统设置 → 访问与证书”提供 PEM 证书上传、信息/到期显示及网关应用/回滚。可选 ONE_NVR_TLS_DIR 映射整个证书目录，外部程序更新 fullchain.pem/privkey.pem 后自动校验并应用，无需重建容器。完整范围见 [访问与证书设计](docs/web-access-tls.md)，M1-A 已实现控制面与网关，M0 保持现有 HTTPS 配置。
+M0 前期验证代码已移除，历史版本可从 Git 恢复。现场旧容器和录像数据不会随代码更新自动删除。
 
 ## 部署
 
-需要 Linux x86_64、Docker Engine 和 Docker Compose v2；宿主无需 Python 或 OpenSSL。
+需要 Linux amd64、Docker Engine 和 Docker Compose v2.20.0 或以上；宿主无需安装 Go、Node 或 Python。在项目根目录执行：
 
 ```bash
-git clone https://github.com/zhigu34/one-nvr.git
-cd one-nvr/deploy/m0
-cp .env.example .env
-chmod 600 .env
-```
-
-编辑 `.env`：
-
-```dotenv
-M0_MEDIA_HOST=192.168.1.10
-COMPOSE_PROFILES=cpu
-M0_STATE_DIR=./state
-M0_STORAGE_ROOT=/mnt/recordings
-M0_HTTPS_PORT=8443
-
-camera1='rtsp://admin:password@192.168.1.101:554/main'
-camera1_sub='rtsp://admin:password@192.168.1.101:554/sub'
-camera1_name='入口'
-camera2='rtsp://admin:password@192.168.1.102:554/main'
-```
-
-- `M0_MEDIA_HOST` 填本台服务器实际 IP，浏览器需要能够访问。
-- EPYC 7402 使用 `COMPOSE_PROFILES=cpu`；N5105 使用 `intel`，并填写实际 `M0_GPU_DEVICE`。
-- `M0_STORAGE_ROOT` 填宿主已挂载的录像目录；项目不管理底层 NAS/RAID。
-- `camera1` 对应 CH01，支持到 `camera32`；子流和名称可省略。
-- URL 使用英文单引号；账号/密码中的保留字符先 URL 编码。两台机器各自配置 `.env`，运行数据独立。
-
-网络受限且基础镜像已在本地时，推荐通过脚本构建并启动，自动生成配置、密钥和测试证书：
-
-```bash
-./deploy.sh
-docker compose ps -a
-```
-
-访问 `https://服务器IP:8443`，账号 `admin`。默认需放行 TCP 8443、UDP/TCP 8000；首次访问使用自签证书。查看随机密码：
-
-```bash
-docker compose run --rm --no-deps --entrypoint cat init \
-  /workspace/state/operator.txt
-```
-
-`init` 和 `mqtt-init` 成功后退出是正常状态。仍使用一个 Compose 和 `.env`；`deploy.sh` 只协调 Docker 命令，不要求宿主 Python/OpenSSL，也不会执行 `.env` 中的内容。它检查本地 `python:3.12-slim` 与 Engine 架构，选用当前 context 的 Docker 驱动构建器，并关闭 Bake 自动分派；共享工具镜像只构建一次。启动采用 `--pull never`，上游镜像须已在本地且符合 Compose 固定的 digest；缺少时先通过可用网络 `docker compose pull mqtt-init mqtt zlm gateway frigate`（Intel 将 frigate 换 frigate-intel）或在另一机器 `docker save` 后本机 `docker load` 准备镜像。
-
-首次构建仍需安装依赖。Compose 默认使用清华 Debian/PyPI 镜像，可在 `.env` 修改 `DEBIAN_MIRROR`、`DEBIAN_SECURITY_MIRROR`、`PYPI_INDEX_URL`，旧 `.env` 不追加也会使用这些默认值。镜像失败会尝试原始 Debian 源或官方 PyPI，仍保留 TLS 验证和依赖 hash 校验。Dockerfile 单独构建默认使用官方安装源。Docker Hub 基础镜像鉴权/拉取与 apt/pip 是不同阶段，换软件包安装源不能替代镜像准备或修复不可达的 Docker Hub。
-
-详细硬件、故障实验、目录和未实现功能说明见 [M0 部署说明](deploy/m0/README.md) 与 [真机验证清单](docs/M0-validation.md)。两款机器各两路摄像头的取流、录像与浏览器播放，以及 N5105 的事件/抓拍已通过限定范围验证；AMD 检测、实际硬件执行、长期稳定性、故障恢复和 16/32 路容量仍未完成认证。
-
-## 更新
-
-从 `deploy/m0` 执行，先停止服务，再拉取代码和重建：
-
-```bash
-docker compose down
-git pull --ff-only
+cp -n .env.example .env
+# 编辑 .env：站点 URL、Web/RTC 端口、数据目录、存储根目录和摄像头网段。
+# 创建实际存储池目录，授予容器 UID 10001 读写权限。
+mkdir -p /srv/one-nvr-storage/disk1
+chown 10001:10001 /srv/one-nvr-storage/disk1
+./deploy.sh --check
 ./deploy.sh
 ```
 
-不要覆盖已有 `.env`；按更新说明补充参数。停止或重建不会自动删除宿主录像与索引，也不会覆盖已有密钥。更新会中断本实验所有通道。
+`ONE_NVR_DATA_DIR` 是宿主机专用应用数据目录。例如 NAS 上可以填 `/vol1/1000/docker/one-nvr/data`，该目录首次可以不存在。`deploy.sh` 自动创建目录、生成内部密钥并初始化数据库和运行配置；不需要手工创建密钥文件或填写内部密码。目录必须沿用并保留，不能填写项目根目录。`ONE_NVR_STORAGE_ROOT` 则是录像存储池所在的已有根目录，两者用途不同。
 
-`.env`、摄像头实际 CSV、`state`、录像目录和本地发布压缩包不提交 Git。分享日志前脱敏，避免公开带密码的 RTSP URL 或 `docker compose config` 输出。
+首次构建 app/gateway，其他镜像固定 digest。脚本打印一次性初始化令牌获取命令；打开 `.env` 的 `ONE_NVR_PUBLIC_URL` 初始化管理员和 16/32 个通道。`.env` 不填写摄像头密码，摄像头在通道界面配置，批量导入字段如下：
 
-## 开发验证
-
-```bash
-python3 -m unittest discover -s deploy/m0/tests -v
+```csv
+channel_no,channel_name,ip,rtsp_port,username,password,main_path,sub_path
 ```
 
-测试覆盖 URL/CSV 解析、初始化、来源隔离、录像索引、事件时序、路径访问约束和本机 HTTP 接口，不替代实际 Docker/硬件验证。
+路径直接填 `/main`、`/sub`，可追加 `onvif_port`。存储池登记已挂载目录，例如 `/storage/disk1`；不管理底层 NAS、RAID 或磁盘挂载。
 
-M1-A 正式基础服务与控制面板部署入口：[`deploy/production/README.md`](deploy/production/README.md)。默认仅五个核心容器，Frigate/OpenList 按 `.env` 开关启停；M1-A 尚未交付源配置、录制或回放 UI。实际测试证据见 [`docs/M1-A-validation.md`](docs/M1-A-validation.md)。
+基础常驻 5 个容器：gateway（含前端）、api、worker、postgres、zlm。Frigate 开关增加 frigate/mqtt，OpenList 开关增加 openlist；全部启用为 8 个。默认两模块关闭。
+
+根目录 `compose.yaml` 是正式运行入口，加载数据目录内自动生成的私有配置和硬件覆盖。内部凭据不写入仓库。日常操作使用脚本加载完整配置：
+
+```bash
+./deploy.sh compose ps
+./deploy.sh compose logs --tail=100 api worker zlm
+./deploy.sh compose restart api worker
+# 修改 .env 或更新源码后重新部署：
+./deploy.sh --check
+./deploy.sh
+```
+
+不要直接 `docker compose up` 绕过迁移、初始化和硬件探测。已有正式部署可把 `deploy/production/.env` 复制为根目录 `.env`，保留原数据目录与项目名；M0 的配置不能直接复用。切换前停止原 M0 服务，保留其配置和录像作为备份。
+
+[完整部署说明](deploy/production/README.md) 包含证书续签目录、硬件自动探测、模块状态、升级及故障处理。
+
+## 项目目录
+
+```text
+.env.example       部署配置模板
+deploy.sh          部署、检查和 Compose 运维入口
+compose.yaml       正式 Compose 入口
+apps/web/          shadcn-admin 前端
+cmd/               Go API、Worker 和管理命令
+internal/          后端业务模块
+migrations/        PostgreSQL 迁移
+deploy/production/ 镜像构建、配置模板、硬件探测和 CI 验收工具
+tests/             集成、媒体与浏览器测试
+docs/              PRD、部署约定和验证报告
+```
+
+## 开发与验证
+
+```bash
+./deploy/production/dev.sh test-go -race ./internal/... ./cmd/... ./migrations
+./deploy/production/dev.sh test-db -race ./tests/integration
+./deploy/production/dev.sh web build
+./deploy/production/dev.sh e2e
+```
+
+Docker 与浏览器验收由 GitHub CI 执行，包括真实 PostgreSQL、ZLM 两路合成源、连续录像发布、进程/数据库故障及证书恢复。每机两路真机验证与 CI 不代表已经通过 16–32 路容量或长期稳定性验证。
+
+- [PRD](docs/PRD.md)
+- [镜像版本](docs/image-versions.md)
+- [录像目录与文件名](docs/recording-file-layout.md)
+- [实时预览验证](docs/live-preview-validation.md)
+- [M1-B 验证记录](docs/M1-B-validation.md)
+- [M1-B 验收矩阵](docs/M1-B-decisions.md)
+- [前端许可证](apps/web/LICENSE)

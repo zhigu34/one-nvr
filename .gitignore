@@ -1,13 +1,15 @@
 __pycache__/
 *.pyc
-deploy/m0/state/
-deploy/m0/storage/
-deploy/m0/.env
-deploy/m0/cameras.csv
-one-nvr-m0.tar.gz
+# Keep prototype data in old checkouts private; never publish it.
+/deploy/m0/
+/docs/M0-browser-validation-2026-10-03.md
+/.env
+/one-nvr-m0.tar.gz
 .DS_Store
 
 # Formal deployment secrets and build outputs
+/data/
+/storage/
 /deploy/production/.env
 /deploy/production/state/
 /bin/
@@ -19,3 +21,6 @@ one-nvr-m0.tar.gz
 
 # Local package-manager cache
 /.pnpm-store/
+media-test-results/
+
+/.local/

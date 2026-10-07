@@ -1,7 +1,10 @@
 # Isolated development tooling. No production data, ports or .env are loaded.
 services:
   go:
-    image: golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195
+    image: one-nvr/go-test:dev
+    build:
+      context: ../..
+      dockerfile: deploy/production/Dockerfile.go-test
     platform: linux/amd64
     working_dir: /workspace
     volumes:
@@ -10,6 +13,7 @@ services:
       - go-build:/root/.cache/go-build
     environment:
       GOPROXY: ${ONE_NVR_GOPROXY:-https://proxy.golang.org,direct}
+      ONE_NVR_REQUIRE_MEDIA_TOOLS: "yes"
   web:
     image: node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
     platform: linux/amd64

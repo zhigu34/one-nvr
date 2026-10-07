@@ -8,7 +8,7 @@ compose=(docker compose --project-name one-nvr-dev --file deploy/production/comp
 case "$mode" in
  test-go)
   [[ $# -gt 0 ]] || set -- ./...
-  "${compose[@]}" run --rm go go test "$@"
+  "${compose[@]}" run --build --rm go go test "$@"
   ;;
  test-db)
   [[ -z ${DATABASE_URL:-} && -z ${ONE_NVR_DATABASE_URL:-} && -z ${TEST_DATABASE_URL:-} ]] || { printf '%s\n' 'Refusing external database variables: test-db creates an isolated database.' >&2; exit 2; }
@@ -18,7 +18,7 @@ case "$mode" in
   trap cleanup EXIT
   "${compose[@]}" up --detach --wait postgres
   [[ $# -gt 0 ]] || set -- ./tests/integration
-  "${compose[@]}" run --rm -e TEST_DATABASE_URL=postgres://one_nvr_test:isolated-test-only@postgres:5432/one_nvr_test?sslmode=disable go go test "$@"
+  "${compose[@]}" run --build --rm -e TEST_DATABASE_URL=postgres://one_nvr_test:isolated-test-only@postgres:5432/one_nvr_test?sslmode=disable go go test "$@"
   ;;
  web) "${compose[@]}" run --rm web "$@" ;;
  e2e) exec ./deploy/production/test-e2e.sh "$@" ;;

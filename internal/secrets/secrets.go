@@ -39,7 +39,7 @@ func Init(dataDir string) (State, error) {
 	}
 	filename := filepath.Join(dir, "one-nvr.json")
 	if _, err := os.Lstat(filename); err == nil {
-		return Load(dataDir)
+		return load(dataDir, true)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return State{}, err
 	}
@@ -69,6 +69,12 @@ func Init(dataDir string) (State, error) {
 		return State{}, err
 	}
 	defer os.Remove(f.Name())
+	// CreateTemp's 0600 is filtered by the process umask and filesystem defaults.
+	// Set the final permissions explicitly before publishing any key material.
+	if err := f.Chmod(0600); err != nil {
+		f.Close()
+		return State{}, fmt.Errorf("set generated secret file permissions to 0600: %w", err)
+	}
 	if _, err = f.Write(raw); err == nil {
 		err = f.Sync()
 	}
@@ -95,6 +101,12 @@ func Init(dataDir string) (State, error) {
 	return Load(dataDir)
 }
 func Load(dataDir string) (State, error) {
+	return load(dataDir, false)
+}
+
+// Only deployment initialization repairs permissions, after validating the
+// existing identity. Runtime readers remain strict and never mutate key files.
+func load(dataDir string, repairPermissions bool) (State, error) {
 	var state State
 	dir := filepath.Join(dataDir, "secrets")
 	info, err := os.Lstat(dir)
@@ -106,8 +118,14 @@ func Load(dataDir string) (State, error) {
 	if err != nil {
 		return state, err
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || info.Size() > 16384 {
-		return state, fmt.Errorf("invalid secret file")
+	if !info.Mode().IsRegular() {
+		return state, fmt.Errorf("invalid secret file %q: expected a regular file, got %s", filename, info.Mode().Type())
+	}
+	if info.Size() > 16384 {
+		return state, fmt.Errorf("invalid secret file %q: size %d exceeds 16384 bytes", filename, info.Size())
+	}
+	if info.Mode().Perm() != 0600 && !repairPermissions {
+		return state, fmt.Errorf("invalid secret file %q: permissions %04o, expected 0600; rerun deploy.sh to repair", filename, info.Mode().Perm())
 	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -119,6 +137,16 @@ func Load(dataDir string) (State, error) {
 		return state, err
 	}
 	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil {
+		return state, err
+	}
+	if !os.SameFile(info, opened) || !opened.Mode().IsRegular() || opened.Size() > 16384 {
+		return state, fmt.Errorf("secret file changed during validation")
+	}
+	if opened.Mode().Perm() != 0600 && !repairPermissions {
+		return state, fmt.Errorf("secret file permissions changed during validation")
+	}
 	decoder := json.NewDecoder(f)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&state); err != nil {
@@ -134,6 +162,15 @@ func Load(dataDir string) (State, error) {
 		b, err := hex.DecodeString(key)
 		if err != nil || len(b) != 32 {
 			return State{}, fmt.Errorf("invalid secret key")
+		}
+	}
+	if repairPermissions && opened.Mode().Perm() != 0600 {
+		if err := f.Chmod(0600); err != nil {
+			return State{}, fmt.Errorf("repair secret file permissions to 0600: %w", err)
+		}
+		checked, err := f.Stat()
+		if err != nil || checked.Mode().Perm() != 0600 {
+			return State{}, fmt.Errorf("filesystem did not retain secret file permissions 0600")
 		}
 	}
 	return state, nil

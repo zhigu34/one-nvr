@@ -1,6 +1,7 @@
 import {
   LayoutDashboard,
   Video,
+  MonitorPlay,
   HardDrive,
   Users,
   Settings,
@@ -14,6 +15,7 @@ export const sidebarData: { navGroups: NavGroup[] } = {
       title: 'one-nvr',
       items: [
         { title: '总览', url: '/', icon: LayoutDashboard },
+        { title: '实时预览', url: '/live', icon: MonitorPlay },
         { title: '通道管理', url: '/channels', icon: Video },
         { title: '存储池', url: '/storage-pools', icon: HardDrive },
         { title: '用户与权限', url: '/users', icon: Users },

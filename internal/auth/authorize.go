@@ -35,6 +35,31 @@ func (s *Service) RequireChannelTx(ctx context.Context, p Principal, channelID i
 	return s.requireChannel(ctx, p, channelID, action, tx)
 }
 
+func (s *Service) RequireAnyChannelTx(ctx context.Context, p Principal, ch id.ID, tx pgx.Tx) error {
+	if err := LockAuthorization(ctx, tx); err != nil {
+		return err
+	}
+	user, err := s.current(ctx, p, tx)
+	if err != nil {
+		return err
+	}
+	var live, playback, export, configure bool
+	err = tx.QueryRow(ctx, "SELECT live,playback,export,configure FROM channel_grants WHERE user_id=$1 AND channel_id=$2", p.UserID, ch).Scan(&live, &playback, &export, &configure)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !live && !playback && !export && !configure {
+		return ErrNotFound
+	}
+	if live && roleAllows(user.Role, Live) || playback && roleAllows(user.Role, Playback) || export && roleAllows(user.Role, Export) || configure && roleAllows(user.Role, Configure) {
+		return nil
+	}
+	return ErrForbidden
+}
+
 func (s *Service) requireChannel(ctx context.Context, p Principal, channelID id.ID, action Action, q interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }) error {
@@ -172,4 +197,29 @@ func (s *Service) SetGrants(ctx context.Context, p Principal, userID id.ID, expe
 
 func roleAllows(role string, a Action) bool {
 	return validRole(role) && validAction(a) && !(role == "viewer" && a == Configure)
+}
+
+// RequireActorChannelTx is Worker-only authorization for an accepted job. Its
+// captured auth version prevents a queued job surviving grant/user revocation;
+// no raw session or camera credentials need to be stored in the job payload.
+func (s *Service) RequireActorChannelTx(ctx context.Context, actorID id.ID, authVersion int64, channelID id.ID, action Action, tx pgx.Tx) error {
+	if err := LockAuthorization(ctx, tx); err != nil {
+		return err
+	}
+	if !validAction(action) {
+		return ErrInvalid
+	}
+	var role string
+	var live, playback, export, configure bool
+	err := tx.QueryRow(ctx, `SELECT u.role,g.live,g.playback,g.export,g.configure FROM users u JOIN channel_grants g ON g.user_id=u.id WHERE u.id=$1 AND u.enabled AND u.auth_version=$2 AND g.channel_id=$3`, actorID, authVersion, channelID).Scan(&role, &live, &playback, &export, &configure)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrForbidden
+	}
+	if err != nil {
+		return err
+	}
+	if !roleAllows(role, action) || !map[Action]bool{Live: live, Playback: playback, Export: export, Configure: configure}[action] {
+		return ErrForbidden
+	}
+	return nil
 }
