@@ -80,7 +80,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("ONE_NVR_TLS_DIR must be an absolute path")
 	}
 	switch c.HardwareProfile {
-	case "auto", "epyc-cpu", "intel-igpu", "nvidia":
+	case "auto", "cpu", "intel-igpu", "nvidia":
 	default:
 		return fmt.Errorf("invalid ONE_NVR_HARDWARE_PROFILE")
 	}

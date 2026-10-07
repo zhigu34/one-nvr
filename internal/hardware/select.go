@@ -31,7 +31,7 @@ type Proposal struct {
 }
 
 func Select(inv Inventory, v Validation, override string, prior *Proposal) (Proposal, error) {
-	if !inv.Known && override == "epyc-cpu" && v["cpu"].Decode && v["cpu"].Inference {
+	if !inv.Known && override == "cpu" && v["cpu"].Decode && v["cpu"].Inference {
 		return Proposal{ID: "cpu", DecodeID: "cpu", InferenceID: "cpu"}, nil
 	}
 	if !inv.Known {
@@ -51,7 +51,7 @@ func Select(inv Inventory, v Validation, override string, prior *Proposal) (Prop
 		if override == "auto" && prior != nil && prior.ID != "cpu" && d.ID != prior.ID {
 			continue
 		}
-		if override == "epyc-cpu" {
+		if override == "cpu" {
 			continue
 		}
 		r := v[d.ID]

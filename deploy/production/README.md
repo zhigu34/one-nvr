@@ -35,7 +35,7 @@ HTTP 是显式选择：`ONE_NVR_PUBLIC_URL=http://服务器IP:8080`，保持 HTT
 
 `.env` 默认 `ONE_NVR_FRIGATE_ENABLE=no`、`ONE_NVR_OPENLIST_ENABLE=no`。重新执行部署按配置启停；关闭时只停止项目内对应服务，保留目录，不停止 ZLM、不删除卷。开关表示启用意图，健康状态和业务“尚未实现”分别显示；启用模块失败返回非零并保留核心可用，不能当作全成功。
 
-启用检测才枚举目标 Docker daemon 的只读 sysfs，然后在同一固定 Frigate 镜像中自检。使用固定生成命令的短 H.264 样本并记录样本和模型 SHA256，分别运行 FFmpeg 解码、CPU TFLite/Intel OpenVINO 推理；不是通道容量或实际摄像头认证。按 PCI 身份匹配 Intel render 节点，ASPEED 显示卡不当加速器。`auto` 优先实测的 Intel，初次 CPU 也需要自检；曾选中 GPU 失败报告故障，保留期望，不静默降级。可显式指定 `epyc-cpu` 选择 CPU。Nvidia/未认证 AMD 不自动使用。
+启用检测才枚举目标 Docker daemon 的只读 sysfs，然后在同一固定 Frigate 镜像中自检。使用固定生成命令的短 H.264 样本并记录样本和模型 SHA256，分别运行 FFmpeg 解码、CPU TFLite/Intel OpenVINO 推理；不是通道容量或实际摄像头认证。按 PCI 身份匹配 Intel render 节点，ASPEED 显示卡不当加速器。`auto` 优先实测的 Intel，初次 CPU 也需要自检；曾选中 GPU 失败报告故障，保留期望，不静默降级。可显式指定 `cpu` 强制 CPU 路径（软件解码与 CPU 推理，同样需要自检）。Nvidia/未认证 AMD 不自动使用。
 
 报告写 `DATA_DIR/hardware/latest.json`；`.env` 不写入运行结果。有效设备最小覆盖写 `runtime/hardware.compose.json`，`./deploy.sh compose` 会自动加载这个文件；日常配置变更重新运行根目录 deploy.sh。Frigate 模板 `record.enabled=false`，无摄像头时保持无业务检测源，不能误报产生事件。OpenList 仅持久保存自身配置，不默认映射录像根；未来仍允许外部 WebDAV。
 
@@ -50,7 +50,7 @@ GitHub CI 使用真实 PostgreSQL、Nginx 与浏览器；开发入口：
 ./deploy/production/dev.sh e2e
 ```
 
-实际证据、失败与未测项记录在 [M1-A 验证报告](../../docs/M1-A-validation.md)。N5105 驱动/权限/模型自检需部署后报告，EPYC 推理和 16–32 路容量不是当前 CI 的证明。M1-B 的真实媒体、页面与故障联合验收状态见 [M1-B 验证报告](../../docs/M1-B-validation.md) 和 [验收矩阵](../../docs/M1-B-decisions.md)。只有明确记录成功的精确提交通过对应门槛；不能以容器 ID 未变化代替录像连续性。内容回放和事件业务仍待后续。
+实际证据、失败与未测项记录在 [M1-A 验证报告](../../docs/M1-A-validation.md)。样本机（N5105/EPYC）的驱动、权限、模型自检需部署后报告；16–32 路容量不是当前 CI 的证明。M1-B 的真实媒体、页面与故障联合验收状态见 [M1-B 验证报告](../../docs/M1-B-validation.md) 和 [验收矩阵](../../docs/M1-B-decisions.md)。只有明确记录成功的精确提交通过对应门槛；不能以容器 ID 未变化代替录像连续性。内容回放和事件业务仍待后续。
 
 ## 摄像头与普通录像
 

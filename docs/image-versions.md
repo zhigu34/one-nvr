@@ -1,6 +1,6 @@
 # one-nvr 镜像版本基线
 
-确定日期：2026-10-03。适用范围：正式版单机 Docker Compose，Linux `amd64`（AMD EPYC 7402 / Intel N5105）。M1-A 已交付正式 Dockerfile / Compose 并通过 GitHub CI 的构建、基础部署和网关验证；M1-B 媒体能力仍在实测中。
+确定日期：2026-10-03。适用范围：正式版单机 Docker Compose，Linux `amd64`（不限定机型；首批真机验证样本为 AMD EPYC 7402 与 Intel N5105）。M1-A 已交付正式 Dockerfile / Compose 并通过 GitHub CI 的构建、基础部署和网关验证；M1-B 媒体能力仍在实测中。
 
 ## 版本选择
 
@@ -12,7 +12,7 @@
 | PostgreSQL | `17.11-bookworm` | 基础模块数据库 | CI PostgreSQL 实际迁移/集成通过 |
 | Nginx | `1.30.5-alpine3.24` | 自建 gateway 的运行基础 | CI 实际网关/换证/恢复通过 |
 | ZLMediaKit | `master + 固定 digest` | 基础模块取流与录像 | 沿用 M0 两机每机两路直播/录像/回放的构建 |
-| Frigate | `0.17.2` | 可选智能检测 | 沿用 M0 N5105 事件/抓拍验证构建；AMD 检测未验收 |
+| Frigate | `0.17.2` | 可选智能检测 | 沿用 M0 样本机 N5105 的事件/抓拍验证构建；EPYC 检测未验收 |
 | Mosquitto | `2.0.22` | 可选智能检测的 MQTT | 沿用 M0 消息链路构建 |
 | OpenList | `v4.2.6` | 可选云归档的自带服务 | 仓库与架构已核对，归档链路未测 |
 
@@ -20,7 +20,7 @@ Go / Node 仅用于构建，不增加常驻容器。API、Worker 与一次性 ad
 
 Go 沿用设计的 1.27 系列；Node 采用 24 系列 LTS 构建前端；PostgreSQL 保持已选 17 系列，固定其补丁版本。Go、Node、PostgreSQL 和应用运行基础统一选择 Bookworm 变体，减少构建与运行环境差异。Nginx 正式版选稳定分支 1.30.5。OpenList 使用标准 v4.2.6 镜像。
 
-ZLM 当前基线没有记录可对应的语义版本号，直接沿用 M0 构建的 digest；`master@sha256:…` 按 digest 寻址，不随 master 标签更新。Frigate 与 Mosquitto 同样沿用已测构建，不因上游发布新版本自动升级。两台机器用同一 Frigate 基础镜像，Intel 核显通过设备映射和硬件配置处理；不凭 CPU 品牌切换 TensorRT 镜像。
+ZLM 当前基线没有记录可对应的语义版本号，直接沿用 M0 构建的 digest；`master@sha256:…` 按 digest 寻址，不随 master 标签更新。Frigate 与 Mosquitto 同样沿用已测构建，不因上游发布新版本自动升级。各部署机器共用同一 Frigate 基础镜像，Intel 核显通过设备映射和硬件配置处理；不凭 CPU 品牌切换 TensorRT 镜像。
 
 ## 完整镜像引用
 
