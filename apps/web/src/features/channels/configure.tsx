@@ -18,6 +18,7 @@ import { sourceCommand } from './api'
 import { ChannelStatus } from './channel-status'
 import { RecordingPolicyControls } from './recording-policy'
 import { RecordingsIndex } from './recordings-index'
+import { connectSource } from './source-connect'
 import { CredentialReveal } from './source-credentials'
 import { SourceForm } from './source-form'
 import { SourceHistory } from './source-history'
@@ -139,6 +140,7 @@ function ConfigureChannel({ channel }: { channel: Schema<'Channel'> }) {
   const [selected, setSelected] = useState<Schema<'SourceRevision'> | null>(
     null
   )
+  const [connecting, setConnecting] = useState(false)
   const [testId, setTestId] = useState(''),
     [jobId, setJobId] = useState(''),
     [notice, setNotice] = useState(''),
@@ -235,57 +237,64 @@ function ConfigureChannel({ channel }: { channel: Schema<'Channel'> }) {
             <ChannelName channel={{ ...channel, version }} />
           </Panel>
           <Panel title='摄像头连接'>
-            {status.data.current_revision_id && !current && !selected ? (
+            {status.data.current_revision_id && !current ? (
               <p>当前修订在更早的历史中，请先加载更多修订。</p>
             ) : (
               <SourceForm
                 channel={{ ...channel, version }}
-                revision={activeRevision}
+                revision={current}
                 history={revisions}
-                onSaved={async (value, signal) => {
+                onSaved={async (value, signal, context) => {
+                  setConnecting(context.action === 'connect')
                   setSelected(value)
                   setTestId('')
                   setJobId('')
                   setError('')
-                  setNotice('配置已保存，正在提交连接测试')
-                  void client.invalidateQueries()
+                  setNotice('')
                   try {
-                    const result = await sourceCommand<Schema<'SourceChange'>>(
-                      `/api/v1/channels/${channel.id}/source-revisions/${value.id}/test`,
-                      {},
-                      undefined,
-                      signal
+                    return await connectSource(
+                      channel.id,
+                      value.id,
+                      signal,
+                      context,
+                      admin,
+                      (result) => {
+                        if (!signal.aborted) setTestId(result.test_id || '')
+                      }
                     )
-                    if (!signal.aborted) accepted(result, 'test')
-                  } catch (error) {
+                  } finally {
                     if (!signal.aborted) {
-                      setNotice('配置已保存，可重新测试')
-                      setError(
-                        `连接测试未提交：${error instanceof Error ? error.message : '请重试'}`
-                      )
+                      setConnecting(false)
+                      void client.invalidateQueries()
                     }
                   }
                 }}
               />
             )}
             {activeRevision && (
-              <div className='mt-5 grid gap-4 border-t pt-5'>
-                <SourceTestControls
-                  key={activeRevision.id}
-                  channelId={channel.id}
-                  version={version}
-                  revisionId={activeRevision.id}
-                  proof={proof.data || null}
-                  first={status.data.requires_initial_recording_mode}
-                  hasPool={!!status.data.storage_pool_id}
-                  onAccepted={accepted}
-                />
-                <QueryState
-                  pending={!!testId && proof.isPending}
-                  error={proof.error}
-                  retry={() => proof.refetch()}
-                />
-              </div>
+              <details className='mt-5 border-t pt-5'>
+                <summary className='cursor-pointer text-sm text-muted-foreground'>
+                  连接诊断与历史配置应用
+                </summary>
+                <div className='mt-4 grid gap-4'>
+                  <SourceTestControls
+                    key={activeRevision.id}
+                    channelId={channel.id}
+                    version={version}
+                    revisionId={activeRevision.id}
+                    proof={proof.data || null}
+                    first={status.data.requires_initial_recording_mode}
+                    hasPool={!!status.data.storage_pool_id}
+                    onAccepted={accepted}
+                    busy={connecting}
+                  />
+                  <QueryState
+                    pending={!!testId && proof.isPending}
+                    error={proof.error}
+                    retry={() => proof.refetch()}
+                  />
+                </div>
+              </details>
             )}
           </Panel>
         </TabsContent>
@@ -318,7 +327,7 @@ function ConfigureChannel({ channel }: { channel: Schema<'Channel'> }) {
               onSelect={(value) => {
                 setSelected(value)
                 setTestId('')
-                setNotice('已选择历史配置，请在摄像头连接页测试后应用')
+                setNotice('已选择历史配置，请在连接诊断中测试后应用')
               }}
             />
             {history.hasNextPage && (

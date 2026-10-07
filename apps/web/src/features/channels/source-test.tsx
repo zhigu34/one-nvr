@@ -13,6 +13,7 @@ type Props = {
   proof: Schema<'SourceTestResult'> | null
   first: boolean
   hasPool: boolean
+  busy?: boolean
   onAccepted: (value: Schema<'SourceChange'>, kind: 'test' | 'apply') => void
 }
 export function SourceTestControls({
@@ -23,6 +24,7 @@ export function SourceTestControls({
   first,
   hasPool,
   onAccepted,
+  busy = false,
 }: Props) {
   const now = useNow()
   const [mode, setMode] = useState<'none' | 'continuous'>('continuous')
@@ -38,7 +40,7 @@ export function SourceTestControls({
     !!proof.expires_at &&
     Date.parse(proof.expires_at) > now
   async function run(kind: 'test' | 'apply') {
-    if (pending) return
+    if (pending || busy) return
     const abort = new AbortController()
     controller.current = abort
     setPending(true)
@@ -127,7 +129,7 @@ export function SourceTestControls({
         <Button
           type='button'
           variant='outline'
-          disabled={pending}
+          disabled={pending || busy}
           onClick={() => void run('test')}
         >
           测试取流
@@ -135,7 +137,10 @@ export function SourceTestControls({
         <Button
           type='button'
           disabled={
-            pending || !valid || (first && mode === 'continuous' && !hasPool)
+            pending ||
+            busy ||
+            !valid ||
+            (first && mode === 'continuous' && !hasPool)
           }
           onClick={() => void run('apply')}
         >

@@ -36,7 +36,7 @@ async function freshPoolProof(page: Page, poolId: string) {
     await poolPage.close()
   }
 }
-async function saveAndTest(page: Page, ip: string, main: string, sub: string) {
+async function saveAndTest(page: Page, ip: string, main: string, sub: string, connect = false) {
   await page.getByRole('tab', {name: '摄像头连接', exact: true}).click()
   await page.getByLabel('IP 地址', {exact: true}).fill(ip)
   await page.getByLabel('主流路径', {exact: true}).fill(main)
@@ -46,7 +46,7 @@ async function saveAndTest(page: Page, ip: string, main: string, sub: string) {
   await page.getByLabel('密码处理', {exact: true}).selectOption('clear')
   const saved = page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/source-revisions'))
   const tested = page.waitForResponse(r => r.request().method() === 'POST' && /\/source-revisions\/[^/]+\/test$/.test(new URL(r.url()).pathname))
-  await page.getByRole('button', {name: '保存并测试', exact: true}).click()
+  await page.getByRole('button', {name: connect ? '保存并连接' : '仅保存并测试', exact: true}).click()
   const response = await saved
   if (response.status() !== 201) {
     const failed = await response.json()
@@ -58,7 +58,13 @@ async function saveAndTest(page: Page, ip: string, main: string, sub: string) {
   expect(new URL(testResponse.url()).pathname.endsWith('/source-revisions/' + revision.id + '/test')).toBe(true)
   const job = (await testResponse.json()).data as {job_id: string}
   await finished(page, job)
-  await expect(page.getByText('测试状态：通过')).toBeVisible({timeout: 15000})
+  if (connect) {
+    await expect(page.getByText('摄像头已连接', {exact: true})).toBeVisible({timeout: 90000})
+  } else {
+    const diagnostics = page.locator('details').filter({has: page.locator('summary', {hasText: '连接诊断与历史配置应用'})})
+    if (!(await diagnostics.evaluate(el => el.hasAttribute('open')))) await diagnostics.locator('summary').click()
+    await expect(page.getByText('测试状态：通过')).toBeVisible({timeout: 15000})
+  }
   return revision.id
 }
 
@@ -102,10 +108,7 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   await expect(page.getByText('存储池已登记')).toBeVisible()
   const pool = (await get<{items: {id: string}[]}>(page, 'storage-pools')).items[0]
   await page.goto('/channels/configure?channel=' + channel.id)
-  const initial = await saveAndTest(page, fixture.camera_ip, fixture.paths[2], fixture.paths[3])
-  expect((await status()).current_revision_id).toBeNull()
-  await page.getByLabel('首次普通录像', {exact: true}).selectOption('none')
-  await finished(page, await command(page, '应用配置', '/source/apply'))
+  const initial = await saveAndTest(page, fixture.camera_ip, fixture.paths[2], fixture.paths[3], true)
   await expect.poll(async () => (await status()).current_revision_id, {timeout: 20000}).toBe(initial)
   await expect.poll(async () => (await status()).main.state, {timeout: 30000}).toBe('healthy')
   expect((await status()).recording.state).toBe('disabled')
@@ -161,10 +164,10 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   const historical = (await recordings()).items.find(s => s.state === 'ready')!
   expect(historical.source_revision_id).toBe(initial)
   expect(historical.pool_id).toBe(pool.id)
-  const changed = await saveAndTest(page, fixture.camera_ip, fixture.paths[0], fixture.paths[1])
-  await freshPoolProof(page, pool.id)
-  await finished(page, await command(page, '应用配置', '/source/apply'))
+  const changed = await saveAndTest(page, fixture.camera_ip, fixture.paths[0], fixture.paths[1], true)
   await expect.poll(async () => (await status()).current_revision_id, {timeout: 20000}).toBe(changed)
+  await expect.poll(async () => (await physical()).filter(s => s.isRecordingMP4).length, {timeout: 30000}).toBe(1)
+  expect((await recordings()).items.find(s => s.id === historical.id)?.state).toBe('ready')
   // API polling can observe a committed job before the page's query refresh.
   // Reload as an operator may do, preserving optimistic conflict protection.
   await page.reload()
@@ -210,5 +213,5 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   expect((await status()).recording.state).toBe('disabled')
   expect((await recordings()).items.find(s => s.id === historical.id)?.state).toBe('ready')
   expect((await status()).channel_id).toBe(channel.id)
-  writeFileSync('/results/media-browser.json', JSON.stringify({actual_media: true, webrtc_decoded_frames: firstFrames, live_main_sub_switch: true, live_no_recording: true, live_unauthorized_denied: true, live_readers_released: true, live_grid_cells: 4, slots: 32, active_channels: 1, synthetic_camera_pairs: 2, no_recording_keeps_pull: true, real_ready_segment: true, switch_and_rollback: true, clear_and_reconfigure_preserves_policy: true, channel_id: channel.id, historical_segment_id: historical.id}))
+  writeFileSync('/results/media-browser.json', JSON.stringify({actual_media: true, camera_one_click_connect: true, camera_one_click_preserves_recording: true, webrtc_decoded_frames: firstFrames, live_main_sub_switch: true, live_no_recording: true, live_unauthorized_denied: true, live_readers_released: true, live_grid_cells: 4, slots: 32, active_channels: 1, synthetic_camera_pairs: 2, no_recording_keeps_pull: true, real_ready_segment: true, switch_and_rollback: true, clear_and_reconfigure_preserves_policy: true, channel_id: channel.id, historical_segment_id: historical.id}))
 })
