@@ -350,6 +350,18 @@ function LiveWorkspace({
           >
             配置通道与录像
           </Link>
+          {displayed[selected]?.permissions.includes('playback') && (
+            <Link
+              to='/recordings'
+              search={{
+                channel: displayed[selected]!.id,
+                at: new Date().toISOString(),
+              }}
+              className='block text-sm text-primary underline underline-offset-4'
+            >
+              查看 {label(displayed[selected]!)} 即时回放
+            </Link>
+          )}
         </aside>
         <div
           ref={grid}

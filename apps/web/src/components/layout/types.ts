@@ -16,6 +16,11 @@ type BaseNavItem = {
   title: string
   badge?: string
   icon?: React.ElementType
+  /**
+   * Shown to every signed-in role, not only administrators. The pages behind
+   * these entries enforce their own permissions against the API.
+   */
+  everyRole?: boolean
 }
 
 type NavLink = BaseNavItem & {

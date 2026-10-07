@@ -1,0 +1,524 @@
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
+import { Link } from '@tanstack/react-router'
+import {
+  Maximize,
+  Pause,
+  Play,
+  RotateCcw,
+  SkipForward,
+  Square,
+} from 'lucide-react'
+import type { PageData, Schema } from '@/lib/types'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { useAPI } from '@/features/foundation/hooks'
+import { Empty, QueryState } from '@/features/foundation/ui'
+import { probeSegment } from './api'
+import {
+  RATES,
+  PlaybackController,
+  type MediaElement,
+  type PlaybackState,
+} from './player'
+import {
+  buildTimeline,
+  formatClock,
+  formatDuration,
+  type Entry,
+  type Timeline,
+} from './timeline'
+
+const IDLE: PlaybackState = {
+  phase: 'idle',
+  clock: 0,
+  message: '选择时间轴上的片段后播放',
+  entry: null,
+  gap: null,
+  skipped: null,
+  rate: 1,
+}
+
+const label = (channel: Schema<'Channel'>) =>
+  `CH${String(channel.channel_no).padStart(2, '0')} ${channel.channel_name}`
+
+const recordingsPath = (
+  channelID: string,
+  range: { start: number; end: number }
+) =>
+  `/api/v1/recordings?${new URLSearchParams({
+    channel_id: channelID,
+    start: new Date(range.start).toISOString(),
+    end: new Date(range.end).toISOString(),
+    limit: '100',
+  })}`
+
+/** Instant playback asks for the last five minutes; a plain visit asks a day. */
+function defaultRange(at: string) {
+  const anchored = at && Number.isFinite(Date.parse(at))
+  const end = anchored ? Date.parse(at) : Date.now()
+  return { start: end - (anchored ? 5 * 60_000 : 24 * 3600_000), end }
+}
+
+export function Playback({
+  initialChannel = '',
+  initialAt = '',
+}: {
+  initialChannel?: string
+  initialAt?: string
+}) {
+  const channelsQuery = useAPI<PageData<Schema<'Channel'>>>(
+    '/api/v1/channels?limit=100'
+  )
+  const site = useAPI<Schema<'Site'>>('/api/v1/site')
+  const channels = (channelsQuery.data?.items || []).filter((channel) =>
+    channel.permissions.includes('playback')
+  )
+  const zone = site.data?.timezone || 'Asia/Shanghai'
+  return (
+    <div className='space-y-4'>
+      <div>
+        <h1 className='text-2xl font-semibold tracking-tight'>录像回放</h1>
+        <p className='mt-1 text-sm text-muted-foreground'>
+          按站点时区 {zone}{' '}
+          检索与播放。进入本页只加载索引，播放由播放按钮、双击片段或时间轴定位触发。
+        </p>
+      </div>
+      <QueryState
+        pending={channelsQuery.isPending}
+        error={channelsQuery.error}
+        retry={channelsQuery.refetch}
+      />
+      {channelsQuery.data && !channels.length && (
+        <Empty>没有可回放的通道，请联系管理员分配录像回放权限。</Empty>
+      )}
+      {!!channels.length && (
+        <Workspace
+          channels={channels}
+          zone={zone}
+          initialChannel={initialChannel}
+          initialAt={initialAt}
+        />
+      )}
+    </div>
+  )
+}
+
+function Workspace({
+  channels,
+  zone,
+  initialChannel,
+  initialAt,
+}: {
+  channels: Schema<'Channel'>[]
+  zone: string
+  initialChannel: string
+  initialAt: string
+}) {
+  const [channelID, setChannelID] = useState(
+    () =>
+      channels.find((channel) => channel.id === initialChannel)?.id ||
+      channels[0].id
+  )
+  const [range, setRange] = useState(() => defaultRange(initialAt))
+  const [rangeError, setRangeError] = useState('')
+  const [selected, setSelected] = useState<Entry | null>(null)
+  const [search, setSearch] = useState('')
+  const query = useAPI<Schema<'RecordingPage'>>(
+    recordingsPath(channelID, range)
+  )
+  const timeline = useMemo(
+    () => buildTimeline(query.data?.items || [], range.start, range.end),
+    [query.data, range]
+  )
+  const video = useRef<HTMLVideoElement>(null)
+  const frame = useRef<HTMLDivElement>(null)
+  const controller = useRef<PlaybackController | null>(null)
+  const [state, setState] = useState<PlaybackState>(IDLE)
+  useEffect(() => {
+    if (!video.current) return
+    const instance = new PlaybackController(
+      video.current as unknown as MediaElement,
+      (entry) => probeSegment(entry.id),
+      setState
+    )
+    controller.current = instance
+    return () => {
+      instance.dispose()
+      controller.current = null
+    }
+  }, [])
+  useEffect(() => {
+    const instance = controller.current
+    if (!instance) return
+    instance.setTimeline(timeline)
+    const playing = instance.current.entry
+    // A shorter range, another channel or a refreshed index can remove the
+    // segment under the playhead; never keep streaming a segment the operator
+    // can no longer see.
+    if (playing && !timeline.entries.some((entry) => entry.id === playing.id))
+      instance.stop()
+  }, [timeline])
+  const filtered = channels.filter((channel) =>
+    label(channel).toLowerCase().includes(search.toLowerCase())
+  )
+  const active =
+    channels.find((channel) => channel.id === channelID) || channels[0]
+  // A blocked selection is never a play target: fall forward to the next
+  // segment the index does vouch for, without pretending it starts here.
+  const startTarget = useMemo(() => {
+    if (selected && !selected.blocked) return selected
+    const after = selected?.start ?? Number.NEGATIVE_INFINITY
+    return (
+      timeline.entries.find((entry) => !entry.blocked && entry.end > after) ||
+      timeline.entries.find((entry) => !entry.blocked) ||
+      null
+    )
+  }, [selected, timeline])
+  const initial = {
+    start: new Date(range.start).toISOString(),
+    end: new Date(range.end).toISOString(),
+  }
+  return (
+    <div className='grid items-start gap-4 xl:grid-cols-[240px_minmax(0,1fr)]'>
+      <aside className='space-y-3 rounded-xl border bg-card p-3'>
+        <div className='flex items-center justify-between text-sm font-medium'>
+          <span>回放通道</span>
+          <span className='text-muted-foreground'>{channels.length} 路</span>
+        </div>
+        <Input
+          aria-label='搜索回放通道'
+          placeholder='搜索编号或名称'
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+        />
+        <div className='grid max-h-80 gap-1 overflow-y-auto'>
+          {filtered.map((channel) => (
+            <button
+              key={channel.id}
+              onClick={() => {
+                setChannelID(channel.id)
+                setSelected(null)
+              }}
+              className={`truncate rounded-md px-2 py-2 text-left text-sm hover:bg-accent ${
+                channel.id === channelID ? 'bg-accent font-medium' : ''
+              }`}
+            >
+              {label(channel)}
+            </button>
+          ))}
+        </div>
+        <p className='text-xs text-muted-foreground'>
+          只有已完成发布、校验通过的片段可播放。缺口不会被静默跳过。
+        </p>
+        <Link
+          to='/live'
+          className='block text-sm text-primary underline underline-offset-4'
+        >
+          返回实时预览
+        </Link>
+      </aside>
+      <section className='space-y-4'>
+        <form
+          className='grid items-end gap-3 rounded-xl border bg-card p-4 md:grid-cols-3'
+          onSubmit={(event) => {
+            event.preventDefault()
+            const data = new FormData(event.currentTarget),
+              start = String(data.get('start') || ''),
+              end = String(data.get('end') || '')
+            if (
+              !Number.isFinite(Date.parse(start)) ||
+              !Number.isFinite(Date.parse(end)) ||
+              Date.parse(start) >= Date.parse(end)
+            ) {
+              setRangeError('请输入有效起止时间，结束需晚于开始')
+              return
+            }
+            if (Date.parse(end) - Date.parse(start) > 31 * 24 * 3600_000) {
+              setRangeError('单次检索不能超过 31 天')
+              return
+            }
+            setRangeError('')
+            setSelected(null)
+            setRange({ start: Date.parse(start), end: Date.parse(end) })
+          }}
+        >
+          <label className='grid gap-2 text-sm'>
+            <span>检索开始时间</span>
+            <Input name='start' defaultValue={initial.start} required />
+          </label>
+          <label className='grid gap-2 text-sm'>
+            <span>检索结束时间</span>
+            <Input name='end' defaultValue={initial.end} required />
+          </label>
+          <Button type='submit'>检索录像</Button>
+        </form>
+        {rangeError && <p role='alert'>{rangeError}</p>}
+        <p className='text-xs text-muted-foreground'>
+          时间带时区偏移，例如 2026-10-05T08:00:00+08:00；显示按站点时区 {zone}
+          。
+        </p>
+        <div ref={frame} className='overflow-hidden rounded-xl border bg-black'>
+          <video
+            ref={video}
+            data-testid='playback-video'
+            playsInline
+            className='aspect-video w-full bg-black'
+          />
+        </div>
+        <div className='flex flex-wrap items-center gap-2'>
+          <Button
+            onClick={() =>
+              state.phase === 'playing'
+                ? controller.current?.pause()
+                : controller.current?.resume()
+            }
+            disabled={!timeline.entries.length}
+          >
+            {state.phase === 'playing' ? (
+              <Pause size={16} />
+            ) : (
+              <Play size={16} />
+            )}
+            {state.phase === 'playing' ? '暂停' : '播放'}
+          </Button>
+          <Button
+            variant='outline'
+            onClick={() => controller.current?.shift(-10)}
+          >
+            <RotateCcw size={16} />
+            -10 秒
+          </Button>
+          <Button
+            variant='outline'
+            onClick={() => controller.current?.shift(10)}
+          >
+            <RotateCcw size={16} className='scale-x-[-1]' />
+            +10 秒
+          </Button>
+          <Button
+            variant='outline'
+            onClick={() => controller.current?.jumpToNext()}
+          >
+            <SkipForward size={16} />
+            下一可用片段
+          </Button>
+          <Button variant='outline' onClick={() => controller.current?.stop()}>
+            <Square size={16} />
+            停止
+          </Button>
+          <Button
+            variant='outline'
+            onClick={() =>
+              void frame.current?.requestFullscreen().catch(() => {})
+            }
+          >
+            <Maximize size={16} />
+            放大
+          </Button>
+          <label className='flex items-center gap-2 text-sm'>
+            <span>倍速</span>
+            <select
+              aria-label='播放倍速'
+              value={state.rate}
+              onChange={(event) =>
+                controller.current?.setRate(Number(event.target.value))
+              }
+              className='rounded border bg-background px-2 py-1'
+            >
+              {RATES.map((rate) => (
+                <option key={rate} value={rate}>
+                  {rate}x
+                </option>
+              ))}
+            </select>
+          </label>
+          <Button
+            variant='outline'
+            onClick={() =>
+              startTarget && controller.current?.start(startTarget.start)
+            }
+            disabled={!startTarget}
+          >
+            {selected
+              ? selected.blocked
+                ? '从下一可用片段开始播放'
+                : '从此片段开始播放'
+              : '播放首个可用片段'}
+          </Button>
+        </div>
+        <div className='rounded-xl border bg-card p-3 text-sm'>
+          <p role='status'>{state.message}</p>
+          <p className='mt-1 text-muted-foreground'>
+            当前位置 {formatClock(state.clock, zone)}
+            {state.entry ? ` · 片段 ${state.entry.id.slice(0, 8)}` : ''}
+          </p>
+          {state.skipped && (
+            <p role='alert' className='mt-2 text-amber-600'>
+              已自动跳过缺口 {formatClock(state.skipped.start, zone)} —{' '}
+              {formatClock(state.skipped.end, zone)}（
+              {formatDuration(state.skipped.end - state.skipped.start)}，
+              {state.skipped.reason}）
+            </p>
+          )}
+          {state.gap && (
+            <div className='mt-2 text-amber-600'>
+              <p>
+                该时间没有可播放录像：{formatClock(state.gap.start, zone)} —{' '}
+                {formatClock(state.gap.end, zone)}（{state.gap.reason}）
+              </p>
+              <Button
+                size='sm'
+                variant='outline'
+                className='mt-2'
+                onClick={() => controller.current?.jumpToNext()}
+              >
+                跳到下一可用片段
+              </Button>
+            </div>
+          )}
+          {state.phase === 'error' && (
+            <p role='alert' className='mt-2 text-destructive'>
+              {state.message}
+            </p>
+          )}
+        </div>
+        <QueryState
+          pending={query.isPending}
+          error={query.error}
+          retry={query.refetch}
+        />
+        <Timeline
+          timeline={timeline}
+          zone={zone}
+          clock={state.clock}
+          selected={selected}
+          onSelect={setSelected}
+          onSeek={(at) => controller.current?.seek(at)}
+          onPlay={(entry) => {
+            setSelected(entry)
+            controller.current?.start(entry.start)
+          }}
+        />
+        {query.data && !timeline.entries.length && (
+          <Empty>该时间范围没有已登记录像</Empty>
+        )}
+        {selected && (
+          <div className='rounded-xl border bg-card p-3 text-sm'>
+            <p className='font-medium'>
+              片段 {selected.id.slice(0, 8)} · {selected.blocked || '可用'}
+            </p>
+            <p className='mt-1 text-muted-foreground'>
+              {formatClock(selected.start, zone)} —{' '}
+              {formatClock(selected.end, zone)} ·{' '}
+              {formatDuration(selected.end - selected.start)} ·{' '}
+              {(selected.bytes / 1048576).toFixed(1)} MiB
+            </p>
+          </div>
+        )}
+        <p className='text-xs text-muted-foreground'>
+          正在回放 {label(active)}。暂停、拖动、±10
+          秒与倍速都在同一条时间轴上生效。
+        </p>
+      </section>
+    </div>
+  )
+}
+
+function Timeline({
+  timeline,
+  zone,
+  clock,
+  selected,
+  onSelect,
+  onSeek,
+  onPlay,
+}: {
+  timeline: Timeline
+  zone: string
+  clock: number
+  selected: Entry | null
+  onSelect: (entry: Entry) => void
+  onSeek: (at: number) => void
+  onPlay: (entry: Entry) => void
+}) {
+  const strip = useRef<HTMLDivElement>(null)
+  const [scrubbing, setScrubbing] = useState(false)
+  const span = timeline.to - timeline.from
+  const position = (at: number) =>
+    `${Math.min(Math.max(((at - timeline.from) / span) * 100, 0), 100)}%`
+  function scrubTo(clientX: number) {
+    const box = strip.current?.getBoundingClientRect()
+    if (!box || !box.width) return
+    onSeek(timeline.from + ((clientX - box.left) / box.width) * span)
+  }
+  function beginScrub(event: ReactPointerEvent<HTMLElement>) {
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setScrubbing(true)
+    scrubTo(event.clientX)
+  }
+  if (!timeline.entries.length || span <= 0)
+    return (
+      <p className='rounded-xl border border-dashed p-4 text-center text-sm text-muted-foreground'>
+        时间轴上没有可绘制的片段
+      </p>
+    )
+  return (
+    <div className='space-y-2'>
+      <div
+        ref={strip}
+        data-testid='playback-timeline'
+        aria-label='录像时间轴'
+        className={`relative h-12 touch-none rounded-lg border bg-muted ${
+          scrubbing ? 'cursor-grabbing' : 'cursor-crosshair'
+        }`}
+        onPointerDown={(event) => {
+          // Only the empty background positions playback; a bar click selects.
+          if (event.target === event.currentTarget) beginScrub(event)
+        }}
+        onPointerMove={(event) => scrubbing && scrubTo(event.clientX)}
+        onPointerUp={() => setScrubbing(false)}
+      >
+        {timeline.entries.map((entry) => (
+          <button
+            key={entry.id}
+            title={`${formatClock(entry.start, zone)} — ${formatClock(entry.end, zone)}${
+              entry.blocked ? ` · ${entry.blocked}` : ''
+            }`}
+            aria-label={`片段 ${formatClock(entry.start, zone)}`}
+            onClick={() => onSelect(entry)}
+            onDoubleClick={() => onPlay(entry)}
+            className={`absolute top-1 h-10 rounded ${
+              entry.blocked
+                ? 'bg-amber-500/40'
+                : entry.id === selected?.id
+                  ? 'bg-primary'
+                  : 'bg-emerald-600/70'
+            }`}
+            style={{ left: position(entry.start), width: position(entry.end) }}
+          />
+        ))}
+        <div
+          data-testid='playback-playhead'
+          className='absolute top-0 bottom-0 -ml-2 w-4 cursor-grab'
+          style={{ left: position(clock) }}
+          onPointerDown={beginScrub}
+          onPointerMove={(event) => scrubbing && scrubTo(event.clientX)}
+          onPointerUp={() => setScrubbing(false)}
+        >
+          <div className='mx-auto h-full w-0.5 bg-red-600' />
+        </div>
+      </div>
+      <p className='text-xs text-muted-foreground'>
+        {formatClock(timeline.from, zone)} — {formatClock(timeline.to, zone)} ·{' '}
+        {timeline.entries.length} 个片段 · {timeline.gaps.length}{' '}
+        处缺口（单击片段选中，双击播放，拖动时间轴定位）
+      </p>
+    </div>
+  )
+}

@@ -16,6 +16,7 @@ import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/
 import { Route as AuthenticatedUsersIndexRouteImport } from './routes/_authenticated/users/index'
 import { Route as AuthenticatedStoragePoolsIndexRouteImport } from './routes/_authenticated/storage-pools/index'
 import { Route as AuthenticatedSettingsIndexRouteImport } from './routes/_authenticated/settings/index'
+import { Route as AuthenticatedRecordingsIndexRouteImport } from './routes/_authenticated/recordings/index'
 import { Route as AuthenticatedOperationsIndexRouteImport } from './routes/_authenticated/operations/index'
 import { Route as AuthenticatedLiveIndexRouteImport } from './routes/_authenticated/live/index'
 import { Route as AuthenticatedChannelsIndexRouteImport } from './routes/_authenticated/channels/index'
@@ -57,6 +58,12 @@ const AuthenticatedSettingsIndexRoute =
     path: '/settings/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedRecordingsIndexRoute =
+  AuthenticatedRecordingsIndexRouteImport.update({
+    id: '/recordings/',
+    path: '/recordings/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedOperationsIndexRoute =
   AuthenticatedOperationsIndexRouteImport.update({
     id: '/operations/',
@@ -89,6 +96,7 @@ export interface FileRoutesByFullPath {
   '/channels/': typeof AuthenticatedChannelsIndexRoute
   '/live/': typeof AuthenticatedLiveIndexRoute
   '/operations/': typeof AuthenticatedOperationsIndexRoute
+  '/recordings/': typeof AuthenticatedRecordingsIndexRoute
   '/settings/': typeof AuthenticatedSettingsIndexRoute
   '/storage-pools/': typeof AuthenticatedStoragePoolsIndexRoute
   '/users/': typeof AuthenticatedUsersIndexRoute
@@ -101,6 +109,7 @@ export interface FileRoutesByTo {
   '/channels': typeof AuthenticatedChannelsIndexRoute
   '/live': typeof AuthenticatedLiveIndexRoute
   '/operations': typeof AuthenticatedOperationsIndexRoute
+  '/recordings': typeof AuthenticatedRecordingsIndexRoute
   '/settings': typeof AuthenticatedSettingsIndexRoute
   '/storage-pools': typeof AuthenticatedStoragePoolsIndexRoute
   '/users': typeof AuthenticatedUsersIndexRoute
@@ -115,6 +124,7 @@ export interface FileRoutesById {
   '/_authenticated/channels/': typeof AuthenticatedChannelsIndexRoute
   '/_authenticated/live/': typeof AuthenticatedLiveIndexRoute
   '/_authenticated/operations/': typeof AuthenticatedOperationsIndexRoute
+  '/_authenticated/recordings/': typeof AuthenticatedRecordingsIndexRoute
   '/_authenticated/settings/': typeof AuthenticatedSettingsIndexRoute
   '/_authenticated/storage-pools/': typeof AuthenticatedStoragePoolsIndexRoute
   '/_authenticated/users/': typeof AuthenticatedUsersIndexRoute
@@ -129,6 +139,7 @@ export interface FileRouteTypes {
     | '/channels/'
     | '/live/'
     | '/operations/'
+    | '/recordings/'
     | '/settings/'
     | '/storage-pools/'
     | '/users/'
@@ -141,6 +152,7 @@ export interface FileRouteTypes {
     | '/channels'
     | '/live'
     | '/operations'
+    | '/recordings'
     | '/settings'
     | '/storage-pools'
     | '/users'
@@ -154,6 +166,7 @@ export interface FileRouteTypes {
     | '/_authenticated/channels/'
     | '/_authenticated/live/'
     | '/_authenticated/operations/'
+    | '/_authenticated/recordings/'
     | '/_authenticated/settings/'
     | '/_authenticated/storage-pools/'
     | '/_authenticated/users/'
@@ -216,6 +229,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSettingsIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/recordings/': {
+      id: '/_authenticated/recordings/'
+      path: '/recordings'
+      fullPath: '/recordings/'
+      preLoaderRoute: typeof AuthenticatedRecordingsIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/operations/': {
       id: '/_authenticated/operations/'
       path: '/operations'
@@ -253,6 +273,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedChannelsIndexRoute: typeof AuthenticatedChannelsIndexRoute
   AuthenticatedLiveIndexRoute: typeof AuthenticatedLiveIndexRoute
   AuthenticatedOperationsIndexRoute: typeof AuthenticatedOperationsIndexRoute
+  AuthenticatedRecordingsIndexRoute: typeof AuthenticatedRecordingsIndexRoute
   AuthenticatedSettingsIndexRoute: typeof AuthenticatedSettingsIndexRoute
   AuthenticatedStoragePoolsIndexRoute: typeof AuthenticatedStoragePoolsIndexRoute
   AuthenticatedUsersIndexRoute: typeof AuthenticatedUsersIndexRoute
@@ -264,6 +285,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedChannelsIndexRoute: AuthenticatedChannelsIndexRoute,
   AuthenticatedLiveIndexRoute: AuthenticatedLiveIndexRoute,
   AuthenticatedOperationsIndexRoute: AuthenticatedOperationsIndexRoute,
+  AuthenticatedRecordingsIndexRoute: AuthenticatedRecordingsIndexRoute,
   AuthenticatedSettingsIndexRoute: AuthenticatedSettingsIndexRoute,
   AuthenticatedStoragePoolsIndexRoute: AuthenticatedStoragePoolsIndexRoute,
   AuthenticatedUsersIndexRoute: AuthenticatedUsersIndexRoute,

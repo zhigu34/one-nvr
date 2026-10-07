@@ -26,10 +26,7 @@ export function AppSidebar() {
             key={group.title}
             {...group}
             items={group.items.filter(
-              (item) =>
-                user?.role === 'admin' ||
-                item.url === '/' ||
-                item.url === '/channels'
+              (item) => user?.role === 'admin' || item.everyRole
             )}
           />
         ))}
