@@ -4,8 +4,10 @@ cd "$(dirname "$0")/../.."
 project="one-nvr-gateway-test-${GITHUB_RUN_ID:-local}-$$"
 compose=(docker compose -p "$project" -f deploy/production/compose.gateway-test.yaml)
 runner_pid=
+api_peer_reservation=
 cleanup() {
   if [[ -n "$runner_pid" ]]; then kill "$runner_pid" 2>/dev/null || true; fi
+  [[ -z $api_peer_reservation ]] || docker rm -f "$api_peer_reservation" >/dev/null 2>&1 || true
   "${compose[@]}" unpause worker >/dev/null 2>&1 || true
   "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
 }
@@ -65,3 +67,15 @@ mark crashed-gateway-recreated
 phase crash-recovery-done
 wait "$runner_pid"
 runner_pid=
+# Deterministic address relocation, without restarting/reloading gateway.
+old_api_peer=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$("${compose[@]}" ps -q api)")
+[[ "$old_api_peer" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+gateway_before=$("${compose[@]}" ps -q gateway)
+"${compose[@]}" stop api
+"${compose[@]}" rm -f api
+api_peer_reservation=$(docker run -d --network "${project}_default" --ip "$old_api_peer" --entrypoint sleep one-nvr/app:ci 60)
+"${compose[@]}" up -d --no-deps api
+new_api_peer=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$("${compose[@]}" ps -q api)")
+[[ -n "$new_api_peer" && "$new_api_peer" != "$old_api_peer" ]] || { printf 'API peer relocation not exercised.\n' >&2; exit 1; }
+[[ $("${compose[@]}" ps -q gateway) == "$gateway_before" ]] || exit 1
+"${compose[@]}" run --rm --no-deps runner go test -tags gateway_runtime ./tests/integration -run '^TestGatewayAPIPeerRelocation$' -count=1 -v

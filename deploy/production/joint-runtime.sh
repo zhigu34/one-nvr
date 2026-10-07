@@ -47,6 +47,8 @@ joint_phase snapshot
 export ONE_NVR_E2E_MODULES=yes
 "${compose[@]}" up -d --no-deps --force-recreate api worker
 joint_phase modules
+# After API/Worker recreation, verify the public boundary too, not just DB state.
+"${compose[@]}" run --rm --no-deps runner go test -tags gateway_runtime ./tests/integration -run '^TestGatewayAPIPeerRelocation$' -count=1 -v
 # Optional DNS is absent; a new media connection must still recover.
 joint_phase snapshot
 "${compose[@]}" restart zlm

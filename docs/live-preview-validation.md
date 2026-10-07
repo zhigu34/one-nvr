@@ -16,4 +16,10 @@
 
 ## 容器验收
 
-待本次提交 GitHub CI：固定 digest ZLM + 合成 H.264 摄像头 + 真正 Chromium 解码帧增长。要求关闭录像仍可播放、主子流切换、4画面布局、未授权直访拒绝、停止后实际媒体reader归零，并继续执行已有录像/换源/回滚验收。单活动通道测试不代表16–32路并发容量达标。
+代码提交 `187b7eff7cc4df0cc9ac81fc03287e2ff7db90eb` 的 [CI 37570858057](https://github.com/zhigu34/one-nvr/actions/runs/37570858057) 已通过 `media-browser-runtime`、`media-contract`、`backend`、`frontend` 和普通浏览器回归。
+
+固定 digest ZLM + 合成 H.264 摄像头 + Chromium 的验收检查实际解码帧超过5帧后持续增长，关闭录像仍可播放、主子流切换、4画面布局、未授权直访拒绝、停止后实际媒体reader归零；同时完成既有录像片、换源/回滚、历史索引与清空重新配置验收。验收回执 `media-browser-contract` artifact `11461545289` 已核对，ZIP SHA256 为 `360c8288f2bb094e1c7fa4dfafc2c4905d300bd313adb3eecb76b427d44def2f`。
+
+这轮11项检查通过10项；联合故障验收发现API容器重建后Nginx继续使用旧IP，导致入口返回502。网关已改为通过Docker DNS重新解析，并增加强制改变API地址、不重启网关的验收；修复后的完整CI结果待补。
+
+单活动通道测试不代表16–32路并发容量达标；两台现场设备仍需更新后确认出画面。

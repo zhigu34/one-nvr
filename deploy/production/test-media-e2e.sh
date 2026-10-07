@@ -19,6 +19,9 @@ cleanup() {
 	# These application messages contain only fixed stages/booleans, never raw
 	# completion bodies or upstream credentials; retain the entire fault window.
 	"${compose[@]}" logs --no-log-prefix worker 2>/dev/null | awk '/recording completion (received|durable|database deferred|spooled|rejected)/ { print }' || true
+  # Private endpoint addresses only, never env or credential/config bodies.
+  "${compose[@]}" exec -T gateway getent hosts api || true
+  "${compose[@]}" exec -T gateway wget -q -O /dev/null http://api:8081/health/ready || true
   # Report only whether the original firewall peer still identifies Worker.
   if [[ -n $initial_worker_ip ]]; then
    current_worker_ip=$(docker inspect --format "{{range \$name, \$network := .NetworkSettings.Networks}}{{if eq \$name \"${project}_default\"}}{{\$network.IPAddress}}{{end}}{{end}}" "$("${compose[@]}" ps -q worker)" 2>/dev/null) || current_worker_ip=
