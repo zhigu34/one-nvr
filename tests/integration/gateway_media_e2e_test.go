@@ -34,7 +34,7 @@ func TestGatewayMediaRuntimeE2EInit(t *testing.T) {
 	if err != nil {
 		t.Fatal("private fixture secrets unavailable")
 	}
-	rendered, err := zlm.RenderConfig(config.Config{MediaHost: "127.0.0.1", RTCPort: 8000}, secret)
+	rendered, err := zlm.RenderConfig(config.Config{MediaHost: "172.30.253.10", RTCPort: 8000}, secret)
 	if err != nil {
 		t.Fatal("private media configuration unavailable")
 	}

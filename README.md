@@ -2,7 +2,7 @@
 
 面向单站点、16–32 个固定通道的本地 NVR。Go + PostgreSQL 管理通道、录像索引和任务，ZLMediaKit 负责取流与录像，控制面基于 shadcn-admin。Frigate 和 OpenList 为可选模块，按 `.env` 开关启停。
 
-当前 M1-B 可部署测试：站点初始化、账号权限、固定通道、摄像头配置/测试/替换、批量导入导出、目录存储池、连续录像或仅取流、录像索引、时区与证书管理。实时播放和录像内容回放待 M1-C；智能事件接入、云归档业务仍待开发。开启可选容器不代表这些业务已经完成。
+当前 M1-B 可部署测试：站点初始化、账号权限、固定通道、摄像头配置/测试/替换、批量导入导出、目录存储池、连续录像或仅取流、录像索引、时区与证书管理。已增加 WebRTC 实时预览（1/4/9/16 分屏、主子流切换），容器出画面验收记录见实时预览验证文档。录像内容回放待后续实现；智能事件接入、云归档业务仍待开发。开启可选容器不代表这些业务已经完成。
 
 M0 前期验证代码已移除，历史版本可从 Git 恢复。现场旧容器和录像数据不会随代码更新自动删除。
 
@@ -76,6 +76,7 @@ Docker 与浏览器验收由 GitHub CI 执行，包括真实 PostgreSQL、ZLM �
 - [PRD](docs/PRD.md)
 - [镜像版本](docs/image-versions.md)
 - [录像目录与文件名](docs/recording-file-layout.md)
+- [实时预览验证](docs/live-preview-validation.md)
 - [M1-B 验证记录](docs/M1-B-validation.md)
 - [M1-B 验收矩阵](docs/M1-B-decisions.md)
 - [前端许可证](apps/web/LICENSE)

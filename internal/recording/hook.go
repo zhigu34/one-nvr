@@ -137,6 +137,18 @@ func (s *Service) handleAccessHook(w http.ResponseWriter, r *http.Request, raw [
 		return
 	}
 	params, err := url.ParseQuery(in.Params)
+	if len(params["live_token"]) > 0 && len(params["probe_token"]) > 0 {
+		deny()
+		return
+	}
+	if err == nil && len(params["live_token"]) == 1 && len(params["probe_token"]) == 0 && s.AuthorizeLive != nil {
+		if s.AuthorizeLive(r.Context(), key, params.Get("live_token")) != nil {
+			deny()
+			return
+		}
+		w.Write([]byte(`{"code":0,"msg":"success"}`))
+		return
+	}
 	if err != nil || len(tokens) != 1 || tokens[0] == "" || len(params["probe_token"]) != 1 || !hmac.Equal([]byte(params.Get("probe_token")), []byte(tokens[0])) || s.DB == nil || s.DB.Pool == nil {
 		deny()
 		return

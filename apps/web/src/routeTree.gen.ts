@@ -17,6 +17,7 @@ import { Route as AuthenticatedUsersIndexRouteImport } from './routes/_authentic
 import { Route as AuthenticatedStoragePoolsIndexRouteImport } from './routes/_authenticated/storage-pools/index'
 import { Route as AuthenticatedSettingsIndexRouteImport } from './routes/_authenticated/settings/index'
 import { Route as AuthenticatedOperationsIndexRouteImport } from './routes/_authenticated/operations/index'
+import { Route as AuthenticatedLiveIndexRouteImport } from './routes/_authenticated/live/index'
 import { Route as AuthenticatedChannelsIndexRouteImport } from './routes/_authenticated/channels/index'
 import { Route as AuthenticatedChannelsConfigureRouteImport } from './routes/_authenticated/channels/configure'
 
@@ -62,6 +63,11 @@ const AuthenticatedOperationsIndexRoute =
     path: '/operations/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedLiveIndexRoute = AuthenticatedLiveIndexRouteImport.update({
+  id: '/live/',
+  path: '/live/',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
 const AuthenticatedChannelsIndexRoute =
   AuthenticatedChannelsIndexRouteImport.update({
     id: '/channels/',
@@ -81,6 +87,7 @@ export interface FileRoutesByFullPath {
   '/sign-in': typeof SignInRoute
   '/channels/configure': typeof AuthenticatedChannelsConfigureRoute
   '/channels/': typeof AuthenticatedChannelsIndexRoute
+  '/live/': typeof AuthenticatedLiveIndexRoute
   '/operations/': typeof AuthenticatedOperationsIndexRoute
   '/settings/': typeof AuthenticatedSettingsIndexRoute
   '/storage-pools/': typeof AuthenticatedStoragePoolsIndexRoute
@@ -92,6 +99,7 @@ export interface FileRoutesByTo {
   '/': typeof AuthenticatedIndexRoute
   '/channels/configure': typeof AuthenticatedChannelsConfigureRoute
   '/channels': typeof AuthenticatedChannelsIndexRoute
+  '/live': typeof AuthenticatedLiveIndexRoute
   '/operations': typeof AuthenticatedOperationsIndexRoute
   '/settings': typeof AuthenticatedSettingsIndexRoute
   '/storage-pools': typeof AuthenticatedStoragePoolsIndexRoute
@@ -105,6 +113,7 @@ export interface FileRoutesById {
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/channels/configure': typeof AuthenticatedChannelsConfigureRoute
   '/_authenticated/channels/': typeof AuthenticatedChannelsIndexRoute
+  '/_authenticated/live/': typeof AuthenticatedLiveIndexRoute
   '/_authenticated/operations/': typeof AuthenticatedOperationsIndexRoute
   '/_authenticated/settings/': typeof AuthenticatedSettingsIndexRoute
   '/_authenticated/storage-pools/': typeof AuthenticatedStoragePoolsIndexRoute
@@ -118,6 +127,7 @@ export interface FileRouteTypes {
     | '/sign-in'
     | '/channels/configure'
     | '/channels/'
+    | '/live/'
     | '/operations/'
     | '/settings/'
     | '/storage-pools/'
@@ -129,6 +139,7 @@ export interface FileRouteTypes {
     | '/'
     | '/channels/configure'
     | '/channels'
+    | '/live'
     | '/operations'
     | '/settings'
     | '/storage-pools'
@@ -141,6 +152,7 @@ export interface FileRouteTypes {
     | '/_authenticated/'
     | '/_authenticated/channels/configure'
     | '/_authenticated/channels/'
+    | '/_authenticated/live/'
     | '/_authenticated/operations/'
     | '/_authenticated/settings/'
     | '/_authenticated/storage-pools/'
@@ -211,6 +223,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedOperationsIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/live/': {
+      id: '/_authenticated/live/'
+      path: '/live'
+      fullPath: '/live/'
+      preLoaderRoute: typeof AuthenticatedLiveIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/channels/': {
       id: '/_authenticated/channels/'
       path: '/channels'
@@ -232,6 +251,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
   AuthenticatedChannelsConfigureRoute: typeof AuthenticatedChannelsConfigureRoute
   AuthenticatedChannelsIndexRoute: typeof AuthenticatedChannelsIndexRoute
+  AuthenticatedLiveIndexRoute: typeof AuthenticatedLiveIndexRoute
   AuthenticatedOperationsIndexRoute: typeof AuthenticatedOperationsIndexRoute
   AuthenticatedSettingsIndexRoute: typeof AuthenticatedSettingsIndexRoute
   AuthenticatedStoragePoolsIndexRoute: typeof AuthenticatedStoragePoolsIndexRoute
@@ -242,6 +262,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
   AuthenticatedChannelsConfigureRoute: AuthenticatedChannelsConfigureRoute,
   AuthenticatedChannelsIndexRoute: AuthenticatedChannelsIndexRoute,
+  AuthenticatedLiveIndexRoute: AuthenticatedLiveIndexRoute,
   AuthenticatedOperationsIndexRoute: AuthenticatedOperationsIndexRoute,
   AuthenticatedSettingsIndexRoute: AuthenticatedSettingsIndexRoute,
   AuthenticatedStoragePoolsIndexRoute: AuthenticatedStoragePoolsIndexRoute,

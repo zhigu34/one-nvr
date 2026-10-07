@@ -50,6 +50,7 @@ type Service struct {
 	Sources        *channel.SourceService
 	FreshNetwork   func(context.Context) (channel.NetworkPolicy, error)
 	ProbeToken     string
+	AuthorizeLive  func(context.Context, zlm.StreamKey, string) error
 	siteID         id.ID
 	discoveryMu    sync.Mutex
 	discoveryAfter id.ID

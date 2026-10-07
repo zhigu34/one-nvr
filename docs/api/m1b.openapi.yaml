@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "one-nvr M1-B API contract",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "description": "Approved target contract, not an implementation claim. M1-A Cookie/CSRF and error rules apply. The frontend generator combines both contracts. Source bodies and explicit reveal/export responses are sensitive; no logs or shared caches."
   },
   "paths": {
@@ -3190,6 +3190,222 @@
         },
         "description": "Not implemented until authorized Range playback in M1-C."
       }
+    },
+    "/api/v1/channels/{id}/live": {
+      "post": {
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "live",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "operationId": "openLive",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LiveOffer"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/LiveAnswer"
+                    },
+                    "request_id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/live-sessions/{id}/renew": {
+      "post": {
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "live",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "operationId": "renewLive",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "expires_in"
+                      ],
+                      "properties": {
+                        "expires_in": {
+                          "type": "integer",
+                          "const": 30
+                        }
+                      }
+                    },
+                    "request_id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/live-sessions/{id}": {
+      "delete": {
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "live",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "operationId": "closeLive",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "request_id"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "closed"
+                      ],
+                      "properties": {
+                        "closed": {
+                          "type": "boolean"
+                        }
+                      }
+                    },
+                    "request_id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4116,6 +4332,60 @@
           "main_path"
         ],
         "additionalProperties": false
+      },
+      "LiveOffer": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "stream",
+          "sdp"
+        ],
+        "properties": {
+          "stream": {
+            "type": "string",
+            "enum": [
+              "main",
+              "sub"
+            ]
+          },
+          "sdp": {
+            "type": "string",
+            "maxLength": 65536
+          }
+        }
+      },
+      "LiveAnswer": {
+        "type": "object",
+        "required": [
+          "id",
+          "sdp",
+          "stream",
+          "fallback",
+          "expires_in"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sdp": {
+            "type": "string"
+          },
+          "stream": {
+            "type": "string",
+            "enum": [
+              "main",
+              "sub"
+            ]
+          },
+          "fallback": {
+            "type": "boolean"
+          },
+          "expires_in": {
+            "type": "integer",
+            "const": 30
+          }
+        }
       }
     },
     "securitySchemes": {
