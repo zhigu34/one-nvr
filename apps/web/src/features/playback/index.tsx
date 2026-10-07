@@ -560,7 +560,13 @@ function Timeline({
                   ? 'bg-primary'
                   : 'bg-emerald-600/70'
             }`}
-            style={{ left: position(entry.start), width: position(entry.end) }}
+            style={{
+              left: position(entry.start),
+              width: position(entry.end),
+              // A short segment inside a long range rounds to nothing; keep it
+              // visible and selectable instead of collapsing to a sliver.
+              minWidth: '3px',
+            }}
           />
         ))}
         <div

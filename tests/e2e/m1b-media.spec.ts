@@ -69,7 +69,7 @@ async function saveAndTest(page: Page, ip: string, main: string, sub: string, co
 }
 
 test('real media UI keeps channel history through no-recording, recording, source switch and rollback', async ({page, request}) => {
-  test.setTimeout(420000)
+  test.setTimeout(480000)
   const fixtureFile = process.env.ONE_NVR_E2E_MEDIA_FIXTURE
   expect(fixtureFile, 'requires the isolated actual ZLM/browser fixture; never skip this acceptance').toBeTruthy()
   const fixture = JSON.parse(readFileSync(fixtureFile!, 'utf8')) as {camera_ip: string; paths: string[]}
@@ -99,6 +99,7 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   expect(channels).toHaveLength(32)
   expect(new Set(channels.map(c => c.id)).size).toBe(32)
   const channel = channels.find(c => c.channel_no === 1)!
+  const channel2 = channels.find(c => c.channel_no === 2)!
   const status = () => get<Status>(page, `channels/${channel.id}/source/status`)
   const recordings = () => get<{items: {id: string; state: string; source_revision_id: string; pool_id: string; bytes: number}[]}>(page, 'recordings?' + new URLSearchParams({channel_id: channel.id, start: new Date(Date.now() - 3600000).toISOString(), end: new Date(Date.now() + 60000).toISOString()}))
   await page.goto('/storage-pools')
@@ -213,5 +214,117 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   expect((await status()).recording.state).toBe('disabled')
   expect((await recordings()).items.find(s => s.id === historical.id)?.state).toBe('ready')
   expect((await status()).channel_id).toBe(channel.id)
-  writeFileSync('/results/media-browser.json', JSON.stringify({actual_media: true, camera_one_click_connect: true, camera_one_click_preserves_recording: true, webrtc_decoded_frames: firstFrames, live_main_sub_switch: true, live_no_recording: true, live_unauthorized_denied: true, live_readers_released: true, live_grid_cells: 4, slots: 32, active_channels: 1, synthetic_camera_pairs: 2, no_recording_keeps_pull: true, real_ready_segment: true, switch_and_rollback: true, clear_and_reconfigure_preserves_policy: true, channel_id: channel.id, historical_segment_id: historical.id}))
+  // M1-C: measure the authorized byte-range read path against the real
+  // published segment, through the real gateway.
+  await page.goto('/recordings')
+  await expect(page.getByRole('heading', {name: '录像回放', exact: true})).toBeVisible()
+  await page.getByRole('button', {name: 'CH01 通道 01', exact: true}).click()
+  // The index must reach the timeline; a short segment inside a 24 hour window
+  // is only a few pixels wide, so playback is started from the control instead
+  // of a click on the bar.
+  await expect.poll(async () => page.getByRole('button', {name: /^片段 /}).count(), {timeout: 30000, message: 'the recording index must reach the timeline'}).toBeGreaterThan(0)
+  const contentResponses: {range: string; status: number}[] = []
+  page.on('response', response => {
+    if (response.url().endsWith('/content')) contentResponses.push({range: response.request().headers()['range'] || '', status: response.status()})
+  })
+  await page.getByRole('button', {name: '播放首个可用片段', exact: true}).click()
+  const playback = page.getByTestId('playback-video')
+  await expect.poll(async () => playback.evaluate((el: HTMLVideoElement) => el.getVideoPlaybackQuality().totalVideoFrames), {timeout: 60000, message: 'the published recording must decode in the browser'}).toBeGreaterThan(2)
+  const playbackFrames = await playback.evaluate((el: HTMLVideoElement) => el.getVideoPlaybackQuality().totalVideoFrames)
+  const geometry = await playback.evaluate((el: HTMLVideoElement) => ({duration: el.duration, width: el.videoWidth, height: el.videoHeight}))
+  expect(geometry.width).toBeGreaterThan(0)
+  expect(geometry.height).toBeGreaterThan(0)
+  expect(geometry.duration).toBeGreaterThan(0)
+  // Playback must stream from the authorized endpoint, never a private path or blob.
+  expect(contentResponses.length).toBeGreaterThan(0)
+  expect(contentResponses.every(r => r.status === 200 || r.status === 206)).toBe(true)
+  // Range is proven by fetching the same bytes the browser just played. The
+  // digest is a plain in-page FNV-1a: the entry is plain HTTP, so crypto.subtle
+  // is absent in this context by design.
+  const rangeProof = await page.evaluate(async (segmentId: string) => {
+    const digest = (buffer: ArrayBuffer) => {
+      const bytes = new Uint8Array(buffer)
+      let hash = 0x811c9dc5
+      for (let index = 0; index < bytes.length; index++) {
+        hash ^= bytes[index]
+        hash = Math.imul(hash, 0x01000193) >>> 0
+      }
+      return hash.toString(16).padStart(8, '0') + ':' + bytes.length
+    }
+    const read = async (range?: string) => {
+      const response = await fetch('/api/v1/recordings/' + segmentId + '/content', range ? {headers: {Range: range}} : undefined)
+      const buffer = await response.arrayBuffer()
+      return {status: response.status, acceptRanges: response.headers.get('Accept-Ranges'), contentRange: response.headers.get('Content-Range'), contentType: response.headers.get('Content-Type'), length: buffer.byteLength, digest: digest(buffer), buffer}
+    }
+    const full = await read()
+    const from = full.length >> 2
+    const to = Math.min(full.length - 1, from + 4095)
+    const whole = await read('bytes=0-')
+    const slice = await read(`bytes=${from}-${to}`)
+    const overflow = await read(`bytes=${full.length}-`)
+    return {
+      total: full.length,
+      full: {status: full.status, acceptRanges: full.acceptRanges, contentType: full.contentType, digest: full.digest},
+      whole: {status: whole.status, contentRange: whole.contentRange, digest: whole.digest},
+      slice: {status: slice.status, contentRange: slice.contentRange, length: slice.length, digest: slice.digest, expected: digest(full.buffer.slice(from, to + 1)), from, to},
+      overflow: {status: overflow.status, contentRange: overflow.contentRange},
+    }
+  }, historical.id)
+  expect(rangeProof.total).toBe(historical.bytes)
+  expect(rangeProof.full.status).toBe(200)
+  expect(rangeProof.full.acceptRanges).toBe('bytes')
+  expect(rangeProof.full.contentType).toBe('video/mp4')
+  expect(rangeProof.whole.status).toBe(206)
+  expect(rangeProof.whole.contentRange).toBe(`bytes 0-${rangeProof.total - 1}/${rangeProof.total}`)
+  expect(rangeProof.whole.digest).toBe(rangeProof.full.digest)
+  expect(rangeProof.slice.status).toBe(206)
+  expect(rangeProof.slice.contentRange).toBe(`bytes ${rangeProof.slice.from}-${rangeProof.slice.to}/${rangeProof.total}`)
+  expect(rangeProof.slice.length).toBe(rangeProof.slice.to - rangeProof.slice.from + 1)
+  expect(rangeProof.slice.digest).toBe(rangeProof.slice.expected)
+  expect(rangeProof.overflow.status).toBe(416)
+  expect(rangeProof.overflow.contentRange).toBe(`bytes */${rangeProof.total}`)
+  // A viewer with playback on another channel must not be able to tell this
+  // channel's segment from a segment that does not exist.
+  const viewer = 'm1c-viewer-' + Date.now()
+  const csrf = await page.evaluate(async () => (await (await fetch('/api/v1/auth/me')).json()).data.csrf_token as string)
+  const created = await page.evaluate(async ([username, secret, token]) => {
+    const response = await fetch('/api/v1/users', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRF-Token': token}, body: JSON.stringify({username, password: secret, role: 'viewer'})})
+    return {status: response.status, data: (await response.json()).data as {id: string; version: number}}
+  }, [viewer, password, csrf] as const)
+  expect(created.status).toBe(201)
+  const granted = await page.evaluate(async ([userId, version, otherChannel, token]) => {
+    const response = await fetch('/api/v1/users/' + userId + '/channel-grants', {method: 'PUT', headers: {'Content-Type': 'application/json', 'If-Match': '"' + version + '"', 'X-CSRF-Token': token}, body: JSON.stringify({grants: [{channel_id: otherChannel, actions: ['playback']}]})})
+    return response.status
+  }, [created.data.id, created.data.version, channel2.id, csrf] as const)
+  expect(granted).toBe(200)
+  const viewerContext = await page.context().browser()!.newContext()
+  let unauthorizedRead: {status: number; body: string} = {status: 0, body: ''}
+  let absent: {status: number; body: string} = {status: 0, body: ''}
+  try {
+    const viewerPage = await viewerContext.newPage()
+    await viewerPage.goto('/sign-in')
+    await viewerPage.getByLabel('用户名', {exact: true}).fill(viewer)
+    await viewerPage.getByLabel('密码', {exact: true}).fill(password)
+    await viewerPage.getByRole('button', {name: '登录', exact: true}).click()
+    await expect(viewerPage.getByRole('heading', {name: '总览', exact: true})).toBeVisible()
+    const read = async (segmentId: string) => viewerPage.evaluate(async (id: string) => {
+      const response = await fetch('/api/v1/recordings/' + id + '/content')
+      return {status: response.status, body: await response.text()}
+    }, segmentId)
+    unauthorizedRead = await read(historical.id)
+    absent = await read('00000000-0000-4000-8000-000000000000')
+    // The workspace reflects the grant: the other channel is offered, this one
+    // is absent rather than merely refusing to play.
+    await viewerPage.goto('/recordings')
+    await expect(viewerPage.getByRole('button', {name: 'CH02 通道 02', exact: true})).toBeVisible({timeout: 20000})
+    await expect(viewerPage.getByRole('button', {name: 'CH01 通道 01'})).toHaveCount(0)
+  } finally {
+    await viewerContext.close()
+  }
+  expect(unauthorizedRead.status).toBe(404)
+  expect(absent.status).toBe(404)
+  expect(JSON.parse(unauthorizedRead.body).error.code).toBe('not_found')
+  expect(JSON.parse(absent.body).error.code).toBe('not_found')
+  expect(unauthorizedRead.body).not.toContain('ftyp')
+  writeFileSync('/results/media-browser.json', JSON.stringify({actual_media: true, camera_one_click_connect: true, camera_one_click_preserves_recording: true, webrtc_decoded_frames: firstFrames, live_main_sub_switch: true, live_no_recording: true, live_unauthorized_denied: true, live_readers_released: true, live_grid_cells: 4, slots: 32, active_channels: 1, synthetic_camera_pairs: 2, no_recording_keeps_pull: true, real_ready_segment: true, switch_and_rollback: true, clear_and_reconfigure_preserves_policy: true, playback_decoded_frames: playbackFrames, playback_video_width: geometry.width, playback_range_206: rangeProof.whole.status === 206, playback_range_slice_matches: rangeProof.slice.digest === rangeProof.slice.expected, playback_range_416: rangeProof.overflow.status === 416, playback_gateway_range_passthrough: true, playback_unauthorized_404: unauthorizedRead.status === 404, playback_unknown_404: absent.status === 404, playback_no_media_leak: !unauthorizedRead.body.includes('ftyp'), channel_id: channel.id, historical_segment_id: historical.id}))
 })
