@@ -24,3 +24,6 @@ __pycache__/
 media-test-results/
 
 /.local/
+
+# Local agent session state and work logs
+/.workbuddy/
