@@ -105,24 +105,3 @@ func nullableID(value id.ID) any {
 	return value
 }
 
-func (s *Service) AuthorizeSegment(ctx context.Context, p auth.Principal, recordingID id.ID) error {
-	if s.Auth == nil {
-		return auth.ErrNotFound
-	}
-	return s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
-		var channelID id.ID
-		if err := tx.QueryRow(ctx, "SELECT channel_id FROM recording_segments WHERE id=$1", recordingID).Scan(&channelID); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return auth.ErrNotFound
-			}
-			return err
-		}
-		if err := s.Auth.RequireChannelTx(ctx, p, channelID, auth.Playback, tx); err != nil {
-			if errors.Is(err, auth.ErrForbidden) {
-				return auth.ErrNotFound
-			}
-			return err
-		}
-		return nil
-	})
-}

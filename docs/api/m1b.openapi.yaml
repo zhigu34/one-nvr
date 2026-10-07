@@ -3073,13 +3073,13 @@
             }
           }
         },
-        "description": "Single channel, explicit [start,end), max 31 days; return persisted media states, exclude probe recordings. Range delivery belongs to M1-C."
+        "description": "Single channel, explicit [start,end), max 31 days; return persisted media states, exclude probe recordings. Byte-range delivery is provided by the segment content endpoint."
       }
     },
     "/api/v1/recordings/{id}/content": {
       "get": {
         "operationId": "recordingContent",
-        "x-one-nvr-implementation": "planned",
+        "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "playback",
         "security": [
           {
@@ -3094,11 +3094,94 @@
             "schema": {
               "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
             }
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "required": false,
+            "description": "Single byte range, e.g. `bytes=0-`, `bytes=N-M`, `bytes=N-`. Multiple ranges are not served (416).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Range",
+            "in": "header",
+            "required": false,
+            "description": "Entity tag of the requested segment; when it does not match, the full 200 response is returned.",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
-          "501": {
-            "description": "feature_not_available: M1-C",
+          "200": {
+            "description": "Full media stream: no Range header, or a Range rejected by If-Range. Always carries Accept-Ranges: bytes.",
+            "headers": {
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Length": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "video/mp4": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "One byte range of the segment; Content-Range is always present.",
+            "headers": {
+              "Content-Range": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Length": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "video/mp4": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "Range not satisfiable; returns Content-Range: bytes */<size> and no media bytes.",
+            "headers": {
+              "Content-Range": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -3188,7 +3271,7 @@
             }
           }
         },
-        "description": "Not implemented until authorized Range playback in M1-C."
+        "description": "Authorized byte-range delivery of one published recording segment. Requires the channel playback permission; unauthorized or missing segments answer 404. Media paths, pool roots and upstream identifiers are never exposed; only ready, identity-verified segments are served."
       }
     },
     "/api/v1/channels/{id}/live": {

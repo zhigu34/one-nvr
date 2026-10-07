@@ -819,7 +819,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Single channel, explicit [start,end), max 31 days; return persisted media states, exclude probe recordings. Range delivery belongs to M1-C. */
+        /** @description Single channel, explicit [start,end), max 31 days; return persisted media states, exclude probe recordings. Byte-range delivery is provided by the segment content endpoint. */
         get: operations["recordings"];
         put?: never;
         post?: never;
@@ -836,7 +836,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Not implemented until authorized Range playback in M1-C. */
+        /** @description Authorized byte-range delivery of one published recording segment. Requires the channel playback permission; unauthorized or missing segments answer 404. Media paths, pool roots and upstream identifiers are never exposed; only ready, identity-verified segments are served. */
         get: operations["recordingContent"];
         put?: never;
         post?: never;
@@ -4747,7 +4747,12 @@ export interface operations {
     recordingContent: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Single byte range, e.g. `bytes=0-`, `bytes=N-M`, `bytes=N-`. Multiple ranges are not served (416). */
+                Range?: string;
+                /** @description Entity tag of the requested segment; when it does not match, the full 200 response is returned. */
+                "If-Range"?: string;
+            };
             path: {
                 id: components["schemas"]["UUID"];
             };
@@ -4755,6 +4760,30 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description Full media stream: no Range header, or a Range rejected by If-Range. Always carries Accept-Ranges: bytes. */
+            200: {
+                headers: {
+                    "Accept-Ranges"?: string;
+                    "Content-Length"?: number;
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "video/mp4": string;
+                };
+            };
+            /** @description One byte range of the segment; Content-Range is always present. */
+            206: {
+                headers: {
+                    "Content-Range"?: string;
+                    "Content-Length"?: number;
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "video/mp4": string;
+                };
+            };
             /** @description Malformed request */
             400: {
                 headers: {
@@ -4800,6 +4829,16 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            /** @description Range not satisfiable; returns Content-Range: bytes *\/<size> and no media bytes. */
+            416: {
+                headers: {
+                    "Content-Range"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             /** @description Invalid fields */
             422: {
                 headers: {
@@ -4811,15 +4850,6 @@ export interface operations {
             };
             /** @description Rate limit */
             429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
-            /** @description feature_not_available: M1-C */
-            501: {
                 headers: {
                     [name: string]: unknown;
                 };
