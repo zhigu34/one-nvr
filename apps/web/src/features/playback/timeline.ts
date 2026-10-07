@@ -135,23 +135,6 @@ export function offsetIn(entry: Entry, at: number): number {
   return Math.min(Math.max((at - entry.start) / 1000, 0), Math.max(seconds, 0))
 }
 
-export function formatClock(epochMs: number, timezone: string): string {
-  if (!Number.isFinite(epochMs)) return '—'
-  const parts = new Intl.DateTimeFormat('zh-CN', {
-    timeZone: timezone,
-    hourCycle: 'h23',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).formatToParts(new Date(epochMs))
-  const pick = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((part) => part.type === type)?.value || ''
-  return `${pick('year')}-${pick('month')}-${pick('day')} ${pick('hour')}:${pick('minute')}:${pick('second')}`
-}
-
 export function formatDuration(milliseconds: number): string {
   const total = Math.max(0, Math.round(milliseconds / 1000))
   const hours = Math.floor(total / 3600),

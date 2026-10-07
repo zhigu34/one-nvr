@@ -28,6 +28,15 @@
     cursor: pointer;
   }
 
+  /* Native date/time pickers ship a dark glyph that disappears on dark surfaces. */
+  input[type='datetime-local']::-webkit-calendar-picker-indicator {
+    opacity: 0.55;
+    cursor: pointer;
+  }
+  .dark input[type='datetime-local']::-webkit-calendar-picker-indicator {
+    filter: invert(1);
+  }
+
   /* Prevent focus zoom on mobile devices */
   @media screen and (max-width: 767px) {
     input,

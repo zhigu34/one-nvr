@@ -4,7 +4,6 @@ import {
   blockedReason,
   buildTimeline,
   entryAt,
-  formatClock,
   formatDuration,
   gapAt,
   nextPlayableEntry,
@@ -133,9 +132,7 @@ describe('recording timeline', () => {
     expect(nextPlayableEntry(timeline, base + 300_000)).toBeNull()
   })
 
-  it('renders clock and duration in the site timezone', () => {
-    expect(formatClock(base, 'Asia/Shanghai')).toBe('2026-10-05 08:00:00')
-    expect(formatClock(base, 'UTC')).toBe('2026-10-05 00:00:00')
+  it('renders segment durations', () => {
     expect(formatDuration(45_000)).toBe('0:45')
     expect(formatDuration(3_725_000)).toBe('1:02:05')
   })

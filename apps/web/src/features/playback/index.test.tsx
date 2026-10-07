@@ -70,19 +70,25 @@ function segment(
 
 afterEach(() => vi.clearAllMocks())
 
-async function fixture(segments: Schema<'RecordingSegment'>[], probe = '') {
+async function fixture(
+  segments: Schema<'RecordingSegment'>[],
+  probe = '',
+  zone: string | null = 'Asia/Shanghai'
+) {
   calls.probe.mockResolvedValue(probe)
   calls.request.mockImplementation((path: string) => {
     if (path.startsWith('/api/v1/channels'))
       return { items: channels, next_cursor: null }
-    if (path.startsWith('/api/v1/site'))
+    if (path.startsWith('/api/v1/site')) {
+      if (zone === null) return new Promise(() => {})
       return {
         id: 'site',
         name: '站点',
-        timezone: 'Asia/Shanghai',
+        timezone: zone,
         channel_count: 16,
         version: 1,
       }
+    }
     if (path.startsWith('/api/v1/recordings'))
       return { items: segments, next_cursor: null }
     throw new Error('Unexpected query ' + path)
@@ -118,6 +124,86 @@ const says = (text: string) =>
   vi.waitFor(() => expect(document.body.textContent).toContain(text), {
     timeout: 10_000,
   })
+const fieldValue = (locator: { element: () => HTMLElement | SVGElement }) =>
+  (locator.element() as HTMLInputElement).value
+const lastQuery = () => {
+  const paths = calls.request.mock.calls.map((call) => call[0] as string)
+  const path = [...paths]
+    .reverse()
+    .find((candidate) => candidate.startsWith('/api/v1/recordings'))
+  return new URLSearchParams(path?.split('?')[1] || '')
+}
+const shanghaiDay = (epochMs: number) =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(
+    new Date(epochMs)
+  )
+
+test('search inputs read and write the site clock while the request stays UTC', async () => {
+  const { view } = await fixture([segment(A, 0, 120)])
+  await vi.waitFor(() =>
+    expect(fieldValue(view.getByLabelText('检索开始时间'))).toBe(
+      '2026-10-05T08:00'
+    )
+  )
+  expect(fieldValue(view.getByLabelText('检索结束时间'))).toBe(
+    '2026-10-05T08:05'
+  )
+  // The same window as the API is asked for it: 08:00 Shanghai is 00:00 UTC.
+  expect(lastQuery().get('start')).toBe('2026-10-05T00:00:00.000Z')
+  expect(lastQuery().get('end')).toBe('2026-10-05T00:05:00.000Z')
+  await view.getByLabelText('检索开始时间').fill('2026-10-05T09:00')
+  await view.getByLabelText('检索结束时间').fill('2026-10-05T09:30:15')
+  await view.getByRole('button', { name: '检索录像' }).click()
+  await vi.waitFor(() =>
+    expect(lastQuery().get('start')).toBe('2026-10-05T01:00:00.000Z')
+  )
+  expect(lastQuery().get('end')).toBe('2026-10-05T01:30:15.000Z')
+})
+
+test('an out-of-order range is refused without querying', async () => {
+  const { view } = await fixture([segment(A, 0, 120)])
+  await view.getByLabelText('检索开始时间').fill('2026-10-05T10:00')
+  await view.getByLabelText('检索结束时间').fill('2026-10-05T09:00')
+  await view.getByRole('button', { name: '检索录像' }).click()
+  await says('结束时间需晚于开始时间')
+  expect(lastQuery().get('end')).toBe('2026-10-05T00:05:00.000Z')
+})
+
+test('quick ranges are resolved on the site clock, not the browser one', async () => {
+  const { view } = await fixture([segment(A, 0, 120)])
+  await view.getByRole('button', { name: '最近 1 小时' }).click()
+  await vi.waitFor(() => {
+    const start = Date.parse(lastQuery().get('start')!)
+    const end = Date.parse(lastQuery().get('end')!)
+    expect(end - start).toBe(3600_000)
+    expect(Math.abs(end - Date.now())).toBeLessThan(10_000)
+  })
+  const today = shanghaiDay(Date.now())
+  await view.getByRole('button', { name: '今天' }).click()
+  await vi.waitFor(() =>
+    expect(fieldValue(view.getByLabelText('检索开始时间'))).toBe(
+      `${today}T00:00`
+    )
+  )
+  // Shanghai is UTC+8, so the local midnight is 16:00 UTC the day before.
+  expect(lastQuery().get('start')).toBe(
+    new Date(Date.parse(`${today}T00:00:00Z`) - 8 * 3600_000).toISOString()
+  )
+  await view.getByRole('button', { name: '昨天' }).click()
+  await vi.waitFor(() =>
+    expect(fieldValue(view.getByLabelText('检索开始时间'))).toBe(
+      `${shanghaiDay(Date.now() - 24 * 3600_000)}T00:00`
+    )
+  )
+  expect(fieldValue(view.getByLabelText('检索结束时间'))).toBe(`${today}T00:00`)
+})
+
+test('nothing clock dependent renders before the site timezone is known', async () => {
+  const { view } = await fixture([segment(A, 0, 120)], '', null)
+  await says('正在读取站点时区')
+  expect(document.body.textContent).not.toContain('检索开始时间')
+  expect(view.getByRole('button', { name: '检索录像' }).query()).toBeNull()
+})
 
 test('offers only channels with playback permission and starts no media on entry', async () => {
   const { view, video } = await fixture([segment(A, 0, 120)])

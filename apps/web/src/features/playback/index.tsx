@@ -28,11 +28,17 @@ import {
 } from './player'
 import {
   buildTimeline,
-  formatClock,
   formatDuration,
   type Entry,
   type Timeline,
 } from './timeline'
+import {
+  formatClock,
+  parseWallClock,
+  quickRange,
+  wallClockInput,
+  type QuickRangeKind,
+} from './zone'
 
 const IDLE: PlaybackState = {
   phase: 'idle',
@@ -65,6 +71,13 @@ function defaultRange(at: string) {
   return { start: end - (anchored ? 5 * 60_000 : 24 * 3600_000), end }
 }
 
+const QUICK_RANGES: { kind: QuickRangeKind; label: string }[] = [
+  { kind: 'hour', label: '最近 1 小时' },
+  { kind: 'day', label: '最近 24 小时' },
+  { kind: 'today', label: '今天' },
+  { kind: 'yesterday', label: '昨天' },
+]
+
 export function Playback({
   initialChannel = '',
   initialAt = '',
@@ -79,26 +92,34 @@ export function Playback({
   const channels = (channelsQuery.data?.items || []).filter((channel) =>
     channel.permissions.includes('playback')
   )
-  const zone = site.data?.timezone || 'Asia/Shanghai'
+  // The site zone is never assumed: every clock in this page is derived from it,
+  // so the workspace waits for the value the API reports.
+  const zone = site.data?.timezone || ''
   return (
     <div className='space-y-4'>
       <div>
         <h1 className='text-2xl font-semibold tracking-tight'>录像回放</h1>
         <p className='mt-1 text-sm text-muted-foreground'>
-          按站点时区 {zone}{' '}
-          检索与播放。进入本页只加载索引，播放由播放按钮、双击片段或时间轴定位触发。
+          {zone
+            ? `按站点时区 ${zone} 检索与播放。进入本页只加载索引，播放由播放按钮、双击片段或时间轴定位触发。`
+            : '正在读取站点时区…'}
         </p>
       </div>
       <QueryState
-        pending={channelsQuery.isPending}
-        error={channelsQuery.error}
-        retry={channelsQuery.refetch}
+        pending={channelsQuery.isPending || site.isPending}
+        error={channelsQuery.error || site.error}
+        retry={() => {
+          void channelsQuery.refetch()
+          void site.refetch()
+        }}
       />
-      {channelsQuery.data && !channels.length && (
+      {!!zone && channelsQuery.data && !channels.length && (
         <Empty>没有可回放的通道，请联系管理员分配录像回放权限。</Empty>
       )}
-      {!!channels.length && (
+      {!!zone && !!channels.length && (
         <Workspace
+          // A site timezone change invalidates every wall-clock value below.
+          key={zone}
           channels={channels}
           zone={zone}
           initialChannel={initialChannel}
@@ -126,6 +147,12 @@ function Workspace({
       channels[0].id
   )
   const [range, setRange] = useState(() => defaultRange(initialAt))
+  // The inputs hold site-zone wall clock text so the operator reads and types
+  // the same clock the timeline shows; only `range` is sent to the API, in UTC.
+  const [draft, setDraft] = useState(() => ({
+    start: wallClockInput(range.start, zone),
+    end: wallClockInput(range.end, zone),
+  }))
   const [rangeError, setRangeError] = useState('')
   const [selected, setSelected] = useState<Entry | null>(null)
   const [search, setSearch] = useState('')
@@ -180,9 +207,14 @@ function Workspace({
       null
     )
   }, [selected, timeline])
-  const initial = {
-    start: new Date(range.start).toISOString(),
-    end: new Date(range.end).toISOString(),
+  function applyRange(next: { start: number; end: number }) {
+    setRangeError('')
+    setSelected(null)
+    setRange(next)
+    setDraft({
+      start: wallClockInput(next.start, zone),
+      end: wallClockInput(next.end, zone),
+    })
   }
   return (
     <div className='grid items-start gap-4 xl:grid-cols-[240px_minmax(0,1fr)]'>
@@ -228,40 +260,68 @@ function Workspace({
           className='grid items-end gap-3 rounded-xl border bg-card p-4 md:grid-cols-3'
           onSubmit={(event) => {
             event.preventDefault()
-            const data = new FormData(event.currentTarget),
-              start = String(data.get('start') || ''),
-              end = String(data.get('end') || '')
-            if (
-              !Number.isFinite(Date.parse(start)) ||
-              !Number.isFinite(Date.parse(end)) ||
-              Date.parse(start) >= Date.parse(end)
-            ) {
-              setRangeError('请输入有效起止时间，结束需晚于开始')
+            const start = parseWallClock(draft.start, zone),
+              end = parseWallClock(draft.end, zone)
+            if (!Number.isFinite(start) || !Number.isFinite(end)) {
+              setRangeError(`请输入有效的起止时间（按站点时区 ${zone}）`)
               return
             }
-            if (Date.parse(end) - Date.parse(start) > 31 * 24 * 3600_000) {
+            if (start >= end) {
+              setRangeError('结束时间需晚于开始时间')
+              return
+            }
+            if (end - start > 31 * 24 * 3600_000) {
               setRangeError('单次检索不能超过 31 天')
               return
             }
-            setRangeError('')
-            setSelected(null)
-            setRange({ start: Date.parse(start), end: Date.parse(end) })
+            applyRange({ start, end })
           }}
         >
           <label className='grid gap-2 text-sm'>
-            <span>检索开始时间</span>
-            <Input name='start' defaultValue={initial.start} required />
+            <span>检索开始时间（{zone}）</span>
+            <Input
+              type='datetime-local'
+              step='1'
+              aria-label='检索开始时间'
+              value={draft.start}
+              onChange={(event) =>
+                setDraft({ ...draft, start: event.target.value })
+              }
+              required
+            />
           </label>
           <label className='grid gap-2 text-sm'>
-            <span>检索结束时间</span>
-            <Input name='end' defaultValue={initial.end} required />
+            <span>检索结束时间（{zone}）</span>
+            <Input
+              type='datetime-local'
+              step='1'
+              aria-label='检索结束时间'
+              value={draft.end}
+              onChange={(event) =>
+                setDraft({ ...draft, end: event.target.value })
+              }
+              required
+            />
           </label>
           <Button type='submit'>检索录像</Button>
+          <div className='flex flex-wrap items-center gap-2 md:col-span-3'>
+            <span className='text-xs text-muted-foreground'>快捷范围</span>
+            {QUICK_RANGES.map(({ kind, label: name }) => (
+              <Button
+                key={kind}
+                type='button'
+                size='sm'
+                variant='outline'
+                onClick={() => applyRange(quickRange(kind, Date.now(), zone))}
+              >
+                {name}
+              </Button>
+            ))}
+          </div>
         </form>
         {rangeError && <p role='alert'>{rangeError}</p>}
         <p className='text-xs text-muted-foreground'>
-          时间带时区偏移，例如 2026-10-05T08:00:00+08:00；显示按站点时区 {zone}
-          。
+          时间按站点时区 {zone} 填写与显示，单次检索不超过 31 天。
         </p>
         <div ref={frame} className='overflow-hidden rounded-xl border bg-black'>
           <video
