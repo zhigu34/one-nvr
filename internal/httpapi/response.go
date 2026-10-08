@@ -7,6 +7,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/fault"
 	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/secrets"
+	"github.com/zhigu34/one-nvr/internal/storage"
 	"io"
 	"net/http"
 	"strconv"
@@ -28,6 +29,12 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 	var f *fault.Error
 	if errors.Is(err, secrets.ErrCredentialUnavailable) {
 		err = fault.New(503, "credential_unavailable", "摄像头凭据无法解密，请检查持久密钥")
+	}
+	// Missing pool write evidence is a failed precondition the operator can fix
+	// by running a pool check, not a service outage. Report it as such instead
+	// of falling through to the blanket 503 below.
+	if errors.Is(err, storage.ErrMediaProof) {
+		err = fault.New(409, "zlm_write_evidence_unavailable", "存储池检查未通过，请先运行存储池检查")
 	}
 	if !errors.As(err, &f) {
 		f = fault.New(503, "dependency_unavailable", "服务暂时不可用，请稍后重试")

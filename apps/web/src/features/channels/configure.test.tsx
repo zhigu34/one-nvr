@@ -101,16 +101,6 @@ function fixture(
         items: saved || options.continuous ? [revision] : [],
         next_cursor: null,
       }
-    if (path.endsWith('/recording-policy'))
-      return {
-        channel_id: channel.id,
-        version: 1,
-        mode: options.continuous ? 'continuous' : 'none',
-        event_recording_enabled: false,
-      }
-    if (path.includes('/recordings')) return { items: [], next_cursor: null }
-    if (path.startsWith('/api/v1/storage-pools'))
-      return { items: [], next_cursor: null }
     if (path.endsWith('/source-tests/test-proof'))
       return {
         id: 'test-proof',
@@ -153,7 +143,7 @@ test('one click tests and connects a first camera without requiring storage or r
     view = await render(setup.view)
   await fill(view)
   await userEvent.click(
-    view.getByRole('button', { name: '保存并连接', exact: true })
+    view.getByRole('button', { name: '保存并启用', exact: true })
   )
   await expect
     .element(view.getByText('摄像头已连接', { exact: true }))
@@ -175,7 +165,7 @@ test('failed connection retains the first form credentials and retries as add, n
     view = await render(setup.view)
   await fill(view)
   await userEvent.click(
-    view.getByRole('button', { name: '保存并连接', exact: true })
+    view.getByRole('button', { name: '保存并启用', exact: true })
   )
   await expect
     .element(view.getByRole('alert'))
@@ -184,7 +174,7 @@ test('failed connection retains the first form credentials and retries as add, n
     .element(view.getByLabelText('密码', { exact: true }))
     .toHaveValue('isolated-fixture-password')
   await userEvent.click(
-    view.getByRole('button', { name: '保存并连接', exact: true })
+    view.getByRole('button', { name: '保存并启用', exact: true })
   )
   await expect
     .poll(
@@ -213,7 +203,7 @@ test('does not overwrite a concurrently changed channel after connection test', 
     view = await render(setup.view)
   await fill(view)
   await userEvent.click(
-    view.getByRole('button', { name: '保存并连接', exact: true })
+    view.getByRole('button', { name: '保存并启用', exact: true })
   )
   await expect
     .element(view.getByRole('alert'))
@@ -223,21 +213,44 @@ test('does not overwrite a concurrently changed channel after connection test', 
   )
   setup.client.clear()
 })
-test('editing a recording camera automatically checks its pool and preserves recording mode', async () => {
+test('connecting never inspects or changes recording, which lives on the recording plan page', async () => {
   const setup = fixture({ continuous: true }),
     view = await render(setup.view)
   await userEvent.click(
-    view.getByRole('button', { name: '保存并连接', exact: true })
+    view.getByRole('button', { name: '保存并启用', exact: true })
   )
   await expect
     .element(view.getByText('摄像头已连接', { exact: true }))
     .toBeVisible()
+  // The pool is a recording precondition, so bringing a camera up must not
+  // probe it, and an already-running policy must be left exactly as it was.
   expect(
-    setup.mutations.some((m) => m.path === '/api/v1/storage-pools/pool-1/test')
-  ).toBe(true)
+    setup.mutations.some((m) => m.path.includes('/storage-pools/'))
+  ).toBe(false)
+  expect(
+    setup.mutations.some((m) => m.path.endsWith('/recording-policy'))
+  ).toBe(false)
   const apply = setup.mutations.find((m) => m.path.endsWith('/source/apply'))!
   expect(JSON.parse(apply.init.body as string)).not.toHaveProperty(
     'first_recording_mode'
+  )
+  setup.client.clear()
+})
+
+test('saving alone records the camera and neither tests nor switches the source', async () => {
+  const setup = fixture(),
+    view = await render(setup.view)
+  await fill(view)
+  await userEvent.click(view.getByRole('button', { name: '保存', exact: true }))
+  await expect
+    .element(view.getByText('已保存，未启用；启用请点「保存并启用」', { exact: true }))
+    .toBeVisible()
+  expect(
+    setup.mutations.filter((m) => m.path.endsWith('/source-revisions'))
+  ).toHaveLength(1)
+  expect(setup.mutations.some((m) => m.path.endsWith('/test'))).toBe(false)
+  expect(setup.mutations.some((m) => m.path.endsWith('/source/apply'))).toBe(
+    false
   )
   setup.client.clear()
 })

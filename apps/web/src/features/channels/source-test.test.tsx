@@ -15,7 +15,6 @@ const base = {
   version: 8,
   revisionId: '00000000-0000-4000-8000-000000000002',
   first: false,
-  hasPool: true,
   onAccepted: vi.fn(),
 }
 const proof: Schema<'SourceTestResult'> = {
@@ -31,7 +30,7 @@ const proof: Schema<'SourceTestResult'> = {
   observed_at: new Date().toISOString(),
   expires_at: new Date(Date.now() + 300000).toISOString(),
 }
-test('apply requires the selected revision proof and keeps test separate', async () => {
+test('enabling requires the selected revision proof and keeps testing separate', async () => {
   calls.request.mockResolvedValue({
     job_id: 'test-job',
     state: 'queued',
@@ -39,7 +38,7 @@ test('apply requires the selected revision proof and keeps test separate', async
   })
   const view = await render(<SourceTestControls {...base} proof={null} />)
   await expect
-    .element(view.getByRole('button', { name: '应用配置', exact: true }))
+    .element(view.getByRole('button', { name: '测试并启用', exact: true }))
     .toBeDisabled()
   await userEvent.click(
     view.getByRole('button', { name: '测试取流', exact: true })
@@ -53,7 +52,7 @@ test('apply requires the selected revision proof and keeps test separate', async
     .element(view.getByText('子流不可用，可降级应用主流'))
     .toBeVisible()
   await userEvent.click(
-    view.getByRole('button', { name: '应用配置', exact: true })
+    view.getByRole('button', { name: '测试并启用', exact: true })
   )
   const [path, init] = calls.request.mock.calls[1]
   expect(path).toContain('/source/apply')
@@ -63,24 +62,36 @@ test('apply requires the selected revision proof and keeps test separate', async
   })
   expect(new Headers(init.headers).get('If-Match')).toBe('"8"')
 })
-test('first continuous configuration needs a pool, recording off still permits application', async () => {
+test('a first apply starts stream-only and offers no recording choice here', async () => {
+  calls.request.mockResolvedValue({
+    job_id: 'apply-job',
+    state: 'queued',
+    test_id: proof.id,
+  })
   const view = await render(
-    <SourceTestControls {...base} first hasPool={false} proof={proof} />
+    <SourceTestControls {...base} first proof={proof} />
   )
+  // Recording belongs to the recording plan page, so this control must not ask
+  // for a mode and must not gate enablement on a storage pool.
+  expect(view.getByLabelText('首次普通录像').elements()).toHaveLength(0)
   await expect
-    .element(view.getByText('请先绑定存储池，或关闭普通录像'))
-    .toBeVisible()
-  await expect
-    .element(view.getByRole('button', { name: '应用配置', exact: true }))
-    .toBeDisabled()
-  await userEvent.selectOptions(view.getByLabelText('首次普通录像'), 'none')
-  await expect
-    .element(view.getByRole('button', { name: '应用配置', exact: true }))
+    .element(view.getByRole('button', { name: '测试并启用', exact: true }))
     .toBeEnabled()
+  await userEvent.click(
+    view.getByRole('button', { name: '测试并启用', exact: true })
+  )
+  expect(JSON.parse(calls.request.mock.calls[0][1].body)).toEqual({
+    revision_id: base.revisionId,
+    test_id: proof.id,
+    first_recording_mode: 'none',
+  })
+})
+test('a proof bound to another revision never enables the selected one', async () => {
+  const view = await render(<SourceTestControls {...base} proof={proof} />)
   await view.rerender(
     <SourceTestControls {...base} proof={{ ...proof, revision_id: 'other' }} />
   )
   await expect
-    .element(view.getByRole('button', { name: '应用配置', exact: true }))
+    .element(view.getByRole('button', { name: '测试并启用', exact: true }))
     .toBeDisabled()
 })

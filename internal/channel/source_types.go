@@ -56,6 +56,28 @@ type Change struct {
 	JobID  id.ID  `json:"job_id"`
 	State  string `json:"state"`
 }
+
+// PolicyItem is one row of a batch recording-mode request. The version travels
+// with the row so a batch never adopts a channel that changed since the page
+// was read.
+type PolicyItem struct {
+	ChannelID       id.ID  `json:"channel_id"`
+	ExpectedVersion int64  `json:"expected_version"`
+	Mode            string `json:"mode"`
+}
+
+// PolicyOutcome reports one row's result. A rejected row carries only a public
+// error code; it never reports another channel's state or identifiers.
+type PolicyOutcome struct {
+	ChannelID id.ID  `json:"channel_id"`
+	State     string `json:"state"`
+	JobID     *id.ID `json:"job_id,omitempty"`
+	ErrorCode string `json:"error_code,omitempty"`
+}
+
+type PolicyBatch struct {
+	Items []PolicyOutcome `json:"items"`
+}
 type StreamTest struct {
 	State      string  `json:"state"`
 	FirstFrame bool    `json:"first_frame"`

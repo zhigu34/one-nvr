@@ -30,21 +30,26 @@ export function CommandMenu() {
     [setOpen]
   )
 
+  // Mirror the sidebar: declarative everyRole visibility, and never render an
+  // empty heading for a group whose entries are all restricted.
+  const navGroups = sidebarData.navGroups
+    .map((group) => ({
+      title: group.title,
+      items: group.items.filter(
+        (item) => user?.role === 'admin' || item.everyRole
+      ),
+    }))
+    .filter((group) => group.items.length > 0)
+
   return (
     <CommandDialog modal open={open} onOpenChange={setOpen}>
       <CommandInput placeholder='搜索页面…' />
       <CommandList>
         <ScrollArea type='hover' className='h-72 pe-1'>
           <CommandEmpty>没有匹配页面</CommandEmpty>
-          {sidebarData.navGroups.map((group) => (
+          {navGroups.map((group) => (
             <CommandGroup key={group.title} heading={group.title}>
               {group.items
-                .filter(
-                  (item) =>
-                    user?.role === 'admin' ||
-                    item.url === '/' ||
-                    item.url === '/channels'
-                )
                 .map((navItem, i) => {
                   if (navItem.url)
                     return (
