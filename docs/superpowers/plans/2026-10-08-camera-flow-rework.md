@@ -50,6 +50,7 @@
 | --- | --- | --- | --- | --- |
 | **1** | 侧边栏分组 + 录像计划页 + 配置页拆 Tab + 连接流程去录像耦合 + 连接表单重排 + 状态语义 + 批量录像端点 | 无 | 1 次 | ✅ `cb7bd9a` |
 | **2（本计划详述）** | 分组列 + 通道级启用/停用（`channels.enabled` 写入口）+ 列表一次请求拿全（分组/码率/最近错误/更新时间，消 N+1） | `0011_channel_group.sql` | 1 次 | ✅ |
+| 2 补 | CI 暴露的真实媒体验收适配 + 标签/竞态修复 + 媒体验收失败可诊断 | 无 | 2 次 | ✅ `57bfa51` `06d98a4`（远端 `d18aca0` `a2505c7`） |
 | 3 | ONVIF 真实现：局域网发现 + 能力探测 + 自动填 RTSP（CH-06） | 视需要 | 1 次 | 未做 |
 
 ## 本拆分带来的两处行为变化（有意，需知悉）
@@ -216,6 +217,26 @@ Files: `migrations/0011_channel_group.sql`（新增）、`internal/channel/{serv
   - **行为变化必须体现在规格里**：切换源时若通道正在连续录像，后端仍要求新鲜的存储池写入证据，而连接流程不再替用户预检，因此这类切换改为「保存并测试 → 刷新池证据 → 测试并启用」两步（`freshPoolProof` 紧贴 apply）。
 - `apps/web/tests/playwright.ts`：补导出 `type Locator` 供规格使用；`tests/e2e` 不在任何 tsconfig 内，按既有配方逐个手动过类型（已过）。
 - **本机无法运行这些规格**（无 Docker / 无真实摄像头），只能由 CI 判定。
+
+## 两个媒体 job 的真实失败原因（已定位并修复）
+
+`browser-runtime` 转绿后，`media-browser-runtime` 与 `joint-media-runtime` 仍失败（run 37799026420 / `3cd9b45`）。判定过程与结论：
+
+- **签名**：失败步骤只走了 **66~94 秒**，而绿灯运行该步骤是 **6m50s / 23m40s**；两个 job 的产物（`media-test-results/*.json`）**完全没有产出**。产物缺失 + 秒级失败 ⇒ 脚本在产出收据之前就退出了，其中一项（media-browser）在**准备阶段**。
+- **时间常数**：`m1b-media.spec.ts` 设了 `test.use({actionTimeout: 15000})`，而各次失败耗时 = 准备耗时（浮动）+ **固定 15000ms**，说明失败点是一次元素等待超时，不是断言值不符。
+- **根因**：批次 1 把「子流路径」改成「**子流路径（可留空）**」（与既有 `分组（可留空）` 同一风格），但只同步了 `m1a`/`m1b` 两个规格，漏了 `m1b-media.spec.ts:59` 的 `getByLabel('子流路径', {exact: true})`。`Field` 渲染的标签就是 `label` 原文，`exact: true` 不容忍多出的括号，于是 `fill` 等到 15000ms 超时，`saveAndTest`（首次在 `line 129` 调用）失败，`set -e` 让脚本立刻退出 —— 收据自然没有。**只有这一个规格引用该标签，也正好只有跑它的这两个 job 失败**，因果闭环。
+- **同类全量核对**：把 5 个规格里所有 `getByLabel/getByRole/getByText/getByTestId` 字面量与 `apps/web/src` 里的 `aria-label`/`label` 字面量做了一次全量比对，`子流路径` 是**唯一**的精确不匹配项（其余 miss 是 `CH${...} 录像方式`、`测试状态：通过` 这类模板拼接的误报）。
+- **附带修掉一个竞态**：批次 1 把「仅保存并测试」拆成「保存」+「测试取流」两次点击后，保存响应到达时页面未必已把测试面板绑到新修订，可能点到旧修订（`expect(pathname.endsWith('/source-revisions/'+revision.id+'/test'))` 会因此失败）。改为先等页面报出保存结果（该提示在 `setSelected` **之后**才渲染），再点「测试取流」，把竞态变成确定顺序。
+- **顺带确认的两件事**（都不需要改）：`PolicyRow` 的 `If-Match` 用 `status.data.version` / `policy.data.version`，二者都是 `channels.version`（`GetPolicy` 取 `c.version`、`statusTx` 取 `c.version`），与旧实现一致；测试证据有效期 **5 分钟**，夹一次存储池检查足够，而存储池证据 30 秒且 `freshPoolProof` 贴着 apply，顺序正确。
+
+## 让媒体验收失败可从公开注解定位
+
+`actions/jobs/<id>/logs` 需要仓库管理员权限（403），而 job 的 **check-run annotations 可以匿名读取**（本次正是靠它确认产物缺失）。因此 `deploy/production/test-media-e2e.sh` 现在：
+
+- 按阶段推进（`stage=compose-config/postgres/permissions/camera/media-init/media-launcher/stack-up/entry/browser/joint-runtime/receipts`），失败时用 `::error::` 注解报出阶段名；
+- 浏览器输出经 `tee` 落到 `/tmp/one-nvr-media-browser.log`，失败时把 Playwright 自己的失败块（测试标题、`Error:`、call log、`at …spec.ts:NNN`）最多 12 行、每行截断 240 字符写成注解 —— 下次失败不用再猜；
+- 原先四处**没有任何输出**的 `exit 1`（camera 地址、hook 对端地址、worker 身份、入口不可用）补上原因；
+- 注解只含固定阶段名与 Playwright 报错文本，不含源地址、凭据、媒体 key 或页面内容。
 
 # 批次 3（概要，本批不实施）
 
