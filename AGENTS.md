@@ -45,7 +45,23 @@
 
 按改动选择必要检查；媒体、录像连续性、证书或部署入口变更还要查看 `.github/workflows/foundation-ci.yml` 中对应真实容器验收 job。报告通过情况时写明具体命令、CI run/commit 和测试范围；没有跑过的现场设备或容量测试要明确标作未验证。
 
-## 当前交接快照（2026-10-07）
+## 当前交接快照（2026-10-08）
+
+- 当前主题：**摄像头接入流程与录像计划拆分**（计划：`docs/superpowers/plans/2026-10-08-camera-flow-rework.md`，批次 1 已完成）。M1-C 历史录像回放见本节下方。
+- 用户裁决（2026-10-08，权威，不可自行改动）：录像计划做成**侧边栏一级菜单**并**按通道管理录像方式（手动/定时/事件）且可批量应用**；**「手动」= 现有连续录像**（复用 `continuous` 语义）；**定时与事件本批只做占位禁用**；**ONVIF 本批只做占位**；**「配置保存」与「使用」是两件事**，UI 与文档**不再出现「草稿」字样**，未启用的配置状态叫「已保存，未启用」；「未启用」分两级——通道级启用/停用（`channels.enabled`，写入口仍缺，属批次 2）与配置级已应用/未应用（`current_revision_id` 是否指向它）。
+- 批次 1 落地内容：
+  - 侧边栏按功能分组为 **监控 / 配置 / 系统**（`components/layout/data/sidebar-data.ts`），`app-sidebar.tsx` 与 `command-menu.tsx` 都改为**整组为空则不渲染**，可见性统一走声明式 `everyRole`。
+  - 新增侧边栏一级菜单**「录像计划」**（路由 `/recording-plan`，`features/recording-plan/`）：按通道选 关闭录像 / 手动（连续录像）/ 定时录像（禁用占位）/ 事件录像（禁用占位），含存储池绑定与「检查存储池」，支持勾选多通道批量应用。
+  - 通道配置页 Tab 由三项收敛为**「连接配置 / 历史与诊断」**，删除「录像设置」Tab、`连接诊断与历史配置应用` 折叠层、`RecordingPolicyControls` 与 `RecordingsIndex`（后两者的文件已删除，回放页已覆盖按通道浏览录像）；「测试与启用」常显。
+  - `connectSource()` **不再自动检查存储池、不再读取录像策略**：接入只负责取流，`first_recording_mode` 固定为 `none` 且理由改为显式的「录像方式去录像计划页定」。存储池证据检查移到录像计划页。
+  - `source-form.tsx`：新增「添加方式」RTSP 手动（可用）/ **ONVIF 发现（禁用占位）**；`onvif_port` 从表单移出并改为**原样保留已有值**（否则一次编辑就会清掉导入进来的端口）；提交按钮拆为「保存并启用」（主，DOM 在前，Enter 默认触发它）与「保存」（只写配置，不测试不启用）；去掉 `order-last`（此前键盘 Tab 顺序与视觉顺序不一致）。
+  - `channel-status.tsx`：`ChannelStatus` 只渲染主流/子流，**录像灯移出**；`StatusLabel` 把 `unknown + observation_missing` 显示为**「未测试」**、`unknown + observation_stale` 显示为**「观测过期」**。
+  - 新增后端端点 **`PUT /api/v1/recording-policies`**：单事务内为 N 个通道各入队一个 `policy_apply` job，**逐行鉴权与版本检查**，被拒行只回 `{state:'rejected', error_code}` 且不回滚已接受行；调用方须带 `Idempotency-Key`（≤90 字符，服务端按 `key:channel_id` 组合）。
+  - `httpapi/response.go` 的 `fail` 新增映射：`storage.ErrMediaProof` → `409 zlm_write_evidence_unavailable`（此前会落成误导性的 503 dependency_unavailable）。
+- 批次 1 校验：`vite build` ✅、`tsc -b` ✅、`eslint src` ✅（0 error 0 warning）、`vitest run` **152 通过 / 26 文件** ✅、`go build ./...` ✅、`go vet` ✅、`go test ./internal/channel/... ./internal/httpapi/...` ✅。**未跑**真实容器/媒体 CI（本机无 Docker daemon）→ 推送后必须看 GitHub CI 结论。
+- 批次 2（未做）：`channel_group` 迁移 + 通道级启用/停用（`channels.enabled` 写入口）+ 通道列表补分组/码率/最近错误/更新时间并消掉 N+1。批次 3（未做）：ONVIF 局域网发现与能力探测（CH-06）。
+
+## 上一轮交接快照（2026-10-07，M1-C）
 
 - 当前主题：M1-C 历史录像回放。M1-B 的固定通道接入、录像与索引留在 `codex/m1b-channel-recording`（草稿 PR [#2](https://github.com/zhigu34/one-nvr/pull/2)）。
 - M1-C 已完成读路径、回放工作区与真实容器验收：`GET /api/v1/recordings/{id}/content` 由 501 变为受授权的单区间 Range 交付——授权与解析同事务、五类失败语义（404/409/503）、只服务单区间、审计先于第一个媒体字节；前端新增 `/recordings` 回放工作区（时间轴、缺口提示、±10 秒、0.5/1/2/4 倍速、跨分片续播、即时回放入口），侧边栏新增「录像回放」并改为声明式 `everyRole` 可见性。检索时间**不写死时区**，一律按 `GET /api/v1/site` 返回的站点 IANA 时区解释与显示，换算集中在 `apps/web/src/features/playback/zone.ts`。决策与边界见 `docs/M1-C-decisions.md`，验收矩阵与证据见 `docs/M1-C-validation.md`。
@@ -55,4 +71,4 @@
 - 本地没有可用的 Docker daemon，也没有真实摄像头：真实容器与媒体验收只能在 GitHub CI 运行。单元测试和 mock 过的 UI 不能替代端到端媒体验收。
 - `tests/e2e` 不在任何 tsconfig 的 include 内，CI 不对它做类型检查。改动这些规格时必须手动过一遍类型，例如：
   `cd apps/web && npx tsc --noEmit --ignoreConfig --strict --target ES2020 --module ESNext --moduleResolution Bundler --lib ES2023,DOM,DOM.Iterable --types node --skipLibCheck ../../tests/e2e/m1b-media.spec.ts`
-- 早前记录的“保存并连接”一键接入（提交 `0e55fb8` / 发布 `b59e613`，CI run `37596104311` 11 个 job 全绿）仍是 M1-B 的现场验证入口，未被本轮改动取代。
+- 早前记录的「保存并连接」一键接入（提交 `0e55fb8` / 发布 `b59e613`，CI run `37596104311` 11 个 job 全绿）是 M1-B 的现场验证入口；该按钮在 2026-10-08 更名为**「保存并启用」**，编排逻辑未变。

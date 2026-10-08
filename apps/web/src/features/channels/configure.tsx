@@ -16,8 +16,6 @@ import {
 } from '@/features/foundation/ui'
 import { sourceCommand } from './api'
 import { ChannelStatus } from './channel-status'
-import { RecordingPolicyControls } from './recording-policy'
-import { RecordingsIndex } from './recordings-index'
 import { connectSource } from './source-connect'
 import { CredentialReveal } from './source-credentials'
 import { SourceForm } from './source-form'
@@ -42,7 +40,7 @@ export function ChannelConfigure({ initialId = '' }: { initialId?: string }) {
     <>
       <PageTitle
         title='通道配置'
-        description='选择通道，设置摄像头连接与录像方式。'
+        description='选择通道，设置摄像头连接。录像方式在「录像计划」页管理。'
       />
       <QueryState
         pending={channels.isPending}
@@ -107,8 +105,8 @@ export function ChannelConfigure({ initialId = '' }: { initialId?: string }) {
   )
 }
 function ConfigureChannel({ channel }: { channel: Schema<'Channel'> }) {
-  const client = useQueryClient(),
-    admin = useAuthStore((s) => s.user?.role === 'admin')
+  const client = useQueryClient()
+  const admin = useAuthStore((s) => s.user?.role === 'admin')
   const status = useAPI<Schema<'ChannelSourceStatus'>>(
     `/api/v1/channels/${channel.id}/source/status`,
     true,
@@ -127,16 +125,6 @@ function ConfigureChannel({ channel }: { channel: Schema<'Channel'> }) {
     retry: false,
   })
   const revisions = history.data?.pages.flatMap((page) => page.items) || []
-  const policy = useAPI<Schema<'RecordingPolicy'>>(
-    `/api/v1/channels/${channel.id}/recording-policy`,
-    true,
-    2000
-  )
-  const pools = useAPI<PageData<Schema<'Pool'>>>(
-    '/api/v1/storage-pools?limit=100',
-    admin,
-    5000
-  )
   const [selected, setSelected] = useState<Schema<'SourceRevision'> | null>(
     null
   )
@@ -175,21 +163,16 @@ function ConfigureChannel({ channel }: { channel: Schema<'Channel'> }) {
     void client.invalidateQueries()
   }
   // Configuration permissions are rechecked on every poll. Unmount secret-bearing controls on failure.
-  if (history.error || status.error || policy.error)
+  if (history.error || status.error)
     return (
       <QueryState
         pending={false}
-        error={history.error || status.error || policy.error}
+        error={history.error || status.error}
         retry={() => client.invalidateQueries()}
       />
     )
-  if (!status.data || !history.data || !policy.data)
-    return <QueryState pending error={null} />
-  const version = Math.max(
-    channel.version,
-    status.data.version,
-    policy.data.version
-  )
+  if (!status.data || !history.data) return <QueryState pending error={null} />
+  const version = Math.max(channel.version, status.data.version)
   return (
     <>
       <Notices
@@ -224,8 +207,7 @@ function ConfigureChannel({ channel }: { channel: Schema<'Channel'> }) {
       </div>
       <Tabs defaultValue='connection'>
         <TabsList className='mb-3 h-auto flex-wrap'>
-          <TabsTrigger value='connection'>摄像头连接</TabsTrigger>
-          <TabsTrigger value='recording'>录像设置</TabsTrigger>
+          <TabsTrigger value='connection'>连接配置</TabsTrigger>
           <TabsTrigger value='history'>历史与诊断</TabsTrigger>
         </TabsList>
         <TabsContent
@@ -233,90 +215,75 @@ function ConfigureChannel({ channel }: { channel: Schema<'Channel'> }) {
           forceMount
           className='data-[state=inactive]:hidden'
         >
-          <Panel title='基本信息'>
+          <Panel title='基本信息与连接'>
             <ChannelName channel={{ ...channel, version }} />
-          </Panel>
-          <Panel title='摄像头连接'>
-            {status.data.current_revision_id && !current ? (
-              <p>当前修订在更早的历史中，请先加载更多修订。</p>
-            ) : (
-              <SourceForm
-                channel={{ ...channel, version }}
-                revision={current}
-                history={revisions}
-                onSaved={async (value, signal, context) => {
-                  setConnecting(context.action === 'connect')
-                  setSelected(value)
-                  setTestId('')
-                  setJobId('')
-                  setError('')
-                  setNotice('')
-                  try {
-                    return await connectSource(
-                      channel.id,
-                      value.id,
-                      signal,
-                      context,
-                      admin,
-                      (result) => {
-                        if (!signal.aborted) setTestId(result.test_id || '')
+            <div className='mt-6 border-t pt-6'>
+              {status.data.current_revision_id && !current ? (
+                <p>当前修订在更早的历史中，请先加载更多修订。</p>
+              ) : (
+                <SourceForm
+                  channel={{ ...channel, version }}
+                  revision={current}
+                  history={revisions}
+                  onSaved={async (value, signal, context) => {
+                    setConnecting(context.action === 'connect')
+                    setSelected(value)
+                    setTestId('')
+                    setJobId('')
+                    setError('')
+                    setNotice('')
+                    try {
+                      if (context.action === 'save') {
+                        void client.invalidateQueries()
+                        return '已保存，未启用；启用请点「保存并启用」'
                       }
-                    )
-                  } finally {
-                    if (!signal.aborted) {
-                      setConnecting(false)
-                      void client.invalidateQueries()
+                      return await connectSource(
+                        channel.id,
+                        value.id,
+                        signal,
+                        context,
+                        (result) => {
+                          if (!signal.aborted) setTestId(result.test_id || '')
+                        }
+                      )
+                    } finally {
+                      if (!signal.aborted) {
+                        setConnecting(false)
+                        void client.invalidateQueries()
+                      }
                     }
-                  }
-                }}
+                  }}
+                />
+              )}
+            </div>
+          </Panel>
+          {activeRevision && (
+            <Panel title='测试与启用'>
+              <SourceTestControls
+                key={activeRevision.id}
+                channelId={channel.id}
+                version={version}
+                revisionId={activeRevision.id}
+                proof={proof.data || null}
+                first={status.data.requires_initial_recording_mode}
+                onAccepted={accepted}
+                busy={connecting}
               />
-            )}
-            {activeRevision && (
-              <details className='mt-5 border-t pt-5'>
-                <summary className='cursor-pointer text-sm text-muted-foreground'>
-                  连接诊断与历史配置应用
-                </summary>
-                <div className='mt-4 grid gap-4'>
-                  <SourceTestControls
-                    key={activeRevision.id}
-                    channelId={channel.id}
-                    version={version}
-                    revisionId={activeRevision.id}
-                    proof={proof.data || null}
-                    first={status.data.requires_initial_recording_mode}
-                    hasPool={!!status.data.storage_pool_id}
-                    onAccepted={accepted}
-                    busy={connecting}
-                  />
-                  <QueryState
-                    pending={!!testId && proof.isPending}
-                    error={proof.error}
-                    retry={() => proof.refetch()}
-                  />
-                </div>
-              </details>
-            )}
-          </Panel>
-        </TabsContent>
-        <TabsContent
-          value='recording'
-          forceMount
-          className='data-[state=inactive]:hidden'
-        >
-          <Panel title='录像与存储池'>
-            <RecordingPolicyControls
-              channel={{ ...channel, version }}
-              mode={policy.data.mode}
-              poolId={status.data.storage_pool_id}
-              pools={pools.data?.items || []}
-              onAccepted={accepted}
-            />
-          </Panel>
-          {channel.permissions.includes('playback') && (
-            <Panel title='录像记录'>
-              <RecordingsIndex channelId={channel.id} />
+              <QueryState
+                pending={!!testId && proof.isPending}
+                error={proof.error}
+                retry={() => proof.refetch()}
+              />
             </Panel>
           )}
+          <div className='mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4'>
+            <p className='text-sm'>
+              录像方式（关闭 / 手动 / 定时 / 事件）与存储池在「录像计划」页设置。
+            </p>
+            <Button asChild variant='outline'>
+              <a href='/recording-plan'>前往录像计划</a>
+            </Button>
+          </div>
         </TabsContent>
         <TabsContent value='history'>
           <Panel title='配置历史'>
@@ -327,7 +294,7 @@ function ConfigureChannel({ channel }: { channel: Schema<'Channel'> }) {
               onSelect={(value) => {
                 setSelected(value)
                 setTestId('')
-                setNotice('已选择历史配置，请在连接诊断中测试后应用')
+                setNotice('已选择历史配置，请在测试与启用中测试后应用')
               }}
             />
             {history.hasNextPage && (

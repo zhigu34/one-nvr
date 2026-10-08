@@ -12,22 +12,23 @@ type Props = {
   revisionId: string
   proof: Schema<'SourceTestResult'> | null
   first: boolean
-  hasPool: boolean
   busy?: boolean
   onAccepted: (value: Schema<'SourceChange'>, kind: 'test' | 'apply') => void
 }
+// Bringing a camera up and deciding what to record are separate operations.
+// This control only proves the stream and switches the source; it never asks
+// for a recording mode, because a first apply starts stream-only and the
+// recording plan page owns everything after that.
 export function SourceTestControls({
   channelId,
   version,
   revisionId,
   proof,
   first,
-  hasPool,
   onAccepted,
   busy = false,
 }: Props) {
   const now = useNow()
-  const [mode, setMode] = useState<'none' | 'continuous'>('continuous')
   const [pending, setPending] = useState(false),
     [notice, setNotice] = useState(''),
     [error, setError] = useState('')
@@ -50,7 +51,7 @@ export function SourceTestControls({
       revision_id: revisionId,
       test_id: proof?.id || '',
     }
-    if (first) body.first_recording_mode = mode
+    if (first) body.first_recording_mode = 'none'
     try {
       const value = await sourceCommand<Schema<'SourceChange'>>(
         `/api/v1/channels/${channelId}/${kind === 'test' ? `source-revisions/${revisionId}/test` : 'source/apply'}`,
@@ -59,7 +60,7 @@ export function SourceTestControls({
         abort.signal
       )
       if (!abort.signal.aborted) {
-        setNotice(kind === 'test' ? '测试已排队' : '应用已排队，等待执行结果')
+        setNotice(kind === 'test' ? '测试已排队' : '启用已排队，等待执行结果')
         onAccepted(value, kind)
       }
     } catch (e) {
@@ -72,23 +73,6 @@ export function SourceTestControls({
   return (
     <section className='grid gap-3'>
       <Notices error={error} notice={notice} />
-      {first && (
-        <label className='grid gap-2 text-sm'>
-          首次普通录像
-          <select
-            aria-label='首次普通录像'
-            value={mode}
-            onChange={(e) => setMode(e.target.value as typeof mode)}
-            className='rounded-md border bg-background p-2'
-          >
-            <option value='continuous'>开启连续录像</option>
-            <option value='none'>关闭录像，仅取流</option>
-          </select>
-        </label>
-      )}
-      {first && mode === 'continuous' && !hasPool && (
-        <p className='text-sm text-amber-600'>请先绑定存储池，或关闭普通录像</p>
-      )}
       {proof && (
         <div className='rounded-lg border p-3 text-sm'>
           <p>
@@ -123,7 +107,8 @@ export function SourceTestControls({
         </div>
       )}
       <p className='text-xs text-muted-foreground'>
-        测试不会切换当前取流。通过后再应用；连续录像所需码率证据过期时，请重新测试。
+        测试不会切换当前取流。启用只接入取流；录像方式在「录像计划」页设置。
+        测试证据过期后需要重新测试。
       </p>
       <div className='flex gap-3'>
         <Button
@@ -136,15 +121,10 @@ export function SourceTestControls({
         </Button>
         <Button
           type='button'
-          disabled={
-            pending ||
-            busy ||
-            !valid ||
-            (first && mode === 'continuous' && !hasPool)
-          }
+          disabled={pending || busy || !valid}
           onClick={() => void run('apply')}
         >
-          应用配置
+          测试并启用
         </Button>
       </div>
     </section>

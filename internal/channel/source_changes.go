@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/zhigu34/one-nvr/internal/audit"
 	"github.com/zhigu34/one-nvr/internal/auth"
+	"github.com/zhigu34/one-nvr/internal/fault"
 	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/jobs"
 	"github.com/zhigu34/one-nvr/internal/storage"
@@ -56,6 +57,74 @@ func (s *SourceService) BindPool(ctx context.Context, p auth.Principal, ch, pool
 	}
 	return s.requestChange(ctx, p, SourceTask{ChannelID: ch, ActorID: p.UserID, AuthVersion: p.AuthVersion, ExpectedVersion: expected, PoolID: &pool}, "pool_switch", key)
 }
+
+// SetPolicies applies one recording mode to many channels in a single
+// transaction. Each row is authorized and version-checked on its own: a
+// rejected row never blocks or rolls back an accepted one, and no channel is
+// touched outside its own queued job. The composed idempotency key keeps a
+// retried batch idempotent per channel.
+func (s *SourceService) SetPolicies(ctx context.Context, p auth.Principal, items []PolicyItem, key string) (PolicyBatch, error) {
+	out := PolicyBatch{Items: make([]PolicyOutcome, 0, len(items))}
+	if len(items) == 0 || len(items) > 64 || !validSourceJobKey(key) || len(key) > 90 {
+		return out, auth.ErrInvalid
+	}
+	err := s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
+		for _, item := range items {
+			row := PolicyOutcome{ChannelID: item.ChannelID}
+			if item.ExpectedVersion < 1 || item.Mode != "none" && item.Mode != "continuous" {
+				row.State, row.ErrorCode = "rejected", publicCode(auth.ErrInvalid)
+				out.Items = append(out.Items, row)
+				continue
+			}
+			mode := item.Mode
+			change, err := s.requestChangeTx(tx, false, ctx, p, SourceTask{
+				ChannelID:       item.ChannelID,
+				ActorID:         p.UserID,
+				AuthVersion:     p.AuthVersion,
+				ExpectedVersion: item.ExpectedVersion,
+				RecordingMode:   &mode,
+			}, "policy_apply", key+":"+string(item.ChannelID))
+			if err != nil {
+				// Business rejections are per row and leave the transaction
+				// usable. Anything else is an infrastructure failure that would
+				// also poison the transaction, so abort the whole batch rather
+				// than report a misleading per-row reason.
+				if !rejectable(err) {
+					return err
+				}
+				row.State, row.ErrorCode = "rejected", publicCode(err)
+				out.Items = append(out.Items, row)
+				continue
+			}
+			job := change.JobID
+			row.State, row.JobID = "queued", &job
+			out.Items = append(out.Items, row)
+		}
+		return nil
+	})
+	return out, err
+}
+
+// rejectable reports whether an error is a per-row business rejection rather
+// than an infrastructure failure. Only these may be absorbed into a row result.
+func rejectable(err error) bool {
+	var f *fault.Error
+	return errors.As(err, &f) || errors.Is(err, storage.ErrMediaProof)
+}
+
+// publicCode maps an internal error to the code the client already understands.
+// Sentinels that are not *fault.Error would otherwise surface as a blanket 503.
+func publicCode(err error) string {
+	var f *fault.Error
+	if errors.As(err, &f) {
+		return f.Code
+	}
+	if errors.Is(err, storage.ErrMediaProof) {
+		return "zlm_write_evidence_unavailable"
+	}
+	return "dependency_unavailable"
+}
+
 func (s *SourceService) requestChange(ctx context.Context, p auth.Principal, task SourceTask, kind, key string) (Change, error) {
 	var out Change
 	err := s.DB.WithinTx(ctx, func(tx pgx.Tx) error {

@@ -25,6 +25,9 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
   const [intent, setIntent] = useState<Schema<'DraftInput'>['identity_intent']>(
     revision ? 'modify' : 'replace'
   )
+  // ONVIF discovery is not implemented yet. It is offered as a disabled choice
+  // so the operator can see the entry point without being promised capability.
+  const [method, setMethod] = useState<'rtsp' | 'onvif'>('rtsp')
   const [intentRevision, setIntentRevision] = useState(revision?.id)
   const [password, setPassword] = useState('')
   if (intentRevision !== revision?.id) {
@@ -46,7 +49,8 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
     <section className='grid gap-4'>
       <Notices error={error} notice={notice} />
       <p className='text-sm text-muted-foreground'>
-        填写连接信息后保存，系统自动检测并连接。录像方式在“录像设置”中调整。
+        「保存」只记录这条摄像头信息，不影响当前正在取的流；「保存并启用」才切换到新配置。
+        录像方式在「录像计划」页设置。
       </p>
       <form
         key={revision?.id || 'empty'}
@@ -58,7 +62,8 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
           setNotice('')
           const submitter = (event.nativeEvent as SubmitEvent)
             .submitter as HTMLButtonElement | null
-          const action = submitter?.value === 'test' ? 'test' : 'connect'
+          const action: SaveConnection['action'] =
+            submitter?.value === 'save' ? 'save' : 'connect'
           const data = new FormData(event.currentTarget),
             value = (name: string) => String(data.get(name) || '')
           if (passwordAction === 'replace' && /^[*•●]{3,}$/u.test(password)) {
@@ -78,8 +83,11 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
             sub_path: value('sub_path'),
             transport: value('transport') as 'tcp' | 'udp',
           }
-          if (value('onvif_port'))
-            config.onvif_port = Number(value('onvif_port'))
+          // ONVIF is not implemented, so this form cannot set its port. Carry an
+          // existing value forward instead of silently dropping data that came
+          // from an import: the UI must not discard what it does not own.
+          if (revision?.config.onvif_port != null)
+            config.onvif_port = revision.config.onvif_port
           const input: Schema<'DraftInput'> = {
             config,
             credentials,
@@ -126,12 +134,45 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
         }}
       >
         <fieldset disabled={pending} className='contents'>
+          <div className='grid gap-2 md:col-span-2'>
+            <span className='text-sm'>添加方式</span>
+            <div className='flex flex-wrap gap-2'>
+              <button
+                type='button'
+                aria-pressed={method === 'rtsp'}
+                onClick={() => setMethod('rtsp')}
+                className={`rounded-md border px-4 py-2 text-sm ${
+                  method === 'rtsp' ? 'bg-accent font-medium' : ''
+                }`}
+              >
+                RTSP 手动
+              </button>
+              <button
+                type='button'
+                disabled
+                aria-pressed={false}
+                title='后续开放'
+                className='cursor-not-allowed rounded-md border px-4 py-2 text-sm text-muted-foreground'
+              >
+                ONVIF 发现（后续开放）
+              </button>
+            </div>
+          </div>
           <Field
             label='IP 地址'
             name='ip'
             defaultValue={revision?.config.ip || ''}
             required
             placeholder='192.168.33.20'
+          />
+          <Field
+            label='RTSP 端口'
+            name='rtsp_port'
+            type='number'
+            min={1}
+            max={65535}
+            defaultValue={revision?.config.rtsp_port || 554}
+            required
           />
           <Field
             label='用户名'
@@ -166,41 +207,16 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
             required
           />
           <Field
-            label='子流路径'
+            label='子流路径（可留空）'
             name='sub_path'
             defaultValue={revision?.config.sub_path || ''}
             placeholder='/sub'
           />
-          <div className='order-last flex flex-wrap items-center justify-between gap-3 border-t pt-4 md:col-span-2'>
-            <span className='text-xs text-muted-foreground'>
-              测试期间继续使用当前配置
-            </span>
-            <Button disabled={pending}>
-              {pending ? '正在连接…' : '保存并连接'}
-            </Button>
-          </div>
           <details className='rounded-lg border p-4 md:col-span-2'>
             <summary className='cursor-pointer text-sm font-medium'>
               高级连接设置
             </summary>
             <div className='mt-4 grid gap-4 md:grid-cols-2'>
-              <Field
-                label='RTSP 端口'
-                name='rtsp_port'
-                type='number'
-                min={1}
-                max={65535}
-                defaultValue={revision?.config.rtsp_port || 554}
-                required
-              />
-              <Field
-                label='ONVIF 端口（可选）'
-                name='onvif_port'
-                type='number'
-                min={1}
-                max={65535}
-                defaultValue={revision?.config.onvif_port || ''}
-              />
               <label className='grid gap-2 text-sm'>
                 传输方式
                 <select
@@ -273,20 +289,30 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
                 </select>
               </label>
             </div>
-            <Button
-              className='mt-4'
-              type='submit'
-              value='test'
-              variant='outline'
-              disabled={pending}
-            >
-              仅保存并测试
-            </Button>
             <p className='mt-4 text-xs text-muted-foreground'>
-              更换摄像头仍保留通道编号、权限与历史录像。ONVIF
-              端口目前只保存配置。
+              更换摄像头仍保留通道编号、权限与历史录像。
             </p>
           </details>
+          <div className='flex flex-wrap items-center justify-between gap-3 border-t pt-4 md:col-span-2'>
+            <span className='text-xs text-muted-foreground'>
+              保存不影响正在运行的源；启用才会切换
+            </span>
+            <div className='flex gap-3'>
+              {/* The primary action comes first so Enter in any field keeps
+                  running the previously verified connect flow. */}
+              <Button disabled={pending}>
+                {pending ? '正在处理…' : '保存并启用'}
+              </Button>
+              <Button
+                type='submit'
+                value='save'
+                variant='outline'
+                disabled={pending}
+              >
+                保存
+              </Button>
+            </div>
+          </div>
         </fieldset>
       </form>
     </section>

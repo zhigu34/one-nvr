@@ -7,13 +7,14 @@ import {
   Users,
   Settings,
   Activity,
+  CalendarClock,
 } from 'lucide-react'
 import type { NavGroup } from '../types'
 
 export const sidebarData: { navGroups: NavGroup[] } = {
   navGroups: [
     {
-      title: 'one-nvr',
+      title: '监控',
       items: [
         { title: '总览', url: '/', icon: LayoutDashboard, everyRole: true },
         { title: '实时预览', url: '/live', icon: MonitorPlay, everyRole: true },
@@ -23,8 +24,24 @@ export const sidebarData: { navGroups: NavGroup[] } = {
           icon: Film,
           everyRole: true,
         },
+      ],
+    },
+    {
+      title: '配置',
+      items: [
         { title: '通道管理', url: '/channels', icon: Video, everyRole: true },
+        {
+          title: '录像计划',
+          url: '/recording-plan',
+          icon: CalendarClock,
+          everyRole: true,
+        },
         { title: '存储池', url: '/storage-pools', icon: HardDrive },
+      ],
+    },
+    {
+      title: '系统',
+      items: [
         { title: '用户与权限', url: '/users', icon: Users },
         { title: '系统设置', url: '/settings', icon: Settings },
         { title: '运维与审计', url: '/operations', icon: Activity },

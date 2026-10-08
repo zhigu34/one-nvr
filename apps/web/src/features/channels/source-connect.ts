@@ -1,9 +1,9 @@
-import { ApiError, apiRequest, jsonRequest } from '@/lib/api-client'
+import { ApiError, apiRequest } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { sourceCommand } from './api'
 
 export type SaveConnection = {
-  action: 'connect' | 'test'
+  action: 'connect' | 'save'
   version: number
   progress: (message: string) => void
 }
@@ -41,7 +41,6 @@ export async function connectSource(
   revisionId: string,
   signal: AbortSignal,
   context: SaveConnection,
-  admin: boolean,
   onTest: (value: Schema<'SourceChange'>) => void
 ) {
   const deadline = Date.now() + 180000
@@ -55,14 +54,9 @@ export async function connectSource(
     }
     throw new Error('连接等待超时，请查看通道运行状态后再重试')
   }
-  async function job(id: string, storage = false) {
+  async function job(id: string) {
     return poll<Schema<'Job'>>(`/api/v1/jobs/${id}`, (value) => {
-      if (value.state === 'failed')
-        throw new Error(
-          storage
-            ? '录像存储池检查未通过，请检查目录权限和剩余空间；当前摄像头保持不变'
-            : failure(value.error_code)
-        )
+      if (value.state === 'failed') throw new Error(failure(value.error_code))
       return value.state === 'succeeded'
     })
   }
@@ -76,7 +70,6 @@ export async function connectSource(
   signal.throwIfAborted()
   if (!test.test_id) throw new Error('未取得连接检测任务，请重试')
   onTest(test)
-  if (context.action === 'test') return '配置已保存'
   const proof = await poll<Schema<'SourceTestResult'>>(
     `/api/v1/channels/${channelId}/source-tests/${test.test_id}`,
     (value) => {
@@ -93,11 +86,7 @@ export async function connectSource(
     !(Date.parse(proof.expires_at) > Date.now())
   )
     throw new Error('未取得有效视频画面，请检查摄像头连接后重试')
-  const policy = await apiRequest<Schema<'RecordingPolicy'>>(
-    `/api/v1/channels/${channelId}/recording-policy`,
-    { signal }
-  )
-  let status = await apiRequest<Schema<'ChannelSourceStatus'>>(
+  const status = await apiRequest<Schema<'ChannelSourceStatus'>>(
     `/api/v1/channels/${channelId}/source/status`,
     { signal }
   )
@@ -107,32 +96,16 @@ export async function connectSource(
       throw new Error('通道配置已改变，请重新保存并连接')
   }
   unchanged()
-  // First connection is view-only. Existing continuous recording remains on,
-  // and administrators get the same mandatory pool check automatically.
-  if (
-    !status.requires_initial_recording_mode &&
-    policy.mode === 'continuous' &&
-    status.storage_pool_id &&
-    admin
-  ) {
-    context.progress('正在检查录像存储池…')
-    const check = await apiRequest<{ job_id: string }>(
-      `/api/v1/storage-pools/${status.storage_pool_id}/test`,
-      { ...jsonRequest('POST'), signal }
-    )
-    signal.throwIfAborted()
-    await job(check.job_id, true)
-    status = await apiRequest<Schema<'ChannelSourceStatus'>>(
-      `/api/v1/channels/${channelId}/source/status`,
-      { signal }
-    )
-    unchanged()
-  }
+  // Connecting brings up the stream and nothing else. The recording mode is a
+  // separate decision made on the recording plan page, so this path never
+  // inspects or binds a storage pool; an existing policy keeps running.
   context.progress('正在连接并启用摄像头…')
   const body: Schema<'SourceApplyInput'> = {
     revision_id: revisionId,
     test_id: proof.id,
   }
+  // A channel that was never configured must state its recording intent. It
+  // starts stream-only; enabling recording is a later, explicit action.
   if (status.requires_initial_recording_mode) body.first_recording_mode = 'none'
   const apply = await sourceCommand<Schema<'SourceChange'>>(
     `/api/v1/channels/${channelId}/source/apply`,

@@ -21,15 +21,15 @@ export function AppSidebar() {
         <AppTitle />
       </SidebarHeader>
       <SidebarContent>
-        {sidebarData.navGroups.map((group) => (
-          <NavGroup
-            key={group.title}
-            {...group}
-            items={group.items.filter(
-              (item) => user?.role === 'admin' || item.everyRole
-            )}
-          />
-        ))}
+        {sidebarData.navGroups.map((group) => {
+          const items = group.items.filter(
+            (item) => user?.role === 'admin' || item.everyRole
+          )
+          // A group whose entries are all restricted renders as a bare label
+          // for non-administrators; hide it entirely instead.
+          if (items.length === 0) return null
+          return <NavGroup key={group.title} title={group.title} items={items} />
+        })}
       </SidebarContent>
       <SidebarFooter>
         <NavUser />

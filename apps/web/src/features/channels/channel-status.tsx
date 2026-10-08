@@ -16,6 +16,17 @@ const reasons: Record<string, string> = {
   source_unavailable: '无法读取视频',
   source_frozen: '视频帧未更新',
   recording_disabled: '已关闭录像',
+  observation_missing: '尚未产生观测：配置已保存但从未测试过',
+  observation_stale: '上一次观测已过期，需要重新测试',
+  source_not_configured: '通道尚未接入摄像头',
+  sub_not_configured: '未填写子流路径',
+}
+// "No observation yet" and "the observation expired" both arrive as `unknown`,
+// which reads like a fault. Name them for what they are so the operator can
+// tell "not tested" apart from "broken".
+const unknownLabels: Record<string, string> = {
+  observation_missing: '未测试',
+  observation_stale: '观测过期',
 }
 export function StatusLabel({
   value,
@@ -33,16 +44,22 @@ export function StatusLabel({
         : value.state === 'degraded'
           ? 'text-amber-700 dark:text-amber-400'
           : 'text-muted-foreground'
+  const text =
+    value.state === 'unknown' && value.reason
+      ? unknownLabels[value.reason] || labels.unknown
+      : labels[value.state]
   return (
     <span
       title={value.reason ? reasons[value.reason] : undefined}
       className={`inline-flex items-center gap-1.5 text-xs whitespace-nowrap ${tone}`}
     >
       <span aria-hidden className='size-1.5 rounded-full bg-current' />
-      {labels[value.state]}
+      {text}
     </span>
   )
 }
+// Recording is a policy, not a connection state: it belongs on the recording
+// plan page and must not sit next to the live stream indicators.
 export function ChannelStatus({
   value,
 }: {
@@ -50,12 +67,12 @@ export function ChannelStatus({
 }) {
   return (
     <div className='flex flex-wrap gap-3 text-xs'>
-      {(['main', 'sub', 'recording'] as const).map((kind) => (
+      {(['main', 'sub'] as const).map((kind) => (
         <span
           key={kind}
           className='inline-flex items-center gap-1.5 rounded-md bg-muted/60 px-2 py-1'
         >
-          {{ main: '主流', sub: '子流', recording: '录像' }[kind]}：
+          {{ main: '主流', sub: '子流' }[kind]}：
           <StatusLabel value={value[kind]} />
         </span>
       ))}

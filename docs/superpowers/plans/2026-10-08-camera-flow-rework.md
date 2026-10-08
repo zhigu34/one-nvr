@@ -1,0 +1,159 @@
+# 摄像头接入流程与录像计划拆分 Implementation Plan
+
+> **For agentic workers:** Use superpowers:executing-plans to implement this plan in the current session, batch by batch. 每个批次完成后提交一次（一批一次提交）。
+
+**Goal:** 把「添加摄像头」与「录像管理」彻底分开：录像方式迁到独立的侧边栏一级菜单「录像计划」，通道配置页只负责连接；连接按 RTSP / ONVIF 区分添加方式；保存与使用解耦，提供不测试不启用的纯保存；侧边栏按功能分组。
+
+**Architecture:** 前端拆出 `features/recording-plan/` 独立工作区，通道配置页的 Tab 收敛为「连接配置 / 历史与诊断」，删掉「连接诊断与历史配置应用」折叠层让测试与应用常显。后端不做破坏性改动：`PUT /channels/:id/recording-policy` 与 `PUT /channels/:id/storage-pool` 保持不变，仅新增一个批量端点 `PUT /recording-policies`（单事务内为 N 个通道各入队一个 job）。通道级启停与分组列留到批次 2（含迁移），ONVIF 真实现留到批次 3。
+
+**Tech Stack:** Go、PostgreSQL、React/TypeScript/shadcn-admin、TanStack Router/Query。
+
+**Spec:** [PRD](../../PRD.md) CH-01（连接测试与离线草稿）/ CH-02（通道列表）/ CH-04（启停独立）/ CH-05（凭据）/ CH-06（ONVIF）；[M1 控制面设计](../specs/2026-10-03-m1-control-plane-design.md) §数据表 `channels`、§API `GET/PATCH /channels/:id`；[M1-B 计划](2026-10-04-m1b-channel-recording.md) Global Constraints。
+
+## 用户指示（2026-10-08，权威，不可自行改动）
+
+1. **录像计划页做成侧边栏一级菜单**，不挂在存储池或录像回放下面。
+2. 该页**按通道管理录像方式：手动、定时、事件，可批量应用**。
+3. **ONVIF 本批只做占位，后续再加功能**。
+4. **「配置仅保存」按「未启用」处理，UI 与文档里不再出现「草稿」字样**。
+5. **「配置保存」与「使用」是两件事**：保存这条摄像头信息是独立能力，能否使用是另一回事。
+
+三点裁决（用户已选，均取推荐项）：
+
+- **「手动」= 现有的连续录像**（复用 `continuous` 语义，不改数据模型）。
+- **定时 / 事件本批只做占位禁用**，标注「后续开放」（定时属 PRD M2、事件属 M3）。
+- **「未启用」按通道级与配置级分开**：通道级启用/停用（`channels.enabled`）+ 配置级已应用/未应用（`current_revision_id` 是否指向它）；**「保存」只写配置，绝不动正在运行的源**。
+
+## Global Constraints
+
+- **不回归 M1-B/M1-C**：连接、测试、应用、清空、批量导入、回放六条既有链路的行为与断言不得改变，除本计划明确移出的项。
+- **测试证据不变**：测试结果有效期、码率证据窗口、存储池三方写入证据的既有语义不得修改；「测试并启用」仍以有效证据为前置。
+- **保存不动运行中的源**：纯保存只创建一条 `source_revisions` 记录（`POST /channels/:id/source-revisions`），不排任务、不改 `current_revision_id`、不改 `channels.enabled`、不改录像策略。这一点与 PRD CH-01「允许保存离线草稿，但不将未测试草稿自动替换正常运行的源」一致（UI 措辞用「已保存，未启用」，不用「草稿」）。
+- **未实现能力不显示为可启用**：ONVIF、定时录像、事件录像一律显式禁用并标注后续开放，不得做成可点但报错。
+- **权限不变**：录像方式写操作仍要求目标通道 `Configure`；存储池读取仍仅管理员；批量端点必须逐通道鉴权，不允许「一次鉴权全批放行」。
+- **契约四层同步**：改 API 必须同时改 Go handler/service、`docs/api/*.openapi.yaml`、并重新生成 `apps/web/src/lib/api-types.ts`（CI 会 `git diff --exit-code`）。
+- **不明文**：新增响应不得带摄像头凭据、完整 RTSP URL 或存储池绝对路径。
+- **一批一次提交**：批次内所有任务完成后提交一次，提交信息中文、说明改了什么与为什么。
+
+## Review Focus
+
+- 纯保存之后：通道仍在原源上正常取流与录像，历史与策略均未被改动；界面上这条配置显示「已保存，未启用」。
+- 「测试并启用」缺失有效证据时必须禁用并说明原因，不得静默跳过测试直接应用。
+- 录像方式迁到新页后：旧页不再出现任何录像控件；从通道列表能一眼看出某通道当前录像方式。
+- 批量应用：部分通道失败时逐行给出结果，成功行不回滚、不重放；通道版本冲突按既有 409 语义暴露。
+- ONVIF / 定时 / 事件三处占位：不可聚焦、不可提交、文案明确「后续开放」。
+- 侧边栏分组后：非管理员看不到空分组标签（分组内一项都没有时整组不渲染）。
+
+## 批次划分
+
+| 批次 | 内容 | 迁移 | 提交 |
+| --- | --- | --- | --- |
+| **1（本计划详述）** | 侧边栏分组 + 录像计划页 + 配置页拆 Tab + 连接流程去录像耦合 + 连接表单重排 + 状态语义 + 批量端点 | 无 | 1 次 |
+| 2 | 分组列 + 通道级启用/停用（`channels.enabled` 写入口） | `0010_channel_group.sql` | 1 次 |
+| 3 | ONVIF 真实现：局域网发现 + 能力探测 + 自动填 RTSP（CH-06） | 视需要 | 1 次 |
+
+---
+
+# 批次 1
+
+Files: `apps/web/src/components/layout/data/sidebar-data.ts`、`apps/web/src/components/layout/app-sidebar.tsx`、`apps/web/src/features/recording-plan/*`（新增）、`apps/web/src/routes/_authenticated/recording-plan/index.tsx`（新增）、`apps/web/src/features/channels/*`、`internal/channel/*`、`internal/httpapi/*`、`docs/api/m1b.openapi.yaml`
+
+## Task 1: 侧边栏按功能分组
+
+- [x] `sidebar-data.ts` 的 `navGroups` 由单一 `one-nvr` 组改为三个功能分组：
+  - **监控**：总览 `/`、实时预览 `/live`、录像回放 `/recordings`
+  - **配置**：通道管理 `/channels`、录像计划 `/recording-plan`、存储池 `/storage-pools`
+  - **系统**：用户与权限 `/users`、系统设置 `/settings`、运维与审计 `/operations`
+- [x] `app-sidebar.tsx` 过滤后为空的整组不渲染：现在只过滤 item，非管理员会看到只剩标签的空分组 `系统`。
+- [x] 既有声明式可见性规则不变（`everyRole` 为真者对所有角色可见，其余仅管理员）。
+- [x] 新增项「录像计划」标 `everyRole: true`（与通道管理一致）；页内存储池选择仍仅管理员可见。
+
+## Task 2: 录像计划页与路由
+
+- [x] 新增路由 `routes/_authenticated/recording-plan/index.tsx`（`createFileRoute('/_authenticated/recording-plan/')`）。
+- [x] 新增 `features/recording-plan/index.tsx`：
+  - 复用 `GET /api/v1/channels?limit=100` 与每通道 `GET /channels/:id/recording-policy`、`GET /channels/:id/source/status`（取 `storage_pool_id`）。
+  - 每行：通道号、通道名称、当前录像方式、存储池、操作。
+  - 录像方式四档：**关闭录像**（`none`）、**手动**（`continuous`，副标注「连续录像」）、**定时录像**（占位禁用）、**事件录像**（占位禁用）。
+  - 存储池选择仅管理员可见；启用「手动」而通道无存储池时给出明确提示。
+  - 勾选多通道 → 批量应用录像方式（Task 7 的端点；Task 7 未落地前先按逐通道请求，落地后切到批量）。
+- [x] 页面文案不出现「草稿」；「手动」的说明写明「= 连续录像」。
+- [x] 测试 `features/recording-plan/index.test.tsx`：方式选择、占位禁用不可提交、无存储池时的提示、权限过滤。
+
+## Task 3: 通道配置页拆出录像
+
+- [x] `features/channels/configure.tsx`：Tabs 由三项收敛为「连接配置 / 历史与诊断」，删除 `recording` Tab、`RecordingPolicyControls`、`RecordingsIndex` 及其相关查询（`recording-policy` 若不是其它逻辑所需则一并移除）。
+- [x] `features/channels/recording-policy.tsx`：主体迁入 `features/recording-plan/`；确认无其它引用后删除原文件与 `recording-policy.test.tsx`（或随迁）。
+- [x] `features/channels/recordings-index.tsx`：仅 `configure.tsx` 引用（已全项目核对）；本批先移除引用，文件保留待批次间确认后处理。回放页 `/recordings` 已覆盖按通道浏览录像。
+- [x] 补一个从配置页跳到录像计划页的入口（带通道参数），让「录不录去哪设」有明确去向。
+
+## Task 4: 连接流程去掉录像耦合
+
+- [x] `features/channels/source-connect.ts`：删除自动存储池检查（现 112–130 行）。录像前提不属于连接流程。
+- [x] 同文件：`first_recording_mode` 不再是替用户决定的隐藏行为，改为**显式规则**——添加摄像头只接入取流（`first_recording_mode='none'`），录像方式一律去录像计划页设定；文案要写明这一点。
+- [x] `features/channels/source-test.tsx`：删除「首次普通录像」下拉、「请先绑定存储池」提示，以及「连续录像所需码率证据过期」那句；保留测试结果展示与「保存并测试 / 测试并启用」。
+- [x] 回归：`source-connect.test.ts`、`source-test.test.tsx`、`configure.test.tsx` 随改动更新。
+
+## Task 5: 连接表单重排
+
+- [x] `features/channels/source-form.tsx`：
+  - 表单顶部新增「添加方式」二选一：**RTSP 手动**（可用）/ **ONVIF 发现**（禁用占位，标注后续开放）。
+  - `onvif_port` 从 RTSP 字段区移入 ONVIF 方式下（占位状态下不渲染或渲染为禁用）。
+  - 提交按钮拆为 **「保存」**（不测试、不启用）与 **「保存并测试」**，从折叠区移出、常显。
+  - 去掉 `order-last`：它让主按钮在视觉上落到底部，而 DOM 顺序在高级设置之前，导致键盘 Tab 顺序与视觉顺序不一致。
+  - `高级连接设置` 保留（RTSP 端口、传输方式、摄像头操作、用户名清空、密码处理确实属高级项）。
+- [x] `features/channels/configure.tsx`：
+  - 「基本信息」Panel 并入连接区顶部，不再单独占一个 Panel。
+  - 拆掉 `连接诊断与历史配置应用` 折叠层，测试结果与「测试并启用」常显。
+  - 「应用配置」改名「测试并启用」。
+- [x] 纯保存路径：调用 `POST /channels/:id/source-revisions` 后**直接结束**，不调 test、不调 apply；状态提示为「已保存，未启用」。
+
+## Task 6: 状态语义补「未测试」
+
+- [x] `features/channels/channel-status.tsx`：通道头部去掉「录像」灯（不与主流/子流并列）；录像状态只在录像计划页呈现。
+- [x] 状态档位明确为：未配置 / 未测试 / 正常 / 降级 / 不可用 / 已关闭。「未测试」对应「有修订但从未产生观测」，与「未配置」（无修订）区分开——现在两者都会落到 `unknown`，用户无法判断。
+- [x] 若需要区分「未测试」与「观测过期」，按 `source_status.go` 现有 `reason` 字段在前端细分，不改后端返回结构。
+
+## Task 7: 批量应用录像方式
+
+- [x] `internal/httpapi/router.go`：新增 `PUT /api/v1/recording-policies`。
+- [x] `internal/httpapi/channels_recording.go`：batch handler，逐通道取 `expected_version`，单事务内为每个通道入队一个 `policy_apply` job。
+- [x] `internal/channel/source_changes.go`：`SetPolicies`（或等价实现），逐通道 `RequireChannelTx(Configure)`；任一通道鉴权失败只影响该行，不整批回滚。
+- [x] `internal/channel/source_types.go`：批量请求与逐行结果 DTO。
+- [x] `docs/api/m1b.openapi.yaml`：新端点与 schema；`x-one-nvr-implementation` 标 implemented。
+- [x] 重新生成 `apps/web/src/lib/api-types.ts`（`node apps/web/scripts/generate-api.mjs`）。
+- [x] 前端录像计划页接入批量端点，展示逐行结果。
+
+## 批次 1 校验
+
+- [x] `npx vite build` → `tsc -b` → `eslint`（前端加路由后必须按此顺序，先 build 生成 `routeTree.gen.ts`）。
+- [x] `go build ./...`、`go test ./internal/channel/... ./internal/httpapi/...`。
+- [x] `node apps/web/scripts/generate-api.mjs` 后 `git diff --exit-code apps/web/src/lib/api-types.ts` 必须无差异。
+- [x] 真机/容器验收由 GitHub CI 承担（本机无 Docker daemon）。
+
+## 批次 1 落地偏差（执行中修正，均已按实际代码复核）
+
+- **`configure.tsx` 保留锚点而非改用 `Link`**：`/channels` 路由带 `validateSearch`，`Link` 会强制要求 `search`（TS2741）；且该文件的单测不挂路由，`Link`/`useNavigate` 会抛 `useRouter must be used inside a <RouterProvider>`。原代码用 `<a href>` 是有意的，继续保持；「前往录像计划」用 `<Button asChild><a>`。
+- **表单主按钮放在 DOM 前面**：隐式提交（在输入框里按 Enter）触发的是**表单中第一个 submit 按钮**。把「保存」放在前面会让回车变成"只保存"。因此顺序为主按钮「保存并启用」在前、「保存」在后，保持此前已验证的回车行为。
+- **`onvif_port` 改为原样保留**：`CreateDraft` 直接把 `in.Config` 落库，而表单已不再渲染该字段。若不显式带回旧值，一次普通编辑就会把导入进来的 ONVIF 端口静默清成 NULL —— 界面不得丢弃它不拥有的数据。
+- **`command-menu.tsx` 一并修正**：它的可见性此前是硬编码 `item.url === '/' || item.url === '/channels'`，与侧边栏的 `everyRole` 不一致；分组后还会渲染空标题，故改为与侧边栏同一套声明式过滤。
+- **新增 `fail` 的错误映射**：`storage.ErrMediaProof` 是普通 `errors.New`，此前会落到兜底分支成为 `503 dependency_unavailable`，把"跑一次存储池检查即可"说成"服务不可用"。现映射为 `409 zlm_write_evidence_unavailable`，与新批量端点的逐行错误码一致。
+- **删除了两个组件文件**（`recording-policy.tsx`、`recordings-index.tsx` 及其测试）：已全项目 grep 确认只被 `configure.tsx` 引用；前者迁入 `features/recording-plan/`，后者由回放页 `/recordings` 覆盖。
+- **`connectSource` 的 `'test'` 分支删除**：表单不再提供「保存并测试」，该分支成为不可达代码；`SaveConnection.action` 收敛为 `'connect' | 'save'`，`'save'` 在 `configure.tsx` 里于调用 `connectSource` 之前处理。
+- **本批次未跑真实容器/媒体 CI**（本机无 Docker daemon）：`vite build`、`tsc -b`、`eslint src`（0 error 0 warning）、`vitest run`（152 通过 / 26 文件）、`go build`、`go vet`、`go test` 均通过，但推送后必须看 GitHub CI 结论。
+
+---
+
+# 批次 2（概要，本批不实施）
+
+- [ ] 迁移 `0010_channel_group.sql`：`ALTER TABLE channels ADD COLUMN channel_group text NOT NULL DEFAULT '';`
+- [ ] `channel.UpdateInput` 改指针字段（`ChannelName` / `ChannelGroup` / `Enabled`），补 `channels.enabled` 写入口，审计 Action 区分改名/改分组/停用/启用。
+- [ ] 通道列表补「分组」列与分组筛选、批量设置分组；配置页基本信息面板加分组与停用开关。
+- [ ] `docs/api/m1a.openapi.yaml` 的 `Channel` 补 `channel_group` 与 `enabled`，`UpdateChannelInput` 三字段改可选。
+- [ ] 停用语义：`channels.enabled=false` 已被 scheduler / monitor / live 读取，Worker 下次 reconcile 生效（租约 30s）；停用只停取流与录像，历史回放照旧（PRD CH-07 与 M1 设计 §「不根据当前源在线或 enabled 隐藏历史」）。
+
+# 批次 3（概要，本批不实施）
+
+- [ ] 新增 `internal/onvif`：局域网发现（WS-Discovery）与设备能力探测（GetCapabilities / GetProfiles）。
+- [ ] 新增扫描端点与前端「ONVIF 发现」方式：发现 → 选中设备 → 用探测到的 RTSP 地址与凭据预填 → 仍走既有的测试/启用链路。
+- [ ] 占位入口届时转正；未通过能力探测的设备不得显示 PTZ 等未确认按钮（PRD CH-06）。

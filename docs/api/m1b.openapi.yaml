@@ -1744,6 +1744,147 @@
         }
       }
     },
+    "/api/v1/recording-policies": {
+      "put": {
+        "operationId": "setRecordingPolicies",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 90
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Rows accepted or rejected individually; a rejected row carries its own public error code",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RecordingPolicyBatch"
+                    },
+                    "request_id": {
+                      "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "request_id"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Session missing or revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Action or role denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 64,
+                    "items": {
+                      "$ref": "#/components/schemas/RecordingPolicyItem"
+                    }
+                  }
+                },
+                "required": [
+                  "items"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/channels/{id}/storage-pool": {
       "put": {
         "operationId": "bindChannelPool",
@@ -4282,6 +4423,71 @@
           "mode",
           "event_recording_enabled",
           "version"
+        ],
+        "additionalProperties": false
+      },
+      "RecordingPolicyItem": {
+        "type": "object",
+        "properties": {
+          "channel_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "expected_version": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/Version"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "none",
+              "continuous"
+            ]
+          }
+        },
+        "required": [
+          "channel_id",
+          "expected_version",
+          "mode"
+        ],
+        "additionalProperties": false
+      },
+      "RecordingPolicyOutcome": {
+        "type": "object",
+        "properties": {
+          "channel_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "rejected"
+            ]
+          },
+          "job_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "error_code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel_id",
+          "state"
+        ],
+        "additionalProperties": false
+      },
+      "RecordingPolicyBatch": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecordingPolicyOutcome"
+            }
+          }
+        },
+        "required": [
+          "items"
         ],
         "additionalProperties": false
       },
