@@ -79,7 +79,7 @@ Files: `tests/e2e/m1b-media.spec.ts`、`docs/M1-C-validation.md`（新增）
 - [x] 在既有真实媒体规格末尾追加回放验收：`Range: bytes=0-` 的 206 与 `Content-Range`、区间窗口摘要与整段同窗口一致、起点越界 416、浏览器实际解码帧与画面尺寸、播放期间只命中 `/content`。
 - [x] 未授权等于不存在：新建只对 CH02 持有回放权的 viewer，用独立浏览器上下文登录，读取 CH01 片段与不存在的 UUID 都回 404 且体内无 `ftyp`；同时断言该 viewer 的回放页只列出 CH02。
 - [x] 网关边界沿用 M1-B 既有断言，不再重复。
-- [ ] **CI 结论与回执摘要待记录**：`docs/M1-C-validation.md` 已写明矩阵，容器验收一栏在拿到实际 run 结果前不宣称通过。
+- [x] **CI 结论已记录**：[CI 37660099874](https://github.com/zhigu34/one-nvr/actions/runs/37660099874)（`11846e0`）11 个 job 全绿，含真实 ZLM + Chromium 的回放断言；回执 artifact id 与摘要写入 `docs/M1-C-validation.md`，并注明只核对了元数据、未下载内容。
 
 **落地偏差（执行中修正）**
 

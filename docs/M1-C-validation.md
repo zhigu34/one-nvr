@@ -40,9 +40,19 @@ M1-C 在 M1-B 已交付的录像索引之上提供历史回放：按通道与时
 
 这一轮证明的是：读路径与回放工作区没有破坏任何既有回归，且部署产物仍可构建。它**不包含**上表新增的回放专用断言，也不包含随后的检索时间时区修复。
 
-### 待记录：回放专用断言与站点时区修复（本次推送）
+### 已通过：回放专用断言、站点时区修复与时间轴最小宽度（提交 `11846e0`）
 
-上表新增的回放断言、站点时区修复与时间轴最小宽度修复在同一次推送中，其 CI 结论与 `media-browser-contract` 回执摘要待运行完成后填入本文件。在拿到实际结果前，本文件不宣称这些断言已通过。
+[CI 37660099874](https://github.com/zhigu34/one-nvr/actions/runs/37660099874) 的 11 个 job 全部成功。其中：
+
+- `media-browser-runtime` 执行了上表全部回放断言：真实 ZLM 产出的 MP4、真实 Chromium、经真实 Nginx 入口，包括第二次浏览器上下文用真实登录完成的未授权与跨通道读取。
+- `backend` 重跑 PostgreSQL 17.11 集成套件（含读路径的 5 项真实 MP4 断言）；`gateway-runtime` 重跑真实 Nginx；`frontend` 重新确认生成类型无漂移与生产构建通过。
+- `browser-runtime`、`media-contract`、`joint-media-runtime`、`production-runtime`、`hardware-cpu-runtime` 与 app / gateway 两个镜像同批通过。
+
+回执是本次运行的 `media-browser-contract` artifact，id `11501126091`、538 字节、ZIP SHA256 `747ba3975df2e3c7867078ad88b13a11e716477a002988ec362153743406e101`、生成于 2026-10-07T17:44:32Z。**已核对的是 artifact 的存在、大小与摘要（来自 API 元数据）；其内容未下载**——下载 artifact 需要认证，本次环境没有凭据，因此本文件不引用回执里的具体数值（例如实际解码帧数）。
+
+回执中的 `playback_*` 字段与该规格里的硬断言一一对应，例如 `playback_range_416: true` 对应 `expect(rangeProof.overflow.status).toBe(416)`、`playback_unauthorized_404: true` 对应 `expect(unauthorizedRead.status).toBe(404)`；`playback_gateway_range_passthrough` 表示同一批经 Nginx 的 206 与 `Content-Range` 断言，与既有 `live_unauthorized_denied` 等字段一样，**是对已断言事实的登记，不是独立测量**。
+
+这一轮验证的是 `11846e0` 的树（`9de20e5`），与当前远端分支一致；本文件随后的补充说明只改文档，不改动已验收的代码。
 
 ## 现场部署检查
 
@@ -64,4 +74,5 @@ M1-C 在 M1-B 已交付的录像索引之上提供历史回放：按通道与时
 - 16–32 路并发播放的容量结论不在本轮承诺内；单通道验收不代表并发容量达标。
 - 跨池与云端（OpenList/WebDAV）统一播放依赖归档业务，属后续阶段。
 - 剪辑导出、录像加锁与证据保护需要数据库迁移，另批实施。
+- 本文件未引用回执中的具体数值（解码帧数等），原因见上节；需要这些数字时在 CI 页面下载 `media-browser-contract` artifact 查看。
 - 两台 NAS 上的真机部署与现场播放仍需用户执行；CI 通过不代表现场完成。
