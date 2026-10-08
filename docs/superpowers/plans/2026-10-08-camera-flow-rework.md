@@ -238,6 +238,15 @@ Files: `migrations/0011_channel_group.sql`（新增）、`internal/channel/{serv
 - 原先四处**没有任何输出**的 `exit 1`（camera 地址、hook 对端地址、worker 身份、入口不可用）补上原因；
 - 注解只含固定阶段名与 Playwright 报错文本，不含源地址、凭据、媒体 key 或页面内容。
 
+## 同一次运行暴露的 backend 失败原因（已修复）
+
+媒体两个 job 转绿后，`1e48c00` 的运行只剩 `backend` 红，且挂在 **PostgreSQL 集成测试**步骤（`Go unit race tests`、`Validate Compose and shell` 都是绿的）。这一步骤从批次 2 落地后**每一次都失败**（`0978757` / `3cd9b45` / `1e48c00` 三次一致，`11846e0` 是绿的），说明回归在批次的 Go 改动里。
+
+- **根因**：`tests/integration/database_test.go:71` 把并发 migrate 之后的行数**写死成 10**（`n != 10`）。批次 2 新增 `0011_channel_group.sql` 后变成 11，断言必然失败。这条断言的本意是「并发 migrate 把整套迁移各执行一次」，与"总共几条"无关，写死总数只是把每次新增迁移都变成一次与结论无关的红。
+- **修法**：改为从内嵌清单推导 `fs.Glob(migrations.Files, "*.sql")` 的长度（`migrations.Files` 是导出变量，`database.Migrate` 也是 `ReadDir(".")` + `.sql` 后缀，两者同集合），断言变成 `n != len(embedded)`。全库检索确认只有这一处写死迁移数量。
+- **验证**：本地 `go test ./tests/integration -run 'TestMigrationConcurrentAndChecksum'` 由 FAIL 转 PASS；`go vet ./...` 通过（CI 的 Vet 步骤此前一直被 test-db 的失败跳过，从未真正执行过）。
+- **教训**：本机只在用 `-run` 挑用例组跑过集成测试，`TestMigrationConcurrentAndChecksum` 不在挑中的组里 —— 改迁移后**至少要本地跑一遍全量集成**，否则这类"总数断言"只在 CI 暴露。
+
 # 批次 3（概要，本批不实施）
 
 - [ ] 新增 `internal/onvif`：局域网发现（WS-Discovery）与设备能力探测（GetCapabilities / GetProfiles）。
