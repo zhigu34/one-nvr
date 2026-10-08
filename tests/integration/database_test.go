@@ -9,6 +9,8 @@ import (
 	"github.com/zhigu34/one-nvr/internal/database"
 	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/jobs"
+	"github.com/zhigu34/one-nvr/migrations"
+	"io/fs"
 	"net/url"
 	"os"
 	"strings"
@@ -67,9 +69,17 @@ func TestMigrationConcurrentAndChecksum(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Count the embedded set instead of a number to bump by hand: what this
+	// asserts is that a concurrent migrate applied every migration exactly once,
+	// and a hand-written total turns every new migration into a red build for a
+	// reason unrelated to that claim.
+	embedded, err := fs.Glob(migrations.Files, "*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
 	var n int
-	if err := db.Pool.QueryRow(ctx, "SELECT count(*) FROM schema_migrations").Scan(&n); err != nil || n != 10 {
-		t.Fatalf("migrations=%d err=%v", n, err)
+	if err := db.Pool.QueryRow(ctx, "SELECT count(*) FROM schema_migrations").Scan(&n); err != nil || n != len(embedded) {
+		t.Fatalf("migrations=%d want=%d err=%v", n, len(embedded), err)
 	}
 	if _, err := db.Pool.Exec(ctx, "UPDATE schema_migrations SET checksum='changed'"); err != nil {
 		t.Fatal(err)
