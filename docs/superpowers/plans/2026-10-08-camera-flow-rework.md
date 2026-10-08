@@ -52,6 +52,11 @@
 | **2（本计划详述）** | 分组列 + 通道级启用/停用（`channels.enabled` 写入口）+ 列表一次请求拿全（分组/码率/最近错误/更新时间，消 N+1） | `0011_channel_group.sql` | 1 次 | ✅ |
 | 3 | ONVIF 真实现：局域网发现 + 能力探测 + 自动填 RTSP（CH-06） | 视需要 | 1 次 | 未做 |
 
+## 本拆分带来的两处行为变化（有意，需知悉）
+
+1. **切换源时不再自动刷新存储池证据。** 后端一直要求：当通道正在连续录像时，源切换的入队要校验存储池有 3 份未过期的健康检查（`requestChangeTx`）。此前 `connectSource()` 会替操作者顺手跑一次池检查，现在这条检查归属录像计划页，所以**在录像中的通道上换源，需要先确认存储池证据新鲜，否则应用会以 `zlm_write_evidence_unavailable` 失败**（提示语已明确指向"请先运行存储池检查"，录像计划页每行都有「检查存储池」）。首次接入（尚无录像策略）不受影响。
+2. **纯保存不再顺带测试。** 「保存」只写 `source_revisions`，不排任务；要验证必须显式点「测试取流」。这正是用户要求的"保存与使用分开"，代价是首次接入多一次点击。
+
 ---
 
 # 批次 1
@@ -195,6 +200,22 @@ Files: `migrations/0011_channel_group.sql`（新增）、`internal/channel/{serv
 - **`reasonLabel`/`STATUS_REASONS` 抽到独立文件 `status-reasons.ts`**：从组件文件导出非组件会触发 `react-refresh/only-export-components`（批次 1 已在这个规则上踩过一次）。
 - **检测状态按未实现处理**：`ChannelSummary` 不包含检测状态，也不给占位值——PRD CH-02 要求它，但检测属未交付里程碑，只能缺省不报，不能编。
 - **`Channel.UpdateInput` 改指针的连带修改**：`tests/integration/channel_test.go` 三处 `ChannelName: "x"` 需改为 `strPtr("x")`。
+
+## 批次 1+2 的 e2e 规格适配（CI 暴露，必须同步）
+
+真实浏览器验收（`tests/e2e/*.spec.ts`）直接驱动 UI，批次 1 的界面改动没有同步更新规格，导致 CI 的 `browser-runtime`、`media-browser-runtime`、`joint-media-runtime` 三个 job 失败。适配内容：
+
+- `m1a.spec.ts`：`保存名称` → `保存基本信息`，`名称已保存` → `基本信息已保存`。
+- `m1b.spec.ts`：`仅保存并测试` → `保存`（并改断言文案为「已保存，未启用」）；移除对 `连接诊断与历史配置应用` 折叠层的点击（诊断区常显）；`应用配置` → `测试并启用`；`保存并连接` → `保存并启用`。
+- `m1b-media.spec.ts`：
+  - `saveAndTest` 重写：`connect=true` 走一键「保存并启用」；`connect=false` 改为两步——「保存」（只写修订）+「测试取流」（常显面板），再手动「测试并启用」。
+  - 页签 `摄像头连接` → `连接配置`。
+  - 存储池绑定与录像方式从 `录像设置` 页签迁到 `/recording-plan`：按行定位（`getByTestId('policy-row').filter({hasText:'CH01'})`）+ `CH01 存储池` / `CH01 录像方式` + 行内「绑定」「应用」。新增 `rowCommand` 辅助函数（`command` 依赖全局按钮名，策略页每行都有同名按钮，会撞严格模式）。
+  - `应用配置` → `测试并启用`。
+  - 删除对已移除的通道内录像索引（`录像结束时间` / `检索录像索引` / `可用` 单元格）的断言；索引改由回放工作区覆盖（该文件末尾的 M1-C 段落已经在断言 `片段` 按钮与真实字节范围）。
+  - **行为变化必须体现在规格里**：切换源时若通道正在连续录像，后端仍要求新鲜的存储池写入证据，而连接流程不再替用户预检，因此这类切换改为「保存并测试 → 刷新池证据 → 测试并启用」两步（`freshPoolProof` 紧贴 apply）。
+- `apps/web/tests/playwright.ts`：补导出 `type Locator` 供规格使用；`tests/e2e` 不在任何 tsconfig 内，按既有配方逐个手动过类型（已过）。
+- **本机无法运行这些规格**（无 Docker / 无真实摄像头），只能由 CI 判定。
 
 # 批次 3（概要，本批不实施）
 

@@ -2,17 +2,17 @@ import {readFileSync} from 'node:fs'
 import {expect,test,type Page} from '../../apps/web/tests/playwright'
 const password='Browser-test-only-2026!'
 async function login(page:Page){await page.goto('/sign-in');await page.getByLabel('用户名',{exact:true}).fill('admin');await page.getByLabel('密码',{exact:true}).fill(process.env.ONE_NVR_E2E_ADMIN_PASSWORD || password);const accepted=page.waitForResponse(r=>r.url().endsWith('/api/v1/auth/login')&&r.request().method()==='POST');await page.getByRole('button',{name:'登录',exact:true}).click();expect((await accepted).status()).toBe(200);await expect(page.getByRole('heading',{name:'总览',exact:true})).toBeVisible()}
-test('draft save and export round trip keep the permanent channel and do not activate it',async({page})=>{
+test('plain save and export round trip keep the permanent channel and do not enable it',async({page})=>{
  await login(page);await page.goto('/channels/configure')
  await expect(page.getByRole('heading',{name:'通道配置',exact:true})).toBeVisible()
  await page.getByLabel('IP 地址',{exact:true}).fill('192.168.33.20')
  await page.getByLabel('用户名',{exact:true}).fill('fixture-camera')
  await page.getByLabel('密码',{exact:true}).fill('fixture-source-password')
  await page.locator('summary', {hasText:'高级连接设置'}).click()
- await page.getByRole('button',{name:'仅保存并测试',exact:true}).click()
- await expect(page.getByText('配置已保存')).toBeVisible()
- await page.locator('summary', {hasText:'连接诊断与历史配置应用'}).click()
- await expect(page.getByRole('button',{name:'应用配置',exact:true})).toBeDisabled()
+ await page.getByRole('button',{name:'保存',exact:true}).click()
+ await expect(page.getByText('已保存，未启用')).toBeVisible()
+ // The diagnostics panel is always visible now.
+ await expect(page.getByRole('button',{name:'测试并启用',exact:true})).toBeDisabled()
  const before=await page.evaluate(async()=>{const channels=await fetch('/api/v1/channels').then(r=>r.json()).then(r=>r.data);const id=channels.items[0].id;return await fetch(`/api/v1/channels/${id}/source/status`).then(r=>r.json()).then(r=>r.data)})
  expect(before.current_revision_id).toBeNull()
  await page.getByRole('tab',{name:'历史与诊断',exact:true}).click()
@@ -66,13 +66,13 @@ test('late actual draft response cannot replace another selected channel',async(
  await page.route('**/source-revisions',async route=>{if(route.request().method()!=='POST'){await route.continue();return}const response=await route.fetch();received();await gate;await route.fulfill({response})})
  await page.getByLabel('IP 地址',{exact:true}).fill('192.168.33.21')
  await page.getByLabel('密码',{exact:true}).fill('late-draft-fixture-password')
- await page.getByRole('button',{name:'保存并连接',exact:true}).click()
+ await page.getByRole('button',{name:'保存并启用',exact:true}).click()
  await delivered
  await page.getByLabel('选择通道',{exact:true}).selectOption({index:1})
  release()
  await expect(page.getByLabel('IP 地址',{exact:true})).toHaveValue('')
  await expect(page.getByLabel('密码',{exact:true})).toHaveValue('')
- await expect(page.getByText('配置已保存')).toHaveCount(0)
+ await expect(page.getByText('已保存，未启用')).toHaveCount(0)
 })
 
 test('viewer cannot access source configuration or credentials',async({page})=>{

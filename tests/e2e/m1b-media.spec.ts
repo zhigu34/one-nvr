@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync } from 'node:fs'
-import { expect, test, type Page } from '../../apps/web/tests/playwright'
+import { expect, test, type Locator, type Page } from '../../apps/web/tests/playwright'
 
 type Status = { channel_id: string; current_revision_id: string | null; storage_pool_id: string | null; main: {state: string}; recording: {state: string} }
 test.use({actionTimeout: 15000})
@@ -14,6 +14,18 @@ async function get<T>(page: Page, path: string): Promise<T> {
 async function command(page: Page, name: string, endpoint: string) {
   const response = page.waitForResponse(r => r.request().method() !== 'GET' && r.url().endsWith(endpoint))
   await page.getByRole('button', {name, exact: true}).click()
+  const actual = await response
+  if (actual.status() !== 202) {
+    const failed = await actual.json()
+    expect(actual.status(), 'command rejected: ' + (failed.error?.code || 'unknown')).toBe(202)
+  }
+  return (await actual.json()).data as {job_id: string}
+}
+// The recording plan lists every channel, so its controls must be addressed
+// through their own row.
+async function rowCommand(page: Page, row: Locator, name: string, endpoint: string) {
+  const response = page.waitForResponse(r => r.request().method() !== 'GET' && r.url().endsWith(endpoint))
+  await row.getByRole('button', {name, exact: true}).click()
   const actual = await response
   if (actual.status() !== 202) {
     const failed = await actual.json()
@@ -36,8 +48,12 @@ async function freshPoolProof(page: Page, poolId: string) {
     await poolPage.close()
   }
 }
+// Recording a camera configuration and using it are separate steps: 「保存」
+// only writes the revision and never touches the running source, and the test
+// panel is always visible. `connect` asks for the one-click save-and-enable
+// path, which is only safe while the channel records nothing yet.
 async function saveAndTest(page: Page, ip: string, main: string, sub: string, connect = false) {
-  await page.getByRole('tab', {name: '摄像头连接', exact: true}).click()
+  await page.getByRole('tab', {name: '连接配置', exact: true}).click()
   await page.getByLabel('IP 地址', {exact: true}).fill(ip)
   await page.getByLabel('主流路径', {exact: true}).fill(main)
   await page.getByLabel('子流路径', {exact: true}).fill(sub)
@@ -46,13 +62,16 @@ async function saveAndTest(page: Page, ip: string, main: string, sub: string, co
   await page.getByLabel('密码处理', {exact: true}).selectOption('clear')
   const saved = page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/source-revisions'))
   const tested = page.waitForResponse(r => r.request().method() === 'POST' && /\/source-revisions\/[^/]+\/test$/.test(new URL(r.url()).pathname))
-  await page.getByRole('button', {name: connect ? '保存并连接' : '仅保存并测试', exact: true}).click()
+  await page.getByRole('button', {name: connect ? '保存并启用' : '保存', exact: true}).click()
   const response = await saved
   if (response.status() !== 201) {
     const failed = await response.json()
     expect(response.status(), 'draft rejected: ' + (failed.error?.code || 'unknown')).toBe(201)
   }
   const revision = (await response.json()).data as {id: string}
+  // The saved revision becomes the selected one, so the test panel below binds
+  // to it; proving it is a separate, explicit action.
+  if (!connect) await page.getByRole('button', {name: '测试取流', exact: true}).click()
   const testResponse = await tested
   expect(testResponse.status()).toBe(202)
   expect(new URL(testResponse.url()).pathname.endsWith('/source-revisions/' + revision.id + '/test')).toBe(true)
@@ -61,8 +80,6 @@ async function saveAndTest(page: Page, ip: string, main: string, sub: string, co
   if (connect) {
     await expect(page.getByText('摄像头已连接', {exact: true})).toBeVisible({timeout: 90000})
   } else {
-    const diagnostics = page.locator('details').filter({has: page.locator('summary', {hasText: '连接诊断与历史配置应用'})})
-    if (!(await diagnostics.evaluate(el => el.hasAttribute('open')))) await diagnostics.locator('summary').click()
     await expect(page.getByText('测试状态：通过')).toBeVisible({timeout: 15000})
   }
   return revision.id
@@ -151,21 +168,32 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   // The first pool is verified by real private temporary media, never seeded proof rows.
   await page.goto('/storage-pools')
   await finished(page, await command(page, '立即检查', '/storage-pools/' + pool.id + '/test'))
-  await page.goto('/channels/configure?channel=' + channel.id)
-  await page.getByRole('tab', {name: '录像设置', exact: true}).click()
-  await page.getByLabel('录像存储池', {exact: true}).selectOption(pool.id)
-  await finished(page, await command(page, '绑定存储池', '/storage-pool'))
+  // Pool binding and the recording mode are recording-plan concerns, not part of
+  // configuring the camera.
+  await page.goto('/recording-plan')
+  const plan = page.getByTestId('policy-row').filter({hasText: 'CH01'})
+  await expect(plan).toHaveCount(1)
+  await plan.getByLabel('CH01 存储池', {exact: true}).selectOption(pool.id)
+  await expect(plan.getByRole('button', {name: '绑定', exact: true})).toBeEnabled({timeout: 15000})
+  await finished(page, await rowCommand(page, plan, '绑定', '/storage-pool'))
   await expect.poll(async () => (await status()).storage_pool_id, {timeout: 15000}).toBe(pool.id)
   await page.reload()
-  await page.getByRole('tab', {name: '录像设置', exact: true}).click()
-  await page.getByLabel('普通录像', {exact: true}).selectOption('continuous')
-  await finished(page, await command(page, '保存录像策略', '/recording-policy'))
+  const rolling = page.getByTestId('policy-row').filter({hasText: 'CH01'})
+  await rolling.getByLabel('CH01 录像方式', {exact: true}).selectOption('continuous')
+  await expect(rolling.getByRole('button', {name: '应用', exact: true})).toBeEnabled({timeout: 15000})
+  await finished(page, await rowCommand(page, rolling, '应用', '/recording-policy'))
   await expect.poll(async () => (await physical()).filter(s => s.isRecordingMP4).length, {timeout: 30000}).toBe(1)
   await expect.poll(async () => (await recordings()).items.filter(s => s.state === 'ready' && s.bytes > 0).length, {timeout: 90000}).toBeGreaterThan(0)
   const historical = (await recordings()).items.find(s => s.state === 'ready')!
   expect(historical.source_revision_id).toBe(initial)
   expect(historical.pool_id).toBe(pool.id)
-  const changed = await saveAndTest(page, fixture.camera_ip, fixture.paths[0], fixture.paths[1], true)
+  // Switching the source while continuous recording is on requires fresh pool
+  // write evidence, and that requirement is no longer pre-checked by the camera
+  // flow: the switch is proven and applied as two explicit steps instead.
+  await page.goto('/channels/configure?channel=' + channel.id)
+  const changed = await saveAndTest(page, fixture.camera_ip, fixture.paths[0], fixture.paths[1])
+  await freshPoolProof(page, pool.id)
+  await finished(page, await command(page, '测试并启用', '/source/apply'))
   await expect.poll(async () => (await status()).current_revision_id, {timeout: 20000}).toBe(changed)
   await expect.poll(async () => (await physical()).filter(s => s.isRecordingMP4).length, {timeout: 30000}).toBe(1)
   expect((await recordings()).items.find(s => s.id === historical.id)?.state).toBe('ready')
@@ -174,7 +202,7 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   await page.reload()
   const restored = await saveAndTest(page, fixture.camera_ip, fixture.paths[2], fixture.paths[3])
   await freshPoolProof(page, pool.id)
-  await finished(page, await command(page, '应用配置', '/source/apply'))
+  await finished(page, await command(page, '测试并启用', '/source/apply'))
   await expect.poll(async () => (await status()).current_revision_id, {timeout: 20000}).toBe(restored)
   await page.reload()
   // Lose the actual candidate publisher AFTER proof, so the switch must roll back.
@@ -182,25 +210,27 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   await freshPoolProof(page, pool.id)
   const stopped = await request.post('http://fixture:8557/stop-one')
   expect(stopped.status()).toBe(200)
-  await finished(page, await command(page, '应用配置', '/source/apply'), 'failed')
+  await finished(page, await command(page, '测试并启用', '/source/apply'), 'failed')
   await expect(page.getByText(/^执行失败：/)).toBeVisible({timeout: 15000})
   expect((await status()).current_revision_id).toBe(restored)
   await expect.poll(async () => (await physical()).filter(s => s.isRecordingMP4).length, {timeout: 30000}).toBe(1)
   // Substream recovery is periodic and rollback treats its failure as a
   // visible degradation. Establish both readable streams before testing off.
   await expect.poll(async () => (await physical()).filter(s => s.tracks.some(t => t.ready && t.frames > 0)).length, {timeout: 30000}).toBe(2)
-  await page.reload()
-  await page.getByRole('tab', {name: '录像设置', exact: true}).click()
-  await page.getByLabel('普通录像', {exact: true}).selectOption('none')
-  await finished(page, await command(page, '保存录像策略', '/recording-policy'))
+  // Turning recording off is a recording-plan action, not part of configuring
+  // the camera.
+  await page.goto('/recording-plan')
+  const stop = page.getByTestId('policy-row').filter({hasText: 'CH01'})
+  await stop.getByLabel('CH01 录像方式', {exact: true}).selectOption('none')
+  await expect(stop.getByRole('button', {name: '应用', exact: true})).toBeEnabled({timeout: 15000})
+  await finished(page, await rowCommand(page, stop, '应用', '/recording-policy'))
   await expect.poll(async () => (await physical()).some(s => s.isRecordingMP4), {timeout: 20000}).toBe(false)
   await expect.poll(async () => (await physical()).filter(s => s.tracks.some(t => t.ready && t.frames > 0)).length, {timeout: 30000}).toBe(2)
   expect((await recordings()).items.find(s => s.id === historical.id)?.state).toBe('ready')
-  await page.reload()
-  await page.getByRole('tab', {name: '录像设置', exact: true}).click()
-  await page.getByLabel('录像结束时间', {exact: true}).fill(new Date(Date.now() + 60000).toISOString())
-  await page.getByRole('button', {name: '检索录像索引', exact: true}).click()
-  await expect(page.getByRole('cell', {name: '可用', exact: true}).first()).toBeVisible()
+  // The published index is browsed from the playback workspace now; the
+  // acceptance block at the end covers it, so go straight to the destructive
+  // source action on the channel page.
+  await page.goto('/channels/configure?channel=' + channel.id)
   await page.getByRole('tab', {name: '历史与诊断', exact: true}).click()
   await page.locator('summary', {hasText: '清空摄像头配置'}).click()
   await page.getByLabel('确认清空此通道摄像头', {exact: true}).check()
@@ -209,7 +239,7 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   await page.reload()
   const reconfigured = await saveAndTest(page, fixture.camera_ip, fixture.paths[2], fixture.paths[3])
   await expect(page.getByLabel('首次普通录像', {exact: true})).toHaveCount(0)
-  await finished(page, await command(page, '应用配置', '/source/apply'))
+  await finished(page, await command(page, '测试并启用', '/source/apply'))
   await expect.poll(async () => (await status()).current_revision_id, {timeout: 20000}).toBe(reconfigured)
   expect((await status()).recording.state).toBe('disabled')
   expect((await recordings()).items.find(s => s.id === historical.id)?.state).toBe('ready')
