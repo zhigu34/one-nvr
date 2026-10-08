@@ -21,10 +21,11 @@ afterEach(() => {
   vi.clearAllMocks()
   useAuthStore.getState().reset()
 })
-const healthy: Schema<'ObservedStatus'> = { state: 'healthy', reason: '' }
-const unconfigured: Schema<'ObservedStatus'> = {
-  state: 'not_configured',
-  reason: 'source_not_configured',
+function observed(
+  state: Schema<'ObservedStatus'>['state'],
+  reason = ''
+): Schema<'ObservedStatus'> {
+  return { state, reason, observed_at: null, expires_at: null }
 }
 const summaries: Schema<'ChannelSummary'>[] = [
   {
@@ -39,9 +40,9 @@ const summaries: Schema<'ChannelSummary'>[] = [
     source_ip: '192.168.66.114',
     main_path: '/Streaming/Channels/101',
     sub_path: '/Streaming/Channels/102',
-    main: healthy,
-    sub: { state: 'unknown', reason: 'observation_missing' },
-    recording: { state: 'disabled', reason: 'recording_disabled' },
+    main: observed('healthy'),
+    sub: observed('unknown', 'observation_missing'),
+    recording: observed('disabled', 'recording_disabled'),
     last_error: '',
     bitrate_kbps: 4096,
     updated_at: '2026-10-08T02:30:00Z',
@@ -55,9 +56,9 @@ const summaries: Schema<'ChannelSummary'>[] = [
     version: 1,
     permissions: ['configure', 'live'],
     current_revision_id: null,
-    main: unconfigured,
-    sub: unconfigured,
-    recording: { state: 'disabled', reason: 'source_not_configured' },
+    main: observed('not_configured', 'source_not_configured'),
+    sub: observed('not_configured', 'source_not_configured'),
+    recording: observed('disabled', 'source_not_configured'),
     last_error: 'source_unavailable',
     bitrate_kbps: null,
     updated_at: null,
@@ -71,9 +72,9 @@ const summaries: Schema<'ChannelSummary'>[] = [
     version: 1,
     permissions: ['live'],
     current_revision_id: null,
-    main: unconfigured,
-    sub: unconfigured,
-    recording: { state: 'disabled', reason: 'source_not_configured' },
+    main: observed('not_configured', 'source_not_configured'),
+    sub: observed('not_configured', 'source_not_configured'),
+    recording: observed('disabled', 'source_not_configured'),
     last_error: '',
     bitrate_kbps: null,
     updated_at: null,
