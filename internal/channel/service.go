@@ -3,6 +3,7 @@ package channel
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -14,18 +15,28 @@ import (
 )
 
 type Channel struct {
-	ID          id.ID         `json:"id"`
-	ChannelNo   int           `json:"channel_no"`
-	ChannelName string        `json:"channel_name"`
-	Version     int64         `json:"version"`
-	Permissions []auth.Action `json:"permissions"`
+	ID           id.ID         `json:"id"`
+	ChannelNo    int           `json:"channel_no"`
+	ChannelName  string        `json:"channel_name"`
+	ChannelGroup string        `json:"channel_group"`
+	Enabled      bool          `json:"enabled"`
+	Version      int64         `json:"version"`
+	Permissions  []auth.Action `json:"permissions"`
 }
 type Page struct {
 	Items      []Channel `json:"items"`
 	NextCursor *id.ID    `json:"next_cursor"`
 }
+
+// UpdateInput carries only the business attributes of a channel. Pointers
+// separate "leave unchanged" from "set to the zero value", so disabling a
+// channel or clearing its group is expressible without a second endpoint.
+// Media identity (source revisions, pool, policy) is never touched here:
+// renaming or regrouping must not rebuild the stream (PRD CH-01/CH-03).
 type UpdateInput struct {
-	ChannelName string `json:"channel_name"`
+	ChannelName  *string `json:"channel_name,omitempty"`
+	ChannelGroup *string `json:"channel_group,omitempty"`
+	Enabled      *bool   `json:"enabled,omitempty"`
 }
 
 // Slot contains only grant-management metadata, never video permissions or URLs.
@@ -92,7 +103,7 @@ func (s *Service) List(ctx context.Context, p auth.Principal, cursor id.ID, limi
 			return out, err
 		}
 	}
-	rows, err := s.DB.Pool.Query(ctx, `SELECT c.id,c.channel_no,c.channel_name,c.version,g.live,g.playback,g.export,g.configure FROM channels c JOIN channel_grants g ON g.channel_id=c.id WHERE g.user_id=$1 AND c.channel_no>$2 AND (g.live OR g.playback OR g.export OR (g.configure AND $3<>'viewer')) ORDER BY c.channel_no LIMIT $4`, p.UserID, from, u.Role, limit+1)
+	rows, err := s.DB.Pool.Query(ctx, `SELECT c.id,c.channel_no,c.channel_name,c.channel_group,c.enabled,c.version,g.live,g.playback,g.export,g.configure FROM channels c JOIN channel_grants g ON g.channel_id=c.id WHERE g.user_id=$1 AND c.channel_no>$2 AND (g.live OR g.playback OR g.export OR (g.configure AND $3<>'viewer')) ORDER BY c.channel_no LIMIT $4`, p.UserID, from, u.Role, limit+1)
 	if err != nil {
 		return out, err
 	}
@@ -100,7 +111,7 @@ func (s *Service) List(ctx context.Context, p auth.Principal, cursor id.ID, limi
 	for rows.Next() {
 		var c Channel
 		var live, playback, export, configure bool
-		if err := rows.Scan(&c.ID, &c.ChannelNo, &c.ChannelName, &c.Version, &live, &playback, &export, &configure); err != nil {
+		if err := rows.Scan(&c.ID, &c.ChannelNo, &c.ChannelName, &c.ChannelGroup, &c.Enabled, &c.Version, &live, &playback, &export, &configure); err != nil {
 			return out, err
 		}
 		c.Permissions = permissions(u.Role, live, playback, export, configure)
@@ -117,17 +128,36 @@ func (s *Service) List(ctx context.Context, p auth.Principal, cursor id.ID, limi
 	return out, nil
 }
 
+// Update applies the business attributes present in the input. Enabling and
+// disabling a channel is deliberately independent of clearing its source and of
+// turning recording off (PRD CH-04): this only flips a flag the recording
+// scheduler, live authorization and status derivation already honour, so it
+// stops fetching and recording without discarding the source or its history.
 func (s *Service) Update(ctx context.Context, p auth.Principal, channelID id.ID, expected int64, in UpdateInput) (Channel, error) {
 	var out Channel
-	name := strings.TrimSpace(in.ChannelName)
-	if name == "" || len(name) > 128 || strings.ContainsAny(name, "\x00\r\n") || expected < 1 {
+	if expected < 1 || in.ChannelName == nil && in.ChannelGroup == nil && in.Enabled == nil {
 		return out, auth.ErrInvalid
+	}
+	var name, group *string
+	if in.ChannelName != nil {
+		value := strings.TrimSpace(*in.ChannelName)
+		if value == "" || len(value) > 128 || strings.ContainsAny(value, "\x00\r\n") {
+			return out, auth.ErrInvalid
+		}
+		name = &value
+	}
+	if in.ChannelGroup != nil {
+		value := strings.TrimSpace(*in.ChannelGroup)
+		if len(value) > 64 || strings.ContainsAny(value, "\x00\r\n") {
+			return out, auth.ErrInvalid
+		}
+		group = &value
 	}
 	err := s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
 		if err := s.Auth.RequireChannelTx(ctx, p, channelID, auth.Configure, tx); err != nil {
 			return err
 		}
-		err := tx.QueryRow(ctx, `UPDATE channels SET channel_name=$2,version=version+1 WHERE id=$1 AND version=$3 RETURNING id,channel_no,channel_name,version`, channelID, name, expected).Scan(&out.ID, &out.ChannelNo, &out.ChannelName, &out.Version)
+		err := tx.QueryRow(ctx, `UPDATE channels SET channel_name=coalesce($2::text,channel_name),channel_group=coalesce($3::text,channel_group),enabled=coalesce($4::boolean,enabled),version=version+1 WHERE id=$1 AND version=$5 RETURNING id,channel_no,channel_name,channel_group,enabled,version`, channelID, name, group, in.Enabled, expected).Scan(&out.ID, &out.ChannelNo, &out.ChannelName, &out.ChannelGroup, &out.Enabled, &out.Version)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return auth.ErrConflict
 		}
@@ -140,7 +170,32 @@ func (s *Service) Update(ctx context.Context, p auth.Principal, channelID id.ID,
 			return err
 		}
 		out.Permissions = permissions(role, live, playback, export, configure)
-		return audit.Append(ctx, tx, audit.Entry{ActorID: p.UserID, Action: "channel.renamed", ObjectID: channelID})
+		// One entry per attribute actually changed, so the log shows what moved
+		// rather than a single opaque "updated" row.
+		if name != nil {
+			if err := audit.Append(ctx, tx, audit.Entry{ActorID: p.UserID, Action: "channel.renamed", ObjectID: channelID}); err != nil {
+				return err
+			}
+		}
+		if group != nil {
+			details, err := json.Marshal(map[string]string{"channel_group": *group})
+			if err != nil {
+				return err
+			}
+			if err := audit.Append(ctx, tx, audit.Entry{ActorID: p.UserID, Action: "channel.regrouped", ObjectID: channelID, Details: details}); err != nil {
+				return err
+			}
+		}
+		if in.Enabled != nil {
+			action := "channel.disabled"
+			if *in.Enabled {
+				action = "channel.enabled"
+			}
+			if err := audit.Append(ctx, tx, audit.Entry{ActorID: p.UserID, Action: action, ObjectID: channelID}); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	return out, err
 }

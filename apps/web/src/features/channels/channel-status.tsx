@@ -1,4 +1,5 @@
 import type { Schema } from '@/lib/types'
+import { STATUS_REASONS, UNKNOWN_STATUS_LABELS } from './status-reasons'
 
 const labels: Record<Schema<'ObservedStatus'>['state'] | 'pending', string> = {
   pending: '检查中',
@@ -8,25 +9,6 @@ const labels: Record<Schema<'ObservedStatus'>['state'] | 'pending', string> = {
   disabled: '已关闭',
   not_configured: '未配置',
   degraded: '降级',
-}
-const reasons: Record<string, string> = {
-  bitrate_unknown: '码率证据不足，等待新采样',
-  pool_unavailable: '存储池不可用',
-  low_space: '空间不足，已暂停录像',
-  source_unavailable: '无法读取视频',
-  source_frozen: '视频帧未更新',
-  recording_disabled: '已关闭录像',
-  observation_missing: '尚未产生观测：配置已保存但从未测试过',
-  observation_stale: '上一次观测已过期，需要重新测试',
-  source_not_configured: '通道尚未接入摄像头',
-  sub_not_configured: '未填写子流路径',
-}
-// "No observation yet" and "the observation expired" both arrive as `unknown`,
-// which reads like a fault. Name them for what they are so the operator can
-// tell "not tested" apart from "broken".
-const unknownLabels: Record<string, string> = {
-  observation_missing: '未测试',
-  observation_stale: '观测过期',
 }
 export function StatusLabel({
   value,
@@ -46,11 +28,11 @@ export function StatusLabel({
           : 'text-muted-foreground'
   const text =
     value.state === 'unknown' && value.reason
-      ? unknownLabels[value.reason] || labels.unknown
+      ? UNKNOWN_STATUS_LABELS[value.reason] || labels.unknown
       : labels[value.state]
   return (
     <span
-      title={value.reason ? reasons[value.reason] : undefined}
+      title={value.reason ? STATUS_REASONS[value.reason] : undefined}
       className={`inline-flex items-center gap-1.5 text-xs whitespace-nowrap ${tone}`}
     >
       <span aria-hidden className='size-1.5 rounded-full bg-current' />

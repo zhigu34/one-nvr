@@ -3,6 +3,7 @@ package channel
 import (
 	"time"
 
+	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/id"
 )
 
@@ -113,4 +114,34 @@ type Status struct {
 	Main                         ObservedStatus `json:"main"`
 	Sub                          ObservedStatus `json:"sub"`
 	Recording                    ObservedStatus `json:"recording"`
+}
+
+// SummaryItem is one row of the channel list: the business attributes plus the
+// per-kind status the list view shows. Detection status is absent because the
+// detection milestone is not delivered; it is not reported as healthy or as a
+// placeholder. Bitrate is the latest valid sample, never an assumption.
+type SummaryItem struct {
+	ChannelID    id.ID         `json:"channel_id"`
+	ChannelNo    int           `json:"channel_no"`
+	ChannelName  string        `json:"channel_name"`
+	ChannelGroup string        `json:"channel_group"`
+	Enabled      bool          `json:"enabled"`
+	Version      int64         `json:"version"`
+	Permissions  []auth.Action `json:"permissions"`
+	// Named the same as in Status so the list and the detail page describe a
+	// channel identically.
+	CurrentRevisionID *id.ID         `json:"current_revision_id"`
+	SourceIP          string         `json:"source_ip"`
+	MainPath          string         `json:"main_path"`
+	SubPath           string         `json:"sub_path"`
+	Main              ObservedStatus `json:"main"`
+	Sub               ObservedStatus `json:"sub"`
+	Recording         ObservedStatus `json:"recording"`
+	LastError         string         `json:"last_error"`
+	BitrateKbps       *int64         `json:"bitrate_kbps"`
+	UpdatedAt         *time.Time     `json:"updated_at"`
+}
+
+type SummaryPage struct {
+	Items []SummaryItem `json:"items"`
 }

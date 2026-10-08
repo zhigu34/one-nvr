@@ -862,12 +862,21 @@
                 "type": "object",
                 "properties": {
                   "channel_name": {
-                    "type": "string"
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "channel_group": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "Business grouping; empty clears it. Never rebuilds the media stream."
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "description": "Enable or disable the channel. Independent of clearing the source and of disabling recording."
                   }
                 },
-                "required": [
-                  "channel_name"
-                ],
+                "minProperties": 1,
                 "additionalProperties": false
               }
             }
@@ -2901,6 +2910,13 @@
           "channel_name": {
             "type": "string"
           },
+          "channel_group": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "enabled": {
+            "type": "boolean"
+          },
           "version": {
             "$ref": "#/components/schemas/Version"
           },
@@ -2921,6 +2937,8 @@
           "id",
           "channel_no",
           "channel_name",
+          "channel_group",
+          "enabled",
           "version",
           "permissions"
         ],

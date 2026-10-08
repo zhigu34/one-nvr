@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   formatClock,
+  formatMinute,
   parseWallClock,
   quickRange,
   startOfZoneDay,
@@ -23,6 +24,14 @@ describe('site timezone wall clock', () => {
     expect(formatClock(base, 'Asia/Shanghai')).toBe('2026-10-05 08:00:00')
     expect(formatClock(base, 'UTC')).toBe('2026-10-05 00:00:00')
     expect(formatClock(Number.NaN, 'UTC')).toBe('—')
+  })
+
+  it('formats list values at minute precision and drops the seconds', () => {
+    expect(formatMinute(base, 'Asia/Shanghai')).toBe('2026-10-05 08:00')
+    expect(formatMinute(Date.parse('2026-10-05T16:07:42Z'), 'UTC')).toBe(
+      '2026-10-05 16:07'
+    )
+    expect(formatMinute(Number.NaN, 'UTC')).toBe('—')
   })
 
   it('round-trips a wall clock value through the site zone', () => {

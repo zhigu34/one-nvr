@@ -47,19 +47,26 @@
 
 ## 当前交接快照（2026-10-08）
 
-- 当前主题：**摄像头接入流程与录像计划拆分**（计划：`docs/superpowers/plans/2026-10-08-camera-flow-rework.md`，批次 1 已完成）。M1-C 历史录像回放见本节下方。
-- 用户裁决（2026-10-08，权威，不可自行改动）：录像计划做成**侧边栏一级菜单**并**按通道管理录像方式（手动/定时/事件）且可批量应用**；**「手动」= 现有连续录像**（复用 `continuous` 语义）；**定时与事件本批只做占位禁用**；**ONVIF 本批只做占位**；**「配置保存」与「使用」是两件事**，UI 与文档**不再出现「草稿」字样**，未启用的配置状态叫「已保存，未启用」；「未启用」分两级——通道级启用/停用（`channels.enabled`，写入口仍缺，属批次 2）与配置级已应用/未应用（`current_revision_id` 是否指向它）。
-- 批次 1 落地内容：
-  - 侧边栏按功能分组为 **监控 / 配置 / 系统**（`components/layout/data/sidebar-data.ts`），`app-sidebar.tsx` 与 `command-menu.tsx` 都改为**整组为空则不渲染**，可见性统一走声明式 `everyRole`。
-  - 新增侧边栏一级菜单**「录像计划」**（路由 `/recording-plan`，`features/recording-plan/`）：按通道选 关闭录像 / 手动（连续录像）/ 定时录像（禁用占位）/ 事件录像（禁用占位），含存储池绑定与「检查存储池」，支持勾选多通道批量应用。
-  - 通道配置页 Tab 由三项收敛为**「连接配置 / 历史与诊断」**，删除「录像设置」Tab、`连接诊断与历史配置应用` 折叠层、`RecordingPolicyControls` 与 `RecordingsIndex`（后两者的文件已删除，回放页已覆盖按通道浏览录像）；「测试与启用」常显。
-  - `connectSource()` **不再自动检查存储池、不再读取录像策略**：接入只负责取流，`first_recording_mode` 固定为 `none` 且理由改为显式的「录像方式去录像计划页定」。存储池证据检查移到录像计划页。
-  - `source-form.tsx`：新增「添加方式」RTSP 手动（可用）/ **ONVIF 发现（禁用占位）**；`onvif_port` 从表单移出并改为**原样保留已有值**（否则一次编辑就会清掉导入进来的端口）；提交按钮拆为「保存并启用」（主，DOM 在前，Enter 默认触发它）与「保存」（只写配置，不测试不启用）；去掉 `order-last`（此前键盘 Tab 顺序与视觉顺序不一致）。
-  - `channel-status.tsx`：`ChannelStatus` 只渲染主流/子流，**录像灯移出**；`StatusLabel` 把 `unknown + observation_missing` 显示为**「未测试」**、`unknown + observation_stale` 显示为**「观测过期」**。
-  - 新增后端端点 **`PUT /api/v1/recording-policies`**：单事务内为 N 个通道各入队一个 `policy_apply` job，**逐行鉴权与版本检查**，被拒行只回 `{state:'rejected', error_code}` 且不回滚已接受行；调用方须带 `Idempotency-Key`（≤90 字符，服务端按 `key:channel_id` 组合）。
-  - `httpapi/response.go` 的 `fail` 新增映射：`storage.ErrMediaProof` → `409 zlm_write_evidence_unavailable`（此前会落成误导性的 503 dependency_unavailable）。
-- 批次 1 校验：`vite build` ✅、`tsc -b` ✅、`eslint src` ✅（0 error 0 warning）、`vitest run` **152 通过 / 26 文件** ✅、`go build ./...` ✅、`go vet` ✅、`go test ./internal/channel/... ./internal/httpapi/...` ✅。**未跑**真实容器/媒体 CI（本机无 Docker daemon）→ 推送后必须看 GitHub CI 结论。
-- 批次 2（未做）：`channel_group` 迁移 + 通道级启用/停用（`channels.enabled` 写入口）+ 通道列表补分组/码率/最近错误/更新时间并消掉 N+1。批次 3（未做）：ONVIF 局域网发现与能力探测（CH-06）。
+- 当前主题：**摄像头接入流程与录像计划拆分 + 通道属性与启停**（计划：`docs/superpowers/plans/2026-10-08-camera-flow-rework.md`，批次 1、2 已完成，批次 3 = ONVIF 真实现未做）。
+- 用户裁决（2026-10-08，权威，不可自行改动）：录像计划做成**侧边栏一级菜单**并**按通道管理录像方式（手动/定时/事件）且可批量应用**；**「手动」= 现有连续录像**（复用 `continuous` 语义）；**定时与事件只做占位禁用**；**ONVIF 只做占位**；**「配置保存」与「使用」是两件事**，UI 与文档**不再出现「草稿」字样**，未启用的配置状态叫「已保存，未启用」；**「未启用」分两级**——通道级启用/停用（`channels.enabled`）与配置级已应用/未应用（`current_revision_id` 是否指向它）。
+- **批次 1**（提交 `cb7bd9a`）：
+  - 侧边栏按功能分组为 **监控 / 配置 / 系统**（`components/layout/data/sidebar-data.ts`）；`app-sidebar.tsx` 与 `command-menu.tsx` 都改为**整组为空则不渲染**，可见性统一走声明式 `everyRole`（command-menu 此前是硬编码 url 白名单）。
+  - 新增侧边栏一级菜单**「录像计划」**（`/recording-plan`，`features/recording-plan/`）：按通道选 关闭录像 / 手动（连续录像）/ 定时（禁用占位）/ 事件（禁用占位），含存储池绑定与「检查存储池」，支持勾选多通道批量应用。
+  - 通道配置页 Tab 收敛为**「连接配置 / 历史与诊断」**；删除「录像设置」Tab、`连接诊断与历史配置应用` 折叠层、`RecordingPolicyControls` 与 `RecordingsIndex`（文件已删除）。
+  - `connectSource()` **不再自动检查存储池、不再读取录像策略**；`first_recording_mode` 固定 `none`（接入只取流）。
+  - `source-form.tsx`：新增「添加方式」RTSP 手动（可用）/ **ONVIF 发现（禁用占位）**；`onvif_port` 移出表单但**原样保留已有值**；按钮拆为「保存并启用」（主，DOM 在前，回车默认触发）与「保存」（只写配置）；去掉 `order-last`。
+  - `channel-status.tsx`：`ChannelStatus` 只渲染主流/子流；`unknown + observation_missing` 显示为**「未测试」**、`stale` 显示为**「观测过期」**。
+  - 新增 **`PUT /api/v1/recording-policies`**：单事务内为 N 个通道各入队一个 job，**逐行鉴权与版本检查**，被拒行只回 `{rejected, error_code}` 且不回滚已接受行；基础设施错误则整批中止。
+- **批次 2**（迁移 `0011_channel_group.sql`）：
+  - `channels.channel_group`（新列）+ **`channels.enabled` 终于有写入口**（该列自 `0005` 起只被 `recording/scheduler.go`、`monitor.go`、`live/service.go`、`source_status.go` 读取）。`channel.UpdateInput` 改为指针字段，`Update` 用 `coalesce` 只改传入项；审计按属性逐条写 `channel.renamed` / `channel.regrouped` / `channel.disabled` / `channel.enabled`。
+  - 停用语义：只停取流与录像，**不改 `current_revision_id`、不改录像策略、不删历史**（集成测试有断言）；约 30 秒内生效；前端两处入口都走 `ConfirmDialog`。
+  - **`GET /api/v1/channels/summary`**：把「1 次列表 + 每路 1 次 status 轮询」换成一次请求，含 分组 / 权限 / 源摘要 / 三种状态 / `last_error` / `bitrate_kbps` / `updated_at` / `current_revision_id`。实现上抽出 `statusTx`（无鉴权的推导内核）供 `GetStatus` 与 `Summaries` 共用，**保证单路与批量不会分叉**；三种 kind 的观测合并为一次查询。
+  - 通道列表补 分组列 / 分组筛选 / 批量分组 / 码率 / 最近错误 / 更新时间，以及启用/停用按钮；配置页「基本信息与连接」面板含 名称 + 分组 + 停用。
+  - 时间显示复用 `features/playback/zone.ts` 新增的 `formatMinute`（YYYY-MM-DD HH:mm，站点时区；时区未就绪显示 `—`）。
+  - 契约：`m1a` 的 `Channel` 补两字段、`PATCH /channels/{id}` 请求体三字段改可选；`m1b` 新增 summary 端点与 schema。**`UpdateChannelInput` 不再强制 `channel_name`**，这是有意的契约放宽。
+  - **检测状态按未实现处理**：`ChannelSummary` 不含检测状态，也不给占位值。
+- 批次 3（未做）：ONVIF 局域网发现与能力探测（CH-06），占位入口届时转正。
+- 交接时必须先看最新一轮 CI 结论，不要假定通过：真实容器与媒体验收只能在 GitHub CI 运行（本机无 Docker daemon）。**本机 PostgreSQL 17.10 可用**，`tests/integration` 可直接跑：`set -a && . ~/.one-nvr/test-pg.env && set +a && go test ./tests/integration -count=1`。
 
 ## 上一轮交接快照（2026-10-07，M1-C）
 

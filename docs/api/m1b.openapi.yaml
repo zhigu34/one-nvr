@@ -1744,6 +1744,102 @@
         }
       }
     },
+    "/api/v1/channels/summary": {
+      "get": {
+        "operationId": "channelSummaries",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "any channel grant",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Every channel the caller may see, with its per-kind status, in one response",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ChannelSummaryPage"
+                    },
+                    "request_id": {
+                      "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "request_id"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Session missing or revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Action or role denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/recording-policies": {
       "put": {
         "operationId": "setRecordingPolicies",
@@ -4423,6 +4519,121 @@
           "mode",
           "event_recording_enabled",
           "version"
+        ],
+        "additionalProperties": false
+      },
+      "ChannelSummary": {
+        "type": "object",
+        "description": "One channel list row. Detection status is absent because that milestone is not delivered.",
+        "properties": {
+          "channel_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "channel_no": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 32
+          },
+          "channel_name": {
+            "type": "string"
+          },
+          "channel_group": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "version": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/Version"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "live",
+                "playback",
+                "export",
+                "configure"
+              ]
+            }
+          },
+          "current_revision_id": {
+            "oneOf": [
+              {
+                "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when the slot has no applied source. Named as in the status response so list and detail agree."
+          },
+          "source_ip": {
+            "type": "string",
+            "description": "Empty when no source revision is applied. Never carries credentials or a full URL."
+          },
+          "main_path": {
+            "type": "string"
+          },
+          "sub_path": {
+            "type": "string"
+          },
+          "main": {
+            "$ref": "#/components/schemas/ObservedStatus"
+          },
+          "sub": {
+            "$ref": "#/components/schemas/ObservedStatus"
+          },
+          "recording": {
+            "$ref": "#/components/schemas/ObservedStatus"
+          },
+          "last_error": {
+            "type": "string",
+            "description": "Reason code of the first unavailable or degraded kind. Empty when nothing is faulty; a disabled or unconfigured channel is an outcome, not an error."
+          },
+          "bitrate_kbps": {
+            "type": "integer",
+            "minimum": 0,
+            "nullable": true,
+            "description": "Latest valid bitrate sample. Null until one exists; never assumed."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Newest observation time across the three kinds. Null when nothing was ever observed."
+          }
+        },
+        "required": [
+          "channel_id",
+          "channel_no",
+          "channel_name",
+          "channel_group",
+          "enabled",
+          "version",
+          "permissions",
+          "current_revision_id",
+          "main",
+          "sub",
+          "recording",
+          "last_error"
+        ],
+        "additionalProperties": false
+      },
+      "ChannelSummaryPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChannelSummary"
+            }
+          }
+        },
+        "required": [
+          "items"
         ],
         "additionalProperties": false
       },
