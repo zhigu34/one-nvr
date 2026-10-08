@@ -63,6 +63,15 @@ func (r *router) listChannels(w http.ResponseWriter, q *http.Request, p auth.Pri
 	respond(w, q, 200, out)
 }
 
+func (r *router) channelSummaries(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	out, err := r.d.Sources.Summaries(q.Context(), p)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, out)
+}
+
 func (r *router) channelSlots(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
 	out, err := r.d.Channels.Slots(q.Context(), p)
 	if err != nil {

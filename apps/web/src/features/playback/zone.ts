@@ -139,6 +139,17 @@ export function formatClock(epochMs: number, timeZone: string): string {
   return `${pad(parts.year, 4)}-${pad(parts.month)}-${pad(parts.day)} ${pad(parts.hour)}:${pad(parts.minute)}:${pad(parts.second)}`
 }
 
+/**
+ * List and status format: YYYY-MM-DD HH:mm in the site zone. Seconds are noise
+ * in a table, and the project convention is minute precision for anything that
+ * is not a playback position.
+ */
+export function formatMinute(epochMs: number, timeZone: string): string {
+  if (!Number.isFinite(epochMs)) return '—'
+  const parts = zoneParts(epochMs, timeZone)
+  return `${pad(parts.year, 4)}-${pad(parts.month)}-${pad(parts.day)} ${pad(parts.hour)}:${pad(parts.minute)}`
+}
+
 export type QuickRangeKind = 'hour' | 'day' | 'today' | 'yesterday'
 
 const HOUR = 3600_000

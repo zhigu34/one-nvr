@@ -15,6 +15,8 @@ const channel: Schema<'Channel'> = {
   id: '00000000-0000-4000-8000-000000000001',
   channel_no: 1,
   channel_name: 'Front',
+  channel_group: '',
+  enabled: true,
   version: 3,
   permissions: ['configure'],
 }

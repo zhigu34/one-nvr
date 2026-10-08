@@ -97,3 +97,92 @@ func TestSourceStatusDistinguishesFirstSetupFromClearedChannel(t *testing.T) {
 		t.Fatal("cleared channel cannot restore its preserved policy", err)
 	}
 }
+
+// CH-02: the list view reads one summary instead of one status request per row.
+// The summary must therefore derive every kind exactly as the detail status
+// does, and it must not widen what a restricted principal can see.
+func TestChannelSummariesMatchStatusAndRespectScope(t *testing.T) {
+	f, _, _, _ := testedSource(t)
+	ctx := context.Background()
+	page, err := f.Service.Sources.Summaries(ctx, f.Admin)
+	if err != nil || len(page.Items) == 0 {
+		t.Fatal("summary", page, err)
+	}
+	for _, item := range page.Items {
+		status, err := f.Service.Sources.GetStatus(ctx, f.Admin, item.ChannelID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, _ := json.Marshal([]channel.ObservedStatus{item.Main, item.Sub, item.Recording})
+		want, _ := json.Marshal([]channel.ObservedStatus{status.Main, status.Sub, status.Recording})
+		if string(got) != string(want) {
+			t.Fatalf("summary diverged from status for %s: %s vs %s", item.ChannelID, got, want)
+		}
+		if (item.CurrentRevisionID == nil) != (status.CurrentRevisionID == nil) {
+			t.Fatal("summary revision presence differs", item, status)
+		}
+		if item.CurrentRevisionID != nil && *item.CurrentRevisionID != *status.CurrentRevisionID {
+			t.Fatal("summary revision differs", item, status)
+		}
+		if item.Version != status.Version {
+			t.Fatal("summary and status expose different optimistic versions", item.Version, status.Version)
+		}
+		// Nothing sampled and nothing faulty must not be reported as a value.
+		if item.BitrateKbps != nil && *item.BitrateKbps < 0 {
+			t.Fatal("bitrate must never be negative", item)
+		}
+		for _, kind := range []channel.ObservedStatus{item.Main, item.Sub, item.Recording} {
+			if kind.State == "not_configured" || kind.State == "disabled" {
+				if item.LastError == kind.Reason {
+					t.Fatalf("a chosen outcome reported as an error: %v", item)
+				}
+			}
+		}
+	}
+	// A group written through the channel endpoint shows up in the summary: the
+	// list is where the operator sets it, so it must also read it back.
+	var version int64
+	var found bool
+	for _, item := range page.Items {
+		if item.ChannelID == f.Channel {
+			version, found = item.Version, true
+		}
+	}
+	if !found {
+		t.Fatal("fixture channel missing from the summary")
+	}
+	slots := &channel.Service{DB: f.DB, Auth: f.Auth}
+	group := "一层"
+	if _, err := slots.Update(ctx, f.Admin, f.Channel, version, channel.UpdateInput{ChannelGroup: &group}); err != nil {
+		t.Fatal(err)
+	}
+	refreshed, err := f.Service.Sources.Summaries(ctx, f.Admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var carried bool
+	for _, item := range refreshed.Items {
+		if item.ChannelID == f.Channel {
+			carried = item.ChannelGroup == "一层"
+		}
+	}
+	if !carried {
+		t.Fatal("summary does not carry the channel group")
+	}
+	// Scope: a single-channel grant must not widen the response.
+	scoped, err := f.Auth.CreateUser(ctx, f.Admin, auth.CreateUserInput{Username: "summary-viewer", Password: testPassword, Role: "viewer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Auth.SetGrants(ctx, f.Admin, scoped.ID, 1, []auth.Grant{{ChannelID: f.Channel, Actions: []auth.Action{auth.Playback}}}); err != nil {
+		t.Fatal(err)
+	}
+	login, err := f.Auth.Login(ctx, "summary-viewer", testPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limited, err := f.Service.Sources.Summaries(ctx, login.Principal)
+	if err != nil || len(limited.Items) != 1 || limited.Items[0].ChannelID != f.Channel {
+		t.Fatal("summary leaked channels outside the grant", limited, err)
+	}
+}

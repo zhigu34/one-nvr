@@ -4,6 +4,7 @@ import { useAuthStore } from '@/stores/auth-store'
 import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { Schema, PageData } from '@/lib/types'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useAPI, useAction, fields, text } from '@/features/foundation/hooks'
 import {
@@ -216,7 +217,7 @@ function ConfigureChannel({ channel }: { channel: Schema<'Channel'> }) {
           className='data-[state=inactive]:hidden'
         >
           <Panel title='基本信息与连接'>
-            <ChannelName channel={{ ...channel, version }} />
+            <ChannelBasics channel={{ ...channel, version }} />
             <div className='mt-6 border-t pt-6'>
               {status.data.current_revision_id && !current ? (
                 <p>当前修订在更早的历史中，请先加载更多修订。</p>
@@ -398,39 +399,116 @@ function ConfigureChannel({ channel }: { channel: Schema<'Channel'> }) {
   )
 }
 
-function ChannelName({ channel }: { channel: Schema<'Channel'> }) {
+// Name and group are business attributes: saving them must not rebuild the
+// stream, so they travel in one PATCH and never touch the source revision.
+function ChannelBasics({ channel }: { channel: Schema<'Channel'> }) {
   const action = useAction()
+  const [confirmDisable, setConfirmDisable] = useState(false)
   return (
     <>
-      <Notices {...action} />
+      <Notices error={action.error} notice={action.notice} />
       <form
-        className='flex flex-wrap items-end gap-3'
+        className='grid gap-4 md:grid-cols-2'
         onSubmit={(event) => {
           event.preventDefault()
-          const name = text(fields(event.currentTarget), 'channel_name')
+          const data = fields(event.currentTarget)
           void action.run(
             () =>
               apiRequest(
                 `/api/v1/channels/${channel.id}`,
-                jsonRequest('PATCH', { channel_name: name }, channel.version)
+                jsonRequest(
+                  'PATCH',
+                  {
+                    channel_name: text(data, 'channel_name'),
+                    channel_group: text(data, 'channel_group'),
+                  },
+                  channel.version
+                )
               ),
-            '名称已保存'
+            '基本信息已保存'
           )
         }}
       >
-        <div className='min-w-0 flex-1'>
-          <Field
-            label='通道名称'
-            name='channel_name'
-            defaultValue={channel.channel_name}
-            required
-            maxLength={128}
-          />
+        <Field
+          label='通道名称'
+          name='channel_name'
+          defaultValue={channel.channel_name}
+          required
+          maxLength={128}
+        />
+        <Field
+          label='分组（可留空）'
+          name='channel_group'
+          defaultValue={channel.channel_group}
+          maxLength={64}
+          placeholder='例如 一层 / 外围'
+        />
+        <div className='flex flex-wrap items-center justify-between gap-3 border-t pt-4 md:col-span-2'>
+          <span className='text-xs text-muted-foreground'>
+            改名与分组不会重建媒体流
+          </span>
+          <Button variant='outline' disabled={action.pending}>
+            保存基本信息
+          </Button>
         </div>
-        <Button variant='outline' disabled={action.pending}>
-          保存名称
-        </Button>
       </form>
+      <div className='mt-5 flex flex-wrap items-center justify-between gap-3 border-t pt-5'>
+        <p className='text-sm'>
+          通道状态：{channel.enabled ? '启用中' : '已停用'}
+          <span className='ml-2 text-xs text-muted-foreground'>
+            停用只停止取流与录像，摄像头配置、录像策略与历史录像都保留
+          </span>
+        </p>
+        {channel.enabled ? (
+          <Button
+            type='button'
+            variant='destructive'
+            disabled={action.pending}
+            onClick={() => setConfirmDisable(true)}
+          >
+            停用通道
+          </Button>
+        ) : (
+          <Button
+            type='button'
+            variant='outline'
+            disabled={action.pending}
+            onClick={() =>
+              void action.run(
+                () =>
+                  apiRequest(
+                    `/api/v1/channels/${channel.id}`,
+                    jsonRequest('PATCH', { enabled: true }, channel.version)
+                  ),
+                '通道已启用；取流与录像会在下一次调度时恢复'
+              )
+            }
+          >
+            启用通道
+          </Button>
+        )}
+      </div>
+      <ConfirmDialog
+        open={confirmDisable}
+        onOpenChange={setConfirmDisable}
+        title='停用此通道？'
+        desc='停用后该通道停止取流与录像，录像策略、摄像头配置与历史录像都保留。约 30 秒内生效。'
+        confirmText='停用'
+        cancelBtnText='取消'
+        destructive
+        isLoading={action.pending}
+        handleConfirm={() => {
+          setConfirmDisable(false)
+          void action.run(
+            () =>
+              apiRequest(
+                `/api/v1/channels/${channel.id}`,
+                jsonRequest('PATCH', { enabled: false }, channel.version)
+              ),
+            '通道已停用；取流与录像会在约 30 秒内停止，历史录像保留'
+          )
+        }}
+      />
     </>
   )
 }

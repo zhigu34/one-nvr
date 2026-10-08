@@ -46,11 +46,11 @@
 
 ## 批次划分
 
-| 批次 | 内容 | 迁移 | 提交 |
-| --- | --- | --- | --- |
-| **1（本计划详述）** | 侧边栏分组 + 录像计划页 + 配置页拆 Tab + 连接流程去录像耦合 + 连接表单重排 + 状态语义 + 批量端点 | 无 | 1 次 |
-| 2 | 分组列 + 通道级启用/停用（`channels.enabled` 写入口） | `0010_channel_group.sql` | 1 次 |
-| 3 | ONVIF 真实现：局域网发现 + 能力探测 + 自动填 RTSP（CH-06） | 视需要 | 1 次 |
+| 批次 | 内容 | 迁移 | 提交 | 状态 |
+| --- | --- | --- | --- | --- |
+| **1** | 侧边栏分组 + 录像计划页 + 配置页拆 Tab + 连接流程去录像耦合 + 连接表单重排 + 状态语义 + 批量录像端点 | 无 | 1 次 | ✅ `cb7bd9a` |
+| **2（本计划详述）** | 分组列 + 通道级启用/停用（`channels.enabled` 写入口）+ 列表一次请求拿全（分组/码率/最近错误/更新时间，消 N+1） | `0011_channel_group.sql` | 1 次 | ✅ |
+| 3 | ONVIF 真实现：局域网发现 + 能力探测 + 自动填 RTSP（CH-06） | 视需要 | 1 次 | 未做 |
 
 ---
 
@@ -144,13 +144,57 @@ Files: `apps/web/src/components/layout/data/sidebar-data.ts`、`apps/web/src/com
 
 ---
 
-# 批次 2（概要，本批不实施）
+# 批次 2：通道属性与启停、列表信息补全
 
-- [ ] 迁移 `0010_channel_group.sql`：`ALTER TABLE channels ADD COLUMN channel_group text NOT NULL DEFAULT '';`
-- [ ] `channel.UpdateInput` 改指针字段（`ChannelName` / `ChannelGroup` / `Enabled`），补 `channels.enabled` 写入口，审计 Action 区分改名/改分组/停用/启用。
-- [ ] 通道列表补「分组」列与分组筛选、批量设置分组；配置页基本信息面板加分组与停用开关。
-- [ ] `docs/api/m1a.openapi.yaml` 的 `Channel` 补 `channel_group` 与 `enabled`，`UpdateChannelInput` 三字段改可选。
-- [ ] 停用语义：`channels.enabled=false` 已被 scheduler / monitor / live 读取，Worker 下次 reconcile 生效（租约 30s）；停用只停取流与录像，历史回放照旧（PRD CH-07 与 M1 设计 §「不根据当前源在线或 enabled 隐藏历史」）。
+Files: `migrations/0011_channel_group.sql`（新增）、`internal/channel/{service,source_status,source_types}.go`、`internal/httpapi/{foundation,router}.go`、`docs/api/{m1a,m1b}.openapi.yaml`、`apps/web/src/features/channels/{index,configure,channel-status}.tsx`（+ 新增 `status-reasons.ts`）、`apps/web/src/features/playback/zone.ts`、`tests/integration/{channel,source_status}_test.go`
+
+## Task 1: 分组列与写入口
+
+- [x] 迁移 `0011_channel_group.sql`：`channels.channel_group text NOT NULL DEFAULT '' CHECK(char_length(...)<=64 AND ... !~ '[[:cntrl:]]')`。
+- [x] `channel.Channel` 补 `ChannelGroup` 与 `Enabled`；`List` 的 SELECT 增补两列。
+- [x] `channel.UpdateInput` 改指针字段（`ChannelName` / `ChannelGroup` / `Enabled`），`Update` 用 `coalesce($n::type,列)` 只改传入项，仍保留 `version=version+1 WHERE version=$expected` 与 `RequireChannelTx(Configure)`。
+- [x] 审计按实际发生的属性逐条记录：`channel.renamed` / `channel.regrouped`（带 `{"channel_group": …}`）/ `channel.disabled` / `channel.enabled`。
+- [x] 空输入（三个字段都为 nil）返回 422；分组超 64 字符返回 422；陈旧版本返回 409。
+
+## Task 2: 通道级启用/停用
+
+- [x] `channels.enabled` 终于有了写入口（该列自 `0005` 起只被读取：`recording/scheduler.go`、`monitor.go`、`live/service.go`、`source_status.go`）。
+- [x] 停用只停取流与录像：不改 `current_revision_id`、不改录像策略、不删历史（集成测试断言 `current_revision_id` 仍为 NULL 且无源被创建）。
+- [x] 前端两处入口都加二次确认（`ConfirmDialog`），并明确"约 30 秒内生效、历史录像保留"。
+
+## Task 3: 列表一次请求拿全（消 N+1）
+
+- [x] `source_status.go` 抽出 `statusTx(ctx, tx, ch)`（不做鉴权，只做推导），`GetStatus` 改为「鉴权 + statusTx」。
+- [x] 三种 kind 的观测由**一个** `DISTINCT ON` 语义的查询取回（索引 `source_observations(channel_id,kind,observed_at DESC,id DESC)` 保证首行即最新），替代原先的 3 次单 kind 查询。
+- [x] 新增 `SourceService.Summaries`：单事务内取可见通道 → 逐通道 `statusTx` → 一次查询取全部源摘要（ip/main_path/sub_path）→ 一次查询取全部最新有效码率。**复用 statusTx 保证与 `GetStatus` 不会分叉。**
+- [x] 新增 `GET /api/v1/channels/summary`；`ChannelSummary` 含 业务属性 + 权限 + 源摘要 + 三种状态 + `last_error` + `bitrate_kbps` + `updated_at` + `current_revision_id`。
+- [x] 前端 `features/channels/index.tsx` 由「1 次列表 + 每路 1 次 status 轮询」改为**1 次 summary 轮询**；补 分组列、分组筛选、码率、最近错误、更新时间列。
+- [x] 时间显示复用 `features/playback/zone.ts` 新增的 `formatMinute`（YYYY-MM-DD HH:mm，站点时区；时区未就绪显示 `—`，不猜）。
+
+## Task 4: 契约与批次 1 遗留
+
+- [x] `m1a.openapi.yaml`：`Channel` 补 `channel_group`/`enabled` 并加入 required；`PATCH /channels/{id}` 请求体改为三字段可选（`minProperties: 1`），不再强制 `channel_name`。
+- [x] `m1b.openapi.yaml`：新增 `ChannelSummary` / `ChannelSummaryPage` 与 `/api/v1/channels/summary`。
+- [x] 重新生成 `apps/web/src/lib/api-types.ts`。
+
+## 批次 2 校验
+
+- [x] `vite build` / `tsc -b` / `eslint src`（0 error 0 warning）。
+- [x] `vitest run`：**156 通过 / 26 文件**（含新增：列表单请求、分组筛选、启用二次确认、批量分组逐通道带版本、`formatMinute`）。
+- [x] `gofmt -l`（改动文件）干净；`go build` / `go vet` 通过。
+- [x] **真实 PostgreSQL 集成测试**（本机 PG 17.10 可用，`TEST_DATABASE_URL` 指向 `one_nvr_test`）：`tests/integration` 全量通过，含新增 `TestChannelAttributesAreIndependentOfMedia` 与 `TestChannelSummariesMatchStatusAndRespectScope`。
+
+## 批次 2 落地偏差（执行中修正，均已按实际代码复核）
+
+- **迁移号是 `0011` 不是 `0010`**：`0010_live_sessions.sql` 已存在（M1-C 实时预览时新增）。计划里写的 `0010_channel_group.sql` 会与既有文件重名。
+- **`Status` 的三种 kind 观测合并为一次查询**：原计划只要求抽 `statusTx`，但 summary 会对每路各调一次，3 次单 kind 查询会让 32 路产生 96 次查询。合并后每路 3 次（channels 行、首次录像判定、观测），且索引方向与 `ORDER BY kind, observed_at DESC, id DESC` 一致。
+- **`Summaries` 的富集查询用 grant join 而不是 id 数组**：`WHERE channel_id = ANY($1)` 需要 `[]uuid` 的编码/强转，改用 `JOIN channel_grants g ON g.channel_id=… AND g.user_id=$1` 后既没有数组类型问题，也保证调用者授权外的通道不可能贡献数据。
+- **`last_error` 只报真实故障**：只有 `unavailable` / `degraded` 才作为错误上报；`disabled` 与 `not_configured` 是操作者选择的结果，报成"错误"会误导。
+- **`bitrate_kbps` 取「最新一条 valid 采样」**，无采样时为 `null` 且前端显示 `—`，不把未知当 0。
+- **加了二次确认**：停用会中断录像，属破坏性操作，列表页与配置页都走 `ConfirmDialog`，而不是一个可误触的开关。
+- **`reasonLabel`/`STATUS_REASONS` 抽到独立文件 `status-reasons.ts`**：从组件文件导出非组件会触发 `react-refresh/only-export-components`（批次 1 已在这个规则上踩过一次）。
+- **检测状态按未实现处理**：`ChannelSummary` 不包含检测状态，也不给占位值——PRD CH-02 要求它，但检测属未交付里程碑，只能缺省不报，不能编。
+- **`Channel.UpdateInput` 改指针的连带修改**：`tests/integration/channel_test.go` 三处 `ChannelName: "x"` 需改为 `strPtr("x")`。
 
 # 批次 3（概要，本批不实施）
 

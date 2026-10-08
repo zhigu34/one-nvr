@@ -700,6 +700,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/channels/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["channelSummaries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recording-policies": {
         parameters: {
             query?: never;
@@ -949,6 +965,8 @@ export interface components {
             id: components["schemas"]["UUID"];
             channel_no: number;
             channel_name: string;
+            channel_group: string;
+            enabled: boolean;
             version: components["schemas"]["Version"];
             permissions: ("live" | "playback" | "export" | "configure")[];
         };
@@ -1304,6 +1322,37 @@ export interface components {
             /** @constant */
             event_recording_enabled: false;
             version: components["schemas"]["Version"];
+        };
+        /** @description One channel list row. Detection status is absent because that milestone is not delivered. */
+        ChannelSummary: {
+            channel_id: components["schemas"]["UUID"];
+            channel_no: number;
+            channel_name: string;
+            channel_group: string;
+            enabled: boolean;
+            version: components["schemas"]["Version"];
+            permissions: ("live" | "playback" | "export" | "configure")[];
+            /** @description Null when the slot has no applied source. Named as in the status response so list and detail agree. */
+            current_revision_id: components["schemas"]["UUID"] | null;
+            /** @description Empty when no source revision is applied. Never carries credentials or a full URL. */
+            source_ip?: string;
+            main_path?: string;
+            sub_path?: string;
+            main: components["schemas"]["ObservedStatus"];
+            sub: components["schemas"]["ObservedStatus"];
+            recording: components["schemas"]["ObservedStatus"];
+            /** @description Reason code of the first unavailable or degraded kind. Empty when nothing is faulty; a disabled or unconfigured channel is an outcome, not an error. */
+            last_error: string;
+            /** @description Latest valid bitrate sample. Null until one exists; never assumed. */
+            bitrate_kbps?: number | null;
+            /**
+             * Format: date-time
+             * @description Newest observation time across the three kinds. Null when nothing was ever observed.
+             */
+            updated_at?: string | null;
+        };
+        ChannelSummaryPage: {
+            items: components["schemas"]["ChannelSummary"][];
         };
         RecordingPolicyItem: {
             channel_id: components["schemas"]["UUID"];
@@ -1800,7 +1849,11 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    channel_name: string;
+                    channel_name?: string;
+                    /** @description Business grouping; empty clears it. Never rebuilds the media stream. */
+                    channel_group?: string;
+                    /** @description Enable or disable the channel. Independent of clearing the source and of disabling recording. */
+                    enabled?: boolean;
                 };
             };
         };
@@ -3912,6 +3965,75 @@ export interface operations {
             };
             /** @description Invalid fields */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Rate limit */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Dependency unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    channelSummaries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every channel the caller may see, with its per-kind status, in one response */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ChannelSummaryPage"];
+                        request_id: components["schemas"]["UUID"];
+                    };
+                };
+            };
+            /** @description Malformed request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Session missing or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Action or role denied */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

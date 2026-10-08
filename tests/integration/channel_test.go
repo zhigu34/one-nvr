@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -129,11 +130,11 @@ func TestChannelScopeRenameAndRevocation(t *testing.T) {
 	if err != nil || len(visible.Items) != 1 {
 		t.Fatal("channel scope leaked", visible, err)
 	}
-	updated, err := slots.Update(ctx, login.Principal, all.Items[0].ID, 1, channel.UpdateInput{ChannelName: "门口"})
+	updated, err := slots.Update(ctx, login.Principal, all.Items[0].ID, 1, channel.UpdateInput{ChannelName: strPtr("门口")})
 	if err != nil || updated.ID != all.Items[0].ID || updated.ChannelNo != 1 || updated.Version != 2 {
 		t.Fatalf("rename changed slot: %v %v", updated, err)
 	}
-	if _, err := slots.Update(ctx, login.Principal, all.Items[1].ID, 1, channel.UpdateInput{ChannelName: "other"}); !errors.Is(err, auth.ErrNotFound) {
+	if _, err := slots.Update(ctx, login.Principal, all.Items[1].ID, 1, channel.UpdateInput{ChannelName: strPtr("other")}); !errors.Is(err, auth.ErrNotFound) {
 		t.Fatal("invisible channel leaked", err)
 	}
 	unknown, _ := id.New()
@@ -143,7 +144,92 @@ func TestChannelScopeRenameAndRevocation(t *testing.T) {
 	if err := accounts.SetGrants(ctx, admin.Principal, operator.ID, 2, []auth.Grant{{ChannelID: all.Items[0].ID, Actions: []auth.Action{auth.Live}}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := slots.Update(ctx, login.Principal, all.Items[0].ID, 2, channel.UpdateInput{ChannelName: "revoked"}); !errors.Is(err, auth.ErrUnauthenticated) {
+	if _, err := slots.Update(ctx, login.Principal, all.Items[0].ID, 2, channel.UpdateInput{ChannelName: strPtr("revoked")}); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatal("revoked session updated slot", err)
+	}
+}
+
+func strPtr(value string) *string { return &value }
+func boolPtr(value bool) *bool    { return &value }
+
+// CH-01/CH-02/CH-04: name, group and enablement are business attributes. They
+// are writable through one endpoint, they never recreate a source revision, and
+// disabling stops fetching and recording while leaving the source, the policy
+// and the history intact. Each change is audited on its own.
+func TestChannelAttributesAreIndependentOfMedia(t *testing.T) {
+	db, accounts, _, admin := authFixture(t)
+	ctx := context.Background()
+	slots := &channel.Service{DB: db, Auth: accounts}
+	all, err := slots.List(ctx, admin.Principal, "", 100)
+	if err != nil || len(all.Items) == 0 {
+		t.Fatal("list", err, all)
+	}
+	target := all.Items[0]
+
+	updated, err := slots.Update(ctx, admin.Principal, target.ID, target.Version, channel.UpdateInput{
+		ChannelGroup: strPtr("一层"),
+		Enabled:      boolPtr(false),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ChannelGroup != "一层" || updated.Enabled || updated.Version != target.Version+1 {
+		t.Fatalf("attributes not applied: %v", updated)
+	}
+	if updated.ChannelName != target.ChannelName {
+		t.Fatal("an omitted field changed: rename must be explicit")
+	}
+
+	// Disabling must not reach the media layer: no applied revision appears.
+	var current *id.ID
+	var enabled bool
+	var version int64
+	if err := db.Pool.QueryRow(ctx, "SELECT current_revision_id,enabled,version FROM channels WHERE id=$1", target.ID).Scan(&current, &enabled, &version); err != nil {
+		t.Fatal(err)
+	}
+	if current != nil || enabled || version != updated.Version {
+		t.Fatal("disable reached the media layer", current, enabled, version)
+	}
+
+	var grouped, disabled, enabledEntry int
+	if err := db.Pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE action='channel.regrouped'),count(*) FILTER (WHERE action='channel.disabled'),count(*) FILTER (WHERE action='channel.enabled') FROM audit_logs WHERE object_id=$1`, target.ID).Scan(&grouped, &disabled, &enabledEntry); err != nil {
+		t.Fatal(err)
+	}
+	if grouped != 1 || disabled != 1 || enabledEntry != 0 {
+		t.Fatal("each attribute change must be audited separately", grouped, disabled, enabledEntry)
+	}
+
+	// Clearing a group and re-enabling are both expressible; empty string is a
+	// value, not "leave unchanged".
+	back, err := slots.Update(ctx, admin.Principal, target.ID, updated.Version, channel.UpdateInput{
+		ChannelGroup: strPtr(""),
+		Enabled:      boolPtr(true),
+	})
+	if err != nil || back.ChannelGroup != "" || !back.Enabled {
+		t.Fatalf("clear/re-enable failed: %v %v", back, err)
+	}
+	if err := db.Pool.QueryRow(ctx, "SELECT count(*) FROM audit_logs WHERE object_id=$1 AND action='channel.enabled'", target.ID).Scan(&enabledEntry); err != nil || enabledEntry != 1 {
+		t.Fatal("re-enable not audited", enabledEntry, err)
+	}
+
+	// An update with nothing to change is a mistake, not a version bump.
+	if _, err := slots.Update(ctx, admin.Principal, target.ID, back.Version, channel.UpdateInput{}); !errors.Is(err, auth.ErrInvalid) {
+		t.Fatal("empty update accepted", err)
+	}
+	// A stale version conflicts instead of overwriting.
+	if _, err := slots.Update(ctx, admin.Principal, target.ID, target.Version, channel.UpdateInput{Enabled: boolPtr(false)}); !errors.Is(err, auth.ErrConflict) {
+		t.Fatal("stale version accepted", err)
+	}
+	// A group longer than the column contract is refused before the database.
+	if _, err := slots.Update(ctx, admin.Principal, target.ID, back.Version, channel.UpdateInput{ChannelGroup: strPtr(strings.Repeat("x", 65))}); !errors.Is(err, auth.ErrInvalid) {
+		t.Fatal("oversized group accepted", err)
+	}
+	// Grouping is a business attribute: clearing a source does not clear it.
+	if _, err := slots.Update(ctx, admin.Principal, target.ID, back.Version, channel.UpdateInput{ChannelGroup: strPtr("一层")}); err != nil {
+		t.Fatal(err)
+	}
+	var kept string
+	if err := db.Pool.QueryRow(ctx, "SELECT channel_group FROM channels WHERE id=$1", target.ID).Scan(&kept); err != nil || kept != "一层" {
+		t.Fatal("group lost", kept, err)
 	}
 }
