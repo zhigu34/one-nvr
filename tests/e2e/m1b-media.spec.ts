@@ -56,7 +56,7 @@ async function saveAndTest(page: Page, ip: string, main: string, sub: string, co
   await page.getByRole('tab', {name: '连接配置', exact: true}).click()
   await page.getByLabel('IP 地址', {exact: true}).fill(ip)
   await page.getByLabel('主流路径', {exact: true}).fill(main)
-  await page.getByLabel('子流路径', {exact: true}).fill(sub)
+  await page.getByLabel('子流路径（可留空）', {exact: true}).fill(sub)
   const advanced = page.locator('details').filter({has: page.locator('summary', {hasText: '高级连接设置'})})
   if (!(await advanced.evaluate(el => el.hasAttribute('open')))) await advanced.locator('summary').click()
   await page.getByLabel('密码处理', {exact: true}).selectOption('clear')
@@ -69,9 +69,15 @@ async function saveAndTest(page: Page, ip: string, main: string, sub: string, co
     expect(response.status(), 'draft rejected: ' + (failed.error?.code || 'unknown')).toBe(201)
   }
   const revision = (await response.json()).data as {id: string}
-  // The saved revision becomes the selected one, so the test panel below binds
-  // to it; proving it is a separate, explicit action.
-  if (!connect) await page.getByRole('button', {name: '测试取流', exact: true}).click()
+  // Saving and proving are two explicit actions now. The panel binds to the
+  // saved revision, but the command above only proves the write reached the
+  // server: wait for the page to report the save before pressing 「测试取流」,
+  // otherwise the click can still reach the panel bound to the previous
+  // revision and the proof below would belong to the wrong configuration.
+  if (!connect) {
+    await expect(page.getByText('已保存，未启用；启用请点「保存并启用」')).toBeVisible({timeout: 15000})
+    await page.getByRole('button', {name: '测试取流', exact: true}).click()
+  }
   const testResponse = await tested
   expect(testResponse.status()).toBe(202)
   expect(new URL(testResponse.url()).pathname.endsWith('/source-revisions/' + revision.id + '/test')).toBe(true)
