@@ -316,3 +316,27 @@ test('an existing ONVIF port survives an ordinary edit that does not touch it', 
     JSON.parse(calls.request.mock.calls[0][1].body).config.onvif_port
   ).toBe(8000)
 })
+// A promised default must survive saving: leaving the port empty used to drop
+// the ONVIF marker from the revision, so the channel list showed the camera as
+// RTSP-only even though it had been added through ONVIF.
+test('an empty ONVIF port is filled from the port the probe actually used', async () => {
+  calls.request.mockResolvedValue({ ...probe, onvif_port: 80 })
+  const view = await render(wrapper(channel, null))
+  await userEvent.click(view.getByRole('button', { name: 'ONVIF 手动' }))
+  await userEvent.fill(
+    view.getByLabelText('IP 地址', { exact: true }),
+    '192.168.33.20'
+  )
+  // The operator trusts the "默认 80" hint and leaves the field empty.
+  await userEvent.click(view.getByRole('button', { name: '获取码流' }))
+  expect(JSON.parse(calls.request.mock.calls[0][1].body)).toEqual({
+    ip: '192.168.33.20',
+    username: '',
+    password: '',
+  })
+  await expect.element(view.getByLabelText('ONVIF 端口')).toHaveValue(80)
+  await userEvent.click(view.getByRole('button', { name: '保存', exact: true }))
+  expect(
+    JSON.parse(calls.request.mock.calls[1][1].body).config.onvif_port
+  ).toBe(80)
+})

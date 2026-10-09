@@ -85,6 +85,10 @@ export function SourceOnvifPanel({
         })
       )
       setProbe(value)
+      // Record the port the probe actually used (the server resolves an empty
+      // field to the device default): saving must not silently drop the ONVIF
+      // identity just because the operator trusted the default.
+      onPortChange(String(value.onvif_port))
       // Default to the largest stream as the main one and the next distinct
       // stream as the sub stream, so the common case needs no editing.
       const ranked = [...value.streams].sort((a, b) => pixels(b) - pixels(a))
