@@ -78,6 +78,9 @@ type device struct {
 	profiles    []string
 	uri         map[string]string
 	faults      map[string]string
+	// rawFaults answers an action with a fault body verbatim, for vendor
+	// structures the standard helper cannot express.
+	rawFaults   map[string]string
 	requireAuth bool
 	requests    []string
 	securities  []security
@@ -102,6 +105,12 @@ func (d *device) handler(t *testing.T) http.HandlerFunc {
 		for action, message := range d.faults {
 			if strings.Contains(text, action) {
 				fmt.Fprint(w, faultResponse(message))
+				return
+			}
+		}
+		for action, fault := range d.rawFaults {
+			if strings.Contains(text, action) {
+				fmt.Fprint(w, soapBody(fault))
 				return
 			}
 		}
@@ -287,6 +296,26 @@ func TestProbeMapsTransportAndProtocolFailures(t *testing.T) {
 	}
 	if _, err := Probe(context.Background(), Options{IP: host, Port: port, Timeout: 2 * time.Second}); err != nil {
 		t.Fatalf("a device that needs no credentials was refused: %v", err)
+	}
+}
+
+// The same refusal is worded differently by different firmwares. A fault that
+// means "authentication no" must answer as one instead of falling through to
+// the generic "response invalid", whether the words live in the Reason text or
+// only in the Code/Subcode values.
+func TestProbeClassifiesDifferentlyWordedAuthFaults(t *testing.T) {
+	for name, fault := range map[string]string{
+		"security token":       `<s:Fault><s:Code><s:Value>s:Sender</s:Value><s:Subcode><s:Value>ter:NotAuthorized</s:Value></s:Subcode></s:Code><s:Reason><s:Text xml:lang="en">The security token could not be authenticated or authorized</s:Text></s:Reason></s:Fault>`,
+		"authorization failed": `<s:Fault><s:Code><s:Value>s:Sender</s:Value></s:Code><s:Reason><s:Text xml:lang="en">Authorization failed</s:Text></s:Reason></s:Fault>`,
+		"subcode only":         `<s:Fault><s:Code><s:Value>s:Sender</s:Value><s:Subcode><s:Value>ter:NotAuthorized</s:Value></s:Subcode></s:Code></s:Fault>`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := &device{clock: deviceTime(), mediaXAddr: "http://127.0.0.1/onvif/media_service", rawFaults: map[string]string{"GetDeviceInformation": fault}}
+			host, port := serve(t, d)
+			if _, err := Probe(context.Background(), Options{IP: host, Port: port, Username: "u", Password: "p"}); !errors.Is(err, ErrAuthRejected) {
+				t.Fatalf("error = %v, want ErrAuthRejected", err)
+			}
+		})
 	}
 }
 
