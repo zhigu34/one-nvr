@@ -156,24 +156,42 @@ func (n node) value(name string) string {
 }
 
 // faultMessage reports the SOAP fault text when the device rejected the call.
+// Vendors spread the reason across different spots — a SOAP 1.1 faultstring, a
+// SOAP 1.2 Reason/Text, or only the Code/Subcode values — so every text below
+// the Fault element is collected instead of probing field by field.
 func faultMessage(root node) (string, bool) {
 	fault, ok := root.find("Fault")
 	if !ok {
 		return "", false
 	}
-	text := strings.TrimSpace(fault.value("faultstring"))
-	if text == "" {
-		text = strings.TrimSpace(fault.value("Text"))
+	var parts []string
+	var walk func(node)
+	walk = func(n node) {
+		if text := strings.TrimSpace(n.Text); text != "" {
+			parts = append(parts, text)
+		}
+		for _, child := range n.Children {
+			walk(child)
+		}
 	}
-	if text == "" {
-		text = strings.TrimSpace(fault.value("Reason"))
-	}
-	return text, true
+	walk(fault)
+	return strings.Join(parts, " "), true
 }
 
+// authorized tells an authentication or authorization rejection from any other
+// fault. The same refusal is worded differently by different firmwares
+// ("NotAuthorized", "Sender not Authorized", "Authorization failed", "The
+// security token could not be authenticated or authorized"), so the check is on
+// stems rather than exact sentences.
 func authorized(message string) bool {
 	lower := strings.ToLower(message)
-	return strings.Contains(lower, "notauthorized") || strings.Contains(lower, "not authorized") ||
-		strings.Contains(lower, "unauthorized") || strings.Contains(lower, "authentication") ||
-		strings.Contains(lower, "sender not")
+	for _, marker := range []string{
+		"authoriz", "authenticat", "sender not", "security token",
+		"invalid security", "invalidsecurity", "credentials",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
