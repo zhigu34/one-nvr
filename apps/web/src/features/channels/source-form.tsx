@@ -4,6 +4,7 @@ import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Field, Notices } from '@/features/foundation/ui'
 import { connectionError, type SaveConnection } from './source-connect'
+import { SourceOnvifPanel } from './source-onvif'
 
 type Props = {
   channel: Schema<'Channel'>
@@ -25,16 +26,64 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
   const [intent, setIntent] = useState<Schema<'DraftInput'>['identity_intent']>(
     revision ? 'modify' : 'replace'
   )
-  // ONVIF discovery is not implemented yet. It is offered as a disabled choice
-  // so the operator can see the entry point without being promised capability.
+  // ONVIF is a manual add method now: the operator names the camera and the
+  // panel asks it for its own stream configuration. The connection fields are
+  // controlled so a probe can fill them, while every write still happens through
+  // the same save / save-and-enable submission below.
   const [method, setMethod] = useState<'rtsp' | 'onvif'>('rtsp')
+  const [ip, setIP] = useState(revision?.config.ip || '')
+  const [rtspPort, setRTSPPort] = useState(
+    String(revision?.config.rtsp_port || 554)
+  )
+  const [mainPath, setMainPath] = useState(
+    revision?.config.main_path || '/main'
+  )
+  const [subPath, setSubPath] = useState(revision?.config.sub_path || '')
+  const [onvifPort, setONVIFPort] = useState(
+    revision?.config.onvif_port ? String(revision.config.onvif_port) : ''
+  )
+  const [probed, setProbed] = useState(false)
   const [intentRevision, setIntentRevision] = useState(revision?.id)
   const [password, setPassword] = useState('')
+  const form = useRef<HTMLFormElement>(null)
   if (intentRevision !== revision?.id) {
     setIntentRevision(revision?.id)
     setPasswordAction(revision ? 'keep' : 'replace')
     setIntent(revision ? 'modify' : 'replace')
     setPassword('')
+    setIP(revision?.config.ip || '')
+    setRTSPPort(String(revision?.config.rtsp_port || 554))
+    setMainPath(revision?.config.main_path || '/main')
+    setSubPath(revision?.config.sub_path || '')
+    setONVIFPort(
+      revision?.config.onvif_port ? String(revision.config.onvif_port) : ''
+    )
+    setProbed(false)
+  }
+  // The probe uses what the operator is entering right now, so it reads the same
+  // fields the submission will send instead of keeping a second copy.
+  function enteredCredentials() {
+    const element = form.current
+    if (!element) return { username: '', password: '' }
+    const data = new FormData(element)
+    return {
+      username: String(data.get('username') || ''),
+      password: String(data.get('password') || ''),
+    }
+  }
+  function applyStreams(
+    main: Schema<'OnvifStream'> | null,
+    sub: Schema<'OnvifStream'> | null
+  ) {
+    if (!main) {
+      setProbed(false)
+      return
+    }
+    setIP(main.ip)
+    setRTSPPort(String(main.rtsp_port))
+    setMainPath(main.path)
+    setSubPath(sub ? sub.path : '')
+    setProbed(true)
   }
   const [pending, setPending] = useState(false),
     [error, setError] = useState(''),
@@ -54,6 +103,7 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
       </p>
       <form
         key={revision?.id || 'empty'}
+        ref={form}
         className='grid gap-4 md:grid-cols-2'
         onSubmit={async (event) => {
           event.preventDefault()
@@ -83,11 +133,10 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
             sub_path: value('sub_path'),
             transport: value('transport') as 'tcp' | 'udp',
           }
-          // ONVIF is not implemented, so this form cannot set its port. Carry an
-          // existing value forward instead of silently dropping data that came
-          // from an import: the UI must not discard what it does not own.
-          if (revision?.config.onvif_port != null)
-            config.onvif_port = revision.config.onvif_port
+          // The ONVIF port belongs to this form now. It is carried forward from
+          // the saved revision and only replaced when the operator sets one, so
+          // data that came from an import is never silently dropped.
+          if (onvifPort.trim() !== '') config.onvif_port = Number(onvifPort)
           const input: Schema<'DraftInput'> = {
             config,
             credentials,
@@ -149,31 +198,41 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
               </button>
               <button
                 type='button'
-                disabled
-                aria-pressed={false}
-                title='后续开放'
-                className='cursor-not-allowed rounded-md border px-4 py-2 text-sm text-muted-foreground'
+                aria-pressed={method === 'onvif'}
+                onClick={() => setMethod('onvif')}
+                className={`rounded-md border px-4 py-2 text-sm ${
+                  method === 'onvif' ? 'bg-accent font-medium' : ''
+                }`}
               >
-                ONVIF 发现（后续开放）
+                ONVIF 手动
               </button>
             </div>
+            <p className='text-xs text-muted-foreground'>
+              {method === 'onvif'
+                ? '填写地址与凭据后从摄像头读取码流配置，不用手填路径。'
+                : '手动填写 RTSP 端口与主/子流路径。'}
+            </p>
           </div>
           <Field
             label='IP 地址'
             name='ip'
-            defaultValue={revision?.config.ip || ''}
+            value={ip}
+            onChange={(event) => setIP(event.target.value)}
             required
             placeholder='192.168.33.20'
           />
-          <Field
-            label='RTSP 端口'
-            name='rtsp_port'
-            type='number'
-            min={1}
-            max={65535}
-            defaultValue={revision?.config.rtsp_port || 554}
-            required
-          />
+          {(method === 'rtsp' || probed) && (
+            <Field
+              label='RTSP 端口'
+              name='rtsp_port'
+              type='number'
+              min={1}
+              max={65535}
+              value={rtspPort}
+              onChange={(event) => setRTSPPort(event.target.value)}
+              required
+            />
+          )}
           <Field
             label='用户名'
             name='username'
@@ -200,18 +259,38 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
               }}
             />
           )}
-          <Field
-            label='主流路径'
-            name='main_path'
-            defaultValue={revision?.config.main_path || '/main'}
-            required
-          />
-          <Field
-            label='子流路径（可留空）'
-            name='sub_path'
-            defaultValue={revision?.config.sub_path || ''}
-            placeholder='/sub'
-          />
+          {method === 'onvif' && (
+            <div className='md:col-span-2'>
+              <SourceOnvifPanel
+                channelId={channel.id}
+                ip={ip}
+                port={onvifPort}
+                onPortChange={setONVIFPort}
+                credentials={enteredCredentials}
+                onStreams={applyStreams}
+                savedPassword={passwordAction === 'keep' && !!revision}
+                busy={pending}
+              />
+            </div>
+          )}
+          {(method === 'rtsp' || probed) && (
+            <>
+              <Field
+                label='主流路径'
+                name='main_path'
+                value={mainPath}
+                onChange={(event) => setMainPath(event.target.value)}
+                required
+              />
+              <Field
+                label='子流路径（可留空）'
+                name='sub_path'
+                value={subPath}
+                onChange={(event) => setSubPath(event.target.value)}
+                placeholder='/sub'
+              />
+            </>
+          )}
           <details className='rounded-lg border p-4 md:col-span-2'>
             <summary className='cursor-pointer text-sm font-medium'>
               高级连接设置
@@ -295,19 +374,21 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
           </details>
           <div className='flex flex-wrap items-center justify-between gap-3 border-t pt-4 md:col-span-2'>
             <span className='text-xs text-muted-foreground'>
-              保存不影响正在运行的源；启用才会切换
+              {method === 'onvif' && !probed
+                ? '请先「获取码流」，码流地址由摄像头返回后再保存'
+                : '保存不影响正在运行的源；启用才会切换'}
             </span>
             <div className='flex gap-3'>
               {/* The primary action comes first so Enter in any field keeps
                   running the previously verified connect flow. */}
-              <Button disabled={pending}>
+              <Button disabled={pending || (method === 'onvif' && !probed)}>
                 {pending ? '正在处理…' : '保存并启用'}
               </Button>
               <Button
                 type='submit'
                 value='save'
                 variant='outline'
-                disabled={pending}
+                disabled={pending || (method === 'onvif' && !probed)}
               >
                 保存
               </Button>

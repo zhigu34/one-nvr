@@ -926,6 +926,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/channels/{id}/onvif/probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["onvifProbe"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1415,6 +1431,35 @@ export interface components {
             fallback: boolean;
             /** @constant */
             expires_in: 30;
+        };
+        OnvifProbeInput: {
+            ip: string;
+            onvif_port?: number;
+            username?: string;
+            password?: string;
+        };
+        OnvifDevice: {
+            manufacturer: string;
+            model: string;
+            firmware_version: string;
+            serial_number: string;
+        };
+        OnvifStream: {
+            token: string;
+            name: string;
+            encoding: string;
+            width: number;
+            height: number;
+            ip: string;
+            rtsp_port: number;
+            path: string;
+        };
+        OnvifProbe: {
+            device: components["schemas"]["OnvifDevice"];
+            streams: components["schemas"]["OnvifStream"][];
+            /** @description Capability the device reported. PTZ control is not implemented; this is reported, never offered as a button. */
+            ptz: boolean;
+            onvif_port: number;
         };
     };
     responses: never;
@@ -5197,6 +5242,100 @@ export interface operations {
                         };
                         request_id: string;
                     };
+                };
+            };
+        };
+    };
+    onvifProbe: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": string;
+            };
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OnvifProbeInput"];
+            };
+        };
+        responses: {
+            /** @description Camera answer, evidence only: nothing is stored and no source is switched */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["OnvifProbe"];
+                        request_id: components["schemas"]["UUID"];
+                    };
+                };
+            };
+            /** @description Malformed request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Session missing or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Action or role denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unknown channel */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Camera rejected the query or offers no usable stream */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Probe attempted too often */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Camera unreachable or answered unusably */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
         };
