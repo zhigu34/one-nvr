@@ -14,6 +14,8 @@ import {
   QueryState,
   Notices,
   Field,
+  SelectField,
+  CheckboxField,
 } from '@/features/foundation/ui'
 import { sourceCommand } from './api'
 import { ChannelStatus } from './channel-status'
@@ -60,22 +62,16 @@ export function ChannelConfigure({ initialId = '' }: { initialId?: string }) {
             >
               ← 返回通道列表
             </a>
-            <label className='grid gap-2 text-sm'>
-              选择通道
-              <select
-                aria-label='选择通道'
-                value={channel?.id || ''}
-                onChange={(e) => setSelected(e.target.value)}
-                className='rounded-md border bg-background p-2'
-              >
-                {allowed.map((value) => (
-                  <option key={value.id} value={value.id}>
-                    CH{String(value.channel_no).padStart(2, '0')} ·{' '}
-                    {value.channel_name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <SelectField
+              label='选择通道'
+              className='text-sm'
+              value={channel?.id || ''}
+              onValueChange={setSelected}
+              options={allowed.map((value) => ({
+                value: value.id,
+                label: `CH${String(value.channel_no).padStart(2, '0')} · ${value.channel_name}`,
+              }))}
+            />
             <nav
               aria-label='切换通道'
               className='mt-3 hidden max-h-[calc(100vh-16rem)] space-y-1 overflow-y-auto lg:block'
@@ -355,14 +351,13 @@ function ConfigureChannel({ channel }: { channel: Schema<'Channel'> }) {
                 <p className='mb-3 text-sm'>
                   清空会停止当前取流和录像，通道编号、权限及历史录像保留。
                 </p>
-                <label className='mb-3 flex gap-2 text-sm'>
-                  <input
-                    type='checkbox'
-                    checked={clearChecked}
-                    onChange={(e) => setClearChecked(e.target.checked)}
-                  />
-                  确认清空此通道摄像头
-                </label>
+                <CheckboxField
+                  label='确认清空此通道摄像头'
+                  id='clear-camera-confirm'
+                  className='mb-3'
+                  checked={clearChecked}
+                  onCheckedChange={setClearChecked}
+                />
                 <Button
                   variant='destructive'
                   disabled={

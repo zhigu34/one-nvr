@@ -3,7 +3,7 @@ import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { fields, text, useAction } from '@/features/foundation/hooks'
-import { Field, Notices } from '@/features/foundation/ui'
+import { Field, SelectField, Notices } from '@/features/foundation/ui'
 
 export function Setup() {
   const navigate = useNavigate()
@@ -70,32 +70,27 @@ export function Setup() {
             maxLength={128}
             required
           />
-          <label className='grid gap-2'>
-            通道数量
-            <select
-              aria-label='通道数量'
-              name='channel_count'
-              className='rounded-md border bg-background p-2'
-              defaultValue='16'
-            >
-              <option value='16'>16 路</option>
-              <option value='32'>32 路</option>
-            </select>
-          </label>
-          <label className='grid gap-2'>
-            初始时区
-            <select
-              aria-label='时区'
-              name='timezone'
-              className='rounded-md border bg-background p-2'
-              defaultValue='Asia/Shanghai'
-            >
-              <option value='Asia/Shanghai'>
-                Asia/Shanghai · 中国标准时间
-              </option>
-              <option value='UTC'>UTC</option>
-            </select>
-          </label>
+          <SelectField
+            label='通道数量'
+            name='channel_count'
+            defaultValue='16'
+            options={[
+              { value: '16', label: '16 路' },
+              { value: '32', label: '32 路' },
+            ]}
+          />
+          <SelectField
+            label='初始时区'
+            name='timezone'
+            defaultValue='Asia/Shanghai'
+            options={[
+              {
+                value: 'Asia/Shanghai',
+                label: 'Asia/Shanghai · 中国标准时间',
+              },
+              { value: 'UTC', label: 'UTC' },
+            ]}
+          />
           <p className='text-xs text-muted-foreground'>
             之后可在系统设置选择全部 IANA
             时区。摄像头配置与录制功能将在后续版本接入。

@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/auth-store'
 import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import {
@@ -16,7 +17,13 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useAPI, useAction } from '@/features/foundation/hooks'
-import { PageTitle, QueryState, Notices, Empty } from '@/features/foundation/ui'
+import {
+  PageTitle,
+  QueryState,
+  Notices,
+  Empty,
+  SelectField,
+} from '@/features/foundation/ui'
 import { formatMinute } from '@/features/playback/zone'
 import { downloadLocal, sourceCommand } from './api'
 import { StatusLabel } from './channel-status'
@@ -233,31 +240,29 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                   onChange={(event) => setSearch(event.target.value)}
                 />
               </div>
-              <select
-                aria-label='分组筛选'
-                className='h-9 rounded-md border bg-background px-3 text-sm'
+              <SelectField
+                ariaLabel='分组筛选'
+                className='w-40'
                 value={group}
-                onChange={(event) => setGroup(event.target.value)}
-              >
-                <option value='all'>全部分组</option>
-                <option value='none'>未分组</option>
-                {groups.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
-                ))}
-              </select>
-              <select
-                aria-label='配置状态'
-                className='h-9 rounded-md border bg-background px-3 text-sm'
+                onValueChange={setGroup}
+                options={[
+                  { value: 'all', label: '全部分组' },
+                  { value: 'none', label: '未分组' },
+                  ...groups.map((value) => ({ value, label: value })),
+                ]}
+              />
+              <SelectField
+                ariaLabel='配置状态'
+                className='w-40'
                 value={filter}
-                onChange={(event) => setFilter(event.target.value)}
-              >
-                <option value='all'>全部通道</option>
-                <option value='configured'>已配置</option>
-                <option value='empty'>未配置</option>
-                <option value='abnormal'>异常通道</option>
-              </select>
+                onValueChange={setFilter}
+                options={[
+                  { value: 'all', label: '全部通道' },
+                  { value: 'configured', label: '已配置' },
+                  { value: 'empty', label: '未配置' },
+                  { value: 'abnormal', label: '异常通道' },
+                ]}
+              />
             </div>
             <span className='text-xs text-muted-foreground'>
               {visible.length} / {channels.length} 路
@@ -313,13 +318,12 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                   <TableRow>
                     {admin && (
                       <TableHead className='w-10'>
-                        <input
-                          type='checkbox'
+                        <Checkbox
                           aria-label='选择当前结果'
                           checked={allChecked}
                           disabled={!selectable.length}
-                          onChange={(event) => {
-                            const checked = event.target.checked
+                          onCheckedChange={(state) => {
+                            const checked = state === true
                             setSelected((previous) => {
                               const next = new Set(previous)
                               selectable.forEach((channel) => {
@@ -352,8 +356,7 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                     <TableRow key={channel.channel_id} data-testid='channel-row'>
                       {admin && (
                         <TableCell>
-                          <input
-                            type='checkbox'
+                          <Checkbox
                             aria-label={`选择 ${numberLabel(channel)}`}
                             checked={chosen.some(
                               (item) => item.channel_id === channel.channel_id
@@ -361,8 +364,8 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                             disabled={
                               !channel.permissions.includes('configure')
                             }
-                            onChange={(event) =>
-                              select(channel.channel_id, event.target.checked)
+                            onCheckedChange={(state) =>
+                              select(channel.channel_id, state === true)
                             }
                           />
                         </TableCell>

@@ -8,6 +8,7 @@ import {
   PageTitle,
   Panel,
   Field,
+  SelectField,
   QueryState,
   Notices,
   Forbidden,
@@ -74,21 +75,15 @@ export function Settings() {
               maxLength={128}
               required
             />
-            <label className='grid gap-2'>
-              时区
-              <select
-                aria-label='时区'
-                name='timezone'
-                className='rounded-md border bg-background p-2'
-                defaultValue={query.data.timezone}
-              >
-                {zones.data.map((z) => (
-                  <option key={z.id} value={z.id}>
-                    {z.label} · {z.id}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <SelectField
+              label='时区'
+              name='timezone'
+              defaultValue={query.data.timezone}
+              options={zones.data.map((z) => ({
+                value: z.id,
+                label: `${z.label} · ${z.id}`,
+              }))}
+            />
             <Button className='self-end' disabled={action.pending}>
               保存站点设置
             </Button>

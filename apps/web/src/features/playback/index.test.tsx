@@ -7,6 +7,7 @@ import {
 } from '@tanstack/react-router'
 import { afterEach, expect, test, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
+import { userEvent } from 'vitest/browser'
 import type { Schema } from '@/lib/types'
 import { Playback } from './index'
 
@@ -267,10 +268,14 @@ test('speed control offers only the documented rates', async () => {
   const { view } = await fixture([segment(A, 0, 120)])
   const speed = view.getByLabelText('播放倍速')
   await expect.element(speed).toBeVisible()
-  const values = [...document.querySelectorAll('select option')].map(
-    (option) => (option as HTMLOptionElement).value
-  )
-  expect(values).toEqual(['0.5', '1', '2', '4'])
-  await speed.selectOptions('2')
-  expect((speed.element() as HTMLSelectElement).value).toBe('2')
+  await userEvent.click(speed)
+  for (const label of ['0.5x', '1x', '2x', '4x']) {
+    await expect
+      .element(view.getByRole('option', { name: label, exact: true }))
+      .toBeVisible()
+  }
+  // Exactly the documented rates: no extra options beyond the four asserted.
+  await expect.element(view.getByRole('option')).toHaveLength(4)
+  await userEvent.click(view.getByRole('option', { name: '2x', exact: true }))
+  await expect.element(speed).toHaveTextContent('2x')
 })

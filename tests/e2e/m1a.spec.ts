@@ -48,7 +48,8 @@ test('viewerCannotConfigureChannel', async ({ page }) => {
   await page.getByRole('link', { name: '用户与权限', exact: true }).click()
   await page.getByLabel('新用户名').fill('viewer')
   await page.getByLabel('初始密码').fill(password)
-  await page.getByLabel('角色', { exact: true }).selectOption('viewer')
+  await page.getByLabel('角色', { exact: true }).click()
+  await page.getByRole('option', { name: '查看者', exact: true }).click()
   await page.getByRole('button', { name: '创建账号' }).click()
   await expect(page.getByText('账号已创建')).toBeVisible()
   await page.getByRole('button', { name: 'viewer 的通道权限' }).click()
@@ -120,12 +121,13 @@ test('permissionsChangeClearsStaleClientState', async ({ page, browser }) => {
 test('timezoneChangesDisplayWithoutRestart', async ({ page }) => {
   await login(page)
   await page.goto('/settings')
-  await page.getByLabel('时区', {exact:true}).selectOption('America/New_York')
+  await page.getByLabel('时区', {exact:true}).click()
+  await page.getByRole('option', {name:/America\/New_York/}).click()
   await page.getByRole('button',{name:'保存站点设置'}).click()
   await expect(page.getByText('站点设置已保存')).toBeVisible()
   await expect(page.getByTestId('site-clock')).toContainText('America/New_York')
   await page.reload()
-  await expect(page.getByLabel('时区', {exact:true})).toHaveValue('America/New_York')
+  await expect(page.getByLabel('时区', {exact:true})).toContainText('America/New_York')
 })
 
 test('directoryPoolKeepsPendingZLMStatus', async ({page}) => {

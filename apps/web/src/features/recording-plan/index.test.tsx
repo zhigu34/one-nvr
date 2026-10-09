@@ -101,24 +101,29 @@ test('unsupported recording modes are listed but cannot be chosen', async () => 
   const view = await render(setup.view)
   const select = view.getByLabelText('CH01 录像方式')
   await expect.element(select).toBeVisible()
-  const scheduled = select.element().querySelector('option[value=scheduled]')
-  expect(scheduled).not.toBeNull()
-  expect((scheduled as HTMLOptionElement).disabled).toBe(true)
-  expect(
-    (select.element().querySelector('option[value=event]') as HTMLOptionElement)
-      .disabled
-  ).toBe(true)
-  expect(
-    (select.element().querySelector('option[value=continuous]') as HTMLOptionElement)
-      .disabled
-  ).toBe(false)
+  await userEvent.click(select)
+  await expect
+    .element(
+      view.getByRole('option', { name: '定时录像（后续开放）', exact: true })
+    )
+    .toHaveAttribute('data-disabled')
+  await expect
+    .element(
+      view.getByRole('option', { name: '事件录像（后续开放）', exact: true })
+    )
+    .toHaveAttribute('data-disabled')
+  await expect
+    .element(
+      view.getByRole('option', { name: '手动（连续录像）', exact: true })
+    )
+    .not.toHaveAttribute('data-disabled')
 })
 test('continuous recording without a bound pool is refused before it reaches the API', async () => {
   const setup = fixture({ pool: false })
   const view = await render(setup.view)
-  await userEvent.selectOptions(
-    view.getByLabelText('CH01 录像方式'),
-    'continuous'
+  await userEvent.click(view.getByLabelText('CH01 录像方式'))
+  await userEvent.click(
+    view.getByRole('option', { name: '手动（连续录像）', exact: true })
   )
   await expect.element(view.getByText('请先绑定存储池')).toBeVisible()
   await expect
@@ -129,7 +134,10 @@ test('a batch reads each current version, applies in one request and reports rej
   const setup = fixture({ pool: true, reject: true })
   const view = await render(setup.view)
   await userEvent.click(view.getByLabelText('选择 CH01'))
-  await userEvent.selectOptions(view.getByLabelText('批量录像方式'), 'continuous')
+  await userEvent.click(view.getByLabelText('批量录像方式'))
+  await userEvent.click(
+    view.getByRole('option', { name: '手动（连续录像）', exact: true })
+  )
   await userEvent.click(
     view.getByRole('button', { name: '应用到选中通道', exact: true })
   )

@@ -102,9 +102,9 @@ test('keep and clear submit explicit intent without a masked password', async ()
   expect(body.credentials.password_action).toBe('keep')
   expect(body.credentials).not.toHaveProperty('password')
   await userEvent.click(view.getByText('高级连接设置', { exact: true }))
-  await userEvent.selectOptions(
-    view.getByLabelText('密码处理', { exact: true }),
-    'clear'
+  await userEvent.click(view.getByLabelText('密码处理', { exact: true }))
+  await userEvent.click(
+    view.getByRole('option', { name: '清空密码', exact: true })
   )
   await userEvent.click(view.getByRole('button', { name: '保存并启用' }))
   body = JSON.parse(calls.request.mock.calls[1][1].body)
@@ -115,9 +115,9 @@ test('replace rejects mask and sends only an explicitly entered real password', 
   calls.request.mockResolvedValue(revision)
   const view = await render(wrapper())
   await userEvent.click(view.getByText('高级连接设置', { exact: true }))
-  await userEvent.selectOptions(
-    view.getByLabelText('密码处理', { exact: true }),
-    'replace'
+  await userEvent.click(view.getByLabelText('密码处理', { exact: true }))
+  await userEvent.click(
+    view.getByRole('option', { name: '输入新密码', exact: true })
   )
   await userEvent.fill(view.getByLabelText('密码', { exact: true }), '••••••')
   await userEvent.click(view.getByRole('button', { name: '保存并启用' }))
@@ -160,9 +160,9 @@ test('changing a revision clears typed credentials but preserves a saved-operati
   calls.request.mockResolvedValue(revision)
   const view = await render(wrapper())
   await userEvent.click(view.getByText('高级连接设置', { exact: true }))
-  await userEvent.selectOptions(
-    view.getByLabelText('密码处理', { exact: true }),
-    'replace'
+  await userEvent.click(view.getByLabelText('密码处理', { exact: true }))
+  await userEvent.click(
+    view.getByRole('option', { name: '输入新密码', exact: true })
   )
   await userEvent.fill(
     view.getByLabelText('密码', { exact: true }),

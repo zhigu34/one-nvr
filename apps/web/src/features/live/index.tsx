@@ -13,7 +13,8 @@ import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useAPI } from '@/features/foundation/hooks'
-import { QueryState } from '@/features/foundation/ui'
+import { QueryState, SelectField } from '@/features/foundation/ui'
+import { cn } from '@/lib/utils'
 import { LivePlayer, type PlayerState } from './player'
 import { restoreView, type Layout, type View } from './view'
 
@@ -62,16 +63,18 @@ function Tile({
           {channel ? label(channel) : '选择通道开始预览'}
         </span>
         {channel && (
-          <button
+          <Button
+            variant='ghost'
+            size='icon'
             aria-label={`关闭 ${label(channel)}`}
-            className='rounded p-1 hover:bg-slate-800'
+            className='size-6 rounded p-1 text-slate-100 hover:bg-slate-800 hover:text-slate-100'
             onClick={(e) => {
               e.stopPropagation()
               onClose()
             }}
           >
             <X size={14} />
-          </button>
+          </Button>
         )}
       </div>
       <div className='relative aspect-video min-h-0 flex-1'>
@@ -118,36 +121,43 @@ function Tile({
               : '未播放'}
           </span>
           <div className='flex items-center gap-2'>
-            <select
-              aria-label={`${label(channel)} 码流`}
+            <SelectField
+              ariaLabel={`${label(channel)} 码流`}
+              size='sm'
+              className='w-28'
+              triggerClassName='text-xs'
               value={stream}
-              onChange={(e) => setStream(e.target.value as 'main' | 'sub')}
-              className='rounded border border-slate-700 bg-slate-900 px-1 py-0.5'
-            >
-              <option value='sub'>子码流</option>
-              <option value='main'>主码流</option>
-            </select>
-            <button
+              onValueChange={(next) => setStream(next as 'main' | 'sub')}
+              options={[
+                { value: 'sub', label: '子码流' },
+                { value: 'main', label: '主码流' },
+              ]}
+            />
+            <Button
+              variant='ghost'
+              size='icon'
               aria-label='切换声音'
               disabled={!selected}
               onClick={() => setAudio((v) => !v)}
-              className='p-1 disabled:opacity-30'
+              className='size-6 p-1 text-slate-100 hover:bg-slate-800 hover:text-slate-100 disabled:opacity-30'
             >
               {audio && selected ? (
                 <Volume2 size={14} />
               ) : (
                 <VolumeX size={14} />
               )}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant='ghost'
+              size='icon'
               aria-label='全屏画面'
-              className='p-1'
+              className='size-6 p-1 text-slate-100 hover:bg-slate-800 hover:text-slate-100'
               onClick={() =>
                 void container.current?.requestFullscreen().catch(() => {})
               }
             >
               <Maximize size={14} />
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -299,17 +309,22 @@ function LiveWorkspace({
           />
           <div className='grid grid-cols-2 gap-1 xl:grid-cols-1'>
             {filtered.slice(page * 16, (page + 1) * 16).map((channel) => (
-              <button
+              <Button
                 key={channel.id}
+                variant='ghost'
                 draggable
                 onDragStart={(e) =>
                   e.dataTransfer.setData('text/plain', channel.id)
                 }
                 onClick={() => choose(channel.id)}
-                className={`truncate rounded-md px-2 py-2 text-left text-sm hover:bg-accent ${displayed[selected]?.id === channel.id ? 'bg-accent font-medium' : ''}`}
+                className={cn(
+                  'h-auto w-full justify-start truncate px-2 py-2 text-left text-sm font-normal',
+                  displayed[selected]?.id === channel.id &&
+                    'bg-accent font-medium'
+                )}
               >
                 {label(channel)}
-              </button>
+              </Button>
             ))}
           </div>
           {!channels.length && (

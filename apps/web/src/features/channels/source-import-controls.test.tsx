@@ -236,11 +236,10 @@ test.each([false, true])(
       </QueryClientProvider>
     )
     await expect.element(view.getByText('第 1 行 · 测试通过')).toBeVisible()
-    if (remap)
-      await userEvent.selectOptions(
-        view.getByLabelText('第 1 行目标通道'),
-        target.id
-      )
+    if (remap) {
+      await userEvent.click(view.getByLabelText('第 1 行目标通道'))
+      await userEvent.click(view.getByRole('option', { name: /^CH02 · / }))
+    }
     await userEvent.click(view.getByLabelText('选择第 1 行'))
     await userEvent.click(
       view.getByLabelText(

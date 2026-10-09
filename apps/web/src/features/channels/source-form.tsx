@@ -2,7 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { apiRequest, jsonRequest, newRequestKey } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
-import { Field, Notices } from '@/features/foundation/ui'
+import {
+  Field,
+  SelectField,
+  CheckboxField,
+  Notices,
+} from '@/features/foundation/ui'
 import { connectionError, type SaveConnection } from './source-connect'
 import { SourceOnvifPanel } from './source-onvif'
 
@@ -186,26 +191,22 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
           <div className='grid gap-2 md:col-span-2'>
             <span className='text-sm'>添加方式</span>
             <div className='flex flex-wrap gap-2'>
-              <button
+              <Button
                 type='button'
+                variant={method === 'rtsp' ? 'secondary' : 'outline'}
                 aria-pressed={method === 'rtsp'}
                 onClick={() => setMethod('rtsp')}
-                className={`rounded-md border px-4 py-2 text-sm ${
-                  method === 'rtsp' ? 'bg-accent font-medium' : ''
-                }`}
               >
                 RTSP 手动
-              </button>
-              <button
+              </Button>
+              <Button
                 type='button'
+                variant={method === 'onvif' ? 'secondary' : 'outline'}
                 aria-pressed={method === 'onvif'}
                 onClick={() => setMethod('onvif')}
-                className={`rounded-md border px-4 py-2 text-sm ${
-                  method === 'onvif' ? 'bg-accent font-medium' : ''
-                }`}
               >
                 ONVIF 手动
-              </button>
+              </Button>
             </div>
             <p className='text-xs text-muted-foreground'>
               {method === 'onvif'
@@ -296,77 +297,62 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
               高级连接设置
             </summary>
             <div className='mt-4 grid gap-4 md:grid-cols-2'>
-              <label className='grid gap-2 text-sm'>
-                传输方式
-                <select
-                  aria-label='传输方式'
-                  name='transport'
-                  defaultValue={revision?.config.transport || 'tcp'}
-                  className='rounded-md border bg-background p-2'
-                >
-                  <option value='tcp'>TCP</option>
-                  <option value='udp'>UDP</option>
-                </select>
-              </label>
-              <label className='grid gap-2 text-sm'>
-                摄像头操作
-                <select
-                  aria-label='摄像头操作'
-                  value={intent}
-                  onChange={(e) => setIntent(e.target.value as typeof intent)}
-                  className='rounded-md border bg-background p-2'
-                >
-                  {revision && (
-                    <option value='modify'>修改当前摄像头配置</option>
-                  )}
-                  <option value='replace'>更换摄像头</option>
-                  {identities.length > 0 && (
-                    <option value='history'>恢复历史摄像头身份</option>
-                  )}
-                </select>
-              </label>
+              <SelectField
+                label='传输方式'
+                name='transport'
+                defaultValue={revision?.config.transport || 'tcp'}
+                options={[
+                  { value: 'tcp', label: 'TCP' },
+                  { value: 'udp', label: 'UDP' },
+                ]}
+              />
+              <SelectField
+                label='摄像头操作'
+                value={intent}
+                onValueChange={(next) => setIntent(next as typeof intent)}
+                options={[
+                  ...(revision
+                    ? [{ value: 'modify', label: '修改当前摄像头配置' }]
+                    : []),
+                  { value: 'replace', label: '更换摄像头' },
+                  ...(identities.length > 0
+                    ? [{ value: 'history', label: '恢复历史摄像头身份' }]
+                    : []),
+                ]}
+              />
               {intent === 'history' && (
-                <label className='grid gap-2 text-sm'>
-                  历史摄像头
-                  <select
-                    aria-label='历史摄像头'
-                    name='history_source_id'
-                    className='rounded-md border bg-background p-2'
-                  >
-                    {identities.map((value) => (
-                      <option key={value.source_id} value={value.source_id}>
-                        身份 {value.source_id.slice(0, 8)} · 修订 {value.number}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <SelectField
+                  label='历史摄像头'
+                  name='history_source_id'
+                  defaultValue={identities[0]?.source_id}
+                  options={identities.map((value) => ({
+                    value: value.source_id,
+                    label: `身份 ${value.source_id.slice(0, 8)} · 修订 ${value.number}`,
+                  }))}
+                />
               )}
               <div className='grid gap-2'>
-                <label className='flex gap-2 text-sm'>
-                  <input
-                    type='checkbox'
-                    name='update_username'
-                    defaultChecked={!revision}
-                  />
-                  允许清空用户名（普通编辑留空保留）
-                </label>
+                <CheckboxField
+                  label='允许清空用户名（普通编辑留空保留）'
+                  name='update_username'
+                  defaultChecked={!revision}
+                />
               </div>
-              <label className='grid gap-2 text-sm'>
-                密码处理
-                <select
-                  aria-label='密码处理'
-                  value={passwordAction}
-                  onChange={(e) => {
-                    setPasswordAction(e.target.value as typeof passwordAction)
-                    setPassword('')
-                  }}
-                  className='rounded-md border bg-background p-2'
-                >
-                  {revision && <option value='keep'>保留当前密码</option>}
-                  <option value='replace'>输入新密码</option>
-                  <option value='clear'>清空密码</option>
-                </select>
-              </label>
+              <SelectField
+                label='密码处理'
+                value={passwordAction}
+                onValueChange={(next) => {
+                  setPasswordAction(next as typeof passwordAction)
+                  setPassword('')
+                }}
+                options={[
+                  ...(revision
+                    ? [{ value: 'keep', label: '保留当前密码' }]
+                    : []),
+                  { value: 'replace', label: '输入新密码' },
+                  { value: 'clear', label: '清空密码' },
+                ]}
+              />
             </div>
             <p className='mt-4 text-xs text-muted-foreground'>
               更换摄像头仍保留通道编号、权限与历史录像。

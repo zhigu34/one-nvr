@@ -4,6 +4,7 @@ import { useAuthStore } from '@/stores/auth-store'
 import { apiRequest } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Table,
   TableBody,
@@ -11,7 +12,13 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { PageTitle, QueryState, Notices, Empty } from '@/features/foundation/ui'
+import {
+  PageTitle,
+  QueryState,
+  Notices,
+  Empty,
+  SelectField,
+} from '@/features/foundation/ui'
 import { useAPI, useAction } from '@/features/foundation/hooks'
 import { sourceCommand } from '@/features/channels/api'
 import { PolicyRow } from './policy-row'
@@ -119,23 +126,21 @@ export function RecordingPlan() {
       {items.length > 0 && (
         <>
           <div className='mb-4 flex flex-wrap items-end gap-3 rounded-xl border bg-card p-4'>
-            <label className='grid gap-2 text-sm'>
-              批量录像方式
-              <select
-                aria-label='批量录像方式'
-                className='rounded-md border bg-background p-2'
-                value={mode}
-                onChange={(event) => setMode(event.target.value)}
-              >
-                <option value='none'>关闭录像</option>
-                <option value='continuous'>手动（连续录像）</option>
-                {PLANNED_MODES.map((entry) => (
-                  <option key={entry.value} value={entry.value} disabled>
-                    {entry.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <SelectField
+              label='批量录像方式'
+              className='text-sm'
+              value={mode}
+              onValueChange={setMode}
+              options={[
+                { value: 'none', label: '关闭录像' },
+                { value: 'continuous', label: '手动（连续录像）' },
+                ...PLANNED_MODES.map((entry) => ({
+                  value: entry.value,
+                  label: entry.label,
+                  disabled: true,
+                })),
+              ]}
+            />
             <Button
               type='button'
               disabled={batch.pending || chosen.length === 0}
@@ -161,17 +166,16 @@ export function RecordingPlan() {
               <TableHeader>
                 <TableRow>
                   <TableHead className='w-10'>
-                    <input
-                      type='checkbox'
+                    <Checkbox
                       aria-label='选择全部可配置通道'
                       checked={
                         permitted.length > 0 &&
                         permitted.every((channel) => selected.has(channel.id))
                       }
                       disabled={permitted.length === 0}
-                      onChange={(event) =>
+                      onCheckedChange={(state) =>
                         setSelected(
-                          event.target.checked
+                          state === true
                             ? new Set(permitted.map((channel) => channel.id))
                             : new Set()
                         )

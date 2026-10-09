@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { ApiError, apiRequest, jsonRequest } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
-import { Notices } from '@/features/foundation/ui'
+import { Notices, SelectField } from '@/features/foundation/ui'
 
 // ONVIF is a manual add method, not a scan: the operator names the camera and
 // this panel asks it for its own stream configuration. Nothing is stored here —
@@ -111,13 +111,12 @@ export function SourceOnvifPanel({
     }
   }
 
-  const options = probe
-    ? probe.streams.map((stream) => (
-        <option key={stream.token} value={stream.token}>
-          {streamLabel(stream)}
-        </option>
-      ))
-    : null
+  const streamOptions = probe
+    ? probe.streams.map((stream) => ({
+        value: stream.token,
+        label: streamLabel(stream),
+      }))
+    : []
   return (
     <section className='grid gap-3 rounded-lg border p-4'>
       <p className='text-sm text-muted-foreground'>
@@ -174,33 +173,27 @@ export function SourceOnvifPanel({
               ? '设备报告支持 PTZ，方向与变焦控制后续开放'
               : '设备未报告 PTZ 支持'}
           </p>
-          <label className='grid gap-2 text-sm'>
-            主码流
-            <select
-              aria-label='主码流'
-              className='rounded-md border bg-background p-2'
-              value={mainToken}
-              onChange={(event) =>
-                choose(probe, event.target.value, subToken)
-              }
-            >
-              {options}
-            </select>
-          </label>
-          <label className='grid gap-2 text-sm'>
-            子码流（可留空）
-            <select
-              aria-label='子码流'
-              className='rounded-md border bg-background p-2'
-              value={subToken}
-              onChange={(event) =>
-                choose(probe, mainToken, event.target.value)
-              }
-            >
-              <option value=''>不使用子码流</option>
-              {options}
-            </select>
-          </label>
+          <SelectField
+            label='主码流'
+            className='text-sm'
+            value={mainToken}
+            onValueChange={(next) => {
+              if (probe) choose(probe, next, subToken)
+            }}
+            options={streamOptions}
+          />
+          <SelectField
+            label='子码流（可留空）'
+            className='text-sm'
+            value={subToken}
+            onValueChange={(next) => {
+              if (probe) choose(probe, mainToken, next)
+            }}
+            options={[
+              { value: '', label: '不使用子码流' },
+              ...streamOptions,
+            ]}
+          />
         </div>
       )}
     </section>

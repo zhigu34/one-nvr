@@ -17,8 +17,9 @@ import {
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
 import { useAPI } from '@/features/foundation/hooks'
-import { Empty, QueryState } from '@/features/foundation/ui'
+import { Empty, QueryState, SelectField } from '@/features/foundation/ui'
 import { probeSegment } from './api'
 import {
   RATES,
@@ -231,18 +232,20 @@ function Workspace({
         />
         <div className='grid max-h-80 gap-1 overflow-y-auto'>
           {filtered.map((channel) => (
-            <button
+            <Button
               key={channel.id}
+              variant='ghost'
               onClick={() => {
                 setChannelID(channel.id)
                 setSelected(null)
               }}
-              className={`truncate rounded-md px-2 py-2 text-left text-sm hover:bg-accent ${
-                channel.id === channelID ? 'bg-accent font-medium' : ''
-              }`}
+              className={cn(
+                'h-auto w-full justify-start truncate px-2 py-2 text-left text-sm font-normal',
+                channel.id === channelID && 'bg-accent font-medium'
+              )}
             >
               {label(channel)}
-            </button>
+            </Button>
           ))}
         </div>
         <p className='text-xs text-muted-foreground'>
@@ -381,23 +384,22 @@ function Workspace({
             <Maximize size={16} />
             放大
           </Button>
-          <label className='flex items-center gap-2 text-sm'>
+          <div className='flex items-center gap-2 text-sm'>
             <span>倍速</span>
-            <select
-              aria-label='播放倍速'
-              value={state.rate}
-              onChange={(event) =>
-                controller.current?.setRate(Number(event.target.value))
+            <SelectField
+              ariaLabel='播放倍速'
+              size='sm'
+              className='w-20'
+              value={String(state.rate)}
+              onValueChange={(next) =>
+                controller.current?.setRate(Number(next))
               }
-              className='rounded border bg-background px-2 py-1'
-            >
-              {RATES.map((rate) => (
-                <option key={rate} value={rate}>
-                  {rate}x
-                </option>
-              ))}
-            </select>
-          </label>
+              options={RATES.map((rate) => ({
+                value: String(rate),
+                label: `${rate}x`,
+              }))}
+            />
+          </div>
           <Button
             variant='outline'
             onClick={() =>
@@ -545,21 +547,23 @@ function Timeline({
         onPointerUp={() => setScrubbing(false)}
       >
         {timeline.entries.map((entry) => (
-          <button
+          <Button
             key={entry.id}
+            variant='ghost'
             title={`${formatClock(entry.start, zone)} — ${formatClock(entry.end, zone)}${
               entry.blocked ? ` · ${entry.blocked}` : ''
             }`}
             aria-label={`片段 ${formatClock(entry.start, zone)}`}
             onClick={() => onSelect(entry)}
             onDoubleClick={() => onPlay(entry)}
-            className={`absolute top-1 h-10 rounded ${
+            className={cn(
+              'absolute top-1 h-10 rounded p-0',
               entry.blocked
                 ? 'bg-amber-500/40'
                 : entry.id === selected?.id
                   ? 'bg-primary'
                   : 'bg-emerald-600/70'
-            }`}
+            )}
             style={{
               left: position(entry.start),
               width: position(entry.end),

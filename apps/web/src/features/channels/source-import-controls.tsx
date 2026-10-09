@@ -4,7 +4,11 @@ import { apiRequest } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { useAPI } from '@/features/foundation/hooks'
-import { Notices } from '@/features/foundation/ui'
+import {
+  Notices,
+  SelectField,
+  CheckboxField,
+} from '@/features/foundation/ui'
 import { sourceCommand, downloadLocal } from './api'
 import { ImportRows } from './source-import'
 import { useNow } from './use-now'
@@ -237,13 +241,15 @@ export function SourceImportControls({
           }
         }}
       >
-        <label className='grid gap-2 text-sm'>
-          文件格式
-          <select name='format' className='rounded-md border bg-background p-2'>
-            <option value='csv'>CSV</option>
-            <option value='json'>JSON（one-nvr 导出）</option>
-          </select>
-        </label>
+        <SelectField
+          label='文件格式'
+          name='format'
+          defaultValue='csv'
+          options={[
+            { value: 'csv', label: 'CSV' },
+            { value: 'json', label: 'JSON（one-nvr 导出）' },
+          ]}
+        />
         <label className='grid gap-2 text-sm'>
           导入配置文件
           <input
@@ -282,122 +288,106 @@ export function SourceImportControls({
                   key={item.row}
                   className='grid gap-3 rounded-lg border p-4 md:grid-cols-2'
                 >
-                  <label className='flex gap-2 text-sm'>
-                    <input
-                      type='checkbox'
-                      disabled={pending || busy}
-                      checked={selectedRows.includes(item.row)}
-                      onChange={(e) => {
-                        setRows((old) =>
-                          e.target.checked
-                            ? [...old, item.row]
-                            : old.filter((row) => row !== item.row)
-                        )
-                        setConfirmation(false)
-                      }}
-                    />
-                    选择第 {item.row} 行
-                  </label>
-                  <label className='grid gap-2 text-sm'>
-                    第 {item.row} 行目标通道
-                    <select
-                      disabled={pending || busy}
-                      value={selection[item.row]?.channel_id || ''}
-                      onChange={(e) => {
-                        const channel = channels.find(
-                          (value) => value.id === e.target.value
-                        )
-                        if (channel)
-                          update(item.row, {
-                            row: item.row,
-                            channel_id: channel.id,
-                            expected_version: channel.version,
-                          })
-                      }}
-                      className='rounded-md border bg-background p-2'
-                    >
-                      <option value=''>请选择</option>
-                      {channels
+                  <CheckboxField
+                    label={`选择第 ${item.row} 行`}
+                    id={`import-row-${item.row}`}
+                    disabled={pending || busy}
+                    checked={selectedRows.includes(item.row)}
+                    onCheckedChange={(state) => {
+                      setRows((old) =>
+                        state === true
+                          ? [...old, item.row]
+                          : old.filter((row) => row !== item.row)
+                      )
+                      setConfirmation(false)
+                    }}
+                  />
+                  <SelectField
+                    label={`第 ${item.row} 行目标通道`}
+                    className='text-sm'
+                    disabled={pending || busy}
+                    value={selection[item.row]?.channel_id || ''}
+                    onValueChange={(next) => {
+                      const channel = channels.find((value) => value.id === next)
+                      if (channel)
+                        update(item.row, {
+                          row: item.row,
+                          channel_id: channel.id,
+                          expected_version: channel.version,
+                        })
+                    }}
+                    options={[
+                      { value: '', label: '请选择' },
+                      ...channels
                         .filter((value) =>
                           value.permissions.includes('configure')
                         )
-                        .map((value) => (
-                          <option key={value.id} value={value.id}>
-                            CH{String(value.channel_no).padStart(2, '0')} ·{' '}
-                            {value.channel_name}
-                          </option>
-                        ))}
-                    </select>
-                  </label>
-                  <label className='grid gap-2 text-sm'>
-                    第 {item.row} 行身份意图
-                    <select
-                      disabled={pending || busy}
-                      value={selection[item.row]?.identity_intent || 'replace'}
-                      onChange={(e) =>
-                        update(item.row, {
-                          identity_intent: e.target
-                            .value as Selection['identity_intent'],
-                        })
-                      }
-                      className='rounded-md border bg-background p-2'
-                    >
-                      <option value='modify'>修改当前摄像头配置</option>
-                      <option value='replace'>更换摄像头</option>
-                    </select>
-                  </label>
-                  <label className='grid gap-2 text-sm'>
-                    第 {item.row} 行密码处理
-                    <select
-                      disabled={pending || busy}
-                      value={selection[item.row]?.password_action || 'keep'}
-                      onChange={(e) =>
-                        update(item.row, {
-                          password_action: e.target
-                            .value as Selection['password_action'],
-                        })
-                      }
-                      className='rounded-md border bg-background p-2'
-                    >
-                      <option value='keep'>保留目标已有密码</option>
-                      <option value='replace'>使用文件中的密码</option>
-                      <option value='clear'>清空密码</option>
-                    </select>
-                  </label>
-                  <label className='flex gap-2 text-sm'>
-                    <input
-                      type='checkbox'
-                      disabled={pending || busy}
-                      checked={selection[item.row]?.import_name || false}
-                      onChange={(e) =>
-                        update(item.row, { import_name: e.target.checked })
-                      }
-                    />
-                    第 {item.row} 行导入名称
-                  </label>
-                  <label className='grid gap-2 text-sm'>
-                    第 {item.row} 行首次普通录像
-                    <select
-                      disabled={pending || busy}
-                      value={
-                        selection[item.row]?.first_recording_mode ||
-                        'continuous'
-                      }
-                      onChange={(e) =>
-                        update(item.row, {
-                          first_recording_mode: e.target.value as
-                            | 'none'
-                            | 'continuous',
-                        })
-                      }
-                      className='rounded-md border bg-background p-2'
-                    >
-                      <option value='continuous'>
-                        开启连续录像（需已绑定存储池）
-                      </option>
-                      <option value='none'>关闭录像，仅取流</option>
-                    </select>
-                  </label>
+                        .map((value) => ({
+                          value: value.id,
+                          label: `CH${String(value.channel_no).padStart(2, '0')} · ${value.channel_name}`,
+                        })),
+                    ]}
+                  />
+                  <SelectField
+                    label={`第 ${item.row} 行身份意图`}
+                    className='text-sm'
+                    disabled={pending || busy}
+                    value={selection[item.row]?.identity_intent || 'replace'}
+                    onValueChange={(next) =>
+                      update(item.row, {
+                        identity_intent: next as Selection['identity_intent'],
+                      })
+                    }
+                    options={[
+                      { value: 'modify', label: '修改当前摄像头配置' },
+                      { value: 'replace', label: '更换摄像头' },
+                    ]}
+                  />
+                  <SelectField
+                    label={`第 ${item.row} 行密码处理`}
+                    className='text-sm'
+                    disabled={pending || busy}
+                    value={selection[item.row]?.password_action || 'keep'}
+                    onValueChange={(next) =>
+                      update(item.row, {
+                        password_action: next as Selection['password_action'],
+                      })
+                    }
+                    options={[
+                      { value: 'keep', label: '保留目标已有密码' },
+                      { value: 'replace', label: '使用文件中的密码' },
+                      { value: 'clear', label: '清空密码' },
+                    ]}
+                  />
+                  <CheckboxField
+                    label={`第 ${item.row} 行导入名称`}
+                    id={`import-name-${item.row}`}
+                    disabled={pending || busy}
+                    checked={selection[item.row]?.import_name || false}
+                    onCheckedChange={(state) =>
+                      update(item.row, { import_name: state === true })
+                    }
+                  />
+                  <SelectField
+                    label={`第 ${item.row} 行首次普通录像`}
+                    className='text-sm'
+                    disabled={pending || busy}
+                    value={
+                      selection[item.row]?.first_recording_mode || 'continuous'
+                    }
+                    onValueChange={(next) =>
+                      update(item.row, {
+                        first_recording_mode: next as 'none' | 'continuous',
+                      })
+                    }
+                    options={[
+                      {
+                        value: 'continuous',
+                        label: '开启连续录像（需已绑定存储池）',
+                      },
+                      { value: 'none', label: '关闭录像，仅取流' },
+                    ]}
+                  />
                   {(item.state === 'failed' || item.state === 'tested') && (
                     <Button
                       type='button'
@@ -422,15 +412,15 @@ export function SourceImportControls({
                 </article>
               ))}
           </div>
-          <label className='flex gap-2 text-sm'>
-            <input
-              type='checkbox'
-              checked={confirmation}
-              disabled={pending || busy}
-              onChange={(e) => setConfirmation(e.target.checked)}
-            />
-            已确认选中行的目标、密码处理和当前版本；应用会切换对应摄像头
-          </label>
+          <CheckboxField
+            label='已确认选中行的目标、密码处理和当前版本；应用会切换对应摄像头'
+            id='import-confirm'
+            className='items-start'
+            labelClassName='leading-snug'
+            checked={confirmation}
+            disabled={pending || busy}
+            onCheckedChange={setConfirmation}
+          />
           <div className='flex flex-wrap gap-3'>
             <Button
               variant='outline'
