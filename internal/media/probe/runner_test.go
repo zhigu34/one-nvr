@@ -79,15 +79,30 @@ for value in "$@"; do
 done
 [ "$found" = yes ] || exit 43
 printf 'frame=1\nprogress=end\n'
-printf 'Video: h264, yuv420p, 320x180, 5 fps\n[Parsed_showinfo_0] s:320x180 i:P\n' >&2
+printf 'Video: h264, yuv420p, 320x180, 5 fps\nAudio: pcm_alaw, 8000 Hz, mono, s16, 64 kb/s\n[Parsed_showinfo_0] s:320x180 i:P\n' >&2
 `
 	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
 	r := Runner{FFmpeg: path}
 	e, err := r.FirstFrame(context.Background(), "rtsp://zlm:554/one_nvr/bb6f7f61-e7dd-4eee-a03c-a53167d6d688")
-	if err != nil || !e.FirstFrame || e.Codec != "h264" || e.Width != 320 || e.Height != 180 || e.FPS != 5 || e.ObservedAt.IsZero() {
+	if err != nil || !e.FirstFrame || e.Codec != "h264" || e.Width != 320 || e.Height != 180 || e.FPS != 5 || e.AudioCodec == nil || *e.AudioCodec != "pcm_alaw" || e.ObservedAt.IsZero() {
 		t.Fatal("decoded frame evidence missing", e, err)
+	}
+}
+
+func TestFirstFrameReportsMissingAudioAsEmptyCodec(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "decoder-video-only")
+	script := `#!/bin/sh
+printf 'frame=1\nprogress=end\n'
+printf 'Video: h264, yuv420p, 320x180, 5 fps\n[Parsed_showinfo_0] s:320x180 i:P\n' >&2
+`
+	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	e, err := (Runner{FFmpeg: path}).FirstFrame(context.Background(), "rtsp://zlm:554/one_nvr/bb6f7f61-e7dd-4eee-a03c-a53167d6d688")
+	if err != nil || !e.FirstFrame || e.AudioCodec == nil || *e.AudioCodec != "" {
+		t.Fatal("a stream without audio must report an empty codec, never unknown", e, err)
 	}
 }
 

@@ -286,7 +286,8 @@ func (p controlledProbe) FirstFrame(ctx context.Context, raw string) (probe.Vide
 	if source == "" {
 		return probe.VideoEvidence{}, probe.ErrProbeFailed
 	}
-	return probe.VideoEvidence{FirstFrame: true, Codec: "H264", Width: 320, Height: 180, FPS: 5, ObservedAt: time.Now().UTC()}, nil
+	audio := "pcm_alaw"
+	return probe.VideoEvidence{FirstFrame: true, Codec: "H264", Width: 320, Height: 180, FPS: 5, AudioCodec: &audio, ObservedAt: time.Now().UTC()}, nil
 }
 func (p controlledProbe) InspectMP4(ctx context.Context, f *os.File) (probe.FileEvidence, error) {
 	return p.file.InspectMP4(ctx, f)

@@ -129,7 +129,7 @@ func (s *Service) checkTestStream(ctx context.Context, e *channel.Execution, wor
 			}
 			snapshot, err := s.Media.Inspect(ctx, ss.Key)
 			if err == nil && !snapshot.Recording {
-				out = channel.StreamTest{State: "healthy", FirstFrame: true, Codec: video.Codec, Width: video.Width, Height: video.Height, FPS: video.FPS}
+				out = channel.StreamTest{State: "healthy", FirstFrame: true, Codec: video.Codec, Width: video.Width, Height: video.Height, FPS: video.FPS, AudioCodec: video.AudioCodec}
 				if kind == "main" {
 					if err := s.sampleBitratePair(ctx, e, ss, work.TestID); err != nil {
 						var problem *fault.Error

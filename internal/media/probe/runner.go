@@ -38,6 +38,11 @@ type VideoEvidence struct {
 	Width      int       `json:"width"`
 	Height     int       `json:"height"`
 	FPS        float64   `json:"fps"`
+	// AudioCodec is the first input audio stream's codec as printed by ffmpeg
+	// ("pcm_alaw", "aac", ...). A non-nil empty string means the stream
+	// genuinely carries no audio; nil means the evidence predates this capture
+	// and the question was never asked.
+	AudioCodec *string   `json:"audio_codec,omitempty"`
 	ObservedAt time.Time `json:"observed_at"`
 }
 type FileEvidence struct {
@@ -120,6 +125,7 @@ func (w *limitedOutput) Write(p []byte) (int, error) {
 
 var dimensions = regexp.MustCompile(`\bs:(\d+)x(\d+)\b`)
 var codec = regexp.MustCompile(`Video: ([a-zA-Z0-9_]+)`)
+var audio = regexp.MustCompile(`Audio: ([a-zA-Z0-9_]+)`)
 var rate = regexp.MustCompile(`([0-9.]+) fps`)
 
 func (r Runner) FirstFrame(ctx context.Context, raw string) (VideoEvidence, error) {
@@ -147,7 +153,13 @@ func (r Runner) FirstFrame(ctx context.Context, raw string) (VideoEvidence, erro
 	if m := rate.FindSubmatch(logs); len(m) == 2 {
 		fps, _ = strconv.ParseFloat(string(m[1]), 64)
 	}
-	return VideoEvidence{FirstFrame: true, Codec: string(c[1]), Width: width, Height: height, FPS: fps, ObservedAt: time.Now().UTC()}, nil
+	// The input stream table lists every stream, so a successful video parse
+	// with no audio line is itself evidence that the camera sends no audio.
+	audioCodec := ""
+	if m := audio.FindSubmatch(logs); len(m) == 2 {
+		audioCodec = string(m[1])
+	}
+	return VideoEvidence{FirstFrame: true, Codec: string(c[1]), Width: width, Height: height, FPS: fps, AudioCodec: &audioCodec, ObservedAt: time.Now().UTC()}, nil
 }
 func (r Runner) InspectMP4(ctx context.Context, file *os.File) (FileEvidence, error) {
 	if file == nil {

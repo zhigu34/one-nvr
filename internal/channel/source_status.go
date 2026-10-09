@@ -2,6 +2,7 @@ package channel
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -144,14 +145,15 @@ func (s *SourceService) Summaries(ctx context.Context, p auth.Principal) (Summar
 		// Both enrichment passes join the grant table instead of taking an id
 		// array, so no array encoding is involved and a channel outside the
 		// caller's grants can never contribute a row.
-		source, err := tx.Query(ctx, `SELECT c.id,host(r.ip),r.main_path,r.sub_path FROM channels c JOIN channel_grants g ON g.channel_id=c.id AND g.user_id=$1 JOIN source_revisions r ON r.id=c.current_revision_id`, p.UserID)
+		source, err := tx.Query(ctx, `SELECT c.id,host(r.ip),r.main_path,r.sub_path,r.onvif_port FROM channels c JOIN channel_grants g ON g.channel_id=c.id AND g.user_id=$1 JOIN source_revisions r ON r.id=c.current_revision_id`, p.UserID)
 		if err != nil {
 			return err
 		}
 		for source.Next() {
 			var ch id.ID
 			var ip, main, sub string
-			if err := source.Scan(&ch, &ip, &main, &sub); err != nil {
+			var onvif *int
+			if err := source.Scan(&ch, &ip, &main, &sub, &onvif); err != nil {
 				source.Close()
 				return err
 			}
@@ -159,6 +161,7 @@ func (s *SourceService) Summaries(ctx context.Context, p auth.Principal) (Summar
 				out.Items[at].SourceIP = ip
 				out.Items[at].MainPath = main
 				out.Items[at].SubPath = sub
+				out.Items[at].OnvifPort = onvif
 			}
 		}
 		if err := source.Err(); err != nil {
@@ -182,9 +185,51 @@ func (s *SourceService) Summaries(ctx context.Context, p auth.Principal) (Summar
 				out.Items[at].BitrateKbps = &kbps
 			}
 		}
-		return bitrate.Err()
+		if err := bitrate.Err(); err != nil {
+			return err
+		}
+		// Media parameters describe the applied source, so only a successful
+		// test of the applied revision qualifies. An older revision's
+		// observation is never substituted, and a channel without such a test
+		// reports nothing.
+		media, err := tx.Query(ctx, `SELECT DISTINCT ON (t.channel_id) t.channel_id,t.result,t.observed_at FROM source_tests t JOIN channels c ON c.id=t.channel_id AND c.current_revision_id=t.revision_id JOIN channel_grants g ON g.channel_id=t.channel_id AND g.user_id=$1 WHERE t.purpose='source' AND t.state='succeeded' ORDER BY t.channel_id,t.created_at DESC,t.id DESC`, p.UserID)
+		if err != nil {
+			return err
+		}
+		defer media.Close()
+		for media.Next() {
+			var ch id.ID
+			var raw []byte
+			var observed *time.Time
+			if err := media.Scan(&ch, &raw, &observed); err != nil {
+				return err
+			}
+			at, ok := index[ch]
+			if !ok {
+				continue
+			}
+			var streams struct{ Main, Sub StreamTest }
+			if err := json.Unmarshal(raw, &streams); err != nil {
+				// A stored result that cannot be parsed contributes nothing;
+				// it must not fail the whole list.
+				continue
+			}
+			out.Items[at].MainMedia = mediaParams(streams.Main, observed)
+			out.Items[at].SubMedia = mediaParams(streams.Sub, observed)
+		}
+		return media.Err()
 	})
 	return out, err
+}
+
+// mediaParams turns one stored stream result into the list's media view. A
+// result without video parameters — for example an unavailable sub stream —
+// contributes nil rather than an empty object.
+func mediaParams(t StreamTest, observed *time.Time) *MediaParams {
+	if t.Codec == "" && t.Width == 0 {
+		return nil
+	}
+	return &MediaParams{Codec: t.Codec, Width: t.Width, Height: t.Height, FPS: t.FPS, AudioCodec: t.AudioCodec, ObservedAt: observed}
 }
 
 // worstOf reports the first real fault across the three kinds plus the newest

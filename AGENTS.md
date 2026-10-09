@@ -45,9 +45,9 @@
 
 按改动选择必要检查；媒体、录像连续性、证书或部署入口变更还要查看 `.github/workflows/foundation-ci.yml` 中对应真实容器验收 job。报告通过情况时写明具体命令、CI run/commit 和测试范围；没有跑过的现场设备或容量测试要明确标作未验证。
 
-## 当前交接快照（2026-10-08）
+## 当前交接快照（2026-10-09）
 
-- 当前主题：**摄像头接入流程与录像计划拆分 + 通道属性与启停 + ONVIF 手动添加**（计划：`docs/superpowers/plans/2026-10-08-camera-flow-rework.md` 批次 1、2；`docs/superpowers/plans/2026-10-09-onvif-manual-add.md` 批次 3，均已完成）。
+- 当前主题：**摄像头接入（RTSP / ONVIF 手动）+ 录像计划拆分 + 通道列表参数显示**（计划：`docs/superpowers/plans/2026-10-08-camera-flow-rework.md` 批次 1、2；`docs/superpowers/plans/2026-10-09-onvif-manual-add.md` 批次 3；`docs/superpowers/plans/2026-10-09-channel-media-params.md`，均已完成）。
 - 用户裁决（2026-10-08，权威，不可自行改动）：录像计划做成**侧边栏一级菜单**并**按通道管理录像方式（手动/定时/事件）且可批量应用**；**「手动」= 现有连续录像**（复用 `continuous` 语义）；**定时与事件只做占位禁用**；**ONVIF 批次 1 只做占位**（2026-10-09 用户新指示：改为「ONVIF 手动添加 + 码流自动填充」，不做局域网扫描，见批次 3）；**「配置保存」与「使用」是两件事**，UI 与文档**不再出现「草稿」字样**，未启用的配置状态叫「已保存，未启用」；**「未启用」分两级**——通道级启用/停用（`channels.enabled`）与配置级已应用/未应用（`current_revision_id` 是否指向它）。
 - **批次 1**（提交 `cb7bd9a`）：
   - 侧边栏按功能分组为 **监控 / 配置 / 系统**（`components/layout/data/sidebar-data.ts`）；`app-sidebar.tsx` 与 `command-menu.tsx` 都改为**整组为空则不渲染**，可见性统一走声明式 `everyRole`（command-menu 此前是硬编码 url 白名单）。
@@ -73,7 +73,9 @@
   - **不跟随设备给的地址**：`GetCapabilities` 的 Media `XAddr` 与流地址里的主机一律丢弃，只取路径，主机/端口用探测目标（防 SSRF 与越界）。
   - **只落结构化字段**：`GetStreamUri` 返回的整条 `rtsp://user:pass@host:port/path?query` 拆成 `ip / rtsp_port / main_path / sub_path / onvif_port`，凭据丢弃且不进响应（CH-10/CH-11）。
   - 新增 `POST /api/v1/channels/{id}/onvif/probe`（同步 200，每人 20 次/分钟），契约 + `api-types.ts` 同步；前端新增 `features/channels/source-onvif.tsx`，「添加方式」两 tab 转正，探测成功前禁用保存，保存仍走既有 `If-Match` + 测试 + 应用链路（**不绕开**）。
-  - 未做：局域网发现、PTZ 控制（只在结果里如实报告能力）、厂商固件/时间/编码批量管理（PRD P2）。**真机 ONVIF 摄像头未验证**（本机与 CI 都没有摄像头）。
+  - 未做：局域网发现、PTZ 控制（只在结果里如实报告能力）、厂商固件/时间/编码批量管理（PRD P2）。**真机已验证**（2026-10-09，大华 `192.168.66.111`：ONVIF 探测 → 保存 → 应用 → 取流整条链路跑通）。
+- **2026-10-09 实时预览音频轨竞态修复**（`apps/web/src/features/live/player.ts`）：`ontrack` 曾每次重新赋值 `video.srcObject`；answer 带音频 m-line 时触发两次 `ontrack`，第二次触发 media load algorithm 把 `play()` 打断成 `AbortError`，被误报成「浏览器阻止播放」。修法：每 attempt 只创建并赋值一次 `srcObject`、后续轨只 `addTrack`、`play()` 只请求一次、仅 `NotAllowedError` 映射 `autoplay_blocked`。触发条件是**音频编码被 ZLM WebRTC 接受**（只支持 opus / PCMA / PCMU；PCMA/PCMU/opus 中招、AAC 不中——与 RTSP/ONVIF 接入方式无关）。CI 拦不住此类回归：`tests/media` 合成摄像头只有视频轨（候选下一批：给夹具加 PCMA 音频轨）。已推送 `5914dcb`；**NAS 是否已部署未确认**。
+- **2026-10-09 通道管理页：媒体参数 + 接入方式**（计划 `docs/superpowers/plans/2026-10-09-channel-media-params.md`）：列表新增「媒体参数」列（主/子流：分辨率 / 视频编码 / 帧率 / 音频编码，音频按"能否经实时预览出声"着色，琥珀 = 无声；悬停显示观测时间）与「接入方式」列（**`onvif_port` 非空 → ONVIF，空 → RTSP，未配置 → —**）；「摄像头」列精简为只显示 IP（完整地址进 title）。数据来源：**当前生效修订的最近一次成功测试**（`source_tests.result`），零新探测 / 零迁移；音频编码由探测的同一份 ffmpeg 日志解析（`audio_codec`：nil = 旧记录未采集 → 显示「—」，重测补齐；**"" = 确认无音频**）。**旧测试记录没有音频字段**：部署后需对每路重新测试一次才会显示音频编码（视频参数立即可见）。
 - 交接时必须先看最新一轮 CI 结论，不要假定通过：真实容器与媒体验收只能在 GitHub CI 运行（本机无 Docker daemon）。**本机 PostgreSQL 17.10 可用**，`tests/integration` 可直接跑：`set -a && . ~/.one-nvr/test-pg.env && set +a && go test ./tests/integration -count=1`。
 
 ## 上一轮交接快照（2026-10-07，M1-C）

@@ -40,11 +40,28 @@ const summaries: Schema<'ChannelSummary'>[] = [
     source_ip: '192.168.66.114',
     main_path: '/Streaming/Channels/101',
     sub_path: '/Streaming/Channels/102',
+    onvif_port: 80,
     main: observed('healthy'),
     sub: observed('unknown', 'observation_missing'),
     recording: observed('disabled', 'recording_disabled'),
     last_error: '',
     bitrate_kbps: 4096,
+    main_media: {
+      codec: 'h264',
+      width: 2560,
+      height: 1440,
+      fps: 25,
+      audio_codec: 'pcm_alaw',
+      observed_at: '2026-10-09T05:00:00Z',
+    },
+    sub_media: {
+      codec: 'h264',
+      width: 704,
+      height: 576,
+      fps: 25,
+      audio_codec: 'pcm_alaw',
+      observed_at: '2026-10-09T05:00:00Z',
+    },
     updated_at: '2026-10-08T02:30:00Z',
   },
   {
@@ -78,6 +95,41 @@ const summaries: Schema<'ChannelSummary'>[] = [
     last_error: '',
     bitrate_kbps: null,
     updated_at: null,
+  },
+  {
+    channel_id: '00000000-0000-4000-8000-000000000004',
+    channel_no: 4,
+    channel_name: '侧门',
+    channel_group: '一层',
+    enabled: true,
+    version: 2,
+    permissions: ['configure', 'live'],
+    current_revision_id: '00000000-0000-4000-8000-0000000000bb',
+    source_ip: '192.168.66.115',
+    main_path: '/onvif/profile1',
+    sub_path: '/onvif/profile2',
+    main: observed('healthy'),
+    sub: observed('healthy'),
+    recording: observed('disabled', 'recording_disabled'),
+    last_error: '',
+    bitrate_kbps: 2048,
+    main_media: {
+      codec: 'hevc',
+      width: 2560,
+      height: 1920,
+      fps: 25,
+      audio_codec: 'aac',
+      observed_at: '2026-10-09T05:05:00Z',
+    },
+    sub_media: {
+      codec: 'hevc',
+      width: 640,
+      height: 480,
+      fps: 25,
+      audio_codec: 'aac',
+      observed_at: '2026-10-09T05:05:00Z',
+    },
+    updated_at: '2026-10-08T02:31:00Z',
   },
 ]
 function fixture() {
@@ -131,7 +183,7 @@ function fixture() {
 test('the list is drawn from a single summary request', async () => {
   const setup = fixture()
   const view = await render(setup.view)
-  await expect.element(view.getByTestId('channel-row')).toHaveLength(3)
+  await expect.element(view.getByTestId('channel-row')).toHaveLength(4)
   await expect
     .poll(() =>
       calls.request.mock.calls.filter(([path]) =>
@@ -147,7 +199,7 @@ test('the list is drawn from a single summary request', async () => {
 test('channel search combines the configured filter without hiding unknown status as empty', async () => {
   const setup = fixture()
   const view = await render(setup.view)
-  await expect.element(view.getByTestId('channel-row')).toHaveLength(3)
+  await expect.element(view.getByTestId('channel-row')).toHaveLength(4)
   await userEvent.fill(
     view.getByRole('searchbox', { name: '搜索通道' }),
     'CH01'
@@ -269,5 +321,25 @@ test('batch grouping patches every selected channel with its own version', async
   expect(
     patches.map(([, init]) => new Headers(init.headers).get('If-Match'))
   ).toEqual(['"3"', '"1"'])
+  setup.client.clear()
+})
+// The row now carries the applied source's media parameters and access
+// method; the camera column keeps only the address and moves the full path
+// into the hover title.
+test('media parameters, access method and the trimmed camera column', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  const rows = view.getByTestId('channel-row')
+  await expect.element(rows.nth(0)).toHaveTextContent('ONVIF')
+  await expect.element(rows.nth(0)).toHaveTextContent('2560×1440 H.264 25fps')
+  await expect.element(rows.nth(0)).toHaveTextContent('音 PCMA')
+  await expect.element(rows.nth(0)).toHaveTextContent('192.168.66.114')
+  await expect
+    .element(rows.nth(0))
+    .not.toHaveTextContent('/Streaming/Channels/101')
+  await expect.element(rows.nth(3)).toHaveTextContent('RTSP')
+  await expect.element(rows.nth(3)).toHaveTextContent('H.265 25fps')
+  await expect.element(rows.nth(3)).toHaveTextContent('音 AAC')
+  await expect.element(rows.nth(1)).toHaveTextContent('未配置摄像头')
   setup.client.clear()
 })
