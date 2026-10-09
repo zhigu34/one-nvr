@@ -1222,6 +1222,8 @@ export interface components {
             width?: number;
             height?: number;
             fps?: number;
+            /** @description First audio stream's codec as reported by the media probe (e.g. pcm_alaw, aac). Empty string means the stream carries no audio; null when the test predates audio capture. */
+            audio_codec?: string | null;
             reason?: string;
         };
         SourceTestResult: {
@@ -1339,6 +1341,17 @@ export interface components {
             event_recording_enabled: false;
             version: components["schemas"]["Version"];
         };
+        /** @description Media parameters of one stream as observed by the applied revision's newest successful source test. Reference information: it stays displayed while the camera is unreachable and is never mixed with the observed connection state. */
+        ChannelMediaParams: {
+            codec?: string;
+            width?: number;
+            height?: number;
+            fps?: number;
+            /** @description Audio codec as reported by the probe. Empty string means the stream carries no audio; null when the test predates audio capture. */
+            audio_codec?: string | null;
+            /** Format: date-time */
+            observed_at?: string | null;
+        };
         /** @description One channel list row. Detection status is absent because that milestone is not delivered. */
         ChannelSummary: {
             channel_id: components["schemas"]["UUID"];
@@ -1354,9 +1367,15 @@ export interface components {
             source_ip?: string;
             main_path?: string;
             sub_path?: string;
+            /** @description ONVIF management port of the applied source revision. Null when the revision was saved as RTSP-only. */
+            onvif_port?: number | null;
             main: components["schemas"]["ObservedStatus"];
             sub: components["schemas"]["ObservedStatus"];
             recording: components["schemas"]["ObservedStatus"];
+            /** @description Media parameters observed by the applied revision's newest successful test for the main stream. Null when the applied revision has no successful test; an older revision's observation is never substituted. */
+            main_media?: components["schemas"]["ChannelMediaParams"] | null;
+            /** @description Same as main_media for the sub stream. */
+            sub_media?: components["schemas"]["ChannelMediaParams"] | null;
             /** @description Reason code of the first unavailable or degraded kind. Empty when nothing is faulty; a disabled or unconfigured channel is an outcome, not an error. */
             last_error: string;
             /** @description Latest valid bitrate sample. Null until one exists; never assumed. */

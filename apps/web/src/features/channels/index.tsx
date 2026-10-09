@@ -21,6 +21,7 @@ import { formatMinute } from '@/features/playback/zone'
 import { downloadLocal, sourceCommand } from './api'
 import { StatusLabel } from './channel-status'
 import { reasonLabel } from './status-reasons'
+import { MediaParamsCell } from './media-cell'
 import { SourceImportControls } from './source-import-controls'
 
 type Channel = Schema<'ChannelSummary'>
@@ -335,9 +336,11 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                     <TableHead>名称</TableHead>
                     <TableHead>分组</TableHead>
                     <TableHead>摄像头</TableHead>
+                    <TableHead className='w-20'>接入方式</TableHead>
                     <TableHead className='w-20 text-center'>主流</TableHead>
                     <TableHead className='w-20 text-center'>子流</TableHead>
                     <TableHead className='w-20 text-center'>录像</TableHead>
+                    <TableHead className='min-w-44'>媒体参数</TableHead>
                     <TableHead className='w-24 text-right'>码率</TableHead>
                     <TableHead className='min-w-40'>最近错误</TableHead>
                     <TableHead className='w-36'>更新时间</TableHead>
@@ -386,15 +389,25 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                             : undefined
                         }
                       >
-                        {channel.source_ip
-                          ? `${channel.source_ip} · ${channel.main_path}`
-                          : '未配置摄像头'}
+                        {channel.source_ip ? channel.source_ip : '未配置摄像头'}
+                      </TableCell>
+                      <TableCell className='text-sm'>
+                        {channel.current_revision_id == null ? (
+                          <span className='text-muted-foreground'>—</span>
+                        ) : channel.onvif_port != null ? (
+                          'ONVIF'
+                        ) : (
+                          'RTSP'
+                        )}
                       </TableCell>
                       {(['main', 'sub', 'recording'] as const).map((kind) => (
                         <TableCell key={kind} className='text-center'>
                           <StatusLabel value={channel[kind]} />
                         </TableCell>
                       ))}
+                      <TableCell className='text-xs'>
+                        <MediaParamsCell channel={channel} zone={zone} />
+                      </TableCell>
                       <TableCell className='text-right text-sm tabular-nums'>
                         {bitrateLabel(channel.bitrate_kbps)}
                       </TableCell>

@@ -186,3 +186,68 @@ func TestChannelSummariesMatchStatusAndRespectScope(t *testing.T) {
 		t.Fatal("summary leaked channels outside the grant", limited, err)
 	}
 }
+
+// The list row carries the media parameters observed by the applied revision's
+// newest successful test plus the ONVIF port that distinguishes ONVIF from
+// RTSP intake. A revision without a successful test must not inherit the
+// previous revision's parameters.
+func TestChannelSummariesCarryMediaParamsAndAccessMethod(t *testing.T) {
+	f, _, proof, revision := testedSource(t)
+	ctx := context.Background()
+	status, err := f.Service.Sources.GetStatus(ctx, f.Admin, f.Channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Service.Sources.RequestApply(ctx, f.Admin, f.Channel, channel.SourceApplyInput{RevisionID: revision, TestID: *proof.TestID, ExpectedVersion: status.Version}, "summary-media"); err != nil {
+		t.Fatal(err)
+	}
+	executeChange(t, f, "source.apply")
+	item := summaryItemOf(t, f, f.Channel)
+	if item.MainMedia == nil || item.MainMedia.Codec != "H264" || item.MainMedia.Width != 320 || item.MainMedia.Height != 180 || item.MainMedia.FPS != 5 || item.MainMedia.ObservedAt == nil {
+		t.Fatal("applied test's media params missing", item.MainMedia)
+	}
+	if item.MainMedia.AudioCodec == nil || *item.MainMedia.AudioCodec != "pcm_alaw" {
+		t.Fatal("audio codec not carried from the probe", item.MainMedia)
+	}
+	if item.SubMedia == nil || item.SubMedia.Width != 320 || item.SubMedia.AudioCodec == nil {
+		t.Fatal("sub stream media params missing", item.SubMedia)
+	}
+	if item.OnvifPort != nil {
+		t.Fatal("RTSP-only revision reported an ONVIF port")
+	}
+	// A replacement revision that was never tested must not keep showing the
+	// previous revision's parameters, and its ONVIF port decides the access
+	// method the list displays.
+	onvif, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.DB.Pool.Exec(ctx, `INSERT INTO source_revisions(id,channel_id,source_id,revision_no,ip,main_path,sub_path,transport,onvif_port,credential_key_id,username_nonce,username_ciphertext,password_nonce,password_ciphertext) SELECT $2,channel_id,source_id,(SELECT max(revision_no)+1 FROM source_revisions s2 WHERE s2.channel_id=source_revisions.channel_id),ip,main_path,sub_path,transport,8000,credential_key_id,username_nonce,username_ciphertext,password_nonce,password_ciphertext FROM source_revisions WHERE id=$1`, revision, onvif); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.DB.Pool.Exec(ctx, "UPDATE channels SET current_revision_id=$2 WHERE id=$1", f.Channel, onvif); err != nil {
+		t.Fatal(err)
+	}
+	item = summaryItemOf(t, f, f.Channel)
+	if item.OnvifPort == nil || *item.OnvifPort != 8000 {
+		t.Fatal("ONVIF port not carried", item.OnvifPort)
+	}
+	if item.MainMedia != nil || item.SubMedia != nil {
+		t.Fatal("an untested revision must not inherit media params", item.MainMedia, item.SubMedia)
+	}
+}
+
+func summaryItemOf(t *testing.T, f publishFixture, channelID id.ID) channel.SummaryItem {
+	t.Helper()
+	page, err := f.Service.Sources.Summaries(context.Background(), f.Admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range page.Items {
+		if item.ChannelID == channelID {
+			return item
+		}
+	}
+	t.Fatal("channel missing from the summary")
+	return channel.SummaryItem{}
+}

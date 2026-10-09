@@ -86,6 +86,10 @@ type StreamTest struct {
 	Width      int     `json:"width,omitempty"`
 	Height     int     `json:"height,omitempty"`
 	FPS        float64 `json:"fps,omitempty"`
+	// AudioCodec mirrors the media probe: nil for results written before audio
+	// capture existed, "" when the stream carries no audio, otherwise the
+	// ffmpeg codec name (pcm_alaw, aac, ...).
+	AudioCodec *string `json:"audio_codec,omitempty"`
 	Reason     string  `json:"reason,omitempty"`
 }
 type SourceTestResult struct {
@@ -116,6 +120,19 @@ type Status struct {
 	Recording                    ObservedStatus `json:"recording"`
 }
 
+// MediaParams is what the most recent successful test of the applied revision
+// observed for one stream. It describes the source itself rather than its
+// current connection state, so it survives an unreachable camera; nil means
+// the applied revision has no successful test on record.
+type MediaParams struct {
+	Codec      string     `json:"codec,omitempty"`
+	Width      int        `json:"width,omitempty"`
+	Height     int        `json:"height,omitempty"`
+	FPS        float64    `json:"fps,omitempty"`
+	AudioCodec *string    `json:"audio_codec,omitempty"`
+	ObservedAt *time.Time `json:"observed_at,omitempty"`
+}
+
 // SummaryItem is one row of the channel list: the business attributes plus the
 // per-kind status the list view shows. Detection status is absent because the
 // detection milestone is not delivered; it is not reported as healthy or as a
@@ -134,12 +151,20 @@ type SummaryItem struct {
 	SourceIP          string         `json:"source_ip"`
 	MainPath          string         `json:"main_path"`
 	SubPath           string         `json:"sub_path"`
-	Main              ObservedStatus `json:"main"`
-	Sub               ObservedStatus `json:"sub"`
-	Recording         ObservedStatus `json:"recording"`
-	LastError         string         `json:"last_error"`
-	BitrateKbps       *int64         `json:"bitrate_kbps"`
-	UpdatedAt         *time.Time     `json:"updated_at"`
+	// OnvifPort is the ONVIF management port of the applied revision. Nil
+	// means the revision was saved as RTSP-only.
+	OnvifPort *int           `json:"onvif_port,omitempty"`
+	Main      ObservedStatus `json:"main"`
+	Sub       ObservedStatus `json:"sub"`
+	Recording ObservedStatus `json:"recording"`
+	LastError string         `json:"last_error"`
+	BitrateKbps *int64       `json:"bitrate_kbps"`
+	// Media parameters of the applied revision's newest successful test. The
+	// list shows them as reference information; they are never mixed with the
+	// observed connection state above.
+	MainMedia *MediaParams `json:"main_media,omitempty"`
+	SubMedia  *MediaParams `json:"sub_media,omitempty"`
+	UpdatedAt *time.Time   `json:"updated_at"`
 }
 
 type SummaryPage struct {
