@@ -8,6 +8,7 @@ import {
   PageTitle,
   Panel,
   Field,
+  CheckboxField,
   Notices,
   QueryState,
   Forbidden,
@@ -183,22 +184,20 @@ function PoolRow({ pool }: { pool: Schema<'Pool'> }) {
             defaultValue={pool.name}
             required
           />
-          <label className='flex items-center gap-2 pb-2'>
-            <input
-              type='checkbox'
-              name='enabled'
-              defaultChecked={pool.enabled}
-            />
-            启用
-          </label>
-          <label className='flex items-center gap-2 pb-2'>
-            <input
-              type='checkbox'
-              name='is_default'
-              defaultChecked={pool.is_default}
-            />
-            默认池
-          </label>
+          <CheckboxField
+            label='启用'
+            id={`pool-enabled-${pool.id}`}
+            name='enabled'
+            defaultChecked={pool.enabled}
+            className='pb-2'
+          />
+          <CheckboxField
+            label='默认池'
+            id={`pool-default-${pool.id}`}
+            name='is_default'
+            defaultChecked={pool.is_default}
+            className='pb-2'
+          />
           <Button disabled={action.pending}>保存设置</Button>
           <Button
             type='button'

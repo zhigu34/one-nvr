@@ -3,11 +3,15 @@ import { useAuthStore } from '@/stores/auth-store'
 import { apiRequest, jsonRequest, clearAuthentication } from '@/lib/api-client'
 import type { Schema, PageData } from '@/lib/types'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
 import { useAPI, useAction, fields, text } from '@/features/foundation/hooks'
 import {
   PageTitle,
   Panel,
   Field,
+  SelectField,
+  CheckboxField,
   Notices,
   QueryState,
   Forbidden,
@@ -20,11 +24,17 @@ const actions = [
   ['export', '导出'],
   ['configure', '配置'],
 ] as const
+const ROLE_OPTIONS = [
+  { value: 'admin', label: '管理员' },
+  { value: 'operator', label: '操作员' },
+  { value: 'viewer', label: '查看者' },
+]
 export function Users() {
   const current = useAuthStore((s) => s.user)
   const admin = current?.role === 'admin'
   const [cursor, setCursor] = useState(''),
-    [selected, setSelected] = useState('')
+    [selected, setSelected] = useState(''),
+    [role, setRole] = useState('viewer')
   const query = useAPI<PageData<Schema<'User'>>>(
     `/api/v1/users?limit=100${cursor ? '&cursor=' + cursor : ''}`,
     admin
@@ -60,6 +70,7 @@ export function Users() {
                 })
               )
               form.reset()
+              setRole('viewer')
             }, '账号已创建')
           }}
         >
@@ -72,19 +83,13 @@ export function Users() {
             minLength={12}
             required
           />
-          <label className='grid gap-2'>
-            角色
-            <select
-              aria-label='角色'
-              name='role'
-              className='rounded-md border bg-background p-2'
-              defaultValue='viewer'
-            >
-              <option value='admin'>管理员</option>
-              <option value='operator'>操作员</option>
-              <option value='viewer'>查看者</option>
-            </select>
-          </label>
+          <SelectField
+            label='角色'
+            name='role'
+            value={role}
+            onValueChange={setRole}
+            options={ROLE_OPTIONS}
+          />
           <Button className='self-end' disabled={action.pending}>
             创建账号
           </Button>
@@ -194,23 +199,19 @@ function UserRow({
           }, '账号已更新')
         }}
       >
-        <label className='grid gap-2'>
-          {user.username} 的角色
-          <select
-            aria-label={`${user.username} 的角色`}
-            name='role'
-            className='rounded-md border bg-background p-2'
-            defaultValue={user.role}
-          >
-            <option value='admin'>管理员</option>
-            <option value='operator'>操作员</option>
-            <option value='viewer'>查看者</option>
-          </select>
-        </label>
-        <label className='flex items-center gap-2'>
-          <input type='checkbox' name='enabled' defaultChecked={user.enabled} />
-          启用账号
-        </label>
+        <SelectField
+          label={`${user.username} 的角色`}
+          id={`role-${user.id}`}
+          name='role'
+          defaultValue={user.role}
+          options={ROLE_OPTIONS}
+        />
+        <CheckboxField
+          label='启用账号'
+          id={`enabled-${user.id}`}
+          name='enabled'
+          defaultChecked={user.enabled}
+        />
         <Button disabled={action.pending}>保存账号</Button>
       </form>
     </article>
@@ -279,30 +280,34 @@ function GrantEditor({
                   CH{String(c.channel_no).padStart(2, '0')} · {c.channel_name}
                 </legend>
                 <div className='flex flex-wrap gap-4'>
-                  {actions.map(([act, label]) => (
-                    <label
-                      key={act}
-                      className='flex items-center gap-2 text-sm'
-                    >
-                      <input
-                        aria-label={`CH${String(c.channel_no).padStart(2, '0')} ${label}`}
-                        type='checkbox'
-                        disabled={user.role === 'viewer' && act === 'configure'}
-                        checked={
-                          user.role === 'viewer' && act === 'configure'
-                            ? false
-                            : checked(c.id, act)
-                        }
-                        onChange={(event) =>
-                          setChanges({
-                            ...changes,
-                            [c.id + ':' + act]: event.target.checked,
-                          })
-                        }
-                      />
-                      {label}
-                    </label>
-                  ))}
+                  {actions.map(([act, label]) => {
+                    const grantId = `grant-${c.id}-${act}`
+                    return (
+                      <div key={act} className='flex items-center gap-2 text-sm'>
+                        <Checkbox
+                          id={grantId}
+                          aria-label={`CH${String(c.channel_no).padStart(2, '0')} ${label}`}
+                          disabled={
+                            user.role === 'viewer' && act === 'configure'
+                          }
+                          checked={
+                            user.role === 'viewer' && act === 'configure'
+                              ? false
+                              : checked(c.id, act)
+                          }
+                          onCheckedChange={(state) =>
+                            setChanges({
+                              ...changes,
+                              [c.id + ':' + act]: state === true,
+                            })
+                          }
+                        />
+                        <Label htmlFor={grantId} className='font-normal'>
+                          {label}
+                        </Label>
+                      </div>
+                    )
+                  })}
                 </div>
               </fieldset>
             ))}

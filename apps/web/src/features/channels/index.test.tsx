@@ -209,7 +209,8 @@ test('channel search combines the configured filter without hiding unknown statu
     .element(view.getByTestId('channel-row'))
     .toHaveTextContent('大门')
   await userEvent.fill(view.getByRole('searchbox', { name: '搜索通道' }), '')
-  await userEvent.selectOptions(view.getByLabelText('配置状态'), 'empty')
+  await userEvent.click(view.getByLabelText('配置状态'))
+  await userEvent.click(view.getByRole('option', { name: '未配置', exact: true }))
   await expect.element(view.getByTestId('channel-row')).toHaveLength(2)
   await userEvent.fill(
     view.getByRole('searchbox', { name: '搜索通道' }),
@@ -221,12 +222,14 @@ test('channel search combines the configured filter without hiding unknown statu
 test('the group filter narrows by business grouping', async () => {
   const setup = fixture()
   const view = await render(setup.view)
-  await userEvent.selectOptions(view.getByLabelText('分组筛选'), '外围')
+  await userEvent.click(view.getByLabelText('分组筛选'))
+  await userEvent.click(view.getByRole('option', { name: '外围', exact: true }))
   await expect.element(view.getByTestId('channel-row')).toHaveLength(1)
   await expect
     .element(view.getByTestId('channel-row'))
     .toHaveTextContent('后门')
-  await userEvent.selectOptions(view.getByLabelText('分组筛选'), 'none')
+  await userEvent.click(view.getByLabelText('分组筛选'))
+  await userEvent.click(view.getByRole('option', { name: '未分组', exact: true }))
   await expect.element(view.getByTestId('channel-row')).toHaveLength(1)
   await expect
     .element(view.getByTestId('channel-row'))

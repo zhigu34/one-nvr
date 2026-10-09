@@ -3,8 +3,9 @@ import { useQueryClient } from '@tanstack/react-query'
 import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { TableCell, TableRow } from '@/components/ui/table'
-import { Notices } from '@/features/foundation/ui'
+import { Notices, SelectField } from '@/features/foundation/ui'
 import { useAPI } from '@/features/foundation/hooks'
 import { sourceCommand } from '@/features/channels/api'
 
@@ -159,12 +160,11 @@ export function PolicyRow({
   return (
     <TableRow data-testid='policy-row'>
       <TableCell>
-        <input
-          type='checkbox'
+        <Checkbox
           aria-label={`选择 ${label}`}
           checked={selected}
           disabled={!configured}
-          onChange={(event) => onSelect(event.target.checked)}
+          onCheckedChange={(state) => onSelect(state === true)}
         />
       </TableCell>
       <TableCell className='font-mono text-xs'>{label}</TableCell>
@@ -175,45 +175,42 @@ export function PolicyRow({
         ) : policy.isPending ? (
           <span className='text-xs text-muted-foreground'>读取中</span>
         ) : (
-          <select
-            aria-label={`${label} 录像方式`}
-            className='rounded-md border bg-background p-2 text-sm'
+          <SelectField
+            ariaLabel={`${label} 录像方式`}
+            className='text-sm'
             value={mode}
             disabled={!configured || !!pending}
-            onChange={(event) => setDraftMode(event.target.value)}
-          >
-            <option value='none'>关闭录像</option>
-            <option value='continuous'>手动（连续录像）</option>
-            {PLANNED_MODES.map((entry) => (
-              <option key={entry.value} value={entry.value} disabled>
-                {entry.label}
-              </option>
-            ))}
-          </select>
+            onValueChange={setDraftMode}
+            options={[
+              { value: 'none', label: '关闭录像' },
+              { value: 'continuous', label: '手动（连续录像）' },
+              ...PLANNED_MODES.map((entry) => ({
+                value: entry.value,
+                label: entry.label,
+                disabled: true,
+              })),
+            ]}
+          />
         )}
       </TableCell>
       <TableCell>
         {admin ? (
           <div className='flex flex-wrap items-center gap-2'>
-            <select
-              aria-label={`${label} 存储池`}
-              className='rounded-md border bg-background p-2 text-sm'
+            <SelectField
+              ariaLabel={`${label} 存储池`}
+              className='text-sm'
               value={pool}
               disabled={!!pending}
-              onChange={(event) => setDraftPool(event.target.value)}
-            >
-              <option value=''>未绑定</option>
-              {pools.map((entry) => (
-                <option
-                  key={entry.id}
-                  value={entry.id}
-                  disabled={!entry.enabled}
-                >
-                  {entry.name}
-                  {entry.enabled ? '' : ' · 已停用'}
-                </option>
-              ))}
-            </select>
+              onValueChange={setDraftPool}
+              options={[
+                { value: '', label: '未绑定' },
+                ...pools.map((entry) => ({
+                  value: entry.id,
+                  label: `${entry.name}${entry.enabled ? '' : ' · 已停用'}`,
+                  disabled: !entry.enabled,
+                })),
+              ]}
+            />
             <Button
               type='button'
               variant='outline'
