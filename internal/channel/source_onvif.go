@@ -56,7 +56,9 @@ func (s *SourceService) ProbeONVIF(ctx context.Context, p auth.Principal, channe
 	}); err != nil {
 		return out, err
 	}
-	port := 0
+	// Resolve the default here, not inside the probe, so the audit entry and
+	// the caller both see the port that was really used (80) instead of 0.
+	port := 80
 	if in.ONVIFPort != nil {
 		port = *in.ONVIFPort
 	}
