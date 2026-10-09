@@ -1,6 +1,8 @@
 import { type ReactNode, type InputHTMLAttributes } from 'react'
 import { ApiError } from '@/lib/api-client'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
@@ -39,27 +41,28 @@ export function Panel({
   children: ReactNode
 }) {
   return (
-    <section className='mb-6 rounded-xl border bg-card p-5 shadow-sm'>
-      <h2 className='mb-4 text-lg font-medium'>{title}</h2>
-      {children}
-    </section>
+    <Card className='mb-6'>
+      <CardHeader>
+        <CardTitle className='text-lg font-medium'>{title}</CardTitle>
+      </CardHeader>
+      <CardContent>{children}</CardContent>
+    </Card>
   )
 }
 export function Notices({ error, notice }: { error: string; notice: string }) {
   return (
     <>
       {error && (
-        <div
-          role='alert'
-          className='mb-4 rounded-lg border border-destructive/40 p-3 text-destructive'
-        >
-          {error}
-        </div>
+        <Alert variant='destructive' className='mb-4'>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       )}
       {notice && (
-        <p role='status' className='mb-4 text-sm text-emerald-500'>
-          {notice}
-        </p>
+        <Alert role='status' className='mb-4'>
+          <AlertDescription className='text-emerald-700 dark:text-emerald-400'>
+            {notice}
+          </AlertDescription>
+        </Alert>
       )}
     </>
   )

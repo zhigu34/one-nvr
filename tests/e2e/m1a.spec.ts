@@ -55,7 +55,8 @@ test('viewerCannotConfigureChannel', async ({ page }) => {
   await page.getByLabel('CH01 实时').check()
   await page.getByRole('button', { name: '保存通道权限' }).click()
   await expect(page.getByText('权限已保存')).toBeVisible()
-  await page.getByRole('button', { name: '退出登录' }).click()
+  await page.getByRole('button', { name: '用户菜单', exact: true }).click()
+  await page.getByRole('menuitem', { name: '退出登录', exact: true }).click()
   await login(page, 'viewer')
   await page.goto('/channels')
   await expect(page.getByTestId('channel-row')).toHaveCount(1)
@@ -142,7 +143,8 @@ test('directoryPoolKeepsPendingZLMStatus', async ({page}) => {
 
 test('passwordChangeRevokesOldSession', async ({page}) => {
   await login(page)
-  await page.getByRole('button',{name:'修改密码',exact:true}).click()
+  await page.getByRole('button',{name:'用户菜单',exact:true}).click()
+  await page.getByRole('menuitem',{name:'修改密码',exact:true}).click()
   await page.getByLabel('当前密码',{exact:true}).fill(password)
   await page.getByLabel('新密码',{exact:true}).fill('Browser-new-only-2026!')
   await page.getByRole('button',{name:'保存新密码',exact:true}).click()
