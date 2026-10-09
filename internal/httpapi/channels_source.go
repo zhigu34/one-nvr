@@ -5,8 +5,36 @@ import (
 
 	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/channel"
+	"github.com/zhigu34/one-nvr/internal/fault"
 	"github.com/zhigu34/one-nvr/internal/id"
 )
+
+// probeChannelONVIF asks one camera what it offers. It is a network action with
+// an operator waiting on it, so it is limited per operator rather than per
+// channel, and the answer is evidence only: saving still goes through the
+// revision, test and apply flow.
+func (r *router) probeChannelONVIF(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	c, err := pathID(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	var in channel.ProbeInput
+	if err := decode(w, q, &in); err != nil {
+		fail(w, q, err)
+		return
+	}
+	if !r.allow("onvif:"+string(p.UserID), 20) {
+		fail(w, q, fault.New(429, "rate_limited", "操作过于频繁，请稍后重试"))
+		return
+	}
+	out, err := r.d.Sources.ProbeONVIF(q.Context(), p, c, in)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, out)
+}
 
 func (r *router) listSourceRevisions(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
 	c, err := pathID(q)

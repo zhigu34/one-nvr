@@ -3726,6 +3726,141 @@
           }
         }
       }
+    },
+    "/api/v1/channels/{id}/onvif/probe": {
+      "post": {
+        "operationId": "onvifProbe",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnvifProbeInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Camera answer, evidence only: nothing is stored and no source is switched",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/OnvifProbe"
+                    },
+                    "request_id": {
+                      "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "request_id"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Session missing or revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Action or role denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown channel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Camera rejected the query or offers no usable stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Probe attempted too often",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Camera unreachable or answered unusably",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4886,6 +5021,128 @@
             "const": 30
           }
         }
+      },
+      "OnvifProbeInput": {
+        "type": "object",
+        "properties": {
+          "ip": {
+            "type": "string"
+          },
+          "onvif_port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "username": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "password": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "ip"
+        ],
+        "additionalProperties": false
+      },
+      "OnvifDevice": {
+        "type": "object",
+        "properties": {
+          "manufacturer": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "firmware_version": {
+            "type": "string"
+          },
+          "serial_number": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "manufacturer",
+          "model",
+          "firmware_version",
+          "serial_number"
+        ],
+        "additionalProperties": false
+      },
+      "OnvifStream": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "encoding": {
+            "type": "string"
+          },
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "ip": {
+            "type": "string"
+          },
+          "rtsp_port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^/(?!/)"
+          }
+        },
+        "required": [
+          "token",
+          "name",
+          "encoding",
+          "width",
+          "height",
+          "ip",
+          "rtsp_port",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "OnvifProbe": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "$ref": "#/components/schemas/OnvifDevice"
+          },
+          "streams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OnvifStream"
+            }
+          },
+          "ptz": {
+            "type": "boolean",
+            "description": "Capability the device reported. PTZ control is not implemented; this is reported, never offered as a button."
+          },
+          "onvif_port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          }
+        },
+        "required": [
+          "device",
+          "streams",
+          "ptz",
+          "onvif_port"
+        ],
+        "additionalProperties": false
       }
     },
     "securitySchemes": {

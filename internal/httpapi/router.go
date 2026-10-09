@@ -116,6 +116,7 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("GET /api/v1/channels/{id}/source-revisions", r.protected(r.listSourceRevisions))
 	r.mux.HandleFunc("POST /api/v1/channels/{id}/source-revisions", r.protected(r.createSourceDraft))
 	r.mux.HandleFunc("POST /api/v1/channels/{id}/source-revisions/{revision_id}/test", r.protected(r.requestSourceTest))
+	r.mux.HandleFunc("POST /api/v1/channels/{id}/onvif/probe", r.protected(r.probeChannelONVIF))
 	r.mux.HandleFunc("GET /api/v1/channels/{id}/source-tests/{test_id}", r.protected(r.sourceTestResult))
 	r.mux.HandleFunc("POST /api/v1/channels/{id}/source/apply", r.protected(r.applySource))
 	r.mux.HandleFunc("POST /api/v1/channels/{id}/source/clear", r.protected(r.clearSource))

@@ -99,6 +99,23 @@ func validSourcePath(path string, optional bool) bool {
 	decoded, err := url.PathUnescape(path)
 	return err == nil && strings.IndexFunc(decoded, unicode.IsControl) < 0
 }
+
+// validateTarget is the single address-boundary check: source configuration and
+// outbound camera traffic (including ONVIF probing) must agree on which
+// addresses this deployment may talk to.
+func (p NetworkPolicy) validateTarget(ip string) (netip.Addr, error) {
+	a, err := netip.ParseAddr(strings.TrimSpace(ip))
+	if err != nil || a.Zone() != "" || a.Is4In6() {
+		return netip.Addr{}, invalidSource("source_config_invalid", "摄像头IP、端口或码流路径无效")
+	}
+	if len(p.Allowed) == 0 {
+		return netip.Addr{}, invalidSource("camera_network_not_configured", "请先在部署配置中填写 ONE_NVR_CAMERA_CIDRS 摄像头允许网段")
+	}
+	if !p.allows(a) {
+		return netip.Addr{}, invalidSource("camera_address_denied", "摄像头地址不在允许范围内或属于受限管理服务")
+	}
+	return a, nil
+}
 func (c SourceConfig) shapeValid() bool {
 	a, err := netip.ParseAddr(c.IP)
 	if err != nil || a.Zone() != "" || a.Is4In6() || c.RTSPPort < 0 || c.RTSPPort > 65535 || (c.Transport != "" && c.Transport != "tcp" && c.Transport != "udp") {
@@ -113,14 +130,8 @@ func (c SourceConfig) Validate(policy NetworkPolicy) error {
 	if !c.shapeValid() {
 		return invalidSource("source_config_invalid", "摄像头IP、端口或码流路径无效")
 	}
-	a, _ := netip.ParseAddr(c.IP)
-	if len(policy.Allowed) == 0 {
-		return invalidSource("camera_network_not_configured", "请先在部署配置中填写 ONE_NVR_CAMERA_CIDRS 摄像头允许网段")
-	}
-	if !policy.allows(a) {
-		return invalidSource("camera_address_denied", "摄像头地址不在允许范围内或属于受限管理服务")
-	}
-	return nil
+	_, err := policy.validateTarget(c.IP)
+	return err
 }
 func BuildRTSPURL(c SourceConfig, username, password, path string) (string, error) {
 	if !c.shapeValid() || !validSourcePath(path, false) || (path != c.MainPath && path != c.SubPath) || !validCredential(username) || !validCredential(password) {

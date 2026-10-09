@@ -47,8 +47,8 @@
 
 ## 当前交接快照（2026-10-08）
 
-- 当前主题：**摄像头接入流程与录像计划拆分 + 通道属性与启停**（计划：`docs/superpowers/plans/2026-10-08-camera-flow-rework.md`，批次 1、2 已完成，批次 3 = ONVIF 真实现未做）。
-- 用户裁决（2026-10-08，权威，不可自行改动）：录像计划做成**侧边栏一级菜单**并**按通道管理录像方式（手动/定时/事件）且可批量应用**；**「手动」= 现有连续录像**（复用 `continuous` 语义）；**定时与事件只做占位禁用**；**ONVIF 只做占位**；**「配置保存」与「使用」是两件事**，UI 与文档**不再出现「草稿」字样**，未启用的配置状态叫「已保存，未启用」；**「未启用」分两级**——通道级启用/停用（`channels.enabled`）与配置级已应用/未应用（`current_revision_id` 是否指向它）。
+- 当前主题：**摄像头接入流程与录像计划拆分 + 通道属性与启停 + ONVIF 手动添加**（计划：`docs/superpowers/plans/2026-10-08-camera-flow-rework.md` 批次 1、2；`docs/superpowers/plans/2026-10-09-onvif-manual-add.md` 批次 3，均已完成）。
+- 用户裁决（2026-10-08，权威，不可自行改动）：录像计划做成**侧边栏一级菜单**并**按通道管理录像方式（手动/定时/事件）且可批量应用**；**「手动」= 现有连续录像**（复用 `continuous` 语义）；**定时与事件只做占位禁用**；**ONVIF 批次 1 只做占位**（2026-10-09 用户新指示：改为「ONVIF 手动添加 + 码流自动填充」，不做局域网扫描，见批次 3）；**「配置保存」与「使用」是两件事**，UI 与文档**不再出现「草稿」字样**，未启用的配置状态叫「已保存，未启用」；**「未启用」分两级**——通道级启用/停用（`channels.enabled`）与配置级已应用/未应用（`current_revision_id` 是否指向它）。
 - **批次 1**（提交 `cb7bd9a`）：
   - 侧边栏按功能分组为 **监控 / 配置 / 系统**（`components/layout/data/sidebar-data.ts`）；`app-sidebar.tsx` 与 `command-menu.tsx` 都改为**整组为空则不渲染**，可见性统一走声明式 `everyRole`（command-menu 此前是硬编码 url 白名单）。
   - 新增侧边栏一级菜单**「录像计划」**（`/recording-plan`，`features/recording-plan/`）：按通道选 关闭录像 / 手动（连续录像）/ 定时（禁用占位）/ 事件（禁用占位），含存储池绑定与「检查存储池」，支持勾选多通道批量应用。
@@ -65,7 +65,15 @@
   - 时间显示复用 `features/playback/zone.ts` 新增的 `formatMinute`（YYYY-MM-DD HH:mm，站点时区；时区未就绪显示 `—`）。
   - 契约：`m1a` 的 `Channel` 补两字段、`PATCH /channels/{id}` 请求体三字段改可选；`m1b` 新增 summary 端点与 schema。**`UpdateChannelInput` 不再强制 `channel_name`**，这是有意的契约放宽。
   - **检测状态按未实现处理**：`ChannelSummary` 不含检测状态，也不给占位值。
-- 批次 3（未做）：ONVIF 局域网发现与能力探测（CH-06），占位入口届时转正。
+- **批次 3**（计划 `docs/superpowers/plans/2026-10-09-onvif-manual-add.md`）：ONVIF 手动添加 + 码流自动填充。
+  - 用户口径（2026-10-09，权威）：**不做局域网发现/扫描**（部署是 Docker 桥接网络，组播 WS-Discovery 到不了局域网）；**按 ONVIF 方式手动添加**（保留「添加方式」两个 tab）；**不用手填码流**（主/子流地址由设备返回）。
+  - 新增 `internal/onvif/`（SOAP 1.2 + WS-UsernameToken 摘要 + 匿名 `GetSystemDateAndTime` **校准设备时钟**再签发认证请求；`GetDeviceInformation`/`GetCapabilities`/`GetProfiles`/`GetStreamUri`；无代理、禁重定向、限时、限读）。按**局部名**解析 XML，兼容各家前缀。
+  - 新增 `internal/channel/source_onvif.go` 的 `ProbeONVIF`：通道 `Configure` 鉴权 + 地址边界（各自独立事务，**不跨网络调用持数据库连接**）→ 5s 预算探测 → 过滤不可用码流 → 审计 `onvif.probed`（只记 ip/onvif_port/profiles/result，**不含凭据**）→ 唯一一处失败映射（操作者可改的 `422`、其余 `503`）。边界或输入被拒**不写审计**（没接触摄像头）。
+  - 地址校验抽成 `NetworkPolicy.validateTarget`，`SourceConfig.Validate` 改为调用它 —— 探测与保存共用同一套 `ONE_NVR_CAMERA_CIDRS` 边界与错误码。
+  - **不跟随设备给的地址**：`GetCapabilities` 的 Media `XAddr` 与流地址里的主机一律丢弃，只取路径，主机/端口用探测目标（防 SSRF 与越界）。
+  - **只落结构化字段**：`GetStreamUri` 返回的整条 `rtsp://user:pass@host:port/path?query` 拆成 `ip / rtsp_port / main_path / sub_path / onvif_port`，凭据丢弃且不进响应（CH-10/CH-11）。
+  - 新增 `POST /api/v1/channels/{id}/onvif/probe`（同步 200，每人 20 次/分钟），契约 + `api-types.ts` 同步；前端新增 `features/channels/source-onvif.tsx`，「添加方式」两 tab 转正，探测成功前禁用保存，保存仍走既有 `If-Match` + 测试 + 应用链路（**不绕开**）。
+  - 未做：局域网发现、PTZ 控制（只在结果里如实报告能力）、厂商固件/时间/编码批量管理（PRD P2）。**真机 ONVIF 摄像头未验证**（本机与 CI 都没有摄像头）。
 - 交接时必须先看最新一轮 CI 结论，不要假定通过：真实容器与媒体验收只能在 GitHub CI 运行（本机无 Docker daemon）。**本机 PostgreSQL 17.10 可用**，`tests/integration` 可直接跑：`set -a && . ~/.one-nvr/test-pg.env && set +a && go test ./tests/integration -count=1`。
 
 ## 上一轮交接快照（2026-10-07，M1-C）

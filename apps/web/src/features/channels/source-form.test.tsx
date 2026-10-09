@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, expect, test, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
+import { ApiError } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { SourceForm } from './source-form'
 
@@ -214,24 +215,104 @@ test('saving alone records the camera without demanding a stream test', async ()
   expect(saved.mock.calls[0][2].action).toBe('save')
 })
 
-test('ONVIF is offered as a disabled placeholder, never as usable capability', async () => {
-  calls.request.mockResolvedValue(revision)
-  const view = await render(wrapper())
+const probe: Schema<'OnvifProbe'> = {
+  device: {
+    manufacturer: 'Fixture Vision',
+    model: 'FX-9000',
+    firmware_version: '4.2.1',
+    serial_number: 'SN-FIXTURE-1',
+  },
+  streams: [
+    {
+      token: 'main',
+      name: 'mainStream',
+      encoding: 'H264',
+      width: 1920,
+      height: 1080,
+      ip: '192.168.33.20',
+      rtsp_port: 554,
+      path: '/Streaming/Channels/101?transport=tcp',
+    },
+    {
+      token: 'sub',
+      name: 'subStream',
+      encoding: 'H264',
+      width: 704,
+      height: 576,
+      ip: '192.168.33.20',
+      rtsp_port: 554,
+      path: '/Streaming/Channels/102',
+    },
+  ],
+  ptz: true,
+  onvif_port: 8000,
+}
+
+test('ONVIF asks the camera for its streams and fills the paths, never the password', async () => {
+  calls.request.mockResolvedValue(probe)
+  const view = await render(wrapper(channel, null))
+  await userEvent.click(view.getByRole('button', { name: 'ONVIF 手动' }))
+  // Nothing is offered for saving until the camera has answered: ONVIF mode has
+  // no paths to submit before the probe fills them.
   await expect
-    .element(view.getByRole('button', { name: 'ONVIF 发现（后续开放）' }))
+    .element(view.getByRole('button', { name: '保存', exact: true }))
     .toBeDisabled()
+  await userEvent.fill(
+    view.getByLabelText('IP 地址', { exact: true }),
+    '192.168.33.20'
+  )
+  await userEvent.fill(view.getByLabelText('ONVIF 端口'), '8000')
+  await userEvent.click(view.getByRole('button', { name: '获取码流' }))
+  await expect.element(view.getByText(/Fixture Vision FX-9000/)).toBeVisible()
+  await expect.element(view.getByText(/支持 PTZ/)).toBeVisible()
   await expect
-    .element(view.getByRole('button', { name: 'RTSP 手动' }))
-    .not.toBeDisabled()
+    .element(view.getByLabelText('主流路径', { exact: true }))
+    .toHaveValue('/Streaming/Channels/101?transport=tcp')
+  await expect
+    .element(view.getByLabelText('子流路径（可留空）', { exact: true }))
+    .toHaveValue('/Streaming/Channels/102')
+  await expect
+    .element(view.getByLabelText('RTSP 端口', { exact: true }))
+    .toHaveValue(554)
+  const [path, init] = calls.request.mock.calls[0]
+  expect(path).toBe(`/api/v1/channels/${channel.id}/onvif/probe`)
+  expect(JSON.parse(init.body)).toEqual({
+    ip: '192.168.33.20',
+    onvif_port: 8000,
+    username: '',
+    password: '',
+  })
 })
 
-test('an existing ONVIF port survives an ordinary edit that cannot set it', async () => {
+test('a refused ONVIF probe explains itself and still refuses to save', async () => {
+  calls.request.mockRejectedValue(
+    new ApiError(422, 'onvif_auth_rejected', 'ONVIF 认证被拒绝，请检查用户名与密码')
+  )
+  const view = await render(wrapper(channel, null))
+  await userEvent.click(view.getByRole('button', { name: 'ONVIF 手动' }))
+  await userEvent.fill(
+    view.getByLabelText('IP 地址', { exact: true }),
+    '192.168.33.20'
+  )
+  await userEvent.click(view.getByRole('button', { name: '获取码流' }))
+  await expect
+    .element(view.getByText('ONVIF 认证被拒绝，请检查用户名与密码'))
+    .toBeVisible()
+  await expect
+    .element(view.getByRole('button', { name: '保存', exact: true }))
+    .toBeDisabled()
+})
+
+test('an existing ONVIF port survives an ordinary edit that does not touch it', async () => {
   calls.request.mockResolvedValue(revision)
   const view = await render(
-    wrapper(channel, { ...revision, config: { ...revision.config, onvif_port: 8000 } })
+    wrapper(channel, {
+      ...revision,
+      config: { ...revision.config, onvif_port: 8000 },
+    })
   )
   await userEvent.click(view.getByRole('button', { name: '保存并启用' }))
-  expect(JSON.parse(calls.request.mock.calls[0][1].body).config.onvif_port).toBe(
-    8000
-  )
+  expect(
+    JSON.parse(calls.request.mock.calls[0][1].body).config.onvif_port
+  ).toBe(8000)
 })
