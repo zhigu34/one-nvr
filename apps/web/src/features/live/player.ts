@@ -23,6 +23,12 @@ export class LivePlayer {
   private reported = false
   private answer?: Answer
   private cancelGather?: () => void
+  // The element is given exactly one MediaStream per attempt. Reassigning
+  // srcObject runs the media load algorithm, and an answer that carries an
+  // audio track fires ontrack twice; reassigning there would abort the play()
+  // started by the video track with AbortError.
+  private mediaStream: MediaStream | null = null
+  private playRequested = false
   constructor(
     private video: HTMLVideoElement,
     private channel: string,
@@ -45,28 +51,34 @@ export class LivePlayer {
         )
       const peer = new RTCPeerConnection({ iceServers: [] })
       this.peer = peer
+      // Attach the owned stream before the answer arrives so the first track
+      // only extends it. Later tracks are added to the same stream, which
+      // never runs the load algorithm and never interrupts playback.
+      this.mediaStream = new MediaStream()
+      this.playRequested = false
+      this.video.srcObject = this.mediaStream
       peer.addTransceiver('video', { direction: 'recvonly' })
       peer.addTransceiver('audio', { direction: 'recvonly' })
       peer.ontrack = (event) => {
-        if (attempt !== this.generation) return
-        const stream =
-          this.video.srcObject instanceof MediaStream
-            ? this.video.srcObject
-            : new MediaStream()
-        stream.addTrack(event.track)
-        this.video.srcObject = stream
-        void this.video
-          .play()
-          .catch(() =>
-            this.fail(
-              new ApiError(
-                422,
-                'autoplay_blocked',
-                '浏览器阻止播放，请保持静音后重新连接'
-              ),
-              attempt
-            )
+        if (attempt !== this.generation || !this.mediaStream) return
+        this.mediaStream.addTrack(event.track)
+        if (this.playRequested) return
+        this.playRequested = true
+        void this.video.play().catch((error: unknown) => {
+          // Only a policy refusal is the operator's problem to fix. An
+          // AbortError means this request was superseded, which is not a
+          // reason to report a blocked browser.
+          if (error instanceof DOMException && error.name === 'AbortError')
+            return
+          this.fail(
+            new ApiError(
+              422,
+              'autoplay_blocked',
+              '浏览器阻止播放，请保持静音后重新连接'
+            ),
+            attempt
           )
+        })
       }
       peer.onconnectionstatechange = () => {
         if (['failed', 'disconnected', 'closed'].includes(peer.connectionState))
@@ -182,6 +194,8 @@ export class LivePlayer {
     if (this.video.srcObject instanceof MediaStream)
       this.video.srcObject.getTracks().forEach((track) => track.stop())
     this.video.srcObject = null
+    this.mediaStream = null
+    this.playRequested = false
     if (this.lease) {
       this.release(this.lease)
       this.lease = ''
