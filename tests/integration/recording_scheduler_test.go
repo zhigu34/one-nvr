@@ -890,3 +890,45 @@ func TestRecordingMonitorSamplingJitterKeepsFreshPair(t *testing.T) {
 		t.Fatal("polling jitter discarded advancing frame evidence", paired, err)
 	}
 }
+
+// Declining admission-time write proof is what asks for the escalation: a
+// recorder that produces nothing for the grace period is stopped and reported.
+// The same stall must NOT stop recording when write proof is on, because that
+// contract reports the gap and keeps the recorder: a database outage spools
+// completions, and stopping there would destroy healthy recording.
+func TestRecordingOutputWatchdogOnlyAppliesWhenWriteProofIsOff(t *testing.T) {
+	f, _, _, _ := testedSource(t)
+	ctx := context.Background()
+	if _, err := f.DB.Pool.Exec(ctx, "UPDATE recording_runs SET started_at=clock_timestamp()-interval '5 minutes',last_completion_at=NULL WHERE id=$1", f.Run); err != nil {
+		t.Fatal(err)
+	}
+
+	// Default site (write proof required): status reports the stale gap and the
+	// recorder keeps running.
+	if err := f.Service.Reconcile(ctx, f.Channel); err != nil {
+		t.Fatal(err)
+	}
+	status, err := f.Service.Sources.GetStatus(ctx, f.Admin, f.Channel)
+	if err != nil || status.Recording.Reason != "completion_stale" {
+		t.Fatalf("write-proof site escalated a stale completion: %+v %v", status.Recording, err)
+	}
+	var state string
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT state FROM recording_runs WHERE id=$1", f.Run).Scan(&state); err != nil || state != "recording" {
+		t.Fatalf("write-proof site stopped a running recorder: %s %v", state, err)
+	}
+
+	// Opting out asks for the escalation, so the same stall now stops it.
+	if _, err := f.DB.Pool.Exec(ctx, "UPDATE sites SET require_storage_write_proof=false WHERE singleton"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Service.Reconcile(ctx, f.Channel); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT state FROM recording_runs WHERE id=$1", f.Run).Scan(&state); err != nil || state != "stopped" {
+		t.Fatalf("opted-out site kept a silent recorder: %s %v", state, err)
+	}
+	status, err = f.Service.Sources.GetStatus(ctx, f.Admin, f.Channel)
+	if err != nil || status.Recording.State != "unavailable" || status.Recording.Reason != "recording_output_stalled" {
+		t.Fatalf("missing stall reason after opting out: %+v %v", status.Recording, err)
+	}
+}

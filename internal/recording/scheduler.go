@@ -10,6 +10,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/fault"
 	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/media/zlm"
+	"github.com/zhigu34/one-nvr/internal/storage"
 )
 
 type desiredRecording struct {
@@ -179,14 +180,24 @@ func (s *Service) Reconcile(ctx context.Context, ch id.ID) error {
 		} else if reason == "completion_stale" {
 			// A recorder that keeps running without landing a segment is the
 			// silent failure mode: the upstream still reports it as recording
-			// while nothing reaches the disk. Stop it and say so, instead of
-			// leaving it running behind a grey "unknown".
-			stalled, err := s.recordingOutputStalled(ctx, ss)
+			// while nothing reaches the disk. Escalating to a stop is scoped to
+			// sites that declined admission-time write proof, because that is
+			// who asked for it. The accepted contract for a proof-requiring
+			// site is to report the gap and leave the recorder alone: a
+			// database outage spools completions, so stopping there would
+			// destroy healthy recording.
+			proof, err := storage.RequireWriteProof(ctx, s.DB.Pool, s.siteID)
 			if err != nil {
 				return err
 			}
-			if stalled {
-				return s.pauseRuntimeRecording(ctx, e, ss, "recording_output_stalled")
+			if !proof {
+				stalled, err := s.recordingOutputStalled(ctx, ss)
+				if err != nil {
+					return err
+				}
+				if stalled {
+					return s.pauseRuntimeRecording(ctx, e, ss, "recording_output_stalled")
+				}
 			}
 			if err := s.runtimeGap(ctx, e, ss, reason, false); err != nil {
 				return err
