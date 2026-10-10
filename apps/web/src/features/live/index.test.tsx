@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { act } from 'react'
 import {
   createMemoryHistory,
   createRootRoute,
@@ -8,11 +9,15 @@ import {
 import { afterEach, expect, test, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { LivePreview } from './index'
+import type { PlayerState } from './player'
+import type { LiveMediaInfo } from './media-info'
 
 const calls = vi.hoisted(() => ({
   request: vi.fn(),
   started: vi.fn(),
   stopped: vi.fn(),
+  update: null as ((state: PlayerState) => void) | null,
+  media: null as ((info: LiveMediaInfo) => void) | null,
 }))
 vi.mock('@/lib/api-client', async (original) => ({
   ...(await original<typeof import('@/lib/api-client')>()),
@@ -20,8 +25,16 @@ vi.mock('@/lib/api-client', async (original) => ({
 }))
 vi.mock('./player', () => ({
   LivePlayer: class {
-    constructor(_video: unknown, channel: string) {
+    constructor(
+      _video: unknown,
+      channel: string,
+      _stream: unknown,
+      update: (state: PlayerState) => void,
+      media: (info: LiveMediaInfo) => void
+    ) {
       calls.started(channel)
+      calls.update = update
+      calls.media = media
     }
     start() {
       return Promise.resolve()
@@ -92,4 +105,25 @@ test('stored forbidden channels never create a media connection', async () => {
   expect(calls.started).not.toHaveBeenCalledWith('channel-32')
   await screen.unmount()
   expect(calls.stopped).toHaveBeenCalled()
+})
+test('a playing tile shows the decoded media facts instead of a bare status', async () => {
+  const screen = await fixture()
+  await screen.getByRole('button', { name: 'CH01 通道 1', exact: true }).click()
+  await vi.waitFor(() => expect(calls.update).toBeTypeOf('function'))
+  await act(async () => {
+    calls.update!({ phase: 'playing', message: '播放中', stream: 'main' })
+    calls.media!({
+      width: 2560,
+      height: 1440,
+      fps: 25,
+      videoCodec: 'H264',
+      audioCodec: 'PCMA',
+    })
+  })
+  await expect.element(screen.getByText('主流', { exact: true })).toBeVisible()
+  await expect
+    .element(screen.getByTestId('live-media-info'))
+    .toHaveTextContent('2560×1440 · 25fps · 直通 · 音 PCMA')
+  // The tile no longer repeats the obvious playing state.
+  expect(document.body.textContent).not.toContain('播放中')
 })

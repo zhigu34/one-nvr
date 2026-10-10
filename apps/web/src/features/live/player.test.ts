@@ -40,6 +40,7 @@ describe('live player cleanup', () => {
       document.createElement('video'),
       'channel',
       'sub',
+      vi.fn(),
       vi.fn()
     )
     const opening = player.start()
@@ -117,8 +118,12 @@ describe('live player track handling', () => {
     play.mockResolvedValue(undefined)
     video.play = play
     const states: PlayerState[] = []
-    const player = new LivePlayer(video, 'channel', 'sub', (state) =>
-      states.push(state)
+    const player = new LivePlayer(
+      video,
+      'channel',
+      'sub',
+      (state) => states.push(state),
+      vi.fn()
     )
     await player.start()
     await new Promise((resolve) => setTimeout(resolve, 0))
@@ -139,6 +144,127 @@ describe('live player track handling', () => {
       tracks.every((track) => track.readyState !== 'ended'),
       'both tracks must still be live while the tile is open'
     ).toBe(true)
+    player.stop()
+  })
+})
+describe('live media statistics', () => {
+  function stubPeer(stats: () => Promise<Map<string, unknown>>) {
+    vi.stubGlobal(
+      'RTCPeerConnection',
+      class {
+        ontrack: ((event: { track: MediaStreamTrack }) => void) | null = null
+        onconnectionstatechange: (() => void) | null = null
+        iceGatheringState = 'complete'
+        localDescription = { sdp: 'v=0' }
+        addTransceiver() {}
+        createOffer() {
+          return Promise.resolve({ type: 'offer', sdp: 'v=0' })
+        }
+        setLocalDescription() {
+          return Promise.resolve()
+        }
+        setRemoteDescription() {
+          return Promise.resolve()
+        }
+        getStats() {
+          return stats()
+        }
+        close() {}
+      }
+    )
+    vi.mocked(apiRequest).mockImplementation((path) =>
+      path.endsWith('/live')
+        ? Promise.resolve({
+            id: 'lease',
+            sdp: 'v=0',
+            stream: 'sub',
+            fallback: false,
+          })
+        : Promise.resolve({})
+    )
+  }
+  it('reports decoded size, rate, codecs and audio from the peer statistics', async () => {
+    stubPeer(() =>
+      Promise.resolve(
+        new Map(
+          Object.entries({
+            v: {
+              id: 'v',
+              type: 'inbound-rtp',
+              kind: 'video',
+              codecId: 'vc',
+              frameWidth: 2560,
+              frameHeight: 1440,
+              framesPerSecond: 25,
+              framesDecoded: 100,
+            },
+            vc: { id: 'vc', type: 'codec', mimeType: 'video/H264' },
+            a: { id: 'a', type: 'inbound-rtp', kind: 'audio', codecId: 'ac' },
+            ac: { id: 'ac', type: 'codec', mimeType: 'audio/PCMA' },
+          })
+        )
+      )
+    )
+    const media = vi.fn()
+    const player = new LivePlayer(
+      document.createElement('video'),
+      'channel',
+      'sub',
+      vi.fn(),
+      media
+    )
+    await player.start()
+    await vi.waitFor(() =>
+      expect(media).toHaveBeenCalledWith({
+        width: 2560,
+        height: 1440,
+        fps: 25,
+        videoCodec: 'H264',
+        audioCodec: 'PCMA',
+      })
+    )
+    player.stop()
+    expect(media).toHaveBeenLastCalledWith(null)
+  })
+  it('reports audio as absent when the session has no audio track', async () => {
+    stubPeer(() =>
+      Promise.resolve(
+        new Map(
+          Object.entries({
+            v: {
+              id: 'v',
+              type: 'inbound-rtp',
+              kind: 'video',
+              codecId: 'vc',
+              frameWidth: 704,
+              frameHeight: 576,
+              framesPerSecond: 25,
+              framesDecoded: 50,
+            },
+            vc: { id: 'vc', type: 'codec', mimeType: 'video/H264' },
+          })
+        )
+      )
+    )
+    const media = vi.fn()
+    const player = new LivePlayer(
+      document.createElement('video'),
+      'channel',
+      'sub',
+      vi.fn(),
+      media
+    )
+    await player.start()
+    await vi.waitFor(() =>
+      expect(media).toHaveBeenCalledWith(
+        expect.objectContaining({
+          width: 704,
+          height: 576,
+          videoCodec: 'H264',
+          audioCodec: null,
+        })
+      )
+    )
     player.stop()
   })
 })

@@ -16,6 +16,11 @@ import { useAPI } from '@/features/foundation/hooks'
 import { QueryState, SelectField } from '@/features/foundation/ui'
 import { cn } from '@/lib/utils'
 import { LivePlayer, type PlayerState } from './player'
+import {
+  liveMediaLabel,
+  liveMediaTitle,
+  type LiveMediaInfo,
+} from './media-info'
 import { restoreView, type Layout, type View } from './view'
 
 function label(c: Schema<'Channel'>) {
@@ -44,9 +49,16 @@ function Tile({
     phase: 'connecting',
     message: '正在连接…',
   })
+  const [media, setMedia] = useState<LiveMediaInfo | null>(null)
   useEffect(() => {
     if (!channelID || paused || !video.current) return
-    const player = new LivePlayer(video.current, channelID, stream, setState)
+    const player = new LivePlayer(
+      video.current,
+      channelID,
+      stream,
+      setState,
+      setMedia
+    )
     void player.start()
     return () => player.stop()
   }, [channelID, paused, stream, retry])
@@ -107,19 +119,32 @@ function Tile({
       </div>
       {channel && (
         <div className='flex flex-wrap items-center justify-between gap-2 bg-slate-950 px-2 py-1.5 text-xs'>
-          <span
-            className={
-              state.phase === 'playing' && !paused
-                ? 'text-emerald-400'
-                : 'text-slate-400'
-            }
-          >
-            {!paused && state.phase === 'playing'
-              ? state.fallback
-                ? '主流 · 未配置子流'
-                : `${state.stream === 'main' ? '主' : '子'}流 · 播放中`
-              : '未播放'}
-          </span>
+          <div className='flex min-w-0 flex-1 items-center gap-2'>
+            <span
+              className={
+                state.phase === 'playing' && !paused
+                  ? 'text-emerald-400'
+                  : 'text-slate-400'
+              }
+            >
+              {!paused && state.phase === 'playing'
+                ? state.fallback
+                  ? '主流 · 未配置子流'
+                  : state.stream === 'main'
+                    ? '主流'
+                    : '子流'
+                : '未播放'}
+            </span>
+            {!paused && state.phase === 'playing' && media && (
+              <span
+                data-testid='live-media-info'
+                className='truncate text-slate-300'
+                title={liveMediaTitle(media)}
+              >
+                {liveMediaLabel(media)}
+              </span>
+            )}
+          </div>
           <div className='flex items-center gap-2'>
             <SelectField
               ariaLabel={`${label(channel)} 码流`}

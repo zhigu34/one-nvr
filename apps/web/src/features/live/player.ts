@@ -1,4 +1,5 @@
 import { ApiError, apiRequest, jsonRequest } from '@/lib/api-client'
+import type { LiveMediaInfo } from './media-info'
 
 export type PlayerState = {
   phase: 'connecting' | 'playing' | 'error' | 'retrying'
@@ -20,6 +21,10 @@ export class LivePlayer {
   private retry?: ReturnType<typeof setTimeout>
   private frame?: number
   private lastFrame = 0
+  private stats?: ReturnType<typeof setInterval>
+  private lastDecoded = 0
+  private lastSampleAt = 0
+  private mediaKey = ''
   private reported = false
   private answer?: Answer
   private cancelGather?: () => void
@@ -33,7 +38,8 @@ export class LivePlayer {
     private video: HTMLVideoElement,
     private channel: string,
     private stream: 'main' | 'sub',
-    private update: (state: PlayerState) => void
+    private update: (state: PlayerState) => void,
+    private media: (info: LiveMediaInfo | null) => void
   ) {}
 
   async start() {
@@ -41,6 +47,9 @@ export class LivePlayer {
     const attempt = ++this.generation
     this.reported = false
     this.lastFrame = 0
+    this.lastDecoded = 0
+    this.lastSampleAt = 0
+    this.mediaKey = ''
     this.update({ phase: 'connecting', message: '正在连接…' })
     try {
       if (!window.RTCPeerConnection)
@@ -134,6 +143,8 @@ export class LivePlayer {
         if (this.lastFrame && Date.now() - this.lastFrame > 8000)
           this.fail(new Error('视频画面停止更新'), attempt)
       }, 1000)
+      void this.sample(attempt)
+      this.stats = setInterval(() => void this.sample(attempt), 2000)
     } catch (error) {
       this.fail(error, attempt)
     }
@@ -149,6 +160,54 @@ export class LivePlayer {
         stream: this.answer?.stream,
         fallback: this.answer?.fallback,
       })
+    }
+  }
+  // Statistics describe the live session, not the camera's advertised profile:
+  // size and rate are what this browser is decoding right now. ZLM only
+  // packetizes the stream, so there is no transcode step to report.
+  private async sample(attempt: number) {
+    const peer = this.peer
+    if (!peer || attempt !== this.generation) return
+    try {
+      const report = await peer.getStats()
+      if (attempt !== this.generation) return
+      let video: StatsRecord | undefined
+      let audio: StatsRecord | undefined
+      const codecs = new Map<string, string>()
+      report.forEach((entry) => {
+        const record = entry as StatsRecord
+        if (record.type === 'codec' && typeof record.mimeType === 'string')
+          codecs.set(record.id, record.mimeType)
+        if (record.type === 'inbound-rtp') {
+          if (record.kind === 'video') video = record
+          if (record.kind === 'audio') audio = record
+        }
+      })
+      if (!video?.frameWidth || !video.frameHeight) return
+      const at = performance.now()
+      let fps = video.framesPerSecond ?? 0
+      // Some browsers report decoded frames only: derive the rate from the
+      // delta between samples.
+      if (!fps && this.lastDecoded && this.lastSampleAt && at > this.lastSampleAt)
+        fps =
+          (((video.framesDecoded ?? this.lastDecoded) - this.lastDecoded) *
+            1000) /
+          (at - this.lastSampleAt)
+      this.lastDecoded = video.framesDecoded ?? this.lastDecoded
+      this.lastSampleAt = at
+      const info: LiveMediaInfo = {
+        width: video.frameWidth,
+        height: video.frameHeight,
+        fps,
+        videoCodec: codecName(codecs.get(video.codecId ?? '')) ?? '',
+        audioCodec: audio ? codecName(codecs.get(audio.codecId ?? '')) : null,
+      }
+      const key = `${info.width}x${info.height}|${Math.round(fps)}|${info.videoCodec}|${info.audioCodec}`
+      if (key === this.mediaKey) return
+      this.mediaKey = key
+      this.media(info)
+    } catch {
+      // Statistics are informative only; losing them must not fail playback.
     }
   }
   private gather(peer: RTCPeerConnection): Promise<void> {
@@ -182,6 +241,7 @@ export class LivePlayer {
     this.cancelGather?.()
     clearInterval(this.heartbeat)
     clearInterval(this.watchdog)
+    clearInterval(this.stats)
     clearTimeout(this.timeout)
     if (this.frame !== undefined)
       this.video.cancelVideoFrameCallback(this.frame)
@@ -196,6 +256,7 @@ export class LivePlayer {
     this.video.srcObject = null
     this.mediaStream = null
     this.playRequested = false
+    this.media(null)
     if (this.lease) {
       this.release(this.lease)
       this.lease = ''
@@ -232,4 +293,25 @@ export class LivePlayer {
     clearTimeout(this.retry)
     this.cleanup()
   }
+}
+
+// The subset of the statistics dictionary this player reads. Fields stay
+// optional: browsers differ in what they report (framesPerSecond is missing
+// in Firefox, for example), so every read has a guard.
+type StatsRecord = {
+  id: string
+  type?: string
+  kind?: string
+  mimeType?: string
+  codecId?: string
+  frameWidth?: number
+  frameHeight?: number
+  framesPerSecond?: number
+  framesDecoded?: number
+}
+function codecName(mime: string | undefined): string | null {
+  if (!mime) return null
+  const name = mime.split('/')[1]
+  if (!name) return null
+  return name === 'opus' ? 'Opus' : name.toUpperCase()
 }
