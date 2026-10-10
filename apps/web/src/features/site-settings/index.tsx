@@ -89,6 +89,7 @@ export function Settings() {
             </Button>
           </form>
           <SiteClock zone={query.data.timezone} />
+          <StorageProofSetting site={query.data} />
           <div className='mt-4 flex items-center gap-4'>
             <p className='text-sm text-muted-foreground'>
               固定槽位 {query.data.channel_count} 路
@@ -167,6 +168,58 @@ export function Settings() {
       )}
       <TLSSettings />
     </>
+  )
+}
+// Storage write proof is the one reliability knob a site may trade away: with
+// it off, binding a pool or enabling continuous recording no longer waits for a
+// verified MP4 write. The runtime capacity gate and the watchdog that stops a
+// recorder producing nothing stay active either way, so the panel states the
+// cost in one sentence rather than hiding it behind a bare label.
+function StorageProofSetting({ site }: { site: Schema<'Site'> }) {
+  const action = useAction()
+  return (
+    <div className='mt-4 rounded-lg border p-4'>
+      <div className='flex flex-wrap items-start justify-between gap-3'>
+        <div className='min-w-0'>
+          <p className='text-sm font-medium'>存储写入检查</p>
+          <p className='mt-1 text-sm text-muted-foreground'>
+            {site.require_storage_write_proof
+              ? '已开启：绑定存储池或开启连续录像前，先真实写入并校验一段录像，确保录像能落盘。'
+              : '已关闭：不再写入校验，绑定与开启连续录像立即生效；若存储实际写不进去，最多约 3 分钟后停止录像并在通道上报告。'}
+          </p>
+          <p className='mt-1 text-xs text-muted-foreground'>
+            两种情况都会继续检查磁盘容量，写满时照常停止录像。
+          </p>
+        </div>
+        <Button
+          type='button'
+          variant='outline'
+          disabled={action.pending}
+          onClick={() =>
+            void action.run(
+              () =>
+                apiRequest(
+                  '/api/v1/site',
+                  jsonRequest(
+                    'PATCH',
+                    {
+                      require_storage_write_proof:
+                        !site.require_storage_write_proof,
+                    },
+                    site.version
+                  )
+                ),
+              site.require_storage_write_proof
+                ? '已关闭存储写入检查'
+                : '已开启存储写入检查'
+            )
+          }
+        >
+          {site.require_storage_write_proof ? '关闭写入检查' : '开启写入检查'}
+        </Button>
+      </div>
+      <Notices {...action} />
+    </div>
   )
 }
 function SiteClock({ zone }: { zone: string }) {

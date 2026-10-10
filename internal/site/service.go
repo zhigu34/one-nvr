@@ -16,6 +16,9 @@ import (
 type UpdateInput struct {
 	Name     *string `json:"name"`
 	Timezone *string `json:"timezone"`
+	// RequireStorageWriteProof is a reliability preference: false accepts a
+	// pool without a verified MP4 write and relies on the runtime gates.
+	RequireStorageWriteProof *bool `json:"require_storage_write_proof"`
 }
 
 func (s *Service) Current(ctx context.Context, p auth.Principal) (Site, error) {
@@ -23,7 +26,7 @@ func (s *Service) Current(ctx context.Context, p auth.Principal) (Site, error) {
 	if _, err := s.Auth.CurrentUser(ctx, p); err != nil {
 		return out, err
 	}
-	err := s.DB.Pool.QueryRow(ctx, "SELECT id,name,timezone,channel_count,version FROM sites WHERE singleton").Scan(&out.ID, &out.Name, &out.Timezone, &out.ChannelCount, &out.Version)
+	err := s.DB.Pool.QueryRow(ctx, "SELECT id,name,timezone,channel_count,require_storage_write_proof,version FROM sites WHERE singleton").Scan(&out.ID, &out.Name, &out.Timezone, &out.ChannelCount, &out.RequireStorageWriteProof, &out.Version)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return out, auth.ErrNotFound
 	}
@@ -32,7 +35,8 @@ func (s *Service) Current(ctx context.Context, p auth.Principal) (Site, error) {
 
 func (s *Service) Update(ctx context.Context, p auth.Principal, expected int64, in UpdateInput) (Site, error) {
 	var out Site
-	if expected < 1 || (in.Name == nil && in.Timezone == nil) {
+	if expected < 1 ||
+		(in.Name == nil && in.Timezone == nil && in.RequireStorageWriteProof == nil) {
 		return out, auth.ErrInvalid
 	}
 	if in.Name != nil {
@@ -49,7 +53,7 @@ func (s *Service) Update(ctx context.Context, p auth.Principal, expected int64, 
 		if err := s.Auth.RequireAdminTx(ctx, p, tx); err != nil {
 			return err
 		}
-		err := tx.QueryRow(ctx, "UPDATE sites SET name=COALESCE($1,name),timezone=COALESCE($2,timezone),version=version+1 WHERE singleton AND version=$3 RETURNING id,name,timezone,channel_count,version", in.Name, in.Timezone, expected).Scan(&out.ID, &out.Name, &out.Timezone, &out.ChannelCount, &out.Version)
+		err := tx.QueryRow(ctx, "UPDATE sites SET name=COALESCE($1,name),timezone=COALESCE($2,timezone),require_storage_write_proof=COALESCE($4,require_storage_write_proof),version=version+1 WHERE singleton AND version=$3 RETURNING id,name,timezone,channel_count,require_storage_write_proof,version", in.Name, in.Timezone, expected, in.RequireStorageWriteProof).Scan(&out.ID, &out.Name, &out.Timezone, &out.ChannelCount, &out.RequireStorageWriteProof, &out.Version)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return auth.ErrConflict
 		}

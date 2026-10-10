@@ -23,7 +23,12 @@ type Site struct {
 	Name         string `json:"name"`
 	Timezone     string `json:"timezone"`
 	ChannelCount int    `json:"channel_count"`
-	Version      int64  `json:"version"`
+	// RequireStorageWriteProof gates admission-time storage proof only. False
+	// accepts a pool before its first real MP4 was verified and relies on the
+	// runtime capacity gate and the stop-when-nothing-lands watchdog; neither
+	// of those is optional at any value of this flag.
+	RequireStorageWriteProof bool  `json:"require_storage_write_proof"`
+	Version                  int64 `json:"version"`
 }
 type SetupInput struct {
 	Token         string `json:"token"`
@@ -84,7 +89,9 @@ func (s *Service) Setup(ctx context.Context, in SetupInput) (Site, error) {
 		if exists {
 			return ErrInitialized
 		}
-		result = Site{s.Secrets.SiteID, strings.TrimSpace(in.Name), in.Timezone, in.ChannelCount, 1}
+		// A new site starts with write proof required: the accepted contract is
+		// the default, and turning it off is an explicit operator decision.
+		result = Site{ID: s.Secrets.SiteID, Name: strings.TrimSpace(in.Name), Timezone: in.Timezone, ChannelCount: in.ChannelCount, RequireStorageWriteProof: true, Version: 1}
 		if _, err := tx.Exec(ctx, "INSERT INTO sites(id,name,timezone,channel_count) VALUES($1,$2,$3,$4)", result.ID, result.Name, result.Timezone, result.ChannelCount); err != nil {
 			return err
 		}

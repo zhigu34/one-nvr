@@ -3,6 +3,7 @@ package recording
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -52,8 +53,7 @@ func (s *Service) closeRuntimeGaps(ctx context.Context, e *channel.Execution) er
 	})
 }
 func (s *Service) completionStatus(ctx context.Context, ss physicalSession) (string, string, error) {
-	var last, started *time.Time
-	err := s.DB.Pool.QueryRow(ctx, "SELECT last_completion_at,started_at FROM recording_runs WHERE stream_session_id=$1 AND state='recording' ORDER BY created_at DESC LIMIT 1", ss.ID).Scan(&last, &started)
+	last, started, err := s.completionWindow(ctx, ss)
 	if err != nil {
 		return "unknown", "recorder_observation_missing", err
 	}
@@ -65,4 +65,46 @@ func (s *Service) completionStatus(ctx context.Context, ss physicalSession) (str
 		return "unknown", "first_completion_pending", nil
 	}
 	return "unknown", "completion_stale", nil
+}
+
+func (s *Service) completionWindow(ctx context.Context, ss physicalSession) (last, started *time.Time, err error) {
+	err = s.DB.Pool.QueryRow(ctx, "SELECT last_completion_at,started_at FROM recording_runs WHERE stream_session_id=$1 AND state='recording' ORDER BY created_at DESC LIMIT 1", ss.ID).Scan(&last, &started)
+	return last, started, err
+}
+
+// RecordingOutputGrace is how long a recorder may keep running without landing
+// a completed segment before it is stopped and reported. Segments complete
+// about once a minute, so three minutes tolerates one delayed or retried
+// segment while still catching a recorder that is producing nothing at all —
+// the failure an operator cannot see, because ZLM still reports it as running.
+const RecordingOutputGrace = 3 * time.Minute
+
+// outputStalledAt decides staleness from the two timestamps a recording run
+// carries. A nil pair (no run row at all) counts as stalled: a recorder that
+// cannot even name its run is not producing output.
+func outputStalledAt(now time.Time, last, started *time.Time) bool {
+	newest := time.Time{}
+	for _, candidate := range []*time.Time{last, started} {
+		if candidate != nil && candidate.After(newest) {
+			newest = *candidate
+		}
+	}
+	if newest.IsZero() {
+		return true
+	}
+	return now.Sub(newest) > RecordingOutputGrace
+}
+
+// recordingOutputStalled reports whether the newest real output of this
+// recorder (a completed segment, or its own start for a brand new run) is older
+// than the grace period.
+func (s *Service) recordingOutputStalled(ctx context.Context, ss physicalSession) (bool, error) {
+	last, started, err := s.completionWindow(ctx, ss)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return true, nil
+		}
+		return false, err
+	}
+	return outputStalledAt(time.Now().UTC(), last, started), nil
 }
