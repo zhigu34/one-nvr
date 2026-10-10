@@ -3,7 +3,7 @@ import type { PageData, Schema } from '@/lib/types'
 
 /**
  * The write proof behind binding or enabling recording is only valid for
- * 30 seconds, so a bind/apply that finds it stale recovers by running one real
+ * 30 seconds, so an operation that finds it stale recovers by running one real
  * pool check and retrying. The server gate itself stays untouched: the proof
  * still comes from a real camera → ZLM → MP4 write, never from inference.
  */
@@ -119,4 +119,26 @@ export async function verifyPoolWrite(
       ? `存储池写入没有通过验证：${reason}`
       : '存储池写入没有通过验证，请刷新后重试',
   }
+}
+
+/**
+ * The pool that would prove a channel's writes: its own binding, or the
+ * enabled default pool the server falls back to when applying the mode.
+ */
+export async function boundOrDefaultPool(
+  channelId: string,
+  signal?: AbortSignal
+): Promise<string | null> {
+  const status = await apiRequest<Schema<'ChannelSourceStatus'>>(
+    `/api/v1/channels/${channelId}/source/status`,
+    { signal }
+  )
+  if (status.storage_pool_id) return status.storage_pool_id
+  const pools = await apiRequest<PageData<Schema<'Pool'>>>(
+    '/api/v1/storage-pools?limit=100',
+    { signal }
+  )
+  return (
+    pools.items.find((pool) => pool.is_default && pool.enabled)?.id ?? null
+  )
 }
