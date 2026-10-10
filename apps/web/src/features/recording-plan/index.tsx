@@ -22,6 +22,11 @@ import {
 import { useAPI, useAction } from '@/features/foundation/hooks'
 import { sourceCommand } from '@/features/channels/api'
 import { PolicyRow } from './policy-row'
+import {
+  failureText,
+  verifyPoolWrite,
+  type PoolCheckOutcome,
+} from './pool-check'
 
 const PLANNED_MODES = [
   { label: '定时录像（后续开放）', value: 'scheduled' },
@@ -63,37 +68,134 @@ export function RecordingPlan() {
 
   // The batch carries one expected version per row, so read the current version
   // immediately before writing instead of trusting a page that may be stale.
+  async function submitPolicies(channelIDs: string[]) {
+    const rows = await Promise.all(
+      channelIDs.map(async (channelID) => {
+        const policy = await apiRequest<Schema<'RecordingPolicy'>>(
+          `/api/v1/channels/${channelID}/recording-policy`
+        )
+        return {
+          channel_id: channelID,
+          expected_version: policy.version,
+          mode: mode as 'none' | 'continuous',
+        }
+      })
+    )
+    return sourceCommand<Schema<'RecordingPolicyBatch'>>(
+      '/api/v1/recording-policies',
+      { items: rows },
+      undefined,
+      undefined,
+      'PUT'
+    )
+  }
+
+  // Rows rejected for a stale write proof recover by running one real pool
+  // check for each pool they depend on and retrying just those rows. The
+  // server evidence gate stays untouched; only the required steps are taken
+  // automatically instead of being left to the operator.
+  async function recoverRejected(items: Schema<'RecordingPolicyOutcome'>[]) {
+    const stale = items.filter(
+      (row) =>
+        row.state !== 'queued' &&
+        row.error_code === 'zlm_write_evidence_unavailable'
+    )
+    const reasons = new Map<string, string>()
+    if (stale.length === 0 || mode !== 'continuous')
+      return { items, recovered: 0, reasons }
+    const poolByChannel = new Map<string, string>()
+    for (const row of stale) {
+      try {
+        const status = await apiRequest<Schema<'ChannelSourceStatus'>>(
+          `/api/v1/channels/${row.channel_id}/source/status`
+        )
+        if (status.storage_pool_id)
+          poolByChannel.set(row.channel_id, status.storage_pool_id)
+      } catch {
+        // The row keeps its original rejection reason.
+      }
+    }
+    // A channel without its own binding falls back to the default pool,
+    // exactly like the server does when it applies the mode.
+    if (stale.some((row) => !poolByChannel.has(row.channel_id))) {
+      try {
+        const pools = await apiRequest<PageData<Schema<'Pool'>>>(
+          '/api/v1/storage-pools?limit=100'
+        )
+        const fallback = pools.items.find(
+          (pool) => pool.is_default && pool.enabled
+        )
+        if (fallback) {
+          for (const row of stale)
+            if (!poolByChannel.has(row.channel_id))
+              poolByChannel.set(row.channel_id, fallback.id)
+        }
+      } catch {
+        // Rows without a usable pool keep their original reason.
+      }
+    }
+    const verified = new Map<string, PoolCheckOutcome>()
+    for (const poolID of new Set(poolByChannel.values())) {
+      try {
+        verified.set(poolID, await verifyPoolWrite(poolID))
+      } catch {
+        verified.set(poolID, { ok: false, message: '' })
+      }
+    }
+    const retryable = stale.filter((row) => {
+      const poolID = poolByChannel.get(row.channel_id)
+      return poolID !== undefined && verified.get(poolID)?.ok === true
+    })
+    for (const row of stale) {
+      if (retryable.includes(row)) continue
+      const poolID = poolByChannel.get(row.channel_id)
+      if (!poolID) {
+        reasons.set(row.channel_id, '未绑定存储池，请先在「存储池」列绑定')
+        continue
+      }
+      const result = verified.get(poolID)
+      reasons.set(
+        row.channel_id,
+        result && !result.ok && result.message
+          ? result.message
+          : '存储池写入检查未通过或已过期'
+      )
+    }
+    if (retryable.length === 0) return { items, recovered: 0, reasons }
+    const retried = await submitPolicies(retryable.map((row) => row.channel_id))
+    const merged = items.map(
+      (row) =>
+        retried.items.find((next) => next.channel_id === row.channel_id) || row
+    )
+    return {
+      items: merged,
+      recovered: retried.items.filter((row) => row.state === 'queued').length,
+      reasons,
+    }
+  }
+
   async function applyBatch() {
     if (chosen.length === 0) return
     setOutcome('')
     await batch.run(
       async () => {
-        const rows = await Promise.all(
-          chosen.map(async (channel) => {
-            const policy = await apiRequest<Schema<'RecordingPolicy'>>(
-              `/api/v1/channels/${channel.id}/recording-policy`
-            )
-            return {
-              channel_id: channel.id,
-              expected_version: policy.version,
-              mode: mode as 'none' | 'continuous',
-            }
-          })
-        )
-        const result = await sourceCommand<Schema<'RecordingPolicyBatch'>>(
-          '/api/v1/recording-policies',
-          { items: rows },
-          undefined,
-          undefined,
-          'PUT'
-        )
-        const queued = result.items.filter((row) => row.state === 'queued')
-        const rejected = result.items.filter((row) => row.state !== 'queued')
+        const first = await submitPolicies(chosen.map((channel) => channel.id))
+        const { items, recovered, reasons } = await recoverRejected(first.items)
+        const queued = items.filter((row) => row.state === 'queued')
+        const rejected = items.filter((row) => row.state !== 'queued')
+        const note =
+          recovered > 0 ? `（其中 ${recovered} 路经自动重新验证存储池写入）` : ''
         setOutcome(
           rejected.length === 0
-            ? `${queued.length} 路已排队`
-            : `${queued.length} 路已排队，${rejected.length} 路未应用：${[
-                ...new Set(rejected.map((row) => row.error_code || '未知原因')),
+            ? `${queued.length} 路已排队${note}`
+            : `${queued.length} 路已排队${note}，${rejected.length} 路未应用：${[
+                ...new Set(
+                  rejected.map(
+                    (row) =>
+                      reasons.get(row.channel_id) ||
+                      failureText(row.error_code || '')
+                  )
+                ),
               ].join('、')}`
         )
         if (rejected.length === 0) setSelected(new Set())
