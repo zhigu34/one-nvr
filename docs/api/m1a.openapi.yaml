@@ -539,6 +539,9 @@
                   },
                   "timezone": {
                     "type": "string"
+                  },
+                  "require_storage_write_proof": {
+                    "type": "boolean"
                   }
                 },
                 "required": [],
@@ -2883,6 +2886,10 @@
               32
             ]
           },
+          "require_storage_write_proof": {
+            "type": "boolean",
+            "description": "Admission-time storage write proof. True (default) requires a verified MP4 write before a pool may start continuous recording. False accepts the pool immediately and relies on the runtime capacity gate and the watchdog that stops a recorder which produces no segment for three minutes; neither of those is optional."
+          },
           "version": {
             "$ref": "#/components/schemas/Version"
           }
@@ -2892,6 +2899,7 @@
           "name",
           "timezone",
           "channel_count",
+          "require_storage_write_proof",
           "version"
         ],
         "additionalProperties": false

@@ -34,8 +34,8 @@ func (s *Service) Start(ctx context.Context, e *channel.Execution, in StartInput
 	if !pool.Enabled || pool.SiteID != s.siteID {
 		return out, storage.ErrMediaProof
 	}
-	var ready bool
-	if err := s.DB.Pool.QueryRow(ctx, "SELECT count(*)=3 FROM storage_pool_checks WHERE pool_id=$1 AND state='healthy' AND expires_at>clock_timestamp()", in.PoolID).Scan(&ready); err != nil {
+	ready, err := storage.PoolHasFreshEvidence(ctx, s.DB.Pool, s.siteID, in.PoolID)
+	if err != nil {
 		return out, err
 	}
 	if !ready {

@@ -199,17 +199,10 @@ func (s *Service) verifySwitchTarget(ctx context.Context, e *channel.Execution, 
 		if pool == nil {
 			return main, storage.ErrMediaProof
 		}
-		var ready bool
-		if err := s.DB.Pool.QueryRow(ctx, "SELECT count(*)=3 FROM storage_pool_checks WHERE pool_id=$1 AND state='healthy' AND expires_at>clock_timestamp()", pool).Scan(&ready); err != nil {
+		// The switch owns the channel while it waits, so it repairs its own
+		// evidence rather than expecting the storage monitor to catch up.
+		if _, err := s.poolEvidenceReady(ctx, e, *pool); err != nil {
 			return main, err
-		}
-		if !ready {
-			if err := e.Check(ctx); err != nil {
-				return main, err
-			}
-			if err := s.CheckPool(ctx, *pool); err != nil {
-				return main, err
-			}
 		}
 		capacity, err := s.capacityFor(ctx, e.ChannelID, main.RevisionID, *pool)
 		if err != nil {
@@ -434,17 +427,14 @@ func (s *Service) ExecuteSourceChange(ctx context.Context, lease jobs.Lease) (jo
 			if w.NewPool == nil {
 				return jobs.Result{}, storage.ErrMediaProof
 			}
-			var ready bool
-			if err := s.DB.Pool.QueryRow(ctx, "SELECT count(*)=3 FROM storage_pool_checks WHERE pool_id=$1 AND state='healthy' AND expires_at>clock_timestamp()", w.NewPool).Scan(&ready); err != nil {
+			ready, err := s.poolEvidenceReady(ctx, e, *w.NewPool)
+			if err != nil {
 				return jobs.Result{}, err
 			}
 			if !ready {
-				if err := e.Check(ctx); err != nil {
-					return jobs.Result{}, err
-				}
-				if err := s.CheckPool(ctx, *w.NewPool); err != nil {
-					return jobs.Result{}, err
-				}
+				// Only reachable when fresh process samples are missing, which
+				// means the storage monitor is not reporting at all.
+				return jobs.Result{}, storage.ErrMediaProof
 			}
 			if w.NewRevision == nil {
 				return jobs.Result{}, ErrPublicationConflict

@@ -8,6 +8,8 @@ export const STATUS_REASONS: Record<string, string> = {
   source_unavailable: '无法读取视频',
   source_frozen: '视频帧未更新',
   recording_disabled: '已关闭录像',
+  recording_output_stalled: '录像长时间没有产生文件，已停止录像',
+  pool_observation_stale: '存储池状态观测过期，等待重新采样',
   observation_missing: '尚未产生观测：配置已保存但从未测试过',
   observation_stale: '上一次观测已过期，需要重新测试',
   source_not_configured: '通道尚未接入摄像头',

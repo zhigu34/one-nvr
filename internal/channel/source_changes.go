@@ -205,8 +205,8 @@ func (s *SourceService) requestChangeTx(tx pgx.Tx, worker bool, ctx context.Cont
 				pool = &value
 			}
 			if pool != nil && (desired == "continuous" || kind == "pool_switch") {
-				var ready bool
-				if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM storage_pools p WHERE p.id=$1 AND p.site_id=$2 AND p.enabled AND (SELECT count(*) FROM storage_pool_checks WHERE pool_id=p.id AND state='healthy' AND expires_at>clock_timestamp())=3)`, pool, site).Scan(&ready); err != nil {
+				ready, err := storage.PoolHasFreshEvidence(ctx, tx, site, *pool)
+				if err != nil {
 					return err
 				}
 				if !ready {
@@ -253,8 +253,8 @@ func (s *SourceService) requestChangeTx(tx pgx.Tx, worker bool, ctx context.Cont
 					}
 					pool = &defaultPool
 				}
-				var ready bool
-				if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM storage_pools p WHERE p.id=$1 AND p.site_id=$2 AND p.enabled AND (SELECT count(*) FROM storage_pool_checks WHERE pool_id=p.id AND state='healthy' AND expires_at>clock_timestamp())=3)`, pool, site).Scan(&ready); err != nil {
+				ready, err := storage.PoolHasFreshEvidence(ctx, tx, site, *pool)
+				if err != nil {
 					return err
 				}
 				if !ready {

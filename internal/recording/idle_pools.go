@@ -2,20 +2,31 @@ package recording
 
 import (
 	"context"
+	"github.com/jackc/pgx/v5"
 	"github.com/zhigu34/one-nvr/internal/id"
+	"github.com/zhigu34/one-nvr/internal/storage"
 	"log/slog"
 	"time"
 )
 
 // Idle pools have no ordinary MP4 completions to refresh media proof. An explicit
 // temporary probe uses the same checked source/write/MP4 path as the Test button.
+//
+// The probe only exists to keep the `zlm` write proof fresh, so a site that does
+// not require that proof is skipped entirely: probing anyway would write a
+// three-second recording to every idle pool every thirty seconds forever, which
+// is precisely the cost the setting exists to avoid.
 func (s *Service) MonitorIdlePools(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for ctx.Err() == nil {
-		rows, err := s.DB.Pool.Query(ctx, `SELECT p.id FROM storage_pools p WHERE EXISTS(SELECT 1 FROM pool_probe_intents pi JOIN stream_sessions ss ON ss.id=pi.session_id WHERE pi.pool_id=p.id AND ss.state<>'closed') OR EXISTS(SELECT 1 FROM recording_runs r WHERE r.pool_id=p.id AND r.purpose='probe' AND r.state IN ('starting','recording','stopping')) OR (p.enabled AND EXISTS(SELECT 1 FROM channels c JOIN recording_policies rp ON rp.channel_id=c.id WHERE c.enabled AND c.storage_pool_id=p.id AND rp.mode='continuous') AND NOT EXISTS(SELECT 1 FROM recording_runs r WHERE r.pool_id=p.id AND r.purpose='continuous' AND r.state IN ('starting','recording','stopping')) AND NOT EXISTS(SELECT 1 FROM storage_pool_checks c WHERE c.pool_id=p.id AND c.service='zlm' AND c.expires_at>clock_timestamp())) ORDER BY p.id`)
+		proof, err := storage.RequireWriteProof(ctx, s.DB.Pool, s.siteID)
+		var rows pgx.Rows
+		if err == nil && proof {
+			rows, err = s.DB.Pool.Query(ctx, `SELECT p.id FROM storage_pools p WHERE EXISTS(SELECT 1 FROM pool_probe_intents pi JOIN stream_sessions ss ON ss.id=pi.session_id WHERE pi.pool_id=p.id AND ss.state<>'closed') OR EXISTS(SELECT 1 FROM recording_runs r WHERE r.pool_id=p.id AND r.purpose='probe' AND r.state IN ('starting','recording','stopping')) OR (p.enabled AND EXISTS(SELECT 1 FROM channels c JOIN recording_policies rp ON rp.channel_id=c.id WHERE c.enabled AND c.storage_pool_id=p.id AND rp.mode='continuous') AND NOT EXISTS(SELECT 1 FROM recording_runs r WHERE r.pool_id=p.id AND r.purpose='continuous' AND r.state IN ('starting','recording','stopping')) AND NOT EXISTS(SELECT 1 FROM storage_pool_checks c WHERE c.pool_id=p.id AND c.service='zlm' AND c.expires_at>clock_timestamp())) ORDER BY p.id`)
+		}
 		var pools []id.ID
-		if err == nil {
+		if err == nil && rows != nil {
 			for rows.Next() {
 				var pool id.ID
 				if err = rows.Scan(&pool); err != nil {

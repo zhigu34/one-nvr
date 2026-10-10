@@ -177,6 +177,17 @@ func (s *Service) Reconcile(ctx context.Context, ch id.ID) error {
 				return err
 			}
 		} else if reason == "completion_stale" {
+			// A recorder that keeps running without landing a segment is the
+			// silent failure mode: the upstream still reports it as recording
+			// while nothing reaches the disk. Stop it and say so, instead of
+			// leaving it running behind a grey "unknown".
+			stalled, err := s.recordingOutputStalled(ctx, ss)
+			if err != nil {
+				return err
+			}
+			if stalled {
+				return s.pauseRuntimeRecording(ctx, e, ss, "recording_output_stalled")
+			}
 			if err := s.runtimeGap(ctx, e, ss, reason, false); err != nil {
 				return err
 			}

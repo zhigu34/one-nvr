@@ -975,6 +975,8 @@ export interface components {
             timezone: string;
             /** @enum {integer} */
             channel_count: 16 | 32;
+            /** @description Admission-time storage write proof. True (default) requires a verified MP4 write before a pool may start continuous recording. False accepts the pool immediately and relies on the runtime capacity gate and the watchdog that stops a recorder which produces no segment for three minutes; neither of those is optional. */
+            require_storage_write_proof: boolean;
             version: components["schemas"]["Version"];
         };
         Channel: {
@@ -1759,6 +1761,7 @@ export interface operations {
                 "application/json": {
                     name?: string;
                     timezone?: string;
+                    require_storage_write_proof?: boolean;
                 };
             };
         };
