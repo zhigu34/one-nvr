@@ -8,7 +8,6 @@ test('plain save and export round trip keep the permanent channel and do not ena
  await page.getByLabel('IP 地址',{exact:true}).fill('192.168.33.20')
  await page.getByLabel('用户名',{exact:true}).fill('fixture-camera')
  await page.getByLabel('密码',{exact:true}).fill('fixture-source-password')
- await page.locator('summary', {hasText:'高级设置'}).click()
  await page.getByRole('button',{name:'仅保存',exact:true}).click()
  await expect(page.getByText('已保存，未启用')).toBeVisible()
  // Save and enable are separate actions: saving alone must leave the slot
