@@ -56,22 +56,22 @@ async function freshPoolProof(page: Page, poolId: string) {
     await poolPage.close()
   }
 }
-// Recording a camera configuration and using it are separate steps: 「保存」
+// Recording a camera configuration and using it are separate steps: 「仅保存」
 // only writes the revision and never touches the running source, and the test
-// panel is always visible. `connect` asks for the one-click save-and-enable
-// path, which is only safe while the channel records nothing yet.
+// panel is always visible beside the fields it proves. `connect` asks for the
+// one-click save-and-enable path, which is only safe while the channel records
+// nothing yet.
 async function saveAndTest(page: Page, ip: string, main: string, sub: string, connect = false) {
-  await page.getByRole('tab', {name: '连接配置', exact: true}).click()
   await page.getByLabel('IP 地址', {exact: true}).fill(ip)
   await page.getByLabel('主流路径', {exact: true}).fill(main)
   await page.getByLabel('子流路径（可留空）', {exact: true}).fill(sub)
-  const advanced = page.locator('details').filter({has: page.locator('summary', {hasText: '高级连接设置'})})
+  const advanced = page.locator('details').filter({has: page.locator('summary', {hasText: '高级设置'})})
   if (!(await advanced.evaluate(el => el.hasAttribute('open')))) await advanced.locator('summary').click()
   await page.getByLabel('密码处理', {exact: true}).click()
   await page.getByRole('option', {name: '清空密码', exact: true}).click()
   const saved = page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/source-revisions'))
   const tested = page.waitForResponse(r => r.request().method() === 'POST' && /\/source-revisions\/[^/]+\/test$/.test(new URL(r.url()).pathname))
-  await page.getByRole('button', {name: connect ? '保存并启用' : '保存', exact: true}).click()
+  await page.getByRole('button', {name: connect ? '保存并启用' : '仅保存', exact: true}).click()
   const response = await saved
   if (response.status() !== 201) {
     const failed = await response.json()
@@ -262,9 +262,9 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   // acceptance block at the end covers it, so go straight to the destructive
   // source action on the channel page.
   await page.goto('/channels/configure?channel=' + channel.id)
-  await page.getByRole('tab', {name: '历史与诊断', exact: true}).click()
-  await page.locator('summary', {hasText: '清空摄像头配置'}).click()
-  await page.getByLabel('确认清空此通道摄像头', {exact: true}).check()
+  await page.getByRole('button', {name: '历史与诊断', exact: true}).click()
+  await page.locator('summary', {hasText: '危险操作'}).click()
+  await page.getByRole('button', {name: '清空摄像头配置', exact: true}).click()
   await finished(page, await command(page, '清空摄像头', '/source/clear'))
   await expect.poll(async () => (await status()).current_revision_id, {timeout: 20000}).toBeNull()
   await page.reload()

@@ -163,3 +163,49 @@ test('a failed write re-verification reports the reason instead of retrying', as
   )
   expect(attempts.apply).toBe(1)
 })
+// proveRevision is the single place that decides whether a test result counts
+// as proof. Both the one-click connect and the explicit enable action depend on
+// it, so a foreign revision or a missing first frame must be rejected here
+// rather than by whichever caller happens to check.
+test('a proof for another revision is never accepted as evidence for this one', async () => {
+  fixture()
+  calls.request.mockImplementation(async (path: string) => {
+    if (path.endsWith('/test'))
+      return { test_id: 'proof', job_id: 'test-job', state: 'queued' }
+    if (path.includes('/source-tests/'))
+      return {
+        id: 'proof',
+        revision_id: 'a-different-revision',
+        state: 'succeeded',
+        main: { state: 'healthy', first_frame: true },
+        sub: { state: 'healthy' },
+        expires_at: new Date(Date.now() + 60000).toISOString(),
+      }
+    throw new Error('unexpected ' + path)
+  })
+  await expect(connect()).rejects.toThrow('有效视频画面')
+  expect(
+    calls.request.mock.calls.some(([path]) => path.endsWith('/source/apply'))
+  ).toBe(false)
+})
+test('a proof without a first frame is never accepted, however healthy it looks', async () => {
+  fixture()
+  calls.request.mockImplementation(async (path: string) => {
+    if (path.endsWith('/test'))
+      return { test_id: 'proof', job_id: 'test-job', state: 'queued' }
+    if (path.includes('/source-tests/'))
+      return {
+        id: 'proof',
+        revision_id: 'revision',
+        state: 'succeeded',
+        main: { state: 'healthy', first_frame: false },
+        sub: { state: 'healthy' },
+        expires_at: new Date(Date.now() + 60000).toISOString(),
+      }
+    throw new Error('unexpected ' + path)
+  })
+  await expect(connect()).rejects.toThrow('有效视频画面')
+  expect(
+    calls.request.mock.calls.some(([path]) => path.endsWith('/source/apply'))
+  ).toBe(false)
+})

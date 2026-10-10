@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { apiRequest, jsonRequest, newRequestKey } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
@@ -12,9 +12,12 @@ import { connectionError, type SaveConnection } from './source-connect'
 import { SourceOnvifPanel } from './source-onvif'
 
 type Props = {
-  channel: Schema<'Channel'>
+  channel: { id: string; version: number }
   revision: Schema<'SourceRevision'> | null
   history: Schema<'SourceRevision'>[]
+  // The test panel renders beside the fields it proves, so the results and the
+  // button that produces them are never a scroll apart.
+  testPanel?: ReactNode
   onSaved: (
     value: Schema<'SourceRevision'>,
     signal: AbortSignal,
@@ -24,7 +27,13 @@ type Props = {
 export function SourceForm(props: Props) {
   return <SourceEditor key={props.channel.id} {...props} />
 }
-function SourceEditor({ channel, revision, history, onSaved }: Props) {
+function SourceEditor({
+  channel,
+  revision,
+  history,
+  testPanel,
+  onSaved,
+}: Props) {
   const [passwordAction, setPasswordAction] = useState<
     Schema<'CredentialInput'>['password_action']
   >(revision ? 'keep' : 'replace')
@@ -48,6 +57,7 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
     revision?.config.onvif_port ? String(revision.config.onvif_port) : ''
   )
   const [probed, setProbed] = useState(false)
+  const [pathsOpen, setPathsOpen] = useState(true)
   const [intentRevision, setIntentRevision] = useState(revision?.id)
   const [password, setPassword] = useState('')
   const form = useRef<HTMLFormElement>(null)
@@ -64,6 +74,7 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
       revision?.config.onvif_port ? String(revision.config.onvif_port) : ''
     )
     setProbed(false)
+    setPathsOpen(true)
   }
   // The probe uses what the operator is entering right now, so it reads the same
   // fields the submission will send instead of keeping a second copy.
@@ -89,6 +100,9 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
     setMainPath(main.path)
     setSubPath(sub ? sub.path : '')
     setProbed(true)
+    // What the device returned is worth showing, so the row that holds the
+    // filled paths opens instead of hiding them behind a summary line.
+    setPathsOpen(true)
   }
   const [pending, setPending] = useState(false),
     [error, setError] = useState(''),
@@ -99,17 +113,16 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
     (entry, index, list) =>
       list.findIndex((value) => value.source_id === entry.source_id) === index
   )
+  // ONVIF has nothing to submit until the camera answered, so both actions stay
+  // unavailable before a probe fills the paths.
+  const blocked = method === 'onvif' && !probed
   return (
     <section className='grid gap-4'>
       <Notices error={error} notice={notice} />
-      <p className='text-sm text-muted-foreground'>
-        「保存」只记录这条摄像头信息，不影响当前正在取的流；「保存并启用」才切换到新配置。
-        录像方式在「录像计划」页设置。
-      </p>
       <form
         key={revision?.id || 'empty'}
         ref={form}
-        className='grid gap-4 md:grid-cols-2'
+        className='grid gap-5'
         onSubmit={async (event) => {
           event.preventDefault()
           if (pending) return
@@ -188,195 +201,256 @@ function SourceEditor({ channel, revision, history, onSaved }: Props) {
         }}
       >
         <fieldset disabled={pending} className='contents'>
-          <div className='grid gap-2 md:col-span-2'>
-            <span className='text-sm'>添加方式</span>
-            <div className='flex flex-wrap gap-2'>
-              <Button
-                type='button'
-                variant={method === 'rtsp' ? 'secondary' : 'outline'}
-                aria-pressed={method === 'rtsp'}
-                onClick={() => setMethod('rtsp')}
-              >
-                RTSP 手动
-              </Button>
-              <Button
-                type='button'
-                variant={method === 'onvif' ? 'secondary' : 'outline'}
-                aria-pressed={method === 'onvif'}
-                onClick={() => setMethod('onvif')}
-              >
-                ONVIF 手动
-              </Button>
-            </div>
-            <p className='text-xs text-muted-foreground'>
-              {method === 'onvif'
-                ? '填写地址与凭据后从摄像头读取码流配置，不用手填路径。'
-                : '手动填写 RTSP 端口与主/子流路径。'}
-            </p>
-          </div>
-          <Field
-            label='IP 地址'
-            name='ip'
-            value={ip}
-            onChange={(event) => setIP(event.target.value)}
-            required
-            placeholder='192.168.33.20'
-          />
-          {(method === 'rtsp' || probed) && (
-            <Field
-              label='RTSP 端口'
-              name='rtsp_port'
-              type='number'
-              min={1}
-              max={65535}
-              value={rtspPort}
-              onChange={(event) => setRTSPPort(event.target.value)}
-              required
-            />
-          )}
-          <Field
-            label='用户名'
-            name='username'
-            autoComplete='off'
-            placeholder={
-              revision
-                ? `已保存 ${revision.username_summary || '用户名'}，留空保留`
-                : '摄像头用户名'
-            }
-          />
-          {passwordAction !== 'clear' && (
-            <Field
-              label='密码'
-              name='password'
-              type='password'
-              autoComplete='new-password'
-              placeholder={revision ? '留空保留已保存的密码' : '摄像头密码'}
-              value={password}
-              onChange={(event) => {
-                setPassword(event.target.value)
-                setPasswordAction(
-                  revision && !event.target.value ? 'keep' : 'replace'
-                )
-              }}
-            />
-          )}
-          {method === 'onvif' && (
-            <div className='md:col-span-2'>
-              <SourceOnvifPanel
-                channelId={channel.id}
-                ip={ip}
-                port={onvifPort}
-                onPortChange={setONVIFPort}
-                credentials={enteredCredentials}
-                onStreams={applyStreams}
-                savedPassword={passwordAction === 'keep' && !!revision}
-                busy={pending}
-              />
-            </div>
-          )}
-          {(method === 'rtsp' || probed) && (
-            <>
-              <Field
-                label='主流路径'
-                name='main_path'
-                value={mainPath}
-                onChange={(event) => setMainPath(event.target.value)}
-                required
-              />
-              <Field
-                label='子流路径（可留空）'
-                name='sub_path'
-                value={subPath}
-                onChange={(event) => setSubPath(event.target.value)}
-                placeholder='/sub'
-              />
-            </>
-          )}
-          <details className='rounded-lg border p-4 md:col-span-2'>
-            <summary className='cursor-pointer text-sm font-medium'>
-              高级连接设置
-            </summary>
-            <div className='mt-4 grid gap-4 md:grid-cols-2'>
-              <SelectField
-                label='传输方式'
-                name='transport'
-                defaultValue={revision?.config.transport || 'tcp'}
-                options={[
-                  { value: 'tcp', label: 'TCP' },
-                  { value: 'udp', label: 'UDP' },
-                ]}
-              />
-              <SelectField
-                label='摄像头操作'
-                value={intent}
-                onValueChange={(next) => setIntent(next as typeof intent)}
-                options={[
-                  ...(revision
-                    ? [{ value: 'modify', label: '修改当前摄像头配置' }]
-                    : []),
-                  { value: 'replace', label: '更换摄像头' },
-                  ...(identities.length > 0
-                    ? [{ value: 'history', label: '恢复历史摄像头身份' }]
-                    : []),
-                ]}
-              />
-              {intent === 'history' && (
-                <SelectField
-                  label='历史摄像头'
-                  name='history_source_id'
-                  defaultValue={identities[0]?.source_id}
-                  options={identities.map((value) => ({
-                    value: value.source_id,
-                    label: `身份 ${value.source_id.slice(0, 8)} · 修订 ${value.number}`,
-                  }))}
+          <div className='grid gap-5 lg:grid-cols-[minmax(0,1fr)_240px]'>
+            <div className='grid content-start gap-4'>
+              <div className='grid gap-2'>
+                <span className='text-sm font-medium'>添加方式</span>
+                <div
+                  role='group'
+                  aria-label='添加方式'
+                  className='inline-flex w-fit rounded-lg border bg-muted/40 p-0.5'
+                >
+                  <Button
+                    type='button'
+                    size='sm'
+                    variant={method === 'rtsp' ? 'secondary' : 'ghost'}
+                    aria-pressed={method === 'rtsp'}
+                    onClick={() => {
+                      setMethod('rtsp')
+                      // RTSP means typing the paths, so they are shown; ONVIF
+                      // receives them from the device and only needs a summary.
+                      setPathsOpen(true)
+                    }}
+                  >
+                    RTSP 手动
+                  </Button>
+                  <Button
+                    type='button'
+                    size='sm'
+                    variant={method === 'onvif' ? 'secondary' : 'ghost'}
+                    aria-pressed={method === 'onvif'}
+                    onClick={() => {
+                      setMethod('onvif')
+                      setPathsOpen(false)
+                    }}
+                  >
+                    ONVIF 手动
+                  </Button>
+                </div>
+                <p className='text-xs text-muted-foreground'>
+                  {method === 'onvif'
+                    ? '填写地址与凭据后从摄像头读取码流配置，不用手填路径。'
+                    : '手动填写 RTSP 端口与主/子流路径。'}
+                </p>
+              </div>
+              <div className='grid gap-4 sm:grid-cols-[minmax(0,1fr)_110px]'>
+                <div className='grid gap-2'>
+                  <label
+                    htmlFor='source-ip'
+                    className='text-sm font-medium leading-none'
+                  >
+                    IP 地址
+                  </label>
+                  <div className='flex'>
+                    <span className='inline-flex items-center rounded-l-md border border-r-0 bg-muted/50 px-2 font-mono text-xs text-muted-foreground'>
+                      rtsp://
+                    </span>
+                    <input
+                      id='source-ip'
+                      name='ip'
+                      required
+                      placeholder='192.168.33.20'
+                      value={ip}
+                      onChange={(event) => setIP(event.target.value)}
+                      className='flex h-9 w-full min-w-0 rounded-r-md border border-input bg-transparent px-3 py-1 text-base shadow-xs outline-none md:text-sm dark:bg-input/30'
+                    />
+                  </div>
+                  <p className='text-[11px] text-muted-foreground'>
+                    {method === 'onvif'
+                      ? '地址与凭据会用于探测，不保存凭据。'
+                      : '填写摄像头地址，路径在下方「码流路径」。'}
+                  </p>
+                </div>
+                {(method === 'rtsp' || probed) && (
+                  <Field
+                    label='RTSP 端口'
+                    name='rtsp_port'
+                    type='number'
+                    min={1}
+                    max={65535}
+                    value={rtspPort}
+                    onChange={(event) => setRTSPPort(event.target.value)}
+                    required
+                  />
+                )}
+              </div>
+              <div className='grid gap-4 sm:grid-cols-2'>
+                <Field
+                  label='用户名'
+                  name='username'
+                  autoComplete='off'
+                  placeholder={
+                    revision
+                      ? `已保存 ${revision.username_summary || '用户名'}，留空保留`
+                      : '摄像头用户名'
+                  }
+                />
+                {passwordAction !== 'clear' && (
+                  <Field
+                    label='密码'
+                    name='password'
+                    type='password'
+                    autoComplete='new-password'
+                    placeholder={
+                      revision ? '留空保留已保存的密码' : '摄像头密码'
+                    }
+                    value={password}
+                    onChange={(event) => {
+                      setPassword(event.target.value)
+                      setPasswordAction(
+                        revision && !event.target.value ? 'keep' : 'replace'
+                      )
+                    }}
+                  />
+                )}
+              </div>
+              {method === 'onvif' && (
+                <SourceOnvifPanel
+                  channelId={channel.id}
+                  ip={ip}
+                  port={onvifPort}
+                  onPortChange={setONVIFPort}
+                  credentials={enteredCredentials}
+                  onStreams={applyStreams}
+                  savedPassword={passwordAction === 'keep' && !!revision}
+                  busy={pending}
                 />
               )}
-              <div className='grid gap-2'>
-                <CheckboxField
-                  label='允许清空用户名（普通编辑留空保留）'
-                  name='update_username'
-                  defaultChecked={!revision}
-                />
-              </div>
-              <SelectField
-                label='密码处理'
-                value={passwordAction}
-                onValueChange={(next) => {
-                  setPasswordAction(next as typeof passwordAction)
-                  setPassword('')
-                }}
-                options={[
-                  ...(revision
-                    ? [{ value: 'keep', label: '保留当前密码' }]
-                    : []),
-                  { value: 'replace', label: '输入新密码' },
-                  { value: 'clear', label: '清空密码' },
-                ]}
-              />
+              {(method === 'rtsp' || probed) && (
+                <details
+                  className='rounded-lg border'
+                  open={pathsOpen}
+                  onToggle={(event) => setPathsOpen(event.currentTarget.open)}
+                >
+                  <summary className='flex cursor-pointer items-center justify-between gap-3 px-3 py-2.5 text-sm font-medium'>
+                    <span>码流路径</span>
+                    <span className='truncate font-mono text-[11px] text-muted-foreground'>
+                      {[mainPath, subPath].filter(Boolean).join(' · ') ||
+                        '未填写'}
+                    </span>
+                  </summary>
+                  <div className='grid gap-4 border-t p-3 sm:grid-cols-2'>
+                    <Field
+                      label='主流路径'
+                      name='main_path'
+                      value={mainPath}
+                      onChange={(event) => setMainPath(event.target.value)}
+                      required
+                    />
+                    <Field
+                      label='子流路径（可留空）'
+                      name='sub_path'
+                      value={subPath}
+                      onChange={(event) => setSubPath(event.target.value)}
+                      placeholder='/sub'
+                    />
+                  </div>
+                </details>
+              )}
+              <details className='rounded-lg border'>
+                <summary className='cursor-pointer px-3 py-2.5 text-sm font-medium'>
+                  高级设置
+                </summary>
+                <div className='grid gap-4 border-t p-3 sm:grid-cols-2'>
+                  <SelectField
+                    label='传输方式'
+                    name='transport'
+                    defaultValue={revision?.config.transport || 'tcp'}
+                    options={[
+                      { value: 'tcp', label: 'TCP' },
+                      { value: 'udp', label: 'UDP' },
+                    ]}
+                  />
+                  <SelectField
+                    label='摄像头操作'
+                    value={intent}
+                    onValueChange={(next) => setIntent(next as typeof intent)}
+                    options={[
+                      ...(revision
+                        ? [{ value: 'modify', label: '修改当前摄像头配置' }]
+                        : []),
+                      { value: 'replace', label: '更换摄像头' },
+                      ...(identities.length > 0
+                        ? [{ value: 'history', label: '恢复历史摄像头身份' }]
+                        : []),
+                    ]}
+                  />
+                  {intent === 'history' && (
+                    <SelectField
+                      label='历史摄像头'
+                      name='history_source_id'
+                      defaultValue={identities[0]?.source_id}
+                      options={identities.map((value) => ({
+                        value: value.source_id,
+                        label: `身份 ${value.source_id.slice(0, 8)} · 修订 ${value.number}`,
+                      }))}
+                    />
+                  )}
+                  <div className='grid gap-2'>
+                    <CheckboxField
+                      label='允许清空用户名（普通编辑留空保留）'
+                      name='update_username'
+                      defaultChecked={!revision}
+                    />
+                  </div>
+                  <SelectField
+                    label='密码处理'
+                    value={passwordAction}
+                    onValueChange={(next) => {
+                      setPasswordAction(next as typeof passwordAction)
+                      setPassword('')
+                    }}
+                    options={[
+                      ...(revision
+                        ? [{ value: 'keep', label: '保留当前密码' }]
+                        : []),
+                      { value: 'replace', label: '输入新密码' },
+                      { value: 'clear', label: '清空密码' },
+                    ]}
+                  />
+                </div>
+                <p className='border-t px-3 py-2.5 text-xs text-muted-foreground'>
+                  更换摄像头仍保留通道编号、权限与历史录像。
+                </p>
+              </details>
             </div>
-            <p className='mt-4 text-xs text-muted-foreground'>
-              更换摄像头仍保留通道编号、权限与历史录像。
-            </p>
-          </details>
-          <div className='flex flex-wrap items-center justify-between gap-3 border-t pt-4 md:col-span-2'>
-            <span className='text-xs text-muted-foreground'>
-              {method === 'onvif' && !probed
+            {testPanel ? (
+              <div className='lg:sticky lg:top-4'>{testPanel}</div>
+            ) : (
+              <div />
+            )}
+          </div>
+          <div className='flex flex-wrap items-center justify-between gap-3 border-t pt-4'>
+            <p className='text-xs text-muted-foreground'>
+              {blocked
                 ? '请先「获取码流」，码流地址由摄像头返回后再保存'
-                : '保存不影响正在运行的源；启用才会切换'}
-            </span>
-            <div className='flex gap-3'>
-              {/* The primary action comes first so Enter in any field keeps
-                  running the previously verified connect flow. */}
-              <Button disabled={pending || (method === 'onvif' && !probed)}>
+                : '保存只记录配置，不影响正在取流；启用会先测试、再切换，约 30 秒内生效。'}
+            </p>
+            <div className='flex items-center gap-2'>
+              {/* Tree order decides which button Enter submits, so the primary
+                  action stays first in the DOM and `order` puts the quieter one
+                  on the left where it reads as secondary. */}
+              <Button className='order-2' disabled={pending || blocked}>
                 {pending ? '正在处理…' : '保存并启用'}
               </Button>
               <Button
                 type='submit'
                 value='save'
-                variant='outline'
-                disabled={pending || (method === 'onvif' && !probed)}
+                variant='ghost'
+                className='order-1'
+                disabled={pending || blocked}
               >
-                保存
+                仅保存
               </Button>
             </div>
           </div>

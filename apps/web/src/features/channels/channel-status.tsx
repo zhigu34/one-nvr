@@ -1,15 +1,11 @@
 import type { Schema } from '@/lib/types'
-import { STATUS_REASONS, UNKNOWN_STATUS_LABELS } from './status-reasons'
+import {
+  statusReason,
+  statusText,
+  statusTextTones,
+  statusTone,
+} from './status-labels'
 
-const labels: Record<Schema<'ObservedStatus'>['state'] | 'pending', string> = {
-  pending: '检查中',
-  healthy: '正常',
-  unavailable: '不可用',
-  unknown: '未知',
-  disabled: '已关闭',
-  not_configured: '未配置',
-  degraded: '降级',
-}
 export function StatusLabel({
   value,
 }: {
@@ -18,25 +14,14 @@ export function StatusLabel({
     reason?: string
   }
 }) {
-  const tone =
-    value.state === 'healthy'
-      ? 'text-emerald-700 dark:text-emerald-400'
-      : value.state === 'unavailable'
-        ? 'text-destructive'
-        : value.state === 'degraded'
-          ? 'text-amber-700 dark:text-amber-400'
-          : 'text-muted-foreground'
-  const text =
-    value.state === 'unknown' && value.reason
-      ? UNKNOWN_STATUS_LABELS[value.reason] || labels.unknown
-      : labels[value.state]
+  const reason = statusReason(value)
   return (
     <span
-      title={value.reason ? STATUS_REASONS[value.reason] : undefined}
-      className={`inline-flex items-center gap-1.5 text-xs whitespace-nowrap ${tone}`}
+      title={reason || undefined}
+      className={`inline-flex items-center gap-1.5 text-xs whitespace-nowrap ${statusTextTones[statusTone(value)]}`}
     >
       <span aria-hidden className='size-1.5 rounded-full bg-current' />
-      {text}
+      {statusText(value)}
     </span>
   )
 }

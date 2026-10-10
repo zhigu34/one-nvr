@@ -25,6 +25,68 @@ function pause(signal: AbortSignal) {
     signal.addEventListener('abort', cancel, { once: true })
   })
 }
+// Queue delay plus one real media probe can take a while, so the wait is
+// generous; the caller keeps its own progress text while waiting.
+const PROOF_DEADLINE_MS = 180000
+
+async function poll<T>(
+  path: string,
+  done: (value: T) => boolean,
+  deadline: number,
+  signal: AbortSignal
+) {
+  while (Date.now() < deadline) {
+    signal.throwIfAborted()
+    const value = await apiRequest<T>(path, { signal })
+    signal.throwIfAborted()
+    if (done(value)) return value
+    await pause(signal)
+  }
+  throw new Error('连接等待超时，请查看通道运行状态后再重试')
+}
+
+/**
+ * Run one source test and return the proof once it has finished and is still
+ * usable. The one-click connect and the explicit "test and enable" action both
+ * go through here, so neither can accept a proof the other would reject, and
+ * neither can submit a foreign revision's or an expired one.
+ */
+export async function proveRevision(
+  channelId: string,
+  revisionId: string,
+  signal: AbortSignal,
+  onAccepted?: (value: Schema<'SourceChange'>) => void,
+  deadline = Date.now() + PROOF_DEADLINE_MS
+) {
+  const started = await sourceCommand<Schema<'SourceChange'>>(
+    `/api/v1/channels/${channelId}/source-revisions/${revisionId}/test`,
+    {},
+    undefined,
+    signal
+  )
+  signal.throwIfAborted()
+  if (!started.test_id) throw new Error('未取得连接检测任务，请重试')
+  onAccepted?.(started)
+  const proof = await poll<Schema<'SourceTestResult'>>(
+    `/api/v1/channels/${channelId}/source-tests/${started.test_id}`,
+    (value) => {
+      if (value.state === 'failed' || value.state === 'cancelled')
+        throw new Error(failure())
+      return value.state === 'succeeded'
+    },
+    deadline,
+    signal
+  )
+  if (
+    proof.revision_id !== revisionId ||
+    proof.main.state !== 'healthy' ||
+    !proof.main.first_frame ||
+    !proof.expires_at ||
+    !(Date.parse(proof.expires_at) > Date.now())
+  )
+    throw new Error('未取得有效视频画面，请检查摄像头连接后重试')
+  return proof
+}
 function failure(code?: string | null) {
   const reasons: Record<string, string> = {
     authorization_revoked: '没有配置此通道的权限，请重新登录或联系管理员',
@@ -91,49 +153,19 @@ export async function connectSource(
   context: SaveConnection,
   onTest: (value: Schema<'SourceChange'>) => void
 ) {
-  const deadline = Date.now() + 180000
-  async function poll<T>(path: string, done: (value: T) => boolean) {
-    while (Date.now() < deadline) {
-      signal.throwIfAborted()
-      const value = await apiRequest<T>(path, { signal })
-      signal.throwIfAborted()
-      if (done(value)) return value
-      await pause(signal)
-    }
-    throw new Error('连接等待超时，请查看通道运行状态后再重试')
-  }
   async function job(id: string) {
-    return poll<Schema<'Job'>>(`/api/v1/jobs/${id}`, (value) => {
-      if (value.state === 'failed') throw new Error(failure(value.error_code))
-      return value.state === 'succeeded'
-    })
+    return poll<Schema<'Job'>>(
+      `/api/v1/jobs/${id}`,
+      (value) => {
+        if (value.state === 'failed') throw new Error(failure(value.error_code))
+        return value.state === 'succeeded'
+      },
+      Date.now() + PROOF_DEADLINE_MS,
+      signal
+    )
   }
   context.progress('正在检测摄像头连接…')
-  const test = await sourceCommand<Schema<'SourceChange'>>(
-    `/api/v1/channels/${channelId}/source-revisions/${revisionId}/test`,
-    {},
-    undefined,
-    signal
-  )
-  signal.throwIfAborted()
-  if (!test.test_id) throw new Error('未取得连接检测任务，请重试')
-  onTest(test)
-  const proof = await poll<Schema<'SourceTestResult'>>(
-    `/api/v1/channels/${channelId}/source-tests/${test.test_id}`,
-    (value) => {
-      if (value.state === 'failed' || value.state === 'cancelled')
-        throw new Error(failure())
-      return value.state === 'succeeded'
-    }
-  )
-  if (
-    proof.revision_id !== revisionId ||
-    proof.main.state !== 'healthy' ||
-    !proof.main.first_frame ||
-    !proof.expires_at ||
-    !(Date.parse(proof.expires_at) > Date.now())
-  )
-    throw new Error('未取得有效视频画面，请检查摄像头连接后重试')
+  const proof = await proveRevision(channelId, revisionId, signal, onTest)
   const status = await apiRequest<Schema<'ChannelSourceStatus'>>(
     `/api/v1/channels/${channelId}/source/status`,
     { signal }
