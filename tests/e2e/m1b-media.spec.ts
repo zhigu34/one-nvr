@@ -24,14 +24,24 @@ async function command(page: Page, name: string, endpoint: string) {
 // The recording plan lists every channel, so its controls must be addressed
 // through their own row.
 async function rowCommand(page: Page, row: Locator, name: string, endpoint: string) {
-  const response = page.waitForResponse(r => r.request().method() !== 'GET' && r.url().endsWith(endpoint))
+  const match = () => page.waitForResponse(r => r.request().method() !== 'GET' && r.url().endsWith(endpoint), {timeout: 180000})
+  let pending = match()
   await row.getByRole('button', {name, exact: true}).click()
-  const actual = await response
-  if (actual.status() !== 202) {
+  for (;;) {
+    const actual = await pending
+    if (actual.status() === 202) {
+      return (await actual.json()).data as {job_id: string}
+    }
     const failed = await actual.json()
-    expect(actual.status(), 'command rejected: ' + (failed.error?.code || 'unknown')).toBe(202)
+    const code = failed.error?.code || 'unknown'
+    // Binding and applying recover a stale write proof by running a real pool
+    // check and retrying inside the same click, so this rejected attempt is
+    // expected to be followed by an accepted one; anything else fails here.
+    if (code !== 'zlm_write_evidence_unavailable') {
+      expect(actual.status(), 'command rejected: ' + code).toBe(202)
+    }
+    pending = match()
   }
-  return (await actual.json()).data as {job_id: string}
 }
 async function finished(page: Page, job: {job_id: string}, state = 'succeeded') {
   await expect.poll(async () => (await get<{state: string}>(page, 'jobs/' + job.job_id)).state, {timeout: 90000}).toBe(state)
@@ -184,9 +194,10 @@ test('real media UI keeps channel history through no-recording, recording, sourc
     return count
   },{timeout:20000,message:'stopping preview must remove actual media readers'}).toBe(0)
   expect((await recordings()).items).toHaveLength(0)
-  // The first pool is verified by real private temporary media, never seeded proof rows.
-  await page.goto('/storage-pools')
-  await finished(page, await command(page, '立即检查', '/storage-pools/' + pool.id + '/test'))
+  // The first bind verifies the pool with real private temporary media: no
+  // write proof exists yet, and the page recovers that by running the actual
+  // check inside the same click instead of asking the operator to pre-check.
+  // Seeded proof rows are still never used.
   // Pool binding and the recording mode are recording-plan concerns, not part of
   // configuring the camera.
   await page.goto('/recording-plan')
@@ -196,7 +207,7 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   await page.getByRole('option', {name: '真实媒体池', exact: true}).click()
   await expect(plan.getByRole('button', {name: '绑定', exact: true})).toBeEnabled({timeout: 15000})
   await finished(page, await rowCommand(page, plan, '绑定', '/storage-pool'))
-  await expect.poll(async () => (await status()).storage_pool_id, {timeout: 15000}).toBe(pool.id)
+  await expect.poll(async () => (await status()).storage_pool_id, {timeout: 30000}).toBe(pool.id)
   await page.reload()
   const rolling = page.getByTestId('policy-row').filter({hasText: 'CH01'})
   await rolling.getByLabel('CH01 录像方式', {exact: true}).click()

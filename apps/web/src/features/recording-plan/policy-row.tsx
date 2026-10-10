@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { apiRequest, jsonRequest } from '@/lib/api-client'
+import { ApiError } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -8,6 +8,7 @@ import { TableCell, TableRow } from '@/components/ui/table'
 import { Notices, SelectField } from '@/features/foundation/ui'
 import { useAPI } from '@/features/foundation/hooks'
 import { sourceCommand } from '@/features/channels/api'
+import { settleJob, verifyPoolWrite } from './pool-check'
 
 /**
  * Only the modes the control plane implements are selectable. The rest are
@@ -18,21 +19,6 @@ const PLANNED_MODES = [
   { label: '定时录像（后续开放）', value: 'scheduled' },
   { label: '事件录像（后续开放）', value: 'event' },
 ]
-
-function pause(signal: AbortSignal) {
-  return new Promise<void>((resolve, reject) => {
-    signal.throwIfAborted()
-    const cancel = () => {
-      clearTimeout(timer)
-      reject(signal.reason)
-    }
-    const timer = setTimeout(() => {
-      signal.removeEventListener('abort', cancel)
-      resolve()
-    }, 1000)
-    signal.addEventListener('abort', cancel, { once: true })
-  })
-}
 
 function channelLabel(channel: Schema<'Channel'>) {
   return `CH${String(channel.channel_no).padStart(2, '0')}`
@@ -96,20 +82,51 @@ export function PolicyRow({
     setPending(kind)
     setError('')
     setNotice('')
-    try {
-      await sourceCommand<Schema<'SourceChange'>>(
-        `/api/v1/channels/${channel.id}/${kind === 'policy' ? 'recording-policy' : 'storage-pool'}`,
+    const endpoint = `/api/v1/channels/${channel.id}/${kind === 'policy' ? 'recording-policy' : 'storage-pool'}`
+    const send = () =>
+      sourceCommand<Schema<'SourceChange'>>(
+        endpoint,
         body,
         version,
         abort.signal,
         'PUT'
       )
-      if (abort.signal.aborted) return
+    try {
+      let change: Schema<'SourceChange'> | null = null
+      try {
+        change = await send()
+      } catch (e) {
+        if (abort.signal.aborted) return
+        // The write proof is only valid for 30 seconds. Instead of asking the
+        // operator to act faster, recover by running one real pool check and
+        // retrying once; the evidence requirement itself is unchanged.
+        const target = kind === 'pool' ? draftPool : boundPool || null
+        if (
+          !(e instanceof ApiError) ||
+          e.code !== 'zlm_write_evidence_unavailable' ||
+          !target
+        )
+          throw e
+        setNotice('存储池写入检查已过期，正在自动重新验证…')
+        const verified = await verifyPoolWrite(target, abort.signal)
+        if (abort.signal.aborted) return
+        if (!verified.ok) {
+          setError(verified.message)
+          return
+        }
+        setNotice('验证通过，正在继续…')
+        change = await send()
+      }
+      if (abort.signal.aborted || change === null) return
       if (kind === 'policy') setDraftMode(null)
       else setDraftPool(null)
       setNotice('已排队，等待执行结果')
       onApplied()
       await client.invalidateQueries()
+      const settled = await settleJob(change.job_id, abort.signal)
+      if (abort.signal.aborted) return
+      if (settled.state === 'succeeded') setNotice('已完成')
+      else if (settled.state === 'failed') setError(settled.message)
     } catch (e) {
       if (!abort.signal.aborted) setError(message(e))
     } finally {
@@ -127,28 +144,14 @@ export function PolicyRow({
     setError('')
     setNotice('')
     try {
-      const { job_id } = await apiRequest<{ job_id: string }>(
-        `/api/v1/storage-pools/${boundPool}/test`,
-        { ...jsonRequest('POST'), signal: abort.signal }
-      )
-      const deadline = Date.now() + 120000
-      while (Date.now() < deadline) {
-        abort.signal.throwIfAborted()
-        const job = await apiRequest<Schema<'Job'>>(`/api/v1/jobs/${job_id}`, {
-          signal: abort.signal,
-        })
-        if (job.state === 'succeeded') {
-          setNotice('存储池检查已通过，现在可以启用录像')
-          await client.invalidateQueries()
-          return
-        }
-        if (job.state === 'failed') {
-          setError('存储池检查未通过，请检查目录权限与剩余空间')
-          return
-        }
-        await pause(abort.signal)
+      const verified = await verifyPoolWrite(boundPool, abort.signal)
+      if (abort.signal.aborted) return
+      if (verified.ok) {
+        setNotice('存储池检查已通过，现在可以启用录像')
+        await client.invalidateQueries()
+      } else {
+        setError(verified.message)
       }
-      setError('存储池检查等待超时，请稍后在存储池页查看结果')
     } catch (e) {
       if (!abort.signal.aborted) setError(message(e))
     } finally {
