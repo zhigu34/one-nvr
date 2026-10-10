@@ -121,9 +121,45 @@ test('a playing tile shows the decoded media facts instead of a bare status', as
     })
   })
   await expect.element(screen.getByText('主流', { exact: true })).toBeVisible()
+  const tile = screen.getByRole('region', {
+    name: '预览 CH01 通道 1',
+    exact: true,
+  })
   await expect
-    .element(screen.getByTestId('live-media-info'))
+    .element(tile.getByTestId('live-media-info'))
     .toHaveTextContent('2560×1440 · 25fps · 直通 · 音 PCMA')
+  // The video box follows the decoded proportions instead of a fixed 16:9,
+  // so a 4:3 camera no longer wastes two black bars on the sides.
+  const area = tile.getByTestId('live-video-area')
+  await vi.waitFor(() =>
+    expect((area.element() as HTMLElement).style.aspectRatio).toBe(
+      '2560 / 1440'
+    )
+  )
   // The tile no longer repeats the obvious playing state.
   expect(document.body.textContent).not.toContain('播放中')
+})
+test('the fullscreen control toggles back to the small tile', async () => {
+  const screen = await fixture()
+  await screen.getByRole('button', { name: 'CH01 通道 1', exact: true }).click()
+  const enter = screen.getByRole('button', { name: '全屏画面', exact: true })
+  await expect.element(enter).toBeVisible()
+
+  const tile = document.querySelector('section[aria-label="预览 CH01 通道 1"]')!
+  const exit = vi.fn().mockResolvedValue(undefined)
+  document.exitFullscreen = exit
+  Object.defineProperty(document, 'fullscreenElement', {
+    configurable: true,
+    get: () => tile,
+  })
+  document.dispatchEvent(new Event('fullscreenchange'))
+
+  const leave = screen.getByRole('button', { name: '退出全屏', exact: true })
+  await expect.element(leave).toBeVisible()
+  await leave.click()
+  expect(exit).toHaveBeenCalledOnce()
+
+  Reflect.deleteProperty(document, 'fullscreenElement')
+  document.dispatchEvent(new Event('fullscreenchange'))
+  await expect.element(enter).toBeVisible()
 })

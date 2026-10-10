@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import {
   Maximize,
+  Minimize,
   MonitorPlay,
   RefreshCw,
   Volume2,
@@ -50,6 +51,13 @@ function Tile({
     message: '正在连接…',
   })
   const [media, setMedia] = useState<LiveMediaInfo | null>(null)
+  const [fullscreen, setFullscreen] = useState(false)
+  useEffect(() => {
+    const changed = () =>
+      setFullscreen(document.fullscreenElement === container.current)
+    document.addEventListener('fullscreenchange', changed)
+    return () => document.removeEventListener('fullscreenchange', changed)
+  }, [])
   useEffect(() => {
     if (!channelID || paused || !video.current) return
     const player = new LivePlayer(
@@ -89,7 +97,18 @@ function Tile({
           </Button>
         )}
       </div>
-      <div className='relative aspect-video min-h-0 flex-1'>
+      <div
+        data-testid='live-video-area'
+        className='relative aspect-video min-h-0 flex-1'
+        // Follow the stream's own proportions once decoded so the picture
+        // fills the column without cropping; before the first statistics
+        // arrive the 16:9 placeholder keeps the grid stable.
+        style={
+          media && media.width > 0 && media.height > 0
+            ? { aspectRatio: `${media.width} / ${media.height}` }
+            : undefined
+        }
+      >
         <video
           ref={video}
           data-testid='live-video'
@@ -149,8 +168,7 @@ function Tile({
             <SelectField
               ariaLabel={`${label(channel)} 码流`}
               size='sm'
-              className='w-28'
-              triggerClassName='text-xs'
+              triggerClassName='w-fit px-2 text-xs'
               value={stream}
               onValueChange={(next) => setStream(next as 'main' | 'sub')}
               options={[
@@ -175,13 +193,16 @@ function Tile({
             <Button
               variant='ghost'
               size='icon'
-              aria-label='全屏画面'
+              aria-label={fullscreen ? '退出全屏' : '全屏画面'}
               className='size-6 p-1 text-slate-100 hover:bg-slate-800 hover:text-slate-100'
-              onClick={() =>
-                void container.current?.requestFullscreen().catch(() => {})
-              }
+              onClick={() => {
+                if (fullscreen)
+                  void document.exitFullscreen().catch(() => {})
+                else
+                  void container.current?.requestFullscreen().catch(() => {})
+              }}
             >
-              <Maximize size={14} />
+              {fullscreen ? <Minimize size={14} /> : <Maximize size={14} />}
             </Button>
           </div>
         </div>
