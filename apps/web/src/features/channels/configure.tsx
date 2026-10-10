@@ -618,6 +618,8 @@ function ConfigureChannel({
 
 // Name and group are business attributes: saving them must not rebuild the
 // stream, so they travel in one PATCH and never touch the source revision.
+// The panel stays open after saving: its own notice reports the outcome, and
+// collapsing it would unmount the very confirmation the operator is reading.
 function ChannelBasics({
   channel,
   done,
@@ -634,25 +636,21 @@ function ChannelBasics({
         onSubmit={(event) => {
           event.preventDefault()
           const data = fields(event.currentTarget)
-          void action
-            .run(
-              () =>
-                apiRequest(
-                  `/api/v1/channels/${channel.channel_id}`,
-                  jsonRequest(
-                    'PATCH',
-                    {
-                      channel_name: text(data, 'channel_name'),
-                      channel_group: text(data, 'channel_group'),
-                    },
-                    channel.version
-                  )
-                ),
-              '基本信息已保存'
-            )
-            .then((ok) => {
-              if (ok) done()
-            })
+          void action.run(
+            () =>
+              apiRequest(
+                `/api/v1/channels/${channel.channel_id}`,
+                jsonRequest(
+                  'PATCH',
+                  {
+                    channel_name: text(data, 'channel_name'),
+                    channel_group: text(data, 'channel_group'),
+                  },
+                  channel.version
+                )
+              ),
+            '基本信息已保存'
+          )
         }}
       >
         <Field

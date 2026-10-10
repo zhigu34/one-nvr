@@ -313,6 +313,33 @@ function SourceEditor({
                     }}
                   />
                 )}
+                {/* Choosing what happens to the stored password is an ordinary
+                    step of editing a camera, so it stays beside the credential
+                    fields instead of hiding behind a collapsible section. */}
+                <SelectField
+                  label='密码处理'
+                  value={passwordAction}
+                  onValueChange={(next) => {
+                    setPasswordAction(next as typeof passwordAction)
+                    setPassword('')
+                  }}
+                  options={[
+                    ...(revision
+                      ? [{ value: 'keep', label: '保留当前密码' }]
+                      : []),
+                    { value: 'replace', label: '输入新密码' },
+                    { value: 'clear', label: '清空密码' },
+                  ]}
+                />
+                <SelectField
+                  label='传输方式'
+                  name='transport'
+                  defaultValue={revision?.config.transport || 'tcp'}
+                  options={[
+                    { value: 'tcp', label: 'TCP' },
+                    { value: 'udp', label: 'UDP' },
+                  ]}
+                />
               </div>
               {method === 'onvif' && (
                 <SourceOnvifPanel
@@ -363,15 +390,6 @@ function SourceEditor({
                 </summary>
                 <div className='grid gap-4 border-t p-3 sm:grid-cols-2'>
                   <SelectField
-                    label='传输方式'
-                    name='transport'
-                    defaultValue={revision?.config.transport || 'tcp'}
-                    options={[
-                      { value: 'tcp', label: 'TCP' },
-                      { value: 'udp', label: 'UDP' },
-                    ]}
-                  />
-                  <SelectField
                     label='摄像头操作'
                     value={intent}
                     onValueChange={(next) => setIntent(next as typeof intent)}
@@ -403,21 +421,6 @@ function SourceEditor({
                       defaultChecked={!revision}
                     />
                   </div>
-                  <SelectField
-                    label='密码处理'
-                    value={passwordAction}
-                    onValueChange={(next) => {
-                      setPasswordAction(next as typeof passwordAction)
-                      setPassword('')
-                    }}
-                    options={[
-                      ...(revision
-                        ? [{ value: 'keep', label: '保留当前密码' }]
-                        : []),
-                      { value: 'replace', label: '输入新密码' },
-                      { value: 'clear', label: '清空密码' },
-                    ]}
-                  />
                 </div>
                 <p className='border-t px-3 py-2.5 text-xs text-muted-foreground'>
                   更换摄像头仍保留通道编号、权限与历史录像。

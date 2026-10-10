@@ -65,8 +65,8 @@ async function saveAndTest(page: Page, ip: string, main: string, sub: string, co
   await page.getByLabel('IP 地址', {exact: true}).fill(ip)
   await page.getByLabel('主流路径', {exact: true}).fill(main)
   await page.getByLabel('子流路径（可留空）', {exact: true}).fill(sub)
-  const advanced = page.locator('details').filter({has: page.locator('summary', {hasText: '高级设置'})})
-  if (!(await advanced.evaluate(el => el.hasAttribute('open')))) await advanced.locator('summary').click()
+  // Credential handling sits with the credential fields, not behind a
+  // collapsible section, so it is reachable without opening anything.
   await page.getByLabel('密码处理', {exact: true}).click()
   await page.getByRole('option', {name: '清空密码', exact: true}).click()
   const saved = page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/source-revisions'))
