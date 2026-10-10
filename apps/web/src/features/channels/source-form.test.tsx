@@ -101,7 +101,7 @@ test('keep and clear submit explicit intent without a masked password', async ()
   let body = JSON.parse(calls.request.mock.calls[0][1].body)
   expect(body.credentials.password_action).toBe('keep')
   expect(body.credentials).not.toHaveProperty('password')
-  await userEvent.click(view.getByText('高级连接设置', { exact: true }))
+  await userEvent.click(view.getByText('高级设置', { exact: true }))
   await userEvent.click(view.getByLabelText('密码处理', { exact: true }))
   await userEvent.click(
     view.getByRole('option', { name: '清空密码', exact: true })
@@ -114,7 +114,7 @@ test('keep and clear submit explicit intent without a masked password', async ()
 test('replace rejects mask and sends only an explicitly entered real password', async () => {
   calls.request.mockResolvedValue(revision)
   const view = await render(wrapper())
-  await userEvent.click(view.getByText('高级连接设置', { exact: true }))
+  await userEvent.click(view.getByText('高级设置', { exact: true }))
   await userEvent.click(view.getByLabelText('密码处理', { exact: true }))
   await userEvent.click(
     view.getByRole('option', { name: '输入新密码', exact: true })
@@ -159,7 +159,7 @@ test('late saved revision cannot fill or activate a different selected channel',
 test('changing a revision clears typed credentials but preserves a saved-operation notice', async () => {
   calls.request.mockResolvedValue(revision)
   const view = await render(wrapper())
-  await userEvent.click(view.getByText('高级连接设置', { exact: true }))
+  await userEvent.click(view.getByText('高级设置', { exact: true }))
   await userEvent.click(view.getByLabelText('密码处理', { exact: true }))
   await userEvent.click(
     view.getByRole('option', { name: '输入新密码', exact: true })
@@ -209,7 +209,7 @@ test('saving alone records the camera without demanding a stream test', async ()
     view.getByLabelText('主流路径', { exact: true }),
     '/main-kept'
   )
-  await userEvent.click(view.getByRole('button', { name: '保存', exact: true }))
+  await userEvent.click(view.getByRole('button', { name: '仅保存', exact: true }))
   expect(calls.request).toHaveBeenCalledOnce()
   expect(calls.request.mock.calls[0][0]).toContain('/source-revisions')
   expect(saved.mock.calls[0][2].action).toBe('save')
@@ -255,7 +255,7 @@ test('ONVIF asks the camera for its streams and fills the paths, never the passw
   // Nothing is offered for saving until the camera has answered: ONVIF mode has
   // no paths to submit before the probe fills them.
   await expect
-    .element(view.getByRole('button', { name: '保存', exact: true }))
+    .element(view.getByRole('button', { name: '仅保存', exact: true }))
     .toBeDisabled()
   await userEvent.fill(
     view.getByLabelText('IP 地址', { exact: true }),
@@ -299,7 +299,7 @@ test('a refused ONVIF probe explains itself and still refuses to save', async ()
     .element(view.getByText('ONVIF 认证被拒绝，请检查用户名与密码'))
     .toBeVisible()
   await expect
-    .element(view.getByRole('button', { name: '保存', exact: true }))
+    .element(view.getByRole('button', { name: '仅保存', exact: true }))
     .toBeDisabled()
 })
 
@@ -335,7 +335,7 @@ test('an empty ONVIF port is filled from the port the probe actually used', asyn
     password: '',
   })
   await expect.element(view.getByLabelText('ONVIF 端口')).toHaveValue(80)
-  await userEvent.click(view.getByRole('button', { name: '保存', exact: true }))
+  await userEvent.click(view.getByRole('button', { name: '仅保存', exact: true }))
   expect(
     JSON.parse(calls.request.mock.calls[1][1].body).config.onvif_port
   ).toBe(80)

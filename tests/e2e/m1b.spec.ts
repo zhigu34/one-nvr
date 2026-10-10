@@ -8,14 +8,15 @@ test('plain save and export round trip keep the permanent channel and do not ena
  await page.getByLabel('IP 地址',{exact:true}).fill('192.168.33.20')
  await page.getByLabel('用户名',{exact:true}).fill('fixture-camera')
  await page.getByLabel('密码',{exact:true}).fill('fixture-source-password')
- await page.locator('summary', {hasText:'高级连接设置'}).click()
- await page.getByRole('button',{name:'保存',exact:true}).click()
+ await page.locator('summary', {hasText:'高级设置'}).click()
+ await page.getByRole('button',{name:'仅保存',exact:true}).click()
  await expect(page.getByText('已保存，未启用')).toBeVisible()
- // The diagnostics panel is always visible now.
- await expect(page.getByRole('button',{name:'测试并启用',exact:true})).toBeDisabled()
+ // Save and enable are separate actions: saving alone must leave the slot
+ // unapplied, even though nothing is done here to disable the enable button.
+ await expect(page.getByRole('button',{name:'测试并启用',exact:true})).toBeEnabled()
  const before=await page.evaluate(async()=>{const channels=await fetch('/api/v1/channels').then(r=>r.json()).then(r=>r.data);const id=channels.items[0].id;return await fetch(`/api/v1/channels/${id}/source/status`).then(r=>r.json()).then(r=>r.data)})
  expect(before.current_revision_id).toBeNull()
- await page.getByRole('tab',{name:'历史与诊断',exact:true}).click()
+ await page.getByRole('button',{name:'历史与诊断',exact:true}).click()
  await page.getByRole('button',{name:'查看账号密码',exact:true}).click()
  await expect(page.getByLabel('已保存密码',{exact:true})).toHaveValue('fixture-source-password')
  await page.getByRole('button',{name:'隐藏账号密码',exact:true}).click()

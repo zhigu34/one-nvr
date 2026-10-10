@@ -3,7 +3,7 @@ import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Notices } from '@/features/foundation/ui'
 import { sourceCommand } from './api'
-import { applyWithPoolRecovery } from './source-connect'
+import { applyWithPoolRecovery, proveRevision } from './source-connect'
 import { StatusLabel } from './channel-status'
 import { useNow } from './use-now'
 
@@ -11,6 +11,7 @@ type Props = {
   channelId: string
   version: number
   revisionId: string
+  revisionNumber?: number
   proof: Schema<'SourceTestResult'> | null
   first: boolean
   busy?: boolean
@@ -24,6 +25,7 @@ export function SourceTestControls({
   channelId,
   version,
   revisionId,
+  revisionNumber,
   proof,
   first,
   onAccepted,
@@ -35,7 +37,11 @@ export function SourceTestControls({
     [error, setError] = useState('')
   const controller = useRef<AbortController | null>(null)
   useEffect(() => () => controller.current?.abort(), [])
-  const valid =
+  // A proof is usable only when it belongs to this revision, actually proved a
+  // first frame and has not expired. Anything else is re-taken by the click
+  // that needs it, so the operator never has to fetch evidence by hand first —
+  // and a proof for another revision can never authorize this one.
+  const usable =
     proof?.revision_id === revisionId &&
     proof.state === 'succeeded' &&
     proof.main.state === 'healthy' &&
@@ -48,33 +54,52 @@ export function SourceTestControls({
     setPending(true)
     setError('')
     setNotice('')
-    const body: Schema<'SourceApplyInput'> = {
-      revision_id: revisionId,
-      test_id: proof?.id || '',
-    }
-    if (first) body.first_recording_mode = 'none'
     try {
-      // An apply while the channel records needs fresh pool write evidence;
-      // the recovery hides that short-lived requirement behind this one click
-      // instead of surfacing a 409 the operator would have to outrun.
-      const value =
-        kind === 'test'
-          ? await sourceCommand<Schema<'SourceChange'>>(
-              `/api/v1/channels/${channelId}/source-revisions/${revisionId}/test`,
-              {},
-              undefined,
-              abort.signal
-            )
-          : await applyWithPoolRecovery(
-              channelId,
-              body,
-              version,
-              abort.signal,
-              setNotice
-            )
-      if (!abort.signal.aborted) {
-        setNotice(kind === 'test' ? '测试已排队' : '启用已排队，等待执行结果')
-        onAccepted(value, kind)
+      if (kind === 'apply') {
+        // Enabling needs proof that is valid right now. Missing or expired
+        // evidence is taken inside this same click, so one action is always
+        // enough and the 30-second window is never the operator's problem.
+        let fresh = usable ? proof : null
+        if (!fresh) {
+          setNotice('正在测试摄像头连接…')
+          fresh = await proveRevision(
+            channelId,
+            revisionId,
+            abort.signal,
+            (value) => onAccepted(value, 'test')
+          )
+        }
+        const body: Schema<'SourceApplyInput'> = {
+          revision_id: revisionId,
+          test_id: fresh.id,
+        }
+        if (first) body.first_recording_mode = 'none'
+        setNotice('正在启用…')
+        // An apply while the channel records needs fresh pool write evidence;
+        // the recovery hides that short-lived requirement behind this same
+        // click instead of surfacing a 409 the operator would have to outrun.
+        const value = await applyWithPoolRecovery(
+          channelId,
+          body,
+          version,
+          abort.signal,
+          setNotice
+        )
+        if (!abort.signal.aborted) {
+          setNotice('启用已排队，等待执行结果')
+          onAccepted(value, 'apply')
+        }
+      } else {
+        const value = await sourceCommand<Schema<'SourceChange'>>(
+          `/api/v1/channels/${channelId}/source-revisions/${revisionId}/test`,
+          {},
+          undefined,
+          abort.signal
+        )
+        if (!abort.signal.aborted) {
+          setNotice('测试已排队')
+          onAccepted(value, 'test')
+        }
       }
     } catch (e) {
       if (!abort.signal.aborted)
@@ -84,11 +109,27 @@ export function SourceTestControls({
     }
   }
   return (
-    <section className='grid gap-3'>
+    <section className='grid content-start gap-3 rounded-lg border bg-card p-3'>
+      <div className='flex items-center justify-between gap-2'>
+        <span className='text-sm font-medium'>连接测试</span>
+        {revisionNumber != null && (
+          <span className='rounded border px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground'>
+            修订 {revisionNumber}
+          </span>
+        )}
+      </div>
       <Notices error={error} notice={notice} />
       {proof && (
-        <div className='rounded-lg border p-3 text-sm'>
-          <p>
+        <div className='grid gap-2 rounded-md border bg-muted/25 p-2.5 text-xs'>
+          <div className='flex items-center justify-between'>
+            <span>主流</span>
+            <StatusLabel value={proof.main} />
+          </div>
+          <div className='flex items-center justify-between'>
+            <span>子流</span>
+            <StatusLabel value={proof.sub} />
+          </div>
+          <p className='border-t pt-2 text-[11px] text-muted-foreground'>
             测试状态：
             {
               {
@@ -99,31 +140,27 @@ export function SourceTestControls({
                 cancelled: '已取消',
               }[proof.state]
             }
+            {proof.state === 'succeeded' &&
+              (usable ? (
+                <>
+                  {' · 有效至 '}
+                  {new Date(proof.expires_at!).toLocaleTimeString()}
+                </>
+              ) : (
+                <span className='text-amber-700 dark:text-amber-400'>
+                  {' '}
+                  · 已过期或不属于当前修订，启用时会自动补测
+                </span>
+              ))}
           </p>
-          <div className='mt-2 flex flex-wrap gap-4'>
-            <span className='flex items-center gap-2'>
-              主流 <StatusLabel value={proof.main} />
-            </span>
-            <span className='flex items-center gap-2'>
-              子流 <StatusLabel value={proof.sub} />
-            </span>
-          </div>
-          {valid && proof.sub.state === 'unavailable' && (
-            <p>子流不可用，可降级应用主流</p>
+          {usable && proof.sub.state === 'unavailable' && (
+            <p className='text-[11px] text-amber-700 dark:text-amber-400'>
+              子流不可用，可降级应用主流
+            </p>
           )}
-          <p>
-            测试有效至：
-            {proof.expires_at
-              ? new Date(proof.expires_at).toLocaleString()
-              : '尚无可用结果'}
-          </p>
         </div>
       )}
-      <p className='text-xs text-muted-foreground'>
-        测试不会切换当前取流。启用只接入取流；录像方式在「录像计划」页设置。
-        测试证据过期后需要重新测试。
-      </p>
-      <div className='flex gap-3'>
+      <div className='grid gap-2'>
         <Button
           type='button'
           variant='outline'
@@ -132,14 +169,21 @@ export function SourceTestControls({
         >
           测试取流
         </Button>
+        {/* This applies the revision loaded here, which the form's own submit
+            row does not do for a historical one. It is styled secondary because
+            saving and enabling the form is the page's primary action. */}
         <Button
           type='button'
-          disabled={pending || busy || !valid}
+          variant='secondary'
+          disabled={pending || busy}
           onClick={() => void run('apply')}
         >
           测试并启用
         </Button>
       </div>
+      <p className='text-[11px] text-muted-foreground'>
+        测试不切换当前取流。启用前需要有通过的测试，「测试并启用」会在证据缺失或过期时自动补测一次。
+      </p>
     </section>
   )
 }

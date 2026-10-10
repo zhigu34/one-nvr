@@ -34,11 +34,14 @@ test('administratorNamesPermanentSlot', async ({page}) => {
   await page.goto('/channels')
   const row=page.getByTestId('channel-row').first()
   await row.getByRole('link', {name: '配置 CH01', exact: true}).click()
+  // Renaming lives behind the header's edit toggle now; it still saves through
+  // one PATCH and never rebuilds the media stream.
+  await page.getByRole('button',{name:'编辑',exact:true}).click()
   await page.getByLabel('通道名称').fill('大门验证槽位')
   await page.getByRole('button',{name:'保存基本信息',exact:true}).click()
   await expect(page.getByText('基本信息已保存')).toBeVisible()
   await page.reload()
-  await expect(page.getByLabel('通道名称')).toHaveValue('大门验证槽位')
+  await expect(page.getByRole('heading', {name: '大门验证槽位'})).toBeVisible()
   await page.goto('/channels')
   await expect(page.getByTestId('channel-row').first()).toContainText('大门验证槽位')
 })
