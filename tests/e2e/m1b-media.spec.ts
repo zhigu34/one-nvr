@@ -158,7 +158,14 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   expect(denied.status(),'unauthorized media access must be denied').not.toBe(201)
   await tile.getByLabel('CH01 通道 01 码流').click()
   await page.getByRole('option', {name: '主码流', exact: true}).click()
-  await expect(tile.getByText('主流 · 播放中',{exact:true})).toBeVisible({timeout:30000})
+  await expect(tile.getByText('主流',{exact:true})).toBeVisible({timeout:30000})
+  // The footer reports what the browser is actually decoding — size, direct
+  // packetization (no transcode) and audio presence — from the live peer
+  // statistics, so it must appear once playback has started.
+  const mediaInfo = tile.getByTestId('live-media-info')
+  await expect(mediaInfo).toBeVisible({timeout: 20000})
+  await expect(mediaInfo).toContainText(/×\d+/)
+  await expect(mediaInfo).toContainText('直通')
   await expect.poll(async()=>video.evaluate((el:HTMLVideoElement)=>el.getVideoPlaybackQuality().totalVideoFrames),{timeout:10000}).toBeGreaterThan(5)
   await page.getByRole('button',{name:'4 画面',exact:true}).click()
   await expect(page.getByRole('region',{name:/预览 CH|空闲画面/})).toHaveCount(4)
