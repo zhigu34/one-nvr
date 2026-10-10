@@ -8,7 +8,7 @@ import { TableCell, TableRow } from '@/components/ui/table'
 import { Notices, SelectField } from '@/features/foundation/ui'
 import { useAPI } from '@/features/foundation/hooks'
 import { sourceCommand } from '@/features/channels/api'
-import { settleJob, verifyPoolWrite } from './pool-check'
+import { settleJob, verifyPoolWrite } from '@/features/storage-pools/pool-check'
 
 /**
  * Only the modes the control plane implements are selectable. The rest are

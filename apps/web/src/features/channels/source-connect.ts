@@ -1,5 +1,9 @@
 import { ApiError, apiRequest } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
+import {
+  boundOrDefaultPool,
+  verifyPoolWrite,
+} from '@/features/storage-pools/pool-check'
 import { sourceCommand } from './api'
 
 export type SaveConnection = {
@@ -33,6 +37,50 @@ function failure(code?: string | null) {
     reasons[code || ''] ||
     '连接未完成，请检查摄像头账号、密码、IP 和码流路径，以及通道运行状态'
   )
+}
+/**
+ * Apply a tested source revision. Applying while the channel records requires
+ * a write proof that only stays valid for 30 seconds, so a rejected attempt
+ * recovers by running one real pool check and retrying once — the operator
+ * never has to race the window. The evidence requirement itself is unchanged.
+ */
+export async function applyWithPoolRecovery(
+  channelId: string,
+  body: Schema<'SourceApplyInput'>,
+  expectedVersion: number,
+  signal: AbortSignal,
+  progress: (message: string) => void
+) {
+  const send = () =>
+    sourceCommand<Schema<'SourceChange'>>(
+      `/api/v1/channels/${channelId}/source/apply`,
+      body,
+      expectedVersion,
+      signal
+    )
+  let verificationFailure: string
+  try {
+    return await send()
+  } catch (e) {
+    if (
+      signal.aborted ||
+      !(e instanceof ApiError) ||
+      e.code !== 'zlm_write_evidence_unavailable'
+    )
+      throw e
+    progress('存储池写入检查已过期，正在自动重新验证…')
+    const poolID = await boundOrDefaultPool(channelId, signal)
+    if (!poolID) throw e
+    const verified = await verifyPoolWrite(poolID, signal)
+    if (verified.ok) {
+      progress('验证通过，正在继续…')
+      return await send()
+    }
+    verificationFailure = verified.message
+  }
+  // Reported outside the catch so the original rejection stays the only
+  // thrown value on every other path.
+  throw new Error(verificationFailure)
 }
 // Compose the existing authorized commands; never bypass media proof, change
 // an existing recording policy, or adopt a concurrently changed channel version.
@@ -107,11 +155,12 @@ export async function connectSource(
   // A channel that was never configured must state its recording intent. It
   // starts stream-only; enabling recording is a later, explicit action.
   if (status.requires_initial_recording_mode) body.first_recording_mode = 'none'
-  const apply = await sourceCommand<Schema<'SourceChange'>>(
-    `/api/v1/channels/${channelId}/source/apply`,
+  const apply = await applyWithPoolRecovery(
+    channelId,
     body,
     context.version,
-    signal
+    signal,
+    context.progress
   )
   signal.throwIfAborted()
   await job(apply.job_id)

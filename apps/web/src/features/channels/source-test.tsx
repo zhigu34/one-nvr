@@ -3,6 +3,7 @@ import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Notices } from '@/features/foundation/ui'
 import { sourceCommand } from './api'
+import { applyWithPoolRecovery } from './source-connect'
 import { StatusLabel } from './channel-status'
 import { useNow } from './use-now'
 
@@ -53,12 +54,24 @@ export function SourceTestControls({
     }
     if (first) body.first_recording_mode = 'none'
     try {
-      const value = await sourceCommand<Schema<'SourceChange'>>(
-        `/api/v1/channels/${channelId}/${kind === 'test' ? `source-revisions/${revisionId}/test` : 'source/apply'}`,
-        kind === 'test' ? {} : body,
-        kind === 'apply' ? version : undefined,
-        abort.signal
-      )
+      // An apply while the channel records needs fresh pool write evidence;
+      // the recovery hides that short-lived requirement behind this one click
+      // instead of surfacing a 409 the operator would have to outrun.
+      const value =
+        kind === 'test'
+          ? await sourceCommand<Schema<'SourceChange'>>(
+              `/api/v1/channels/${channelId}/source-revisions/${revisionId}/test`,
+              {},
+              undefined,
+              abort.signal
+            )
+          : await applyWithPoolRecovery(
+              channelId,
+              body,
+              version,
+              abort.signal,
+              setNotice
+            )
       if (!abort.signal.aborted) {
         setNotice(kind === 'test' ? '测试已排队' : '启用已排队，等待执行结果')
         onAccepted(value, kind)

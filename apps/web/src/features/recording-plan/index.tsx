@@ -23,10 +23,11 @@ import { useAPI, useAction } from '@/features/foundation/hooks'
 import { sourceCommand } from '@/features/channels/api'
 import { PolicyRow } from './policy-row'
 import {
+  boundOrDefaultPool,
   failureText,
   verifyPoolWrite,
   type PoolCheckOutcome,
-} from './pool-check'
+} from '@/features/storage-pools/pool-check'
 
 const PLANNED_MODES = [
   { label: '定时录像（后续开放）', value: 'scheduled' },
@@ -106,32 +107,12 @@ export function RecordingPlan() {
     const poolByChannel = new Map<string, string>()
     for (const row of stale) {
       try {
-        const status = await apiRequest<Schema<'ChannelSourceStatus'>>(
-          `/api/v1/channels/${row.channel_id}/source/status`
-        )
-        if (status.storage_pool_id)
-          poolByChannel.set(row.channel_id, status.storage_pool_id)
+        // The channel's own binding, or the default pool the server falls
+        // back to when applying the mode.
+        const poolID = await boundOrDefaultPool(row.channel_id)
+        if (poolID) poolByChannel.set(row.channel_id, poolID)
       } catch {
         // The row keeps its original rejection reason.
-      }
-    }
-    // A channel without its own binding falls back to the default pool,
-    // exactly like the server does when it applies the mode.
-    if (stale.some((row) => !poolByChannel.has(row.channel_id))) {
-      try {
-        const pools = await apiRequest<PageData<Schema<'Pool'>>>(
-          '/api/v1/storage-pools?limit=100'
-        )
-        const fallback = pools.items.find(
-          (pool) => pool.is_default && pool.enabled
-        )
-        if (fallback) {
-          for (const row of stale)
-            if (!poolByChannel.has(row.channel_id))
-              poolByChannel.set(row.channel_id, fallback.id)
-        }
-      } catch {
-        // Rows without a usable pool keep their original reason.
       }
     }
     const verified = new Map<string, PoolCheckOutcome>()

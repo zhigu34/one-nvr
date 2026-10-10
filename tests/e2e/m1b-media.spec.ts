@@ -11,22 +11,15 @@ async function get<T>(page: Page, path: string): Promise<T> {
     return (await response.json()).data
   }, path)
 }
-async function command(page: Page, name: string, endpoint: string) {
-  const response = page.waitForResponse(r => r.request().method() !== 'GET' && r.url().endsWith(endpoint))
-  await page.getByRole('button', {name, exact: true}).click()
-  const actual = await response
-  if (actual.status() !== 202) {
-    const failed = await actual.json()
-    expect(actual.status(), 'command rejected: ' + (failed.error?.code || 'unknown')).toBe(202)
-  }
-  return (await actual.json()).data as {job_id: string}
+// Binding, applying and enabling recover a stale pool write proof by running a
+// real check and retrying inside the same click, so wait for the accepted
+// (202) response and skip the recovery-only rejection instead of failing on it.
+function accept(page: Page, endpoint: string) {
+  return page.waitForResponse(r => r.request().method() !== 'GET' && r.url().endsWith(endpoint), {timeout: 180000})
 }
-// The recording plan lists every channel, so its controls must be addressed
-// through their own row.
-async function rowCommand(page: Page, row: Locator, name: string, endpoint: string) {
-  const match = () => page.waitForResponse(r => r.request().method() !== 'GET' && r.url().endsWith(endpoint), {timeout: 180000})
-  let pending = match()
-  await row.getByRole('button', {name, exact: true}).click()
+async function acceptedCommand(page: Page, endpoint: string, click: () => Promise<unknown>) {
+  let pending = accept(page, endpoint)
+  await click()
   for (;;) {
     const actual = await pending
     if (actual.status() === 202) {
@@ -34,14 +27,19 @@ async function rowCommand(page: Page, row: Locator, name: string, endpoint: stri
     }
     const failed = await actual.json()
     const code = failed.error?.code || 'unknown'
-    // Binding and applying recover a stale write proof by running a real pool
-    // check and retrying inside the same click, so this rejected attempt is
-    // expected to be followed by an accepted one; anything else fails here.
     if (code !== 'zlm_write_evidence_unavailable') {
       expect(actual.status(), 'command rejected: ' + code).toBe(202)
     }
-    pending = match()
+    pending = accept(page, endpoint)
   }
+}
+async function command(page: Page, name: string, endpoint: string) {
+  return acceptedCommand(page, endpoint, () => page.getByRole('button', {name, exact: true}).click())
+}
+// The recording plan lists every channel, so its controls must be addressed
+// through their own row.
+async function rowCommand(page: Page, row: Locator, name: string, endpoint: string) {
+  return acceptedCommand(page, endpoint, () => row.getByRole('button', {name, exact: true}).click())
 }
 async function finished(page: Page, job: {job_id: string}, state = 'succeeded') {
   await expect.poll(async () => (await get<{state: string}>(page, 'jobs/' + job.job_id)).state, {timeout: 90000}).toBe(state)
@@ -220,11 +218,10 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   expect(historical.source_revision_id).toBe(initial)
   expect(historical.pool_id).toBe(pool.id)
   // Switching the source while continuous recording is on requires fresh pool
-  // write evidence, and that requirement is no longer pre-checked by the camera
-  // flow: the switch is proven and applied as two explicit steps instead.
+  // write evidence; the page recovers an expired proof by running the real
+  // check inside the same 测试并启用 click, so no pre-check is needed here.
   await page.goto('/channels/configure?channel=' + channel.id)
   const changed = await saveAndTest(page, fixture.camera_ip, fixture.paths[0], fixture.paths[1])
-  await freshPoolProof(page, pool.id)
   await finished(page, await command(page, '测试并启用', '/source/apply'))
   await expect.poll(async () => (await status()).current_revision_id, {timeout: 20000}).toBe(changed)
   await expect.poll(async () => (await physical()).filter(s => s.isRecordingMP4).length, {timeout: 30000}).toBe(1)
@@ -233,11 +230,12 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   // Reload as an operator may do, preserving optimistic conflict protection.
   await page.reload()
   const restored = await saveAndTest(page, fixture.camera_ip, fixture.paths[2], fixture.paths[3])
-  await freshPoolProof(page, pool.id)
   await finished(page, await command(page, '测试并启用', '/source/apply'))
   await expect.poll(async () => (await status()).current_revision_id, {timeout: 20000}).toBe(restored)
   await page.reload()
   // Lose the actual candidate publisher AFTER proof, so the switch must roll back.
+  // This one keeps its explicit proof first: the apply must be accepted here and
+  // then fail during execution, which is a different acceptance than recovery.
   await saveAndTest(page, fixture.camera_ip, fixture.paths[0], fixture.paths[1])
   await freshPoolProof(page, pool.id)
   const stopped = await request.post('http://fixture:8557/stop-one')

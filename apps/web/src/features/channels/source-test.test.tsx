@@ -1,6 +1,7 @@
 import { afterEach, expect, test, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
+import { ApiError } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { SourceTestControls } from './source-test'
 
@@ -94,4 +95,56 @@ test('a proof bound to another revision never enables the selected one', async (
   await expect
     .element(view.getByRole('button', { name: '测试并启用', exact: true }))
     .toBeDisabled()
+})
+test('enabling recovers an expired write proof before applying', async () => {
+  let applies = 0
+  calls.request.mockImplementation(async (path: string) => {
+    if (path.endsWith('/source/apply')) {
+      applies++
+      if (applies === 1)
+        throw new ApiError(
+          409,
+          'zlm_write_evidence_unavailable',
+          '存储池检查未通过，请先运行存储池检查'
+        )
+      return { job_id: 'apply-job', state: 'queued', test_id: proof.id }
+    }
+    if (path.endsWith('/source/status'))
+      return { channel_id: base.channelId, storage_pool_id: 'pool', version: 8 }
+    if (path.includes('/storage-pools/') && path.endsWith('/test'))
+      return { job_id: 'check-job' }
+    if (path.includes('/jobs/')) return { state: 'succeeded' }
+    if (path.startsWith('/api/v1/storage-pools'))
+      return {
+        items: [
+          {
+            id: 'pool',
+            checks: [
+              {
+                service: 'zlm',
+                state: 'healthy',
+                reason: 'zlm_media_verified',
+                total_bytes: 0,
+                free_bytes: 0,
+                filesystem_id: '',
+              },
+            ],
+          },
+        ],
+        next_cursor: null,
+      }
+    throw new Error('unexpected ' + path)
+  })
+  const view = await render(<SourceTestControls {...base} proof={proof} />)
+  await userEvent.click(
+    view.getByRole('button', { name: '测试并启用', exact: true })
+  )
+  await expect
+    .element(view.getByText('启用已排队，等待执行结果'))
+    .toBeVisible()
+  expect(applies).toBe(2)
+  expect(base.onAccepted).toHaveBeenCalledWith(
+    expect.objectContaining({ job_id: 'apply-job' }),
+    'apply'
+  )
 })
