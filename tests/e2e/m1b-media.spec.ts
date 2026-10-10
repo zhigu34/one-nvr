@@ -166,6 +166,9 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   await expect(mediaInfo).toBeVisible({timeout: 20000})
   await expect(mediaInfo).toContainText(/×\d+/)
   await expect(mediaInfo).toContainText('直通')
+  // The picture box follows the decoded stream proportions (not a fixed
+  // 16:9), which is what removes the black bars for non-16:9 cameras.
+  await expect(tile.getByTestId('live-video-area')).toHaveAttribute('style', /aspect-ratio/)
   await expect.poll(async()=>video.evaluate((el:HTMLVideoElement)=>el.getVideoPlaybackQuality().totalVideoFrames),{timeout:10000}).toBeGreaterThan(5)
   await page.getByRole('button',{name:'4 画面',exact:true}).click()
   await expect(page.getByRole('region',{name:/预览 CH|空闲画面/})).toHaveCount(4)
