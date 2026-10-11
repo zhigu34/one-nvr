@@ -22,6 +22,7 @@ import {
   SelectField,
 } from '@/features/foundation/ui'
 import { formatMinute } from '@/features/playback/zone'
+import { ExportsDrawer } from '@/features/recording-exports/exports-drawer'
 
 type Segment = Schema<'RecordingSegment'>
 type Stats = Schema<'RecordingStats'>
@@ -89,6 +90,7 @@ export function RecordingFiles({
   const [protection, setProtectionFilter] = useState('all')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [exportsOpen, setExportsOpen] = useState(false)
   const [outcomes, setOutcomes] = useState<Outcome[] | null>(null)
   const action = useAction()
 
@@ -96,6 +98,9 @@ export function RecordingFiles({
     entry.permissions.includes('playback')
   )
   const activeChannel = channel || permitted[0]?.id || ''
+  const exportable = permitted.find(
+    (entry) => entry.id === activeChannel && entry.permissions.includes('export')
+  )
   const window = rangeFor(Number(days))
   const zone = site.data?.timezone || ''
 
@@ -325,6 +330,11 @@ export function RecordingFiles({
               {items.length} 段{selected.size > 0 ? ` · 已选 ${selected.size} 段` : ''}
               {stats.data ? ` · 筛选范围内共 ${stats.data.segments} 段` : ''}
             </span>
+            {exportable && (
+              <Button size='sm' variant='outline' onClick={() => setExportsOpen(true)}>
+                导出记录
+              </Button>
+            )}
             {selected.size > 0 && (
               <div className='flex items-center gap-2'>
                 <Button
@@ -470,6 +480,14 @@ export function RecordingFiles({
         isLoading={action.pending}
         handleConfirm={() => void deleteSelected()}
       />
+      {exportable && (
+        <ExportsDrawer
+          channel={exportable}
+          zone={zone}
+          open={exportsOpen}
+          onOpenChange={setExportsOpen}
+        />
+      )}
     </div>
   )
 

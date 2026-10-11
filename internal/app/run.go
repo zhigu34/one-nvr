@@ -133,6 +133,15 @@ func Run(name string) error {
 		for n := 0; n < 2; n++ {
 			go func() { defer background.Done(); runSourceTestJobs(ctx, recordings) }()
 		}
+		// Export tasks run at most two at a time (PRD EXP-01); a third waits in
+		// the jobs queue. The reconciliation loop terminalizes tasks whose job
+		// exhausted its attempts, which the jobs table cannot see.
+		background.Add(2)
+		for n := 0; n < 2; n++ {
+			go func() { defer background.Done(); runSourceJobs(ctx, recordings, "recording.export", recordings.HandleExport) }()
+		}
+		background.Add(1)
+		go func() { defer background.Done(); runExportReconciliation(ctx, recordings) }()
 		background.Add(6)
 		go func() { defer background.Done(); cleanupImportDrafts(ctx, recordings.Sources) }()
 		go func() {

@@ -3,6 +3,7 @@ package recording
 import (
 	"context"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/zhigu34/one-nvr/internal/id"
@@ -32,11 +33,78 @@ func (s *Service) RunRetention(ctx context.Context) {
 	ticker := time.NewTicker(RetentionSweepInterval)
 	defer ticker.Stop()
 	for {
+		// Export artifacts expire on their own seven-day clock regardless of
+		// the site's recording retention setting, so this sweep always runs.
+		s.SweepExportArtifacts(ctx)
 		s.SweepRetention(ctx)
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		}
+	}
+}
+
+// SweepExportArtifacts removes the files of artifacts past their download
+// validity. A protected artifact outlives expiry (EXP-05); an expired artifact
+// keeps its row with state 'expired' so the drawer can say what happened, and
+// a download attempt finds it gone, exactly like a deleted recording.
+func (s *Service) SweepExportArtifacts(ctx context.Context) {
+	if s.Pools == nil || s.DB == nil {
+		return
+	}
+	for {
+		var batch []struct {
+			ID           id.ID
+			PoolID       id.ID
+			RelativePath string
+		}
+		rows, err := s.DB.Pool.Query(ctx, `SELECT a.id,a.pool_id,a.relative_path FROM recording_export_artifacts a JOIN storage_pools p ON p.id=a.pool_id WHERE a.state='ready' AND NOT a.protected AND a.expires_at<clock_timestamp() AND p.enabled LIMIT 100`)
+		if err != nil {
+			if ctx.Err() == nil {
+				slog.Warn("export artifact expiry scan unavailable")
+			}
+			return
+		}
+		for rows.Next() {
+			var item struct {
+				ID           id.ID
+				PoolID       id.ID
+				RelativePath string
+			}
+			if err := rows.Scan(&item.ID, &item.PoolID, &item.RelativePath); err != nil {
+				rows.Close()
+				slog.Warn("export artifact expiry scan unavailable")
+				return
+			}
+			batch = append(batch, item)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil || len(batch) == 0 {
+			if err != nil && ctx.Err() == nil {
+				slog.Warn("export artifact expiry scan unavailable")
+			}
+			return
+		}
+		for _, item := range batch {
+			root, _, err := s.Pools.OpenMediaRoot(ctx, item.PoolID)
+			if err != nil {
+				return
+			}
+			err = root.Remove(item.RelativePath)
+			root.Close()
+			if err != nil && !os.IsNotExist(err) {
+				return
+			}
+			if _, err := s.DB.Pool.Exec(ctx, `UPDATE recording_export_artifacts SET state='expired' WHERE id=$1 AND state='ready'`, item.ID); err != nil {
+				return
+			}
+		}
+		if len(batch) < 100 {
+			return
+		}
+		if ctx.Err() != nil {
+			return
 		}
 	}
 }

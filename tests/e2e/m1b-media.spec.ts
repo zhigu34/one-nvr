@@ -134,7 +134,7 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   const channel = channels.find(c => c.channel_no === 1)!
   const channel2 = channels.find(c => c.channel_no === 2)!
   const status = () => get<Status>(page, `channels/${channel.id}/source/status`)
-  const recordings = () => get<{items: {id: string; state: string; source_revision_id: string; pool_id: string; bytes: number}[]}>(page, 'recordings?' + new URLSearchParams({channel_id: channel.id, start: new Date(Date.now() - 3600000).toISOString(), end: new Date(Date.now() + 60000).toISOString()}))
+  const recordings = () => get<{items: {id: string; state: string; source_revision_id: string; pool_id: string; bytes: number; start: string; end: string}[]}>(page, 'recordings?' + new URLSearchParams({channel_id: channel.id, start: new Date(Date.now() - 3600000).toISOString(), end: new Date(Date.now() + 60000).toISOString()}))
   await page.goto('/storage-pools')
   await page.getByLabel('存储池名称', {exact: true}).fill('真实媒体池')
   await page.getByLabel('挂载目录', {exact: true}).fill('/storage/pool1')
@@ -346,6 +346,57 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   expect(rangeProof.slice.digest).toBe(rangeProof.slice.expected)
   expect(rangeProof.overflow.status).toBe(416)
   expect(rangeProof.overflow.contentRange).toBe(`bytes */${rangeProof.total}`)
+  // M2: range export. The published segment exports as one artifact whose ZIP
+  // carries the evidence manifest; a stream-copy remux must really run and the
+  // downloads must really be MP4/ZIP bytes, not status codes alone.
+  const exported = await page.evaluate(async ({channelId, segment}: {channelId: string; segment: {start: string; end: string}}) => {
+    const csrf = (await (await fetch('/api/v1/auth/me')).json()).data.csrf_token as string
+    const key = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('')
+    const end = Date.parse(segment.end)
+    const start = end - 60_000
+    const analysis = await fetch('/api/v1/recording-exports/analyze?' + new URLSearchParams({channel_id: channelId, start: String(start), end: String(end)}))
+    const analysisBody = await analysis.json()
+    const create = await fetch('/api/v1/recording-exports', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrf, 'Idempotency-Key': key()}, body: JSON.stringify({channel_id: channelId, start, end, gap_mode: 'merge'})})
+    const created = (await create.json()).data as {export_id: string; job_id: string}
+    let view: {state: string; progress: number; error_code: string | null; artifacts: {id: string; file_name: string; sha256: string}[]} | undefined
+    for (let attempt = 0; attempt < 90; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+      view = (await (await fetch('/api/v1/recording-exports/' + created.export_id)).json()).data
+      if (view && (view.state === 'succeeded' || view.state === 'failed')) break
+    }
+    const zip = await fetch('/api/v1/recording-exports/' + created.export_id + '/download')
+    const zipBytes = new Uint8Array(await zip.arrayBuffer())
+    const artifactId = view?.artifacts?.[0]?.id
+    const mp4 = await fetch(`/api/v1/recording-exports/${created.export_id}/artifacts/${artifactId}/content`)
+    const mp4Bytes = new Uint8Array(await mp4.arrayBuffer())
+    return {
+      analysisStatus: analysis.status,
+      coverage: analysisBody.data?.coverage_ms as number,
+      createStatus: create.status,
+      finalState: view?.state,
+      errorCode: view?.error_code,
+      artifactCount: view?.artifacts?.length,
+      artifactSha: view?.artifacts?.[0]?.sha256,
+      zipStatus: zip.status,
+      zipMagic: String.fromCharCode(...zipBytes.slice(0, 2)),
+      zipSize: zipBytes.length,
+      mp4Status: mp4.status,
+      mp4Magic: String.fromCharCode(...mp4Bytes.slice(4, 8)),
+      mp4Size: mp4Bytes.length,
+    }
+  }, {channelId: channel.id, segment: historical})
+  expect(exported.analysisStatus).toBe(200)
+  expect(exported.coverage).toBeGreaterThan(0)
+  expect(exported.createStatus).toBe(202)
+  expect(exported.finalState).toBe('succeeded')
+  expect(exported.artifactCount).toBe(1)
+  expect(exported.artifactSha).toHaveLength(64)
+  expect(exported.zipStatus).toBe(200)
+  expect(exported.zipMagic).toBe('PK')
+  expect(exported.zipSize).toBeGreaterThan(100)
+  expect(exported.mp4Status).toBe(200)
+  expect(exported.mp4Magic).toBe('ftyp')
+  expect(exported.mp4Size).toBeGreaterThan(100)
   // M2: the lifecycle of a real published file. Protection must actually stop a
   // deletion, releasing it must allow one, the file must really disappear, and
   // the recording must then be unplayable -- a status code alone would not prove
@@ -432,6 +483,14 @@ test('real media UI keeps channel history through no-recording, recording, sourc
     }, segmentId)
     unauthorizedRead = await read(historical.id)
     absent = await read('00000000-0000-4000-8000-000000000000')
+    // The viewer holds playback, not export: creating an export task on the
+    // granted channel itself is refused, indistinguishable from absence.
+    const viewerExport = await viewerPage.evaluate(async (channelId: string) => {
+      const csrf = (await (await fetch('/api/v1/auth/me')).json()).data.csrf_token as string
+      const response = await fetch('/api/v1/recording-exports', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrf, 'Idempotency-Key': 'e2e-viewer-export'}, body: JSON.stringify({channel_id: channelId, start: Date.now() - 60000, end: Date.now(), gap_mode: 'merge'})})
+      return {status: response.status, code: (await response.json()).error?.code}
+    }, channel2.id)
+    var exportedDenied = viewerExport
     // The workspace reflects the grant: the other channel is offered, this one
     // is absent rather than merely refusing to play.
     await viewerPage.goto('/recordings')
@@ -445,5 +504,7 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   expect(JSON.parse(unauthorizedRead.body).error.code).toBe('not_found')
   expect(JSON.parse(absent.body).error.code).toBe('not_found')
   expect(unauthorizedRead.body).not.toContain('ftyp')
-  writeFileSync('/results/media-browser.json', JSON.stringify({actual_media: true, camera_one_click_connect: true, camera_one_click_preserves_recording: true, webrtc_decoded_frames: firstFrames, live_main_sub_switch: true, live_no_recording: true, live_unauthorized_denied: true, live_readers_released: true, live_grid_cells: 4, slots: 32, active_channels: 1, synthetic_camera_pairs: 2, no_recording_keeps_pull: true, real_ready_segment: true, switch_and_rollback: true, clear_and_reconfigure_preserves_policy: true, playback_decoded_frames: playbackFrames, playback_video_width: geometry.width, playback_range_206: rangeProof.whole.status === 206, playback_range_slice_matches: rangeProof.slice.digest === rangeProof.slice.expected, playback_range_416: rangeProof.overflow.status === 416, playback_gateway_range_passthrough: true, playback_unauthorized_404: unauthorizedRead.status === 404, playback_unknown_404: absent.status === 404, playback_no_media_leak: !unauthorizedRead.body.includes('ftyp'), recording_protection_blocks_delete: lifecycle.blockedState === 'protected', recording_delete_removes_file: lifecycle.removedState === 'deleted', recording_delete_releases_bytes: lifecycle.releasedBytes, recording_deleted_content_404: lifecycle.contentStatus === 404, recording_deleted_no_media_leak: !lifecycle.contentHasMedia, channel_id: channel.id, historical_segment_id: historical.id}))
+  expect(exportedDenied.status).toBe(404)
+  expect(exportedDenied.code).toBe('not_found')
+  writeFileSync('/results/media-browser.json', JSON.stringify({actual_media: true, camera_one_click_connect: true, camera_one_click_preserves_recording: true, webrtc_decoded_frames: firstFrames, live_main_sub_switch: true, live_no_recording: true, live_unauthorized_denied: true, live_readers_released: true, live_grid_cells: 4, slots: 32, active_channels: 1, synthetic_camera_pairs: 2, no_recording_keeps_pull: true, real_ready_segment: true, switch_and_rollback: true, clear_and_reconfigure_preserves_policy: true, playback_decoded_frames: playbackFrames, playback_video_width: geometry.width, playback_range_206: rangeProof.whole.status === 206, playback_range_slice_matches: rangeProof.slice.digest === rangeProof.slice.expected, playback_range_416: rangeProof.overflow.status === 416, playback_gateway_range_passthrough: true, playback_unauthorized_404: unauthorizedRead.status === 404, playback_unknown_404: absent.status === 404, playback_no_media_leak: !unauthorizedRead.body.includes('ftyp'), recording_protection_blocks_delete: lifecycle.blockedState === 'protected', recording_delete_removes_file: lifecycle.removedState === 'deleted', recording_delete_releases_bytes: lifecycle.releasedBytes, recording_deleted_content_404: lifecycle.contentStatus === 404, recording_deleted_no_media_leak: !lifecycle.contentHasMedia, recording_export_succeeded: exported.finalState === 'succeeded', recording_export_zip_manifest: exported.zipMagic === 'PK', recording_export_mp4: exported.mp4Magic === 'ftyp', recording_export_viewer_denied: exportedDenied.status === 404, channel_id: channel.id, historical_segment_id: historical.id}))
 })

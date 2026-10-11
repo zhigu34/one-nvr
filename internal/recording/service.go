@@ -37,6 +37,7 @@ type Media interface {
 type Probe interface {
 	FirstFrame(context.Context, string) (probe.VideoEvidence, error)
 	InspectMP4(context.Context, *os.File) (probe.FileEvidence, error)
+	ConcatMP4(context.Context, []probe.ConcatPart, string, func(float64)) (probe.FileEvidence, error)
 }
 type Service struct {
 	DB             *database.DB

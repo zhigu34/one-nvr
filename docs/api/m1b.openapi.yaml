@@ -3142,6 +3142,354 @@
         }
       }
     },
+    "/api/v1/recording-exports/analyze": {
+      "get": {
+        "operationId": "recordingExportAnalyze",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "export",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "channel_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "required": true,
+            "description": "Window start, epoch milliseconds (UTC).",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": true,
+            "description": "Window end, epoch milliseconds (UTC); at most 30 minutes after start.",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Range coverage preview: contiguous groups, gaps and unavailable segments.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordingExportAnalysis"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/recording-exports": {
+      "post": {
+        "operationId": "recordingExportCreate",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "export",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordingExportCreateInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Task created and queued; progress is readable from the export and the job.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordingExportCreated"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "recordingExportList",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "export",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "channel_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The channel's export history, newest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordingExportPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/recording-exports/{id}": {
+      "get": {
+        "operationId": "recordingExportGet",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "export",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One export task with its artifacts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordingExport"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/recording-exports/{id}/download": {
+      "get": {
+        "operationId": "recordingExportDownload",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "export",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Evidence ZIP: manifest.json (task, creator, channel, requested/actual window, gaps, artifacts with SHA-256, pinned sources) plus one stored MP4 per artifact. The download is audited.",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The export has not succeeded, so there is nothing to download."
+          }
+        }
+      }
+    },
+    "/api/v1/recording-exports/{id}/artifacts/{artifactId}/content": {
+      "get": {
+        "operationId": "recordingExportArtifactContent",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "export",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "artifactId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One artifact MP4 as an attachment download. The download is audited.",
+            "content": {
+              "video/mp4": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown artifact, or the artifact expired and its file was reclaimed."
+          }
+        }
+      }
+    },
+    "/api/v1/recording-exports/{id}/artifacts/{artifactId}": {
+      "patch": {
+        "operationId": "recordingExportArtifactProtect",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "artifactId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["protected"],
+                "properties": {
+                  "protected": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated artifact; a protected artifact outlives the default expiry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordingExportArtifact"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/recordings/protect-window": {
+      "post": {
+        "operationId": "recordingProtectWindow",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordingWindowProtectionInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "How many ready segments intersecting the window changed state. Both directions are audited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordingWindowProtectionResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/recordings": {
       "get": {
         "operationId": "recordings",
@@ -5460,6 +5808,289 @@
           "items"
         ],
         "additionalProperties": false
+      },
+      "RecordingExportAnalysis": {
+        "type": "object",
+        "properties": {
+          "channel_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "coverage_ms": {
+            "type": "integer"
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecordingExportAnalysisGroup"
+            }
+          },
+          "gaps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecordingExportAnalysisSpan"
+            }
+          },
+          "unavailable": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecordingExportAnalysisUnavailable"
+            }
+          },
+          "duplicate_count": {
+            "type": "integer"
+          },
+          "ready_bytes": {
+            "type": "integer"
+          },
+          "media_consistent": {
+            "type": "boolean"
+          }
+        }
+      },
+      "RecordingExportAnalysisGroup": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "duration_ms": {
+            "type": "integer"
+          },
+          "segments": {
+            "type": "integer"
+          },
+          "bytes": {
+            "type": "integer"
+          }
+        }
+      },
+      "RecordingExportAnalysisSpan": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "duration_ms": {
+            "type": "integer"
+          }
+        }
+      },
+      "RecordingExportAnalysisUnavailable": {
+        "type": "object",
+        "properties": {
+          "segment_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "state": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RecordingExportCreateInput": {
+        "type": "object",
+        "required": ["channel_id", "start", "end", "gap_mode"],
+        "properties": {
+          "channel_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "start": {
+            "type": "integer",
+            "description": "Window start, epoch milliseconds (UTC)."
+          },
+          "end": {
+            "type": "integer",
+            "description": "Window end, epoch milliseconds (UTC); at most 30 minutes after start."
+          },
+          "gap_mode": {
+            "type": "string",
+            "enum": ["merge", "split"],
+            "description": "merge compresses gaps into one artifact; split writes one artifact per contiguous group."
+          },
+          "pool_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          }
+        }
+      },
+      "RecordingExportCreated": {
+        "type": "object",
+        "properties": {
+          "export_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "job_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          }
+        }
+      },
+      "RecordingExportArtifact": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "file_name": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "segment_count": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string",
+            "enum": ["ready", "expired"]
+          },
+          "protected": {
+            "type": "boolean"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RecordingExport": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "channel_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "channel_no": {
+            "type": "integer"
+          },
+          "pool_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "requested_start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "requested_end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "gap_mode": {
+            "type": "string",
+            "enum": ["merge", "split"]
+          },
+          "state": {
+            "type": "string",
+            "enum": ["queued", "running", "succeeded", "failed"]
+          },
+          "progress": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "error_code": {
+            "type": "string",
+            "nullable": true
+          },
+          "actual_start": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "actual_end": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "requested_by_name": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecordingExportArtifact"
+            }
+          }
+        }
+      },
+      "RecordingExportPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecordingExport"
+            }
+          }
+        }
+      },
+      "RecordingWindowProtectionInput": {
+        "type": "object",
+        "required": ["channel_id", "start", "end", "protected"],
+        "properties": {
+          "channel_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "start": {
+            "type": "integer",
+            "description": "Window start, epoch milliseconds (UTC)."
+          },
+          "end": {
+            "type": "integer",
+            "description": "Window end, epoch milliseconds (UTC)."
+          },
+          "protected": {
+            "type": "boolean"
+          }
+        }
+      },
+      "RecordingWindowProtectionResult": {
+        "type": "object",
+        "properties": {
+          "updated": {
+            "type": "integer"
+          }
+        }
       },
       "RecordingSegment": {
         "type": "object",

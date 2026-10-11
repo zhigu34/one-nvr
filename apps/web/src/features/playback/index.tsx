@@ -16,6 +16,7 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { useAPI } from '@/features/foundation/hooks'
 import { Empty, QueryState, SelectField } from '@/features/foundation/ui'
+import { ExportDialog } from '@/features/recording-exports/export-dialog'
 import { probeSegment } from './api'
 import {
   RATES,
@@ -172,6 +173,7 @@ function Workspace({
   }))
   const [rangeError, setRangeError] = useState('')
   const [selected, setSelected] = useState<Entry | null>(null)
+  const [exportOpen, setExportOpen] = useState(false)
   const [search, setSearch] = useState('')
   // The index follows the API cursor until the window is exhausted, so the
   // timeline never mistakes an unfetched page for a hole. Fetches run
@@ -543,9 +545,16 @@ function Workspace({
         )}
         {selected && (
           <div className='rounded-xl border bg-card p-3 text-sm'>
-            <p className='font-medium'>
-              片段 {selected.id.slice(0, 8)} · {selected.blocked || '可用'}
-            </p>
+            <div className='flex items-center justify-between gap-2'>
+              <p className='font-medium'>
+                片段 {selected.id.slice(0, 8)} · {selected.blocked || '可用'}
+              </p>
+              {active.permissions.includes('export') && !selected.blocked && (
+                <Button size='sm' variant='outline' onClick={() => setExportOpen(true)}>
+                  导出
+                </Button>
+              )}
+            </div>
             <p className='mt-1 text-muted-foreground'>
               {formatClock(selected.start, zone)} —{' '}
               {formatClock(selected.end, zone)} ·{' '}
@@ -553,6 +562,16 @@ function Workspace({
               {(selected.bytes / 1048576).toFixed(1)} MiB
             </p>
           </div>
+        )}
+        {selected && exportOpen && (
+          <ExportDialog
+            channel={active}
+            zone={zone}
+            start={selected.start}
+            end={selected.end}
+            open={exportOpen}
+            onOpenChange={setExportOpen}
+          />
         )}
         <p className='text-xs text-muted-foreground'>
           当前通道 {label(active)}

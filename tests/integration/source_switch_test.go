@@ -292,6 +292,10 @@ func (p controlledProbe) FirstFrame(ctx context.Context, raw string) (probe.Vide
 func (p controlledProbe) InspectMP4(ctx context.Context, f *os.File) (probe.FileEvidence, error) {
 	return p.file.InspectMP4(ctx, f)
 }
+
+func (p controlledProbe) ConcatMP4(ctx context.Context, parts []probe.ConcatPart, output string, progress func(float64)) (probe.FileEvidence, error) {
+	return p.file.ConcatMP4(ctx, parts, output, progress)
+}
 func prepareControlledSourceTest(t *testing.T) (publishFixture, *controlledMedia, channel.Change, id.ID) {
 	t.Helper()
 	f := newPublicationFixture(t)

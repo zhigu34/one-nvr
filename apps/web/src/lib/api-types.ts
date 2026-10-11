@@ -844,6 +844,118 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/recording-exports/analyze": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["recordingExportAnalyze"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/recording-exports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["recordingExportList"];
+        put?: never;
+        post: operations["recordingExportCreate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/recording-exports/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["recordingExportGet"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/recording-exports/{id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["recordingExportDownload"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/recording-exports/{id}/artifacts/{artifactId}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["recordingExportArtifactContent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/recording-exports/{id}/artifacts/{artifactId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["recordingExportArtifactProtect"];
+        trace?: never;
+    };
+    "/api/v1/recordings/protect-window": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["recordingProtectWindow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recordings": {
         parameters: {
             query?: never;
@@ -1458,6 +1570,116 @@ export interface components {
         };
         RecordingPolicyBatch: {
             items: components["schemas"]["RecordingPolicyOutcome"][];
+        };
+        RecordingExportAnalysis: {
+            channel_id?: components["schemas"]["UUID"];
+            /** Format: date-time */
+            start?: string;
+            /** Format: date-time */
+            end?: string;
+            coverage_ms?: number;
+            groups?: components["schemas"]["RecordingExportAnalysisGroup"][];
+            gaps?: components["schemas"]["RecordingExportAnalysisSpan"][];
+            unavailable?: components["schemas"]["RecordingExportAnalysisUnavailable"][];
+            duplicate_count?: number;
+            ready_bytes?: number;
+            media_consistent?: boolean;
+        };
+        RecordingExportAnalysisGroup: {
+            /** Format: date-time */
+            start?: string;
+            /** Format: date-time */
+            end?: string;
+            duration_ms?: number;
+            segments?: number;
+            bytes?: number;
+        };
+        RecordingExportAnalysisSpan: {
+            /** Format: date-time */
+            start?: string;
+            /** Format: date-time */
+            end?: string;
+            duration_ms?: number;
+        };
+        RecordingExportAnalysisUnavailable: {
+            segment_id?: components["schemas"]["UUID"];
+            state?: string;
+            /** Format: date-time */
+            start?: string;
+            /** Format: date-time */
+            end?: string;
+        };
+        RecordingExportCreateInput: {
+            channel_id: components["schemas"]["UUID"];
+            /** @description Window start, epoch milliseconds (UTC). */
+            start: number;
+            /** @description Window end, epoch milliseconds (UTC); at most 30 minutes after start. */
+            end: number;
+            /**
+             * @description merge compresses gaps into one artifact; split writes one artifact per contiguous group.
+             * @enum {string}
+             */
+            gap_mode: "merge" | "split";
+            pool_id?: components["schemas"]["UUID"];
+        };
+        RecordingExportCreated: {
+            export_id?: components["schemas"]["UUID"];
+            job_id?: components["schemas"]["UUID"];
+        };
+        RecordingExportArtifact: {
+            id?: components["schemas"]["UUID"];
+            file_name?: string;
+            size_bytes?: number;
+            sha256?: string;
+            /** Format: date-time */
+            start?: string;
+            /** Format: date-time */
+            end?: string;
+            segment_count?: number;
+            /** @enum {string} */
+            state?: "ready" | "expired";
+            protected?: boolean;
+            /** Format: date-time */
+            expires_at?: string;
+        };
+        RecordingExport: {
+            id?: components["schemas"]["UUID"];
+            channel_id?: components["schemas"]["UUID"];
+            channel_no?: number;
+            pool_id?: components["schemas"]["UUID"];
+            /** Format: date-time */
+            requested_start?: string;
+            /** Format: date-time */
+            requested_end?: string;
+            /** @enum {string} */
+            gap_mode?: "merge" | "split";
+            /** @enum {string} */
+            state?: "queued" | "running" | "succeeded" | "failed";
+            progress?: number;
+            message?: string;
+            error_code?: string | null;
+            /** Format: date-time */
+            actual_start?: string | null;
+            /** Format: date-time */
+            actual_end?: string | null;
+            requested_by_name?: string;
+            /** Format: date-time */
+            created_at?: string;
+            artifacts?: components["schemas"]["RecordingExportArtifact"][];
+        };
+        RecordingExportPage: {
+            items?: components["schemas"]["RecordingExport"][];
+        };
+        RecordingWindowProtectionInput: {
+            channel_id: components["schemas"]["UUID"];
+            /** @description Window start, epoch milliseconds (UTC). */
+            start: number;
+            /** @description Window end, epoch milliseconds (UTC). */
+            end: number;
+            protected: boolean;
+        };
+        RecordingWindowProtectionResult: {
+            updated?: number;
         };
         RecordingSegment: {
             id: components["schemas"]["UUID"];
@@ -5037,6 +5259,215 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    recordingExportAnalyze: {
+        parameters: {
+            query: {
+                channel_id: components["schemas"]["UUID"];
+                /** @description Window start, epoch milliseconds (UTC). */
+                start: number;
+                /** @description Window end, epoch milliseconds (UTC); at most 30 minutes after start. */
+                end: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Range coverage preview: contiguous groups, gaps and unavailable segments. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordingExportAnalysis"];
+                };
+            };
+        };
+    };
+    recordingExportList: {
+        parameters: {
+            query: {
+                channel_id: components["schemas"]["UUID"];
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The channel's export history, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordingExportPage"];
+                };
+            };
+        };
+    };
+    recordingExportCreate: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordingExportCreateInput"];
+            };
+        };
+        responses: {
+            /** @description Task created and queued; progress is readable from the export and the job. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordingExportCreated"];
+                };
+            };
+        };
+    };
+    recordingExportGet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One export task with its artifacts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordingExport"];
+                };
+            };
+        };
+    };
+    recordingExportDownload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Evidence ZIP: manifest.json (task, creator, channel, requested/actual window, gaps, artifacts with SHA-256, pinned sources) plus one stored MP4 per artifact. The download is audited. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
+            };
+            /** @description The export has not succeeded, so there is nothing to download. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    recordingExportArtifactContent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+                artifactId: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One artifact MP4 as an attachment download. The download is audited. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "video/mp4": string;
+                };
+            };
+            /** @description Unknown artifact, or the artifact expired and its file was reclaimed. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    recordingExportArtifactProtect: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+                artifactId: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    protected: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The updated artifact; a protected artifact outlives the default expiry. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordingExportArtifact"];
+                };
+            };
+        };
+    };
+    recordingProtectWindow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordingWindowProtectionInput"];
+            };
+        };
+        responses: {
+            /** @description How many ready segments intersecting the window changed state. Both directions are audited. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordingWindowProtectionResult"];
                 };
             };
         };

@@ -110,6 +110,7 @@ func storageReason(err error) string {
 // ('missing'); the reverse order would let a crash hide a real deletion.
 func (s *Service) deleteOne(ctx context.Context, actor id.ID, segmentID id.ID, reason string) (DeleteOutcome, error) {
 	var item publication
+	pinnedByExport := false
 	err := s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
 		found, err := scanPublication(tx.QueryRow(ctx, `SELECT `+publicationColumns+` FROM recording_segments s WHERE s.id=$1`, segmentID))
 		if err != nil {
@@ -119,7 +120,10 @@ func (s *Service) deleteOne(ctx context.Context, actor id.ID, segmentID id.ID, r
 			return err
 		}
 		item = found
-		return nil
+		// EXP-05: a segment pinned by a queued or running export is that
+		// task's input. Removing it mid-task would either fail the export or
+		// silently shorten its artifact, so deletion waits for the task.
+		return tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM recording_export_sources es JOIN recording_exports e ON e.id=es.export_id WHERE es.segment_id=$1 AND e.state IN ('queued','running'))`, segmentID).Scan(&pinnedByExport)
 	})
 	if err != nil {
 		if errors.Is(err, auth.ErrNotFound) {
@@ -128,6 +132,8 @@ func (s *Service) deleteOne(ctx context.Context, actor id.ID, segmentID id.ID, r
 		return DeleteOutcome{}, err
 	}
 	switch {
+	case pinnedByExport:
+		return DeleteOutcome{SegmentID: segmentID, State: deleteStateSkipped, Reason: "pinned_by_export"}, nil
 	case item.Protected:
 		return DeleteOutcome{SegmentID: segmentID, State: deleteStateProtected, Reason: "protected"}, nil
 	case item.State == deleteStateDeleted:
