@@ -1,4 +1,5 @@
 import type { Schema } from '@/lib/types'
+import { startOfZoneDay, zoneParts } from './zone'
 
 type Segment = Schema<'RecordingSegment'>
 
@@ -177,4 +178,59 @@ export function zoomView(from: number, to: number, anchor: number, full: { start
     end = full.end
   }
   return { start, end: Math.min(end, full.end) }
+}
+
+// Tick ladder in seconds: the ruler picks the first interval that yields a
+// readable number of labels for the strip width.
+const TICK_LADDER = [60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400, 172800, 604800]
+
+export type TimelineTick = { at: number; label: string; major: boolean }
+
+function tickPad(value: number, width = 2): string {
+  return String(value).padStart(width, '0')
+}
+
+/**
+ * The time ruler for one view window: wall-clock-aligned ticks in the site's
+ * zone (hourly ticks land on :00, daily on midnight), with labels that stay
+ * readable as the view zooms from a month down to a minute.
+ */
+export function buildTicks(viewStart: number, viewEnd: number, widthPx: number, timeZone: string): TimelineTick[] {
+  if (!(viewEnd > viewStart) || !Number.isFinite(widthPx) || widthPx < 60 || !timeZone) return []
+  const spanSeconds = (viewEnd - viewStart) / 1000
+  const target = Math.max(4, Math.min(12, Math.floor(widthPx / 90)))
+  let interval = TICK_LADDER[TICK_LADDER.length - 1]
+  for (const candidate of TICK_LADDER) {
+    if (spanSeconds / candidate <= target) {
+      interval = candidate
+      break
+    }
+  }
+  const daily = interval >= 86400
+  const dayStart = startOfZoneDay(viewStart, timeZone)
+  if (!Number.isFinite(dayStart)) return []
+  let at = dayStart
+  if (!daily) {
+    const parts = zoneParts(viewStart, timeZone)
+    const secondOfDay = parts.hour * 3600 + parts.minute * 60 + parts.second
+    at = dayStart + (secondOfDay - (secondOfDay % interval)) * 1000
+  }
+  const ticks: TimelineTick[] = []
+  let lastDay = ''
+  for (let guard = 0; guard <= 400; guard++) {
+    if (at > viewEnd) break
+    if (at >= viewStart) {
+      const parts = zoneParts(at, timeZone)
+      const day = `${tickPad(parts.year, 4)}-${tickPad(parts.month)}-${tickPad(parts.day)}`
+      const isDayStart = parts.hour === 0 && parts.minute === 0
+      let label: string
+      if (daily) label = day.slice(5)
+      else if (lastDay !== day) label = `${day.slice(5)} ${tickPad(parts.hour)}:${tickPad(parts.minute)}`
+      else label = `${tickPad(parts.hour)}:${tickPad(parts.minute)}`
+      ticks.push({ at, label, major: isDayStart })
+      lastDay = day
+    }
+    at += interval * 1000
+  }
+  return ticks
 }

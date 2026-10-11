@@ -9,6 +9,7 @@ import {
   gapAt,
   nextPlayableEntry,
   offsetIn,
+  buildTicks,
   sliceView,
   zoomView,
 } from './timeline'
@@ -181,5 +182,37 @@ describe('zoomView', () => {
     expect(view.end).toBe(3_600_000)
     const tiny = zoomView(0, 90_000, 45_000, full)
     expect(tiny.end - tiny.start).toBeGreaterThanOrEqual(60_000)
+  })
+})
+
+describe('buildTicks', () => {
+  const base = Date.parse('2026-10-12T00:00:00Z')
+  it('draws wall-clock hourly ticks across a six hour window', () => {
+    // Asia/Shanghai is UTC+8: 00:00Z-06:00Z reads 08:00-14:00 local, so the
+    // hourly ticks must land on local :00 boundaries.
+    const ticks = buildTicks(base, base + 6 * 3_600_000, 1200, 'Asia/Shanghai')
+    // A six hour window on a wide strip lands on 30-minute ticks; no midnight
+    // inside means no major tick.
+    expect(ticks.length).toBeGreaterThanOrEqual(12)
+    expect(ticks[0].label).toBe('10-12 08:00')
+    expect(ticks[1].label).toBe('08:30')
+    expect(ticks.every((tick) => !tick.major)).toBe(true)
+  })
+  it('switches to day labels for multi-day windows', () => {
+    const ticks = buildTicks(base, base + 7 * 86_400_000, 1200, 'Asia/Shanghai')
+    // The window starts mid-day, so the first daily tick is the next midnight.
+    expect(ticks.length).toBeGreaterThanOrEqual(6)
+    expect(ticks[0].label).toBe('10-13')
+    expect(ticks[1].label).toBe('10-14')
+    expect(ticks.every((tick) => tick.major)).toBe(true)
+  })
+  it('produces minute ticks for a zoomed window', () => {
+    const ticks = buildTicks(base, base + 5 * 60_000, 1200, 'Asia/Shanghai')
+    expect(ticks[0].label).toBe('10-12 08:00')
+    expect(ticks[1].label).toBe('08:01')
+  })
+  it('refuses degenerate inputs', () => {
+    expect(buildTicks(0, 0, 1200, 'Asia/Shanghai')).toEqual([])
+    expect(buildTicks(base, base + 3_600_000, 0, 'Asia/Shanghai')).toEqual([])
   })
 })

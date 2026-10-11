@@ -32,6 +32,7 @@ import {
 import {
   buildTimeline,
   formatDuration,
+  buildTicks,
   sliceView,
   zoomView,
   type Entry,
@@ -764,7 +765,22 @@ function Timeline({
 }) {
   const strip = useRef<HTMLDivElement>(null)
   const [scrubbing, setScrubbing] = useState(false)
+  const [stripWidth, setStripWidth] = useState(0)
   const span = timeline.to - timeline.from
+  // The ruler adapts to the strip's real width, so the same view reads
+  // differently on a laptop and a fullscreen monitor.
+  useEffect(() => {
+    const element = strip.current
+    if (!element) return
+    const update = () => setStripWidth(element.getBoundingClientRect().width)
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [])
+  const ticks = useMemo(
+    () => buildTicks(timeline.from, timeline.to, stripWidth, zone),
+    [timeline.from, timeline.to, stripWidth, zone]
+  )
   const position = (at: number) =>
     `${Math.min(Math.max(((at - timeline.from) / span) * 100, 0), 100)}%`
   function scrubTo(clientX: number) {
@@ -845,6 +861,14 @@ function Timeline({
             style={{ left: position(bracket.start), width: `calc(${position(bracket.end)} - ${position(bracket.start)})` }}
           />
         )}
+        {ticks.map((tick) => (
+          <div
+            key={tick.at}
+            aria-hidden
+            className={`pointer-events-none absolute w-px ${tick.major ? 'top-0 h-full bg-foreground/25' : 'top-1 h-1/2 bg-foreground/15'}`}
+            style={{ left: position(tick.at) }}
+          />
+        ))}
         {/* No playhead before the first playback: an epoch-zero position would
             clamp to the window start and read as a real position. */}
         {clock > 0 && (
@@ -860,6 +884,19 @@ function Timeline({
           </div>
         )}
       </div>
+      {ticks.length > 0 && (
+        <div aria-hidden className='relative h-4 select-none text-[10px] leading-4 text-muted-foreground'>
+          {ticks.map((tick) => (
+            <span
+              key={tick.at}
+              className={`absolute whitespace-nowrap ${tick.major ? 'font-medium' : ''}`}
+              style={{ left: position(tick.at), transform: 'translateX(-50%)' }}
+            >
+              {tick.label}
+            </span>
+          ))}
+        </div>
+      )}
       <p className='text-xs text-muted-foreground'>
         {formatClock(timeline.from, zone)} — {formatClock(timeline.to, zone)} ·{' '}
         {timeline.entries.length} 个片段 · {timeline.gaps.length}{' '}
