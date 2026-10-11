@@ -278,7 +278,9 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   // M1-C: measure the authorized byte-range read path against the real
   // published segment, through the real gateway.
   await page.goto('/recordings')
-  await expect(page.getByRole('heading', {name: '录像回放', exact: true})).toBeVisible()
+  // One "recordings" entry holds playback and file management.
+  await expect(page.getByRole('heading', {name: '录像', exact: true})).toBeVisible()
+  await expect(page.getByRole('tab', {name: '回放', exact: true})).toHaveAttribute('aria-selected', 'true')
   await page.getByRole('button', {name: 'CH01 通道 01', exact: true}).click()
   // The index must reach the timeline; a short segment inside a 24 hour window
   // is only a few pixels wide, so playback is started from the control instead
@@ -344,6 +346,62 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   expect(rangeProof.slice.digest).toBe(rangeProof.slice.expected)
   expect(rangeProof.overflow.status).toBe(416)
   expect(rangeProof.overflow.contentRange).toBe(`bytes */${rangeProof.total}`)
+  // M2: the lifecycle of a real published file. Protection must actually stop a
+  // deletion, releasing it must allow one, the file must really disappear, and
+  // the recording must then be unplayable -- a status code alone would not prove
+  // any of it.
+  const lifecycle = await page.evaluate(async (segmentId: string) => {
+    const csrf = (await (await fetch('/api/v1/auth/me')).json()).data.csrf_token as string
+    // The entry is plain HTTP, so crypto.randomUUID is absent (it needs a secure
+    // context); getRandomValues works and is what the app itself uses.
+    const key = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('')
+    const post = async (path: string, body: unknown) => {
+      const response = await fetch('/api/v1/' + path, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrf, 'Idempotency-Key': key()},
+        body: JSON.stringify(body),
+      })
+      return {status: response.status, data: (await response.json()).data}
+    }
+    const protect = async (protectedFlag: boolean) => {
+      const response = await fetch('/api/v1/recordings/' + segmentId, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrf},
+        body: JSON.stringify({protected: protectedFlag}),
+      })
+      return {status: response.status, data: (await response.json()).data}
+    }
+    // An explicit deletion acts on the named segment immediately; the freshness
+    // delay only restrains the automatic retention sweep.
+    const protectedFirst = await protect(true)
+    const blocked = await post('recordings/batch-delete-local', {segment_ids: [segmentId]})
+    const released = await protect(false)
+    const removed = await post('recordings/batch-delete-local', {segment_ids: [segmentId]})
+    const contentAfter = await fetch('/api/v1/recordings/' + segmentId + '/content')
+    const contentBody = await contentAfter.text()
+    return {
+      protectedStatus: protectedFirst.status,
+      blockedState: blocked.data?.items?.[0]?.state,
+      releasedStatus: released.status,
+      removedState: removed.data?.items?.[0]?.state,
+      releasedBytes: removed.data?.released_bytes,
+      contentStatus: contentAfter.status,
+      contentCode: JSON.parse(contentBody).error?.code,
+      contentHasMedia: contentBody.includes('ftyp'),
+    }
+  }, historical.id)
+  expect(lifecycle.protectedStatus).toBe(200)
+  // A protected recording is never deleted, whatever else is true.
+  expect(lifecycle.blockedState).toBe('protected')
+  expect(lifecycle.releasedStatus).toBe(200)
+  // The real file is removed and the index says so; the response reports the
+  // bytes it reclaimed rather than claiming success without evidence.
+  expect(lifecycle.removedState).toBe('deleted')
+  expect(lifecycle.releasedBytes).toBeGreaterThan(0)
+  // Playback answers like an unknown recording and carries no media bytes.
+  expect(lifecycle.contentStatus).toBe(404)
+  expect(lifecycle.contentCode).toBe('not_found')
+  expect(lifecycle.contentHasMedia).toBe(false)
   // A viewer with playback on another channel must not be able to tell this
   // channel's segment from a segment that does not exist.
   const viewer = 'm1c-viewer-' + Date.now()
@@ -387,5 +445,5 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   expect(JSON.parse(unauthorizedRead.body).error.code).toBe('not_found')
   expect(JSON.parse(absent.body).error.code).toBe('not_found')
   expect(unauthorizedRead.body).not.toContain('ftyp')
-  writeFileSync('/results/media-browser.json', JSON.stringify({actual_media: true, camera_one_click_connect: true, camera_one_click_preserves_recording: true, webrtc_decoded_frames: firstFrames, live_main_sub_switch: true, live_no_recording: true, live_unauthorized_denied: true, live_readers_released: true, live_grid_cells: 4, slots: 32, active_channels: 1, synthetic_camera_pairs: 2, no_recording_keeps_pull: true, real_ready_segment: true, switch_and_rollback: true, clear_and_reconfigure_preserves_policy: true, playback_decoded_frames: playbackFrames, playback_video_width: geometry.width, playback_range_206: rangeProof.whole.status === 206, playback_range_slice_matches: rangeProof.slice.digest === rangeProof.slice.expected, playback_range_416: rangeProof.overflow.status === 416, playback_gateway_range_passthrough: true, playback_unauthorized_404: unauthorizedRead.status === 404, playback_unknown_404: absent.status === 404, playback_no_media_leak: !unauthorizedRead.body.includes('ftyp'), channel_id: channel.id, historical_segment_id: historical.id}))
+  writeFileSync('/results/media-browser.json', JSON.stringify({actual_media: true, camera_one_click_connect: true, camera_one_click_preserves_recording: true, webrtc_decoded_frames: firstFrames, live_main_sub_switch: true, live_no_recording: true, live_unauthorized_denied: true, live_readers_released: true, live_grid_cells: 4, slots: 32, active_channels: 1, synthetic_camera_pairs: 2, no_recording_keeps_pull: true, real_ready_segment: true, switch_and_rollback: true, clear_and_reconfigure_preserves_policy: true, playback_decoded_frames: playbackFrames, playback_video_width: geometry.width, playback_range_206: rangeProof.whole.status === 206, playback_range_slice_matches: rangeProof.slice.digest === rangeProof.slice.expected, playback_range_416: rangeProof.overflow.status === 416, playback_gateway_range_passthrough: true, playback_unauthorized_404: unauthorizedRead.status === 404, playback_unknown_404: absent.status === 404, playback_no_media_leak: !unauthorizedRead.body.includes('ftyp'), recording_protection_blocks_delete: lifecycle.blockedState === 'protected', recording_delete_removes_file: lifecycle.removedState === 'deleted', recording_delete_releases_bytes: lifecycle.releasedBytes, recording_deleted_content_404: lifecycle.contentStatus === 404, recording_deleted_no_media_leak: !lifecycle.contentHasMedia, channel_id: channel.id, historical_segment_id: historical.id}))
 })

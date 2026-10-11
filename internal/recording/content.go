@@ -100,6 +100,14 @@ func (s *Service) OpenSegment(ctx context.Context, p auth.Principal, recordingID
 	if err != nil {
 		return nil, err
 	}
+	// A deliberately deleted recording answers exactly like one that never
+	// existed: it has no media to serve, and "not published yet" would mislead
+	// an operator into waiting for a file that is gone for good. This also keeps
+	// the M1-C rule that an absent recording and an unauthorized one are
+	// indistinguishable.
+	if found.State == "deleted" {
+		return nil, auth.ErrNotFound
+	}
 	if found.State != "ready" {
 		return nil, ErrContentNotReady
 	}

@@ -19,7 +19,9 @@ export const sidebarData: { navGroups: NavGroup[] } = {
         { title: '总览', url: '/', icon: LayoutDashboard, everyRole: true },
         { title: '实时预览', url: '/live', icon: MonitorPlay, everyRole: true },
         {
-          title: '录像回放',
+          // One "recordings" entry holding playback and file management, as the
+          // product decided; both tabs live at /recordings.
+          title: '录像',
           url: '/recordings',
           icon: Film,
           everyRole: true,

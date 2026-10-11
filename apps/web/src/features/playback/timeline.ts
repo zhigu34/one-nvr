@@ -35,6 +35,9 @@ const STATE_REASON: Record<Segment['state'], string> = {
   missing: '文件缺失，可能已被移走',
   damaged: '文件损坏，与发布记录不一致',
   conflict: '文件冲突，等待人工确认',
+  // A deliberate deletion is not a fault: say it is gone rather than imply it
+  // might come back.
+  deleted: '录像的本地副本已删除',
 }
 
 const CHECK_REASON: Record<string, string> = {

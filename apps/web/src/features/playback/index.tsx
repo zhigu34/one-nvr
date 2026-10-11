@@ -82,9 +82,13 @@ const QUICK_RANGES: { kind: QuickRangeKind; label: string }[] = [
 export function Playback({
   initialChannel = '',
   initialAt = '',
+  embedded = false,
 }: {
   initialChannel?: string
   initialAt?: string
+  // Embedded under the recordings workspace's playback tab, which already
+  // renders the page heading and the tab strip.
+  embedded?: boolean
 }) {
   const channelsQuery = useAPI<PageData<Schema<'Channel'>>>(
     '/api/v1/channels?limit=100'
@@ -98,14 +102,23 @@ export function Playback({
   const zone = site.data?.timezone || ''
   return (
     <div className='space-y-4'>
-      <div>
-        <h1 className='text-2xl font-semibold tracking-tight'>录像回放</h1>
-        <p className='mt-1 text-sm text-muted-foreground'>
+      {!embedded && (
+        <div>
+          <h1 className='text-2xl font-semibold tracking-tight'>录像回放</h1>
+          <p className='mt-1 text-sm text-muted-foreground'>
+            {zone
+              ? `按站点时区 ${zone} 检索与播放。进入本页只加载索引，播放由播放按钮、双击片段或时间轴定位触发。`
+              : '正在读取站点时区…'}
+          </p>
+        </div>
+      )}
+      {embedded && (
+        <p className='text-xs text-muted-foreground'>
           {zone
-            ? `按站点时区 ${zone} 检索与播放。进入本页只加载索引，播放由播放按钮、双击片段或时间轴定位触发。`
+            ? `按站点时区 ${zone} 检索与播放；播放由播放按钮、双击片段或时间轴定位触发。`
             : '正在读取站点时区…'}
         </p>
-      </div>
+      )}
       <QueryState
         pending={channelsQuery.isPending || site.isPending}
         error={channelsQuery.error || site.error}

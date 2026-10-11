@@ -36,6 +36,7 @@ function fixture(requireProof: boolean) {
         timezone: 'Asia/Shanghai',
         channel_count: 16,
         require_storage_write_proof: !requireProof,
+        recording_retention_days: 0,
         version: 2,
       } satisfies Schema<'Site'>
     }
@@ -46,6 +47,7 @@ function fixture(requireProof: boolean) {
         timezone: 'Asia/Shanghai',
         channel_count: 16,
         require_storage_write_proof: requireProof,
+        recording_retention_days: 0,
         version: 1,
       } satisfies Schema<'Site'>
     // Timezones, capabilities and hardware are secondary on this page.

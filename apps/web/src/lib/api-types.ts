@@ -878,6 +878,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/recordings/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["recordingStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/recordings/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** @description Evidence protection. Only an administrator may change it, because retention and deletion both skip a protected recording. */
+        patch: operations["setRecordingProtection"];
+        trace?: never;
+    };
+    "/api/v1/recordings/batch-delete-local": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Remove the local copy of the selected recordings. Administrator only. Each row is processed and reported independently, so an accepted deletion is never masked by a rejected one; the index row and its gap evidence remain and the recording becomes unplayable. */
+        post: operations["deleteRecordingsLocal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/channels/{id}/live": {
         parameters: {
             query?: never;
@@ -977,6 +1027,8 @@ export interface components {
             channel_count: 16 | 32;
             /** @description Admission-time storage write proof. True (default) requires a verified MP4 write before a pool may start continuous recording. False accepts the pool immediately and relies on the runtime capacity gate and the watchdog that stops a recorder which produces no segment for three minutes; neither of those is optional. */
             require_storage_write_proof: boolean;
+            /** @description Local retention period in days. 0 (default) disables automatic deletion entirely, so an upgraded site keeps every recording until an administrator sets a period. Retention never removes protected recordings. */
+            recording_retention_days: number;
             version: components["schemas"]["Version"];
         };
         Channel: {
@@ -1418,11 +1470,50 @@ export interface components {
             /** Format: date-time */
             end: string;
             bytes: number;
-            /** @enum {string} */
-            state: "finalizing" | "ready" | "missing" | "damaged" | "conflict" | "provisional";
+            /**
+             * @description deleted means the local copy was removed deliberately (manual removal or retention); missing means the file disappeared outside one-nvr. The two are never merged.
+             * @enum {string}
+             */
+            state: "finalizing" | "ready" | "missing" | "damaged" | "conflict" | "provisional" | "deleted";
             naming_timezone: string;
             utc_offset_seconds: number;
             check_state: string;
+            /** @description Evidence protection. Retention and manual deletion both skip a protected recording until it is released. */
+            protected: boolean;
+            media: components["schemas"]["RecordingMediaParams"];
+        };
+        /** @description Media facts restated from the verification evidence captured when the recording was published. Zero values mean that evidence predates the capture, not that the property is absent. */
+        RecordingMediaParams: {
+            codec: string;
+            width: number;
+            height: number;
+            fps: number;
+            duration_ms: number;
+        };
+        /** @description Totals for the same filter window as the list, so the management view can state the scope of a selection before deleting it. logical_bytes describes media the index still holds; deleted_bytes is what deliberate deletion already reclaimed. They are reported separately and never summed. */
+        RecordingStats: {
+            segments: number;
+            ready: number;
+            anomalous: number;
+            protected: number;
+            deleted: number;
+            duration_ms: number;
+            logical_bytes: number;
+            deleted_bytes: number;
+            oldest_start: string | null;
+            newest_end: string | null;
+        };
+        /** @description Per-record result of a delete request. state is deleted when the local file was removed, otherwise it names why the recording was kept. */
+        RecordingDeleteOutcome: {
+            segment_id: components["schemas"]["UUID"];
+            /** @enum {string} */
+            state: "deleted" | "protected" | "not_ready" | "missing" | "in_use" | "not_found";
+            reason?: string;
+            bytes?: number;
+        };
+        RecordingDeleteResult: {
+            items: components["schemas"]["RecordingDeleteOutcome"][];
+            released_bytes: number;
         };
         RecordingPage: {
             items: components["schemas"]["RecordingSegment"][];
@@ -1762,6 +1853,7 @@ export interface operations {
                     name?: string;
                     timezone?: string;
                     require_storage_write_proof?: boolean;
+                    recording_retention_days?: number;
                 };
             };
         };
@@ -4957,6 +5049,12 @@ export interface operations {
                 end: string;
                 cursor?: components["schemas"]["UUID"];
                 limit?: number;
+                /** @description Restrict to recordings produced by one source revision. Absent means every revision of the channel's history. */
+                source_revision_id?: components["schemas"]["UUID"];
+                pool_id?: components["schemas"]["UUID"];
+                /** @description Repeatable. Absent means every state. */
+                state?: ("finalizing" | "ready" | "missing" | "damaged" | "conflict" | "provisional" | "deleted")[];
+                protected?: boolean;
             };
             header?: never;
             path?: never;
@@ -5147,6 +5245,321 @@ export interface operations {
                 };
             };
             /** @description Invalid fields */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Rate limit */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Dependency unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    recordingStats: {
+        parameters: {
+            query: {
+                channel_id: components["schemas"]["UUID"];
+                start: string;
+                end: string;
+                source_revision_id?: components["schemas"]["UUID"];
+                pool_id?: components["schemas"]["UUID"];
+                state?: string[];
+                protected?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["RecordingStats"];
+                        request_id: components["schemas"]["UUID"];
+                    };
+                };
+            };
+            /** @description Malformed request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Session missing or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Action or role denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unknown resource, or outside the caller's grants */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description State conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Rate limit */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Dependency unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    setRecordingProtection: {
+        parameters: {
+            query?: never;
+            header: {
+                Origin: string;
+                "X-CSRF-Token": string;
+            };
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    protected: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["RecordingSegment"];
+                        request_id: components["schemas"]["UUID"];
+                    };
+                };
+            };
+            /** @description Malformed request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Session missing or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Action or role denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unknown resource, or outside the caller's grants */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description State conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Rate limit */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Dependency unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    deleteRecordingsLocal: {
+        parameters: {
+            query?: never;
+            header: {
+                Origin: string;
+                "X-CSRF-Token": string;
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    segment_ids: components["schemas"]["UUID"][];
+                };
+            };
+        };
+        responses: {
+            /** @description Per-recording results */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["RecordingDeleteResult"];
+                        request_id: components["schemas"]["UUID"];
+                    };
+                };
+            };
+            /** @description Malformed request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Session missing or revoked */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Action or role denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unknown resource, or outside the caller's grants */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description State conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Validation failed */
             422: {
                 headers: {
                     [name: string]: unknown;

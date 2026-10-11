@@ -112,3 +112,11 @@ API/Worker 故障时 ZLM 在已绑定 run 工作目录继续录制。恢复扫�
 - [ZLM startRecord API](https://docs.zlmediakit.com/guide/media_server/restful_api.html)：提供 customized_path 和 max_second。
 - [on_record_mp4](https://docs.zlmediakit.com/guide/media_server/web_hook_api.html)：完成通知提供 file_path、start_time、time_len、app/stream 等来源字段；通知本身不敏感于应答。
 - [Recorder.cpp](https://github.com/ZLMediaKit/ZLMediaKit/blob/master/src/Record/Recorder.cpp)、[MP4Recorder.cpp](https://github.com/ZLMediaKit/ZLMediaKit/blob/master/src/Record/MP4Recorder.cpp)：当前上游的目录追加、原生命名和完成发布实现。master 源码只是设计依据，不能代替已锁定镜像的契约验收。
+
+## 删除与保留（M2 批次 1）
+
+- 删除只移除目录池中的文件，**不改名、不迁移、不改路径规则**，也不影响其他位置或其他副本。命名规则 v3 对已发布路径仍然不重算。
+- 保留状态记录在索引上：`recording_segments.state='deleted'` 表示本地副本被 one-nvr 主动删除（`recording_locations.delete_reason` 区分 `manual` 与 `retention`）；文件自行消失仍记为 `missing`。两者语义不同，不得互相替代。
+- 删除顺序为先 unlink 后写状态：中断只会留下「索引说 ready、文件已不在」的行，随后由既有对账标为 `missing`，因此崩溃不会伪装成正常删除。
+- 保留策略默认关闭（`sites.recording_retention_days=0`）。开启后自动清理跳过受保护片段与发布不足 10 分钟的片段。
+- 删除不影响文件规则、站点时区或既有路径；历史位置按生成时的规则版本保留。

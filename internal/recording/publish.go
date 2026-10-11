@@ -50,12 +50,12 @@ type publication struct {
 	Evidence         probe.FileEvidence
 }
 
-const publicationColumns = `s.id,s.channel_id,s.source_revision_id,s.pool_id,s.run_id,s.start_at,s.end_at,s.size_bytes,s.state,s.naming_timezone,s.utc_offset_seconds,s.original_relative_path,s.target_relative_path,s.file_identity,s.media_evidence`
+const publicationColumns = `s.id,s.channel_id,s.source_revision_id,s.pool_id,s.run_id,s.start_at,s.end_at,s.size_bytes,s.state,s.naming_timezone,s.utc_offset_seconds,s.original_relative_path,s.target_relative_path,s.file_identity,s.media_evidence,s.protected`
 
 func scanPublication(row pgx.Row) (publication, error) {
 	var p publication
 	var rawIdentity, rawMedia []byte
-	err := row.Scan(&p.ID, &p.ChannelID, &p.SourceRevisionID, &p.PoolID, &p.RunID, &p.Start, &p.End, &p.Bytes, &p.State, &p.NamingTimezone, &p.UTCOffsetSeconds, &p.Original, &p.Target, &rawIdentity, &rawMedia)
+	err := row.Scan(&p.ID, &p.ChannelID, &p.SourceRevisionID, &p.PoolID, &p.RunID, &p.Start, &p.End, &p.Bytes, &p.State, &p.NamingTimezone, &p.UTCOffsetSeconds, &p.Original, &p.Target, &rawIdentity, &rawMedia, &p.Protected)
 	if err != nil {
 		return p, err
 	}
@@ -63,6 +63,13 @@ func scanPublication(row pgx.Row) (publication, error) {
 		return p, ErrPublicationConflict
 	}
 	p.CheckState = p.State
+	p.Segment.Media = MediaParams{
+		Codec:      p.Evidence.Video.Codec,
+		Width:      p.Evidence.Video.Width,
+		Height:     p.Evidence.Video.Height,
+		FPS:        p.Evidence.Video.FPS,
+		DurationMS: p.Evidence.Duration.Milliseconds(),
+	}
 	return p, nil
 }
 

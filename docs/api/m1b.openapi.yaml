@@ -3192,8 +3192,50 @@
             "schema": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 100,
-              "default": 50
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "source_revision_id",
+            "in": "query",
+            "description": "Restrict to recordings produced by one source revision. Absent means every revision of the channel's history.",
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "pool_id",
+            "in": "query",
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Repeatable. Absent means every state.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "finalizing",
+                  "ready",
+                  "missing",
+                  "damaged",
+                  "conflict",
+                  "provisional",
+                  "deleted"
+                ]
+              }
+            }
+          },
+          {
+            "name": "protected",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -3509,6 +3551,525 @@
           }
         },
         "description": "Authorized byte-range delivery of one published recording segment. Requires the channel playback permission; unauthorized or missing segments answer 404. Media paths, pool roots and upstream identifiers are never exposed; only ready, identity-verified segments are served."
+      }
+    },
+    "/api/v1/recordings/stats": {
+      "get": {
+        "operationId": "recordingStats",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "playback",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "channel_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "source_revision_id",
+            "in": "query",
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "pool_id",
+            "in": "query",
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "protected",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RecordingStats"
+                    },
+                    "request_id": {
+                      "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "request_id"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Session missing or revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Action or role denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown resource, or outside the caller's grants",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/recordings/{id}": {
+      "patch": {
+        "operationId": "setRecordingProtection",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "description": "Evidence protection. Only an administrator may change it, because retention and deletion both skip a protected recording.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "protected": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "protected"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RecordingSegment"
+                    },
+                    "request_id": {
+                      "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "request_id"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Session missing or revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Action or role denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown resource, or outside the caller's grants",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/recordings/batch-delete-local": {
+      "post": {
+        "operationId": "deleteRecordingsLocal",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "description": "Remove the local copy of the selected recordings. Administrator only. Each row is processed and reported independently, so an accepted deletion is never masked by a rejected one; the index row and its gap evidence remain and the recording becomes unplayable.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 90
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "segment_ids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "items": {
+                      "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+                    }
+                  }
+                },
+                "required": [
+                  "segment_ids"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Per-recording results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RecordingDeleteResult"
+                    },
+                    "request_id": {
+                      "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "request_id"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Session missing or revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Action or role denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown resource, or outside the caller's grants",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "State conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/channels/{id}/live": {
@@ -4938,8 +5499,10 @@
               "missing",
               "damaged",
               "conflict",
-              "provisional"
-            ]
+              "provisional",
+              "deleted"
+            ],
+            "description": "deleted means the local copy was removed deliberately (manual removal or retention); missing means the file disappeared outside one-nvr. The two are never merged."
           },
           "naming_timezone": {
             "type": "string"
@@ -4949,6 +5512,13 @@
           },
           "check_state": {
             "type": "string"
+          },
+          "protected": {
+            "type": "boolean",
+            "description": "Evidence protection. Retention and manual deletion both skip a protected recording until it is released."
+          },
+          "media": {
+            "$ref": "#/components/schemas/RecordingMediaParams"
           }
         },
         "required": [
@@ -4963,7 +5533,163 @@
           "state",
           "naming_timezone",
           "utc_offset_seconds",
-          "check_state"
+          "check_state",
+          "protected",
+          "media"
+        ],
+        "additionalProperties": false
+      },
+      "RecordingMediaParams": {
+        "type": "object",
+        "description": "Media facts restated from the verification evidence captured when the recording was published. Zero values mean that evidence predates the capture, not that the property is absent.",
+        "properties": {
+          "codec": {
+            "type": "string"
+          },
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "fps": {
+            "type": "number"
+          },
+          "duration_ms": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "codec",
+          "width",
+          "height",
+          "fps",
+          "duration_ms"
+        ],
+        "additionalProperties": false
+      },
+      "RecordingStats": {
+        "type": "object",
+        "description": "Totals for the same filter window as the list, so the management view can state the scope of a selection before deleting it. logical_bytes describes media the index still holds; deleted_bytes is what deliberate deletion already reclaimed. They are reported separately and never summed.",
+        "properties": {
+          "segments": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "ready": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "anomalous": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "protected": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "deleted": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "logical_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "deleted_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "oldest_start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "newest_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "segments",
+          "ready",
+          "anomalous",
+          "protected",
+          "deleted",
+          "duration_ms",
+          "logical_bytes",
+          "deleted_bytes",
+          "oldest_start",
+          "newest_end"
+        ],
+        "additionalProperties": false
+      },
+      "RecordingDeleteOutcome": {
+        "type": "object",
+        "description": "Per-record result of a delete request. state is deleted when the local file was removed, otherwise it names why the recording was kept.",
+        "properties": {
+          "segment_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "deleted",
+              "protected",
+              "not_ready",
+              "missing",
+              "in_use",
+              "not_found"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "segment_id",
+          "state"
+        ],
+        "additionalProperties": false
+      },
+      "RecordingDeleteResult": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecordingDeleteOutcome"
+            }
+          },
+          "released_bytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "items",
+          "released_bytes"
         ],
         "additionalProperties": false
       },

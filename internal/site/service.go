@@ -19,6 +19,9 @@ type UpdateInput struct {
 	// RequireStorageWriteProof is a reliability preference: false accepts a
 	// pool without a verified MP4 write and relies on the runtime gates.
 	RequireStorageWriteProof *bool `json:"require_storage_write_proof"`
+	// RecordingRetentionDays is the local retention period. 0 disables automatic
+	// deletion, which is the default so an upgrade never starts deleting.
+	RecordingRetentionDays *int `json:"recording_retention_days"`
 }
 
 func (s *Service) Current(ctx context.Context, p auth.Principal) (Site, error) {
@@ -26,7 +29,7 @@ func (s *Service) Current(ctx context.Context, p auth.Principal) (Site, error) {
 	if _, err := s.Auth.CurrentUser(ctx, p); err != nil {
 		return out, err
 	}
-	err := s.DB.Pool.QueryRow(ctx, "SELECT id,name,timezone,channel_count,require_storage_write_proof,version FROM sites WHERE singleton").Scan(&out.ID, &out.Name, &out.Timezone, &out.ChannelCount, &out.RequireStorageWriteProof, &out.Version)
+	err := s.DB.Pool.QueryRow(ctx, "SELECT id,name,timezone,channel_count,require_storage_write_proof,recording_retention_days,version FROM sites WHERE singleton").Scan(&out.ID, &out.Name, &out.Timezone, &out.ChannelCount, &out.RequireStorageWriteProof, &out.RecordingRetentionDays, &out.Version)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return out, auth.ErrNotFound
 	}
@@ -36,7 +39,10 @@ func (s *Service) Current(ctx context.Context, p auth.Principal) (Site, error) {
 func (s *Service) Update(ctx context.Context, p auth.Principal, expected int64, in UpdateInput) (Site, error) {
 	var out Site
 	if expected < 1 ||
-		(in.Name == nil && in.Timezone == nil && in.RequireStorageWriteProof == nil) {
+		(in.Name == nil && in.Timezone == nil && in.RequireStorageWriteProof == nil && in.RecordingRetentionDays == nil) {
+		return out, auth.ErrInvalid
+	}
+	if in.RecordingRetentionDays != nil && (*in.RecordingRetentionDays < 0 || *in.RecordingRetentionDays > 3650) {
 		return out, auth.ErrInvalid
 	}
 	if in.Name != nil {
@@ -53,7 +59,7 @@ func (s *Service) Update(ctx context.Context, p auth.Principal, expected int64, 
 		if err := s.Auth.RequireAdminTx(ctx, p, tx); err != nil {
 			return err
 		}
-		err := tx.QueryRow(ctx, "UPDATE sites SET name=COALESCE($1,name),timezone=COALESCE($2,timezone),require_storage_write_proof=COALESCE($4,require_storage_write_proof),version=version+1 WHERE singleton AND version=$3 RETURNING id,name,timezone,channel_count,require_storage_write_proof,version", in.Name, in.Timezone, expected, in.RequireStorageWriteProof).Scan(&out.ID, &out.Name, &out.Timezone, &out.ChannelCount, &out.RequireStorageWriteProof, &out.Version)
+		err := tx.QueryRow(ctx, "UPDATE sites SET name=COALESCE($1,name),timezone=COALESCE($2,timezone),require_storage_write_proof=COALESCE($4,require_storage_write_proof),recording_retention_days=COALESCE($5,recording_retention_days),version=version+1 WHERE singleton AND version=$3 RETURNING id,name,timezone,channel_count,require_storage_write_proof,recording_retention_days,version", in.Name, in.Timezone, expected, in.RequireStorageWriteProof, in.RecordingRetentionDays).Scan(&out.ID, &out.Name, &out.Timezone, &out.ChannelCount, &out.RequireStorageWriteProof, &out.RecordingRetentionDays, &out.Version)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return auth.ErrConflict
 		}

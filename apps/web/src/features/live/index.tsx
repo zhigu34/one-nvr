@@ -417,6 +417,8 @@ function LiveWorkspace({
               search={{
                 channel: displayed[selected]!.id,
                 at: new Date().toISOString(),
+                // The instant-playback entry belongs to the playback tab.
+                tab: 'playback',
               }}
               className='block text-sm text-primary underline underline-offset-4'
             >

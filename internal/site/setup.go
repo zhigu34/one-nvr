@@ -27,8 +27,11 @@ type Site struct {
 	// accepts a pool before its first real MP4 was verified and relies on the
 	// runtime capacity gate and the stop-when-nothing-lands watchdog; neither
 	// of those is optional at any value of this flag.
-	RequireStorageWriteProof bool  `json:"require_storage_write_proof"`
-	Version                  int64 `json:"version"`
+	RequireStorageWriteProof bool `json:"require_storage_write_proof"`
+	// RecordingRetentionDays is 0 (disabled) by default: automatic deletion of
+	// existing footage is not a decision an upgrade may make for the operator.
+	RecordingRetentionDays int   `json:"recording_retention_days"`
+	Version                int64 `json:"version"`
 }
 type SetupInput struct {
 	Token         string `json:"token"`
@@ -91,7 +94,7 @@ func (s *Service) Setup(ctx context.Context, in SetupInput) (Site, error) {
 		}
 		// A new site starts with write proof required: the accepted contract is
 		// the default, and turning it off is an explicit operator decision.
-		result = Site{ID: s.Secrets.SiteID, Name: strings.TrimSpace(in.Name), Timezone: in.Timezone, ChannelCount: in.ChannelCount, RequireStorageWriteProof: true, Version: 1}
+		result = Site{ID: s.Secrets.SiteID, Name: strings.TrimSpace(in.Name), Timezone: in.Timezone, ChannelCount: in.ChannelCount, RequireStorageWriteProof: true, RecordingRetentionDays: 0, Version: 1}
 		if _, err := tx.Exec(ctx, "INSERT INTO sites(id,name,timezone,channel_count) VALUES($1,$2,$3,$4)", result.ID, result.Name, result.Timezone, result.ChannelCount); err != nil {
 			return err
 		}

@@ -25,6 +25,8 @@ function segment(
     end: at(to),
     bytes: 1024,
     state: 'ready',
+  protected: false,
+  media: { codec: '', width: 0, height: 0, fps: 0, duration_ms: 0 },
     naming_timezone: 'Asia/Shanghai',
     utc_offset_seconds: 28800,
     check_state: 'ready',

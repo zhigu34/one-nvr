@@ -142,9 +142,13 @@ func Run(name string) error {
 		for _, kind := range []string{"source.apply", "source.clear", "source.policy_apply", "source.pool_switch"} {
 			go func() { defer background.Done(); runSourceChangeJobs(ctx, recordings, kind) }()
 		}
-		background.Add(2)
+		background.Add(3)
 		go func() { defer background.Done(); runRecordingMonitor(ctx, recordings) }()
 		go func() { defer background.Done(); recordings.MonitorIdlePools(ctx) }()
+		// Retention runs with the recorder loops because it touches pool files
+		// and publishes into the same index. It stays inert until a site sets a
+		// period, so an upgraded site keeps M1's never-delete behaviour.
+		go func() { defer background.Done(); recordings.RunRetention(ctx) }()
 	}
 	if name == "worker" {
 		background.Add(1)

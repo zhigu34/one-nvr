@@ -328,7 +328,17 @@ func (s *Service) Delete(ctx context.Context, p auth.Principal, poolID id.ID, ex
 			return auth.ErrConflict
 		}
 		var referenced bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM channels WHERE storage_pool_id=$1) OR EXISTS(SELECT 1 FROM recording_runs WHERE pool_id=$1) OR EXISTS(SELECT 1 FROM recording_locations WHERE pool_id=$1) OR EXISTS(SELECT 1 FROM source_switches WHERE old_pool_id=$1 OR new_pool_id=$1) OR EXISTS(SELECT 1 FROM pool_probe_intents pi JOIN stream_sessions ss ON ss.id=pi.session_id WHERE pi.pool_id=$1 AND ss.state<>'closed')`, poolID).Scan(&referenced); err != nil {
+		// A location whose media was deliberately deleted no longer pins the
+		// pool: the recording keeps its index row, but nothing on this disk
+		// depends on it any more.
+		//
+		// This does NOT make a used pool deletable on its own: recording_runs
+		// rows are permanent provenance (they are never deleted by design) and
+		// their pool reference below still reserves the pool. Reclaiming a pool
+		// that ever recorded needs a separate decision about run provenance,
+		// which this batch does not make. The file-system walk further down
+		// independently refuses to delete a pool that still holds any file.
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM channels WHERE storage_pool_id=$1) OR EXISTS(SELECT 1 FROM recording_runs WHERE pool_id=$1) OR EXISTS(SELECT 1 FROM recording_locations WHERE pool_id=$1 AND state<>'deleted') OR EXISTS(SELECT 1 FROM source_switches WHERE old_pool_id=$1 OR new_pool_id=$1) OR EXISTS(SELECT 1 FROM pool_probe_intents pi JOIN stream_sessions ss ON ss.id=pi.session_id WHERE pi.pool_id=$1 AND ss.state<>'closed')`, poolID).Scan(&referenced); err != nil {
 			return err
 		}
 		if referenced {
