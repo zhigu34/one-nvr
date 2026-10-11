@@ -273,6 +273,34 @@ func TestRecordingQueryHTTPDoesNotExposeRawMedia(t *testing.T) {
 	}
 }
 
+func TestRecordingQueryHTTPHonorsContractPageCeiling(t *testing.T) {
+	fixture := newPublicationFixture(t)
+	if _, err := fixture.Service.Publish(context.Background(), fixture.Inbox); err != nil {
+		t.Fatal(err)
+	}
+	handler := httpapi.NewHandler(httpapi.Dependencies{Auth: fixture.Auth, Site: fixture.Site, Recordings: fixture.Service, PublicURL: "http://one-nvr.test:8080"})
+	request := func(path string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", "http://one-nvr.test:8080"+path, nil)
+		r.AddCookie(&http.Cookie{Name: "one_nvr_session", Value: fixture.Session})
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	window := "&start=2026-10-03T16:00:00Z&end=2026-10-03T16:06:00Z"
+	// The contract raises this endpoint's page ceiling to 500 (a 24-hour window
+	// holds ~1440 sixty-second segments, so callers page several times); the
+	// shared list ceiling of 100 must not reject it.
+	if response := request("/api/v1/recordings?channel_id=" + string(fixture.Channel) + window + "&limit=500"); response.Code != 200 {
+		t.Fatal("contract page ceiling rejected", response.Code, response.Body.String())
+	}
+	if response := request("/api/v1/recordings?channel_id=" + string(fixture.Channel) + window + "&limit=501"); response.Code != 422 {
+		t.Fatal("page ceiling bypass accepted", response.Code)
+	}
+	if response := request("/api/v1/recordings?channel_id=" + string(fixture.Channel) + window + "&limit=0"); response.Code != 422 {
+		t.Fatal("non-positive limit accepted", response.Code)
+	}
+}
+
 func TestRecordingPublishRecoveryRequiresRegisteredRunReceipt(t *testing.T) {
 	fixture := newPublicationFixture(t)
 	ctx := context.Background()

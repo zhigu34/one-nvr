@@ -111,10 +111,19 @@ func pathID(r *http.Request) (id.ID, error) {
 	return i, nil
 }
 func pagination(r *http.Request) (id.ID, int, error) {
-	limit := 50
+	return paginationLimit(r, 50, 100)
+}
+
+// paginationLimit parses the shared cursor/limit convention with a
+// caller-supplied default and ceiling. Recordings is the one endpoint with a
+// higher ceiling (500): a 24-hour window holds ~1440 sixty-second segments, so
+// the management view and the playback index page several times per search, and
+// its contract declares the same maximum.
+func paginationLimit(r *http.Request, fallback, max int) (id.ID, int, error) {
+	limit := fallback
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
-		if err != nil || n < 1 || n > 100 {
+		if err != nil || n < 1 || n > max {
 			return "", 0, auth.ErrInvalid
 		}
 		limit = n

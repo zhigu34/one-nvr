@@ -1,10 +1,5 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type PointerEvent as ReactPointerEvent,
-} from 'react'
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useInfiniteQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
   Maximize,
@@ -15,6 +10,7 @@ import {
   Square,
 } from 'lucide-react'
 import type { PageData, Schema } from '@/lib/types'
+import { apiRequest } from '@/lib/api-client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
@@ -54,15 +50,22 @@ const IDLE: PlaybackState = {
 const label = (channel: Schema<'Channel'>) =>
   `CH${String(channel.channel_no).padStart(2, '0')} ${channel.channel_name}`
 
+/** A months-wide search must not fetch forever; beyond this the page warns. */
+const MAX_INDEX_SEGMENTS = 2000
+
 const recordingsPath = (
   channelID: string,
-  range: { start: number; end: number }
+  range: { start: number; end: number },
+  cursor = ''
 ) =>
   `/api/v1/recordings?${new URLSearchParams({
     channel_id: channelID,
     start: new Date(range.start).toISOString(),
     end: new Date(range.end).toISOString(),
-    limit: '100',
+    // The contract's page ceiling for this endpoint: a 24-hour window holds
+    // ~1440 sixty-second segments, so one search spans several pages.
+    limit: '500',
+    ...(cursor ? { cursor } : {}),
   })}`
 
 /** Instant playback asks for the last five minutes; a plain visit asks a day. */
@@ -170,12 +173,46 @@ function Workspace({
   const [rangeError, setRangeError] = useState('')
   const [selected, setSelected] = useState<Entry | null>(null)
   const [search, setSearch] = useState('')
-  const query = useAPI<Schema<'RecordingPage'>>(
-    recordingsPath(channelID, range)
+  // The index follows the API cursor until the window is exhausted, so the
+  // timeline never mistakes an unfetched page for a hole. Fetches run
+  // newest-first, so the timeline fills backwards while pages arrive.
+  const index = useInfiniteQuery({
+    queryKey: ['recording-index', channelID, range],
+    queryFn: ({ pageParam, signal }) =>
+      apiRequest<Schema<'RecordingPage'>>(
+        recordingsPath(channelID, range, pageParam),
+        { signal }
+      ),
+    initialPageParam: '',
+    getNextPageParam: (page) => page.next_cursor || undefined,
+    retry: false,
+  })
+  const {
+    data,
+    error: indexError,
+    hasNextPage,
+    isPending,
+    isFetching,
+    isFetchingNextPage,
+    fetchNextPage,
+    refetch,
+  } = index
+  const items = useMemo(
+    () => data?.pages.flatMap((page) => page.items) ?? [],
+    [data]
   )
+  useEffect(() => {
+    // A failed page surfaces through QueryState with a manual retry; auto
+    // continuing past it would turn one error into an unbounded loop.
+    if (indexError || !hasNextPage || isFetching) return
+    if (items.length >= MAX_INDEX_SEGMENTS) return
+    void fetchNextPage()
+    // Each settled page changes what the guards read; other runs are no-ops.
+  }, [indexError, hasNextPage, isFetching, fetchNextPage, items.length])
+  const truncated = hasNextPage && items.length >= MAX_INDEX_SEGMENTS
   const timeline = useMemo(
-    () => buildTimeline(query.data?.items || [], range.start, range.end),
-    [query.data, range]
+    () => buildTimeline(items, range.start, range.end),
+    [items, range]
   )
   const video = useRef<HTMLVideoElement>(null)
   const frame = useRef<HTMLDivElement>(null)
@@ -430,7 +467,10 @@ function Workspace({
         <div className='rounded-xl border bg-card p-3 text-sm'>
           <p role='status'>{state.message}</p>
           <p className='mt-1 text-muted-foreground'>
-            当前位置 {formatClock(state.clock, zone)}
+            当前位置{' '}
+            {state.clock > 0
+              ? formatClock(state.clock, zone)
+              : '—'}
             {state.entry ? ` · 片段 ${state.entry.id.slice(0, 8)}` : ''}
           </p>
           {state.skipped && (
@@ -464,9 +504,9 @@ function Workspace({
           )}
         </div>
         <QueryState
-          pending={query.isPending}
-          error={query.error}
-          retry={query.refetch}
+          pending={isPending}
+          error={indexError}
+          retry={refetch}
         />
         <Timeline
           timeline={timeline}
@@ -480,8 +520,26 @@ function Workspace({
             controller.current?.start(entry.start)
           }}
         />
-        {query.data && !timeline.entries.length && (
+        {isFetchingNextPage && (
+          <p role='status' className='text-sm text-muted-foreground'>
+            正在加载更早的录像…
+          </p>
+        )}
+        {data && !timeline.entries.length && (
           <Empty>该时间范围没有已登记录像</Empty>
+        )}
+        {truncated && (
+          <p
+            role='alert'
+            className='rounded-xl border border-amber-500/50 bg-amber-500/10 p-3 text-sm text-amber-600'
+          >
+            片段超过单次加载上限（{MAX_INDEX_SEGMENTS}
+            个），时间轴只包含最新的部分
+            {timeline.entries[0]
+              ? `，已覆盖到 ${formatClock(timeline.entries[0].start, zone)}`
+              : ''}
+            。更早的录像请缩小时间范围后检索。
+          </p>
         )}
         {selected && (
           <div className='rounded-xl border bg-card p-3 text-sm'>
@@ -497,8 +555,8 @@ function Workspace({
           </div>
         )}
         <p className='text-xs text-muted-foreground'>
-          正在回放 {label(active)}。暂停、拖动、±10
-          秒与倍速都在同一条时间轴上生效。
+          当前通道 {label(active)}
+          。暂停、拖动、±10 秒与倍速都在同一条时间轴上生效。
         </p>
       </section>
     </div>
@@ -537,12 +595,9 @@ function Timeline({
     setScrubbing(true)
     scrubTo(event.clientX)
   }
-  if (!timeline.entries.length || span <= 0)
-    return (
-      <p className='rounded-xl border border-dashed p-4 text-center text-sm text-muted-foreground'>
-        时间轴上没有可绘制的片段
-      </p>
-    )
+  // An empty index is explained once, by the page-level empty state below the
+  // timeline; a second box here would duplicate it and flash while pages load.
+  if (!timeline.entries.length || span <= 0) return null
   return (
     <div className='space-y-2'>
       <div
@@ -586,16 +641,20 @@ function Timeline({
             }}
           />
         ))}
-        <div
-          data-testid='playback-playhead'
-          className='absolute top-0 bottom-0 -ml-2 w-4 cursor-grab'
-          style={{ left: position(clock) }}
-          onPointerDown={beginScrub}
-          onPointerMove={(event) => scrubbing && scrubTo(event.clientX)}
-          onPointerUp={() => setScrubbing(false)}
-        >
-          <div className='mx-auto h-full w-0.5 bg-red-600' />
-        </div>
+        {/* No playhead before the first playback: an epoch-zero position would
+            clamp to the window start and read as a real position. */}
+        {clock > 0 && (
+          <div
+            data-testid='playback-playhead'
+            className='absolute top-0 bottom-0 -ml-2 w-4 cursor-grab'
+            style={{ left: position(clock) }}
+            onPointerDown={beginScrub}
+            onPointerMove={(event) => scrubbing && scrubTo(event.clientX)}
+            onPointerUp={() => setScrubbing(false)}
+          >
+            <div className='mx-auto h-full w-0.5 bg-red-600' />
+          </div>
+        )}
       </div>
       <p className='text-xs text-muted-foreground'>
         {formatClock(timeline.from, zone)} — {formatClock(timeline.to, zone)} ·{' '}

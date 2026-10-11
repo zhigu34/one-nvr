@@ -238,7 +238,6 @@ export class PlaybackController {
     this.playing = false
     this.pendingOffset = offset
     this.media.src = contentPath(entry.id)
-    this.media.playbackRate = this.rate
     this.media.load()
     this.emit({
       phase: 'loading',
@@ -254,6 +253,9 @@ export class PlaybackController {
     // Assigning zero would seek a stream that already starts at zero.
     if (this.pendingOffset > 0) this.media.currentTime = this.pendingOffset
     this.pendingOffset = 0
+    // Loading a new resource resets the element's rate to defaultPlaybackRate
+    // (1), so the chosen rate can only stick once the segment is open.
+    this.media.playbackRate = this.rate
     void this.play()
   }
 

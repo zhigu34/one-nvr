@@ -41,7 +41,7 @@ func recordingQuery(q *http.Request) (recording.Query, error) {
 	if out.End, err = time.Parse(time.RFC3339, q.URL.Query().Get("end")); err != nil {
 		return out, auth.ErrInvalid
 	}
-	if out.Cursor, out.Limit, err = pagination(q); err != nil {
+	if out.Cursor, out.Limit, err = paginationLimit(q, 100, 500); err != nil {
 		return out, err
 	}
 	if raw := q.URL.Query().Get("source_revision_id"); raw != "" {

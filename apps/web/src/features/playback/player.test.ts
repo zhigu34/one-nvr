@@ -66,6 +66,10 @@ class FakeMedia implements MediaElement {
   }
   load() {
     this.loads++
+    // The spec's resource selection resets playbackRate to defaultPlaybackRate
+    // (1) whenever a new resource loads; modelling that here is what pins the
+    // re-apply in ready().
+    this.playbackRate = 1
   }
   emit(type: string) {
     for (const listener of [...(this.handlers.get(type) || [])]) listener()
@@ -195,6 +199,20 @@ describe('recording playback controller', () => {
     expect(f.state().rate).toBe(4)
     f.controller.setRate(3)
     expect(f.media.playbackRate).toBe(4)
+  })
+
+  it('keeps the chosen rate when playback crosses into the next segment', () => {
+    const f = fixture([segment('a', 0, 60), segment('b', 120, 180)])
+    f.controller.start(base + 30_000)
+    f.controller.setRate(4)
+    f.media.emit('loadedmetadata')
+    f.media.emit('ended')
+    // The reload answered with the spec reset the fake models…
+    expect(f.media.playbackRate).toBe(1)
+    // …and the controller must answer that reset, not leave 1x playing at 4x.
+    f.media.emit('loadedmetadata')
+    expect(f.media.playbackRate).toBe(4)
+    expect(f.state().rate).toBe(4)
   })
 
   it('refines a media failure with the reason the API reports', async () => {

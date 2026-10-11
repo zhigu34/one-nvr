@@ -77,10 +77,13 @@ function segment(
 
 afterEach(() => vi.clearAllMocks())
 
+type Page = { items: Schema<'RecordingSegment'>[]; next_cursor: string | null }
+
 async function fixture(
   segments: Schema<'RecordingSegment'>[],
   probe = '',
-  zone: string | null = 'Asia/Shanghai'
+  zone: string | null = 'Asia/Shanghai',
+  pages?: Page[]
 ) {
   calls.probe.mockResolvedValue(probe)
   calls.request.mockImplementation((path: string) => {
@@ -96,8 +99,17 @@ async function fixture(
         version: 1,
       }
     }
-    if (path.startsWith('/api/v1/recordings'))
+    if (path.startsWith('/api/v1/recordings')) {
+      if (pages) {
+        // Cursor paging: the n-th index request gets the n-th page, so a test
+        // chains pages without caring about the cursor values themselves.
+        const made = calls.request.mock.calls.filter((call) =>
+          (call[0] as string).startsWith('/api/v1/recordings')
+        ).length
+        return pages[Math.min(made - 1, pages.length - 1)]
+      }
       return { items: segments, next_cursor: null }
+    }
     throw new Error('Unexpected query ' + path)
   })
   const client = new QueryClient({
@@ -222,6 +234,58 @@ test('offers only channels with playback permission and starts no media on entry
   expect(video().src).toBe('')
   expect(video().currentTime).toBe(0)
 })
+
+test('an idle workspace shows no fake position and names the channel, not playback', async () => {
+  const { view } = await fixture([segment(A, 0, 120)])
+  await view.getByRole('button', { name: 'CH01 大门' }).click()
+  await says('当前通道 CH01 大门')
+  await says('当前位置 —')
+  expect(document.body.textContent).not.toContain('1970-01-01')
+  expect(document.body.textContent).not.toContain('正在回放')
+})
+
+test('the index follows the cursor until the window is exhausted', async () => {
+  const { view } = await fixture([], '', 'Asia/Shanghai', [
+    { items: [segment(A, 0, 120)], next_cursor: 'cursor-1' },
+    { items: [segment(B, 120, 240)], next_cursor: null },
+  ])
+  // The second page's segment reaches the timeline.
+  await expect
+    .element(view.getByRole('button', { name: '片段 2026-10-05 08:02:00' }))
+    .toBeVisible()
+  expect(document.body.textContent).not.toContain('加载上限')
+  expect(recordingCalls()).toHaveLength(2)
+})
+
+test('a window too large for the cap warns instead of hiding the rest', async () => {
+  const bulk = (page: number) =>
+    Array.from({ length: 500 }, (_, i) =>
+      segment(
+        `seg-${page}-${String(i).padStart(4, '0')}`,
+        -(page * 500 + i + 1) * 60,
+        -(page * 500 + i) * 60
+      )
+    )
+  const { view } = await fixture([], '', 'Asia/Shanghai', [
+    { items: bulk(0), next_cursor: 'cursor-1' },
+    { items: bulk(1), next_cursor: 'cursor-2' },
+    { items: bulk(2), next_cursor: 'cursor-3' },
+    { items: bulk(3), next_cursor: 'cursor-4' },
+  ])
+  await expect
+    .element(view.getByRole('alert'))
+    .toHaveTextContent('片段超过单次加载上限')
+  await expect
+    .element(view.getByRole('alert'))
+    .toHaveTextContent('更早的录像请缩小时间范围后检索')
+  // The cap stops the chain: exactly the 2000-segment ceiling was fetched.
+  await vi.waitFor(() => expect(recordingCalls()).toHaveLength(4))
+})
+
+const recordingCalls = () =>
+  calls.request.mock.calls.filter((call) =>
+    String(call[0]).startsWith('/api/v1/recordings')
+  )
 
 test('a single click only selects a segment, a double click plays it', async () => {
   const { view, video } = await fixture([segment(A, 0, 120)])
