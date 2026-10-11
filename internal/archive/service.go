@@ -340,41 +340,15 @@ func (s *Service) CreateUploads(ctx context.Context, p auth.Principal, targetID 
 			if err := tx.QueryRow(ctx, `SELECT channel_no FROM channels WHERE id=$1`, channelID).Scan(&channelNo); err != nil {
 				return err
 			}
-			// ARC-03: the remote key mirrors the frozen local layout, prefixed
-			// with the site namespace and the target root.
-			objectKey := path.Join(string(s.siteID), target)
-			copyID, err := id.New()
+			enqueued, err := s.enqueueUpload(ctx, tx, targetID, segmentID, uploadSource{
+				ChannelID: id.ID(channelID), ChannelNo: channelNo, Target: target, State: state, Size: size,
+			})
 			if err != nil {
 				return err
 			}
-			// Segment hash is computed during upload; the row exists from the
-			// start so the deletion guard covers the whole window.
-			digest := strings.Repeat("0", 64)
-			if _, err := tx.Exec(ctx, `INSERT INTO recording_archive_copies(id,segment_id,target_id,object_key,state,size_bytes,sha256) VALUES($1,$2,$3,$4,'uploading',$5,$6) ON CONFLICT (segment_id,target_id) DO NOTHING`,
-				copyID, segmentID, targetID, objectKey, size, digest); err != nil {
-				return err
+			if enqueued {
+				created = append(created, segmentID)
 			}
-			var actual id.ID
-			err = tx.QueryRow(ctx, `SELECT id FROM recording_archive_copies WHERE segment_id=$1 AND target_id=$2`, segmentID, targetID).Scan(&actual)
-			if err != nil {
-				return err
-			}
-			payload, err := json.Marshal(map[string]any{"copy_id": actual})
-			if err != nil {
-				return err
-			}
-			if _, err := jobs.Enqueue(ctx, tx, jobs.Input{
-				Kind:           "recording.archive_upload",
-				ObjectID:       actual,
-				IdempotencyKey: string(segmentID) + ":" + string(targetID),
-				Payload:        payload,
-			}); err != nil {
-				if errors.Is(err, jobs.ErrIdempotencyConflict) {
-					continue
-				}
-				return err
-			}
-			created = append(created, segmentID)
 		}
 		detailsRaw, _ := json.Marshal(map[string]any{"target_id": targetID, "queued": len(created)})
 		return audit.Append(ctx, tx, audit.Entry{ActorID: p.UserID, Action: "archive.uploads_requested", ObjectID: targetID, Details: detailsRaw})
@@ -494,3 +468,53 @@ func (s *Service) failRetry(ctx context.Context, copyID id.ID, code string) erro
 	return err
 }
 
+
+// uploadSource is the slice of segment state the upload kernel needs.
+type uploadSource struct {
+	ChannelID id.ID
+	ChannelNo int
+	Target    string
+	State     string
+	Size      int64
+}
+
+// enqueueUpload creates the copy row and the job for one segment against one
+// target. Manual requests, the immediate policy hook and the scheduled sweep
+// all funnel through here, so the object key and the idempotency key have
+// exactly one definition (ARC-02/03).
+func (s *Service) enqueueUpload(ctx context.Context, tx pgx.Tx, targetID, segmentID id.ID, src uploadSource) (bool, error) {
+	if src.State != "ready" {
+		return false, nil
+	}
+	objectKey := path.Join(string(s.siteID), src.Target)
+	copyID, err := id.New()
+	if err != nil {
+		return false, err
+	}
+	// The hash is computed during upload; zeros keep the NOT NULL/CHECK honest
+	// until then, and the row's presence is what guards deletion mid-flight.
+	if _, err := tx.Exec(ctx, `INSERT INTO recording_archive_copies(id,segment_id,target_id,object_key,state,size_bytes,sha256) VALUES($1,$2,$3,$4,'uploading',$5,$6) ON CONFLICT (segment_id,target_id) DO NOTHING`,
+		copyID, segmentID, targetID, objectKey, src.Size, strings.Repeat("0", 64)); err != nil {
+		return false, err
+	}
+	var actual id.ID
+	if err := tx.QueryRow(ctx, `SELECT id FROM recording_archive_copies WHERE segment_id=$1 AND target_id=$2`, segmentID, targetID).Scan(&actual); err != nil {
+		return false, err
+	}
+	payload, err := json.Marshal(map[string]any{"copy_id": actual})
+	if err != nil {
+		return false, err
+	}
+	if _, err := jobs.Enqueue(ctx, tx, jobs.Input{
+		Kind:           "recording.archive_upload",
+		ObjectID:       actual,
+		IdempotencyKey: string(segmentID) + ":" + string(targetID),
+		Payload:        payload,
+	}); err != nil {
+		if errors.Is(err, jobs.ErrIdempotencyConflict) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}

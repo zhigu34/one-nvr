@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5"
 	"github.com/zhigu34/one-nvr/internal/archive"
 	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/channel"
 	"github.com/zhigu34/one-nvr/internal/config"
 	"github.com/zhigu34/one-nvr/internal/database"
 	"github.com/zhigu34/one-nvr/internal/httpapi"
+	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/live"
 	"github.com/zhigu34/one-nvr/internal/media/probe"
 	"github.com/zhigu34/one-nvr/internal/media/zlm"
@@ -110,6 +112,12 @@ func Run(name string) error {
 		recordings.ProbeToken = probeKey
 		pools.MediaCheck = recordings.CheckPool
 		pools.MediaInspector = mediaProbe
+		// The archive service exists before any publisher starts so the
+		// immediate-upload hook is set for the very first published segment.
+		archiveService := archive.New(db, recordings.Sources.Auth, secret, pools)
+		recordings.OnPublished = func(ctx context.Context, tx pgx.Tx, channelID, segmentID id.ID) error {
+			return archiveService.EnqueueForPublication(ctx, tx, channelID, segmentID)
+		}
 		listener, err := net.Listen("tcp", ":8083")
 		if err != nil {
 			return fmt.Errorf("private media hook listener unavailable")
@@ -143,11 +151,12 @@ func Run(name string) error {
 		}
 		background.Add(1)
 		go func() { defer background.Done(); runExportReconciliation(ctx, recordings) }()
-		archiveService := archive.New(db, recordings.Sources.Auth, secret, pools)
 		background.Add(2)
 		for n := 0; n < 2; n++ {
 			go func() { defer background.Done(); runSourceJobs(ctx, db, "recording.archive_upload", archiveService.HandleUpload) }()
 		}
+		background.Add(1)
+		go func() { defer background.Done(); runArchiveScheduleSweeper(ctx, archiveService) }()
 		background.Add(6)
 		go func() { defer background.Done(); cleanupImportDrafts(ctx, recordings.Sources) }()
 		go func() {

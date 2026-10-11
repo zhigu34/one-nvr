@@ -154,6 +154,8 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("DELETE /api/v1/archive-targets/{id}", r.protected(r.deleteArchiveTarget))
 	r.mux.HandleFunc("POST /api/v1/archive-targets/test", r.protected(r.testArchiveTarget))
 	r.mux.HandleFunc("POST /api/v1/recordings/archive", r.protected(r.requestArchiveUploads))
+	r.mux.HandleFunc("GET /api/v1/archive-policies", r.protected(r.listArchivePolicies))
+	r.mux.HandleFunc("PUT /api/v1/archive-policies", r.protected(r.upsertArchivePolicy))
 	r.mux.HandleFunc("GET /api/v1/storage-pools", r.protected(r.listPools))
 	r.mux.HandleFunc("POST /api/v1/storage-pools", r.protected(r.registerPool))
 	r.mux.HandleFunc("PATCH /api/v1/storage-pools/{id}", r.protected(r.updatePool))

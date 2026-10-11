@@ -1020,6 +1020,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/archive-policies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["archivePolicies"];
+        put: operations["archivePolicyUpsert"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recordings": {
         parameters: {
             query?: never;
@@ -1774,6 +1790,17 @@ export interface components {
         };
         ArchiveUploadCreated: {
             queued?: components["schemas"]["UUID"][];
+        };
+        ArchivePolicy: {
+            channel_id?: components["schemas"]["UUID"];
+            target_id?: components["schemas"]["UUID"];
+            /** @enum {string} */
+            mode?: "manual" | "scheduled" | "immediate";
+            /** @description Comma-separated HH:MM list in the site timezone; scheduled mode only. */
+            schedule?: string;
+        };
+        ArchivePolicyPage: {
+            items?: components["schemas"]["ArchivePolicy"][];
         };
         RecordingSegment: {
             /** @description A verified cloud copy exists in the archive index (M2.1). */
@@ -5739,6 +5766,50 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ArchiveUploadCreated"];
+                };
+            };
+        };
+    };
+    archivePolicies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every channel archive binding. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchivePolicyPage"];
+                };
+            };
+        };
+    };
+    archivePolicyUpsert: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArchivePolicy"];
+            };
+        };
+        responses: {
+            /** @description The stored binding; mode manual without a target removes the binding. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchivePolicy"];
                 };
             };
         };

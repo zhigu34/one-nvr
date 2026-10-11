@@ -64,3 +64,12 @@
 4. **探针全链**（ARC-01）：PUT→GET 全量比对→GET Range→DELETE，能力四项落 `last_check`；缺 DELETE 如实显示「到期清理不可用」。审计详情只记名称——safejson 消毒器拒绝 URI 形态的值与含 url 的键，端点只在目标表里。
 5. **验证 = 存在 + Content-Range 总长一致**（ARC-02 底线）；SHA-256 在上传流式计算入库，远端哈希对账留批次 3。上传中（`uploading`）的源被删除保护拦截（理由 `archiving`），与导出 pin 对称；重试期错误码随行展示，任务走 jobs 退避。
 6. **List 带 `archived`**：`publicationColumns` 加 EXISTS 子查询，管理页显示「本地+云端」。
+
+## 2026-10-11 云归档批次 2（M2.1 第二段：归档策略与自动上传）
+
+计划与裁定：`docs/superpowers/plans/2026-10-11-archive-batch2.md`。范围：ARC-08 完整（手动/定时/立即）+ ARC-05 的「发布时固定归档要求」。
+
+1. **策略 = 通道级一行**（`archive_policies`：target + mode manual/scheduled/immediate + 每日时刻列表「HH:MM,HH:MM」站点时区）；切回手动不取消已提交任务（ARC-08）。
+2. **立即上传挂在发布事务里**：`recording.Service.OnPublished` 可选钩子（worker 装配注入 archive 服务），copy 行与分片 ready 同事务落库；hook 失败只记日志、发布不受影响（ARC-06 故障隔离的落点）。
+3. **定时调度以账本去重**：`archive_schedule_runs(policy, date, time)` UNIQUE 是多实例栅栏；每次触发只入队（≤100/次），积压由任务队列消化。入队内核（对象键/幂等键/copy 行）三路共用一个 `enqueueUpload`。
+4. 实现教训：pgx 事务内外层 rows 未关就再查同一事务会「conn busy」——候选先缓冲再入队。

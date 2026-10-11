@@ -1,6 +1,8 @@
 package recording
 
 import (
+	"log/slog"
+
 	"context"
 	"encoding/json"
 	"errors"
@@ -330,6 +332,17 @@ func (s *Service) Publish(ctx context.Context, inboxID id.ID) (segment Segment, 
 			return err
 		}
 		_, err = tx.Exec(work, `UPDATE hook_inbox SET state='processed',processed_at=clock_timestamp(),lease_expires_at=NULL,fencing_token=NULL,error_code=NULL WHERE id=$1 AND fencing_token=$2`, lease.ID, lease.Token)
+		if err != nil {
+			return err
+		}
+		if s.OnPublished != nil {
+			// The immediate-archive hook shares the transaction so its copy row
+			// commits with the segment it references; its failure must never
+			// fail the publication itself.
+			if hookErr := s.OnPublished(work, tx, intent.ChannelID, intent.ID); hookErr != nil {
+				slog.Warn("archive hook failed; publication unaffected", "segment", string(intent.ID), "error", hookErr)
+			}
+		}
 		return err
 	})
 	if err != nil {

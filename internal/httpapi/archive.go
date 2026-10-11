@@ -161,3 +161,38 @@ func (r *router) requestArchiveUploads(w http.ResponseWriter, q *http.Request, p
 		Queued []id.ID `json:"queued"`
 	}{created})
 }
+
+// listArchivePolicies handles GET /api/v1/archive-policies.
+func (r *router) listArchivePolicies(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	policies, err := r.d.Archive.ListPolicies(q.Context(), p)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, struct {
+		Items []archive.Policy `json:"items"`
+	}{policies})
+}
+
+// upsertArchivePolicy handles PUT /api/v1/archive-policies: one channel's
+// binding. mode manual with no target removes the binding.
+func (r *router) upsertArchivePolicy(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	var in struct {
+		ChannelID id.ID `json:"channel_id"`
+		TargetID  id.ID `json:"target_id"`
+		Mode      string `json:"mode"`
+		Schedule  string `json:"schedule"`
+	}
+	if err := decode(w, q, &in); err != nil {
+		fail(w, q, err)
+		return
+	}
+	policy, err := r.d.Archive.UpsertPolicy(q.Context(), p, archive.Policy{
+		ChannelID: in.ChannelID, TargetID: in.TargetID, Mode: in.Mode, Schedule: in.Schedule,
+	})
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, policy)
+}

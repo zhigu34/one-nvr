@@ -3680,6 +3680,48 @@
         }
       }
     },
+    "/api/v1/archive-policies": {
+      "get": {
+        "operationId": "archivePolicies",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [{ "sessionCookie": [] }],
+        "responses": {
+          "200": {
+            "description": "Every channel archive binding.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ArchivePolicyPage" }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "archivePolicyUpsert",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [{ "sessionCookie": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ArchivePolicy" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The stored binding; mode manual without a target removes the binding.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ArchivePolicy" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/recordings": {
       "get": {
         "operationId": "recordings",
@@ -6349,6 +6391,27 @@
             "items": {
               "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
             }
+          }
+        }
+      },
+      "ArchivePolicy": {
+        "type": "object",
+        "properties": {
+          "channel_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+          "target_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+          "mode": { "type": "string", "enum": ["manual", "scheduled", "immediate"] },
+          "schedule": {
+            "type": "string",
+            "description": "Comma-separated HH:MM list in the site timezone; scheduled mode only."
+          }
+        }
+      },
+      "ArchivePolicyPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/ArchivePolicy" }
           }
         }
       },

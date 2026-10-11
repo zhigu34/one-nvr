@@ -52,6 +52,11 @@ type Service struct {
 	FreshNetwork   func(context.Context) (channel.NetworkPolicy, error)
 	ProbeToken     string
 	AuthorizeLive  func(context.Context, zlm.StreamKey, string) error
+	// OnPublished runs inside the publication transaction when a segment turns
+	// ready (M2.1 immediate archive). Optional: nil keeps publishing unchanged,
+	// and an error is logged, never propagated — PRD ARC-06 keeps cloud work
+	// from breaking recording.
+	OnPublished func(ctx context.Context, tx pgx.Tx, channelID, segmentID id.ID) error
 	siteID         id.ID
 	discoveryMu    sync.Mutex
 	discoveryAfter id.ID
