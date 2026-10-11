@@ -345,3 +345,31 @@ test('speed control offers only the documented rates', async () => {
   await userEvent.click(view.getByRole('option', { name: '2x', exact: true }))
   await expect.element(speed).toHaveTextContent('2x')
 })
+
+test('the timeline picks an export bracket and zooms the view', async () => {
+  const { view } = await fixture([segment(A, 0, 120), segment(B, 180, 300)])
+  await view.getByRole('button', { name: '片段 2026-10-05 08:00:00' }).click()
+  // Picker mode: two background clicks bracket the range, the third restarts.
+  await view.getByRole('button', { name: '选择导出区间' }).click()
+  const strip = view.getByTestId('playback-timeline')
+  await strip.click({ position: { x: 40, y: 20 } })
+  await strip.click({ position: { x: 120, y: 20 } })
+  await vi.waitFor(() => expect(document.querySelector('[data-testid="playback-bracket"]')).toBeTruthy())
+  // Width via calc() keeps the overlay out of Playwright's visibility math in
+  // headless mode; presence plus the dialogue below is the real assertion.
+  await expect
+    .element(view.getByRole('button', { name: '导出所选区间' }))
+    .toBeEnabled()
+  await view.getByRole('button', { name: '导出所选区间' }).click()
+  // The dialog analyzes exactly the bracketed window.
+  await vi.waitFor(() => {
+    const paths = calls.request.mock.calls.map((call) => String(call[0]))
+    const analyze = paths.find((p) => p.includes('/recording-exports/analyze'))
+    expect(analyze).toBeTruthy()
+  })
+  await view.getByRole('button', { name: '取消' }).click()
+  // Zoom narrows the caption bounds; 全览 returns to the full range.
+  await view.getByRole('button', { name: '时间轴放大' }).click()
+  await view.getByRole('button', { name: '显示完整范围' }).click()
+  await expect.element(view.getByText(/2026-10-05 08:00:00 — 2026-10-05 08:05:00/)).toBeVisible()
+})

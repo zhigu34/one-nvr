@@ -147,3 +147,34 @@ export function formatDuration(milliseconds: number): string {
     ? `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
     : `${minutes}:${String(seconds).padStart(2, '0')}`
 }
+
+/**
+ * The view window: the timeline renders one slice of the fetched index so a
+ * 24-hour window can be zoomed into minutes. Entries are clipped to the view
+ * (a segment crossing the edge renders from the edge, not from off-screen),
+ * and gaps are the complement of the clipped coverage — a hole outside the
+ * view must not be counted, and one inside must not be hidden.
+ */
+export function sliceView(timeline: Timeline, viewStart: number, viewEnd: number): Timeline {
+  if (!(viewEnd > viewStart)) return timeline
+  const clipped = timeline.entries
+    .map((entry) => ({ ...entry, start: Math.max(entry.start, viewStart), end: Math.min(entry.end, viewEnd) }))
+    .filter((entry) => entry.end > entry.start)
+  return { entries: clipped, gaps: complement(clipped, viewStart, viewEnd), from: viewStart, to: viewEnd }
+}
+
+/** The next smaller view window around an anchor, clamped to the full range. */
+export function zoomView(from: number, to: number, anchor: number, full: { start: number; end: number }): { start: number; end: number } {
+  const span = Math.max((to - from) / 2, 60_000)
+  let start = anchor - span / 2
+  let end = anchor + span / 2
+  if (start < full.start) {
+    end += full.start - start
+    start = full.start
+  }
+  if (end > full.end) {
+    start = Math.max(full.start, start - (end - full.end))
+    end = full.end
+  }
+  return { start, end: Math.min(end, full.end) }
+}

@@ -137,12 +137,18 @@ export function ArchiveTargets() {
           <span>密码{editing ? '（留空保持不变）' : ''}</span>
           <Input aria-label='WebDAV 密码' type='password' value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required={!editing} autoComplete='new-password' />
         </label>
-        <SelectField
-          label='云端保留天数'
-          value={String(form.cloud_retention_days)}
-          onValueChange={(next) => setForm({ ...form, cloud_retention_days: Number(next ?? 365) })}
-          options={[365, 730, 1825].map((days) => ({ value: String(days), label: `${days} 天` }))}
-        />
+        <label className='grid gap-2 text-sm'>
+          <span>云端保留天数</span>
+          <Input
+            aria-label='云端保留天数'
+            type='number'
+            min={1}
+            max={36500}
+            value={form.cloud_retention_days}
+            onChange={(event) => setForm({ ...form, cloud_retention_days: Number(event.target.value || 0) })}
+            required
+          />
+        </label>
         <div className='flex flex-wrap items-center gap-2 md:col-span-3'>
           <Button type='submit' disabled={pending}>{editing ? '保存修改' : '登记目标'}</Button>
           <Button type='button' variant='outline' disabled={pending} onClick={test}>测试连接</Button>

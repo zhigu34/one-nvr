@@ -2,12 +2,17 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointer
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
+  ChevronLeft,
+  ChevronRight,
   Maximize,
+  Maximize2,
   Pause,
   Play,
   RotateCcw,
   SkipForward,
   Square,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react'
 import type { PageData, Schema } from '@/lib/types'
 import { apiRequest } from '@/lib/api-client'
@@ -27,6 +32,8 @@ import {
 import {
   buildTimeline,
   formatDuration,
+  sliceView,
+  zoomView,
   type Entry,
   type Timeline,
 } from './timeline'
@@ -174,6 +181,14 @@ function Workspace({
   const [rangeError, setRangeError] = useState('')
   const [selected, setSelected] = useState<Entry | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
+  // The view window into the fetched index: null means the whole search range.
+  // Zooming never refetches — the paged index already covers the full window.
+  const [view, setView] = useState<{ start: number; end: number } | null>(null)
+  // ARC/EXP: the timeline bracket picker — first click sets the start, the
+  // second the end, a third restarts. The completed bracket is the export range.
+  const [pickMode, setPickMode] = useState(false)
+  const [bracket, setBracket] = useState<{ start: number; end: number } | null>(null)
+  const [exportRange, setExportRange] = useState<{ start: number; end: number } | null>(null)
   const [search, setSearch] = useState('')
   // The index follows the API cursor until the window is exhausted, so the
   // timeline never mistakes an unfetched page for a hole. Fetches run
@@ -216,6 +231,35 @@ function Workspace({
     () => buildTimeline(items, range.start, range.end),
     [items, range]
   )
+  const viewBounds = useMemo(
+    () => view ?? { start: range.start, end: range.end },
+    [view, range.start, range.end]
+  )
+  const viewTimeline = useMemo(
+    () => sliceView(timeline, viewBounds.start, viewBounds.end),
+    [timeline, viewBounds]
+  )
+  function zoomIn() {
+    // Zoom around the playhead when it is inside the view, else around the
+    // view center. Computed lazily: the playhead lives in state declared below.
+    const anchor = state.clock >= viewBounds.start && state.clock <= viewBounds.end
+      ? state.clock
+      : (viewBounds.start + viewBounds.end) / 2
+    setView(zoomView(viewBounds.start, viewBounds.end, anchor, range))
+  }
+  function zoomOut() {
+    const span = viewBounds.end - viewBounds.start
+    const center = (viewBounds.start + viewBounds.end) / 2
+    const start = Math.max(range.start, center - span)
+    const end = Math.min(range.end, center + span)
+    setView(start <= range.start && end >= range.end ? null : { start, end })
+  }
+  function pan(direction: -1 | 1) {
+    const shift = (direction * (viewBounds.end - viewBounds.start)) / 3
+    const start = Math.max(range.start, viewBounds.start + shift)
+    const end = Math.min(range.end, viewBounds.end + shift)
+    setView({ start, end })
+  }
   const video = useRef<HTMLVideoElement>(null)
   const frame = useRef<HTMLDivElement>(null)
   const controller = useRef<PlaybackController | null>(null)
@@ -290,6 +334,8 @@ function Workspace({
   function applyRange(next: { start: number; end: number }) {
     setRangeError('')
     setSelected(null)
+    setView(null)
+    setBracket(null)
     setRange(next)
     setDraft({
       start: wallClockInput(next.start, zone),
@@ -317,6 +363,8 @@ function Workspace({
               onClick={() => {
                 setChannelID(channel.id)
                 setSelected(null)
+                setView(null)
+                setBracket(null)
               }}
               className={cn(
                 'h-auto w-full justify-start truncate px-2 py-2 text-left text-sm font-normal',
@@ -548,11 +596,68 @@ function Workspace({
           error={indexError}
           retry={refetch}
         />
+        <div className='flex flex-wrap items-center gap-2'>
+          <Button
+            size='sm'
+            variant={pickMode ? 'default' : 'outline'}
+            aria-pressed={pickMode}
+            onClick={() => {
+              setPickMode(!pickMode)
+              setBracket(null)
+            }}
+          >
+            选择导出区间
+          </Button>
+          {pickMode && bracket && bracket.end > bracket.start && (
+            <>
+              <Button size='sm' onClick={() => setExportRange({ ...bracket })}>
+                导出所选区间
+              </Button>
+              <Button size='sm' variant='ghost' onClick={() => setBracket(null)}>
+                清除区间
+              </Button>
+            </>
+          )}
+          {pickMode && !bracket && (
+            <span className='text-xs text-muted-foreground'>在时间轴空白处点两次：第一次定起点，第二次定终点。</span>
+          )}
+          <div className='ml-auto flex items-center gap-1'>
+            <Button size='sm' variant='ghost' aria-label='时间轴左移' disabled={!view} onClick={() => pan(-1)}>
+              <ChevronLeft size={16} />
+            </Button>
+            <Button size='sm' variant='ghost' aria-label='时间轴放大' disabled={viewBounds.end - viewBounds.start <= 60_000} onClick={zoomIn}>
+              <ZoomIn size={16} />
+            </Button>
+            <Button size='sm' variant='ghost' aria-label='时间轴缩小' disabled={!view} onClick={zoomOut}>
+              <ZoomOut size={16} />
+            </Button>
+            <Button size='sm' variant='ghost' aria-label='时间轴右移' disabled={!view} onClick={() => pan(1)}>
+              <ChevronRight size={16} />
+            </Button>
+            <Button size='sm' variant='ghost' aria-label='显示完整范围' disabled={!view} onClick={() => setView(null)}>
+              <Maximize2 size={16} />
+            </Button>
+          </div>
+        </div>
         <Timeline
-          timeline={timeline}
+          timeline={viewTimeline}
           zone={zone}
           clock={state.clock}
           selected={selected}
+          viewIsFull={!view}
+          pickMode={pickMode}
+          bracket={pickMode ? bracket : null}
+          onPick={(at) => {
+            setBracket((current) => {
+              if (!current) return { start: at, end: at }
+              if (current.end === current.start) {
+                const start = Math.min(current.start, at)
+                const end = Math.max(current.start, at)
+                return end - start >= 1000 ? { start, end } : { start: at, end: at }
+              }
+              return { start: at, end: at }
+            })
+          }}
           onSelect={setSelected}
           onSeek={(at) => controller.current?.seek(at)}
           onPlay={(entry) => {
@@ -560,6 +665,18 @@ function Workspace({
             controller.current?.start(entry.start)
           }}
         />
+        {exportRange && (
+          <ExportDialog
+            channel={active}
+            zone={zone}
+            start={exportRange.start}
+            end={exportRange.end}
+            open
+            onOpenChange={(next) => {
+              setExportRange(next ? exportRange : null)
+            }}
+          />
+        )}
         {isFetchingNextPage && (
           <p role='status' className='text-sm text-muted-foreground'>
             正在加载更早的录像…
@@ -625,6 +742,10 @@ function Timeline({
   zone,
   clock,
   selected,
+  viewIsFull,
+  pickMode,
+  bracket,
+  onPick,
   onSelect,
   onSeek,
   onPlay,
@@ -633,6 +754,10 @@ function Timeline({
   zone: string
   clock: number
   selected: Entry | null
+  viewIsFull: boolean
+  pickMode: boolean
+  bracket: { start: number; end: number } | null
+  onPick: (at: number) => void
   onSelect: (entry: Entry) => void
   onSeek: (at: number) => void
   onPlay: (entry: Entry) => void
@@ -653,8 +778,16 @@ function Timeline({
     scrubTo(event.clientX)
   }
   // An empty index is explained once, by the page-level empty state below the
-  // timeline; a second box here would duplicate it and flash while pages load.
-  if (!timeline.entries.length || span <= 0) return null
+  // timeline. A zoomed view with no segments in it is different information —
+  // the full index has content, this window simply does not.
+  if (!timeline.entries.length || span <= 0) {
+    if (viewIsFull) return null
+    return (
+      <p className='rounded-xl border border-dashed p-4 text-center text-sm text-muted-foreground'>
+        该视图范围内没有片段——用「显示完整范围」返回，或调整缩放。
+      </p>
+    )
+  }
   return (
     <div className='space-y-2'>
       <div
@@ -665,8 +798,14 @@ function Timeline({
           scrubbing ? 'cursor-grabbing' : 'cursor-crosshair'
         }`}
         onPointerDown={(event) => {
-          // Only the empty background positions playback; a bar click selects.
-          if (event.target === event.currentTarget) beginScrub(event)
+          // Only the empty background positions playback (or picks an export
+          // boundary in picker mode); a bar click selects.
+          if (event.target !== event.currentTarget) return
+          if (pickMode) {
+            onPick(timeline.from + ((event.clientX - event.currentTarget.getBoundingClientRect().left) / event.currentTarget.getBoundingClientRect().width) * span)
+            return
+          }
+          beginScrub(event)
         }}
         onPointerMove={(event) => scrubbing && scrubTo(event.clientX)}
         onPointerUp={() => setScrubbing(false)}
@@ -698,6 +837,14 @@ function Timeline({
             }}
           />
         ))}
+        {bracket && bracket.end > bracket.start && (
+          <div
+            data-testid='playback-bracket'
+            aria-label='导出区间'
+            className='pointer-events-none absolute top-0 bottom-0 border-x-2 border-sky-400 bg-sky-400/25'
+            style={{ left: position(bracket.start), width: `calc(${position(bracket.end)} - ${position(bracket.start)})` }}
+          />
+        )}
         {/* No playhead before the first playback: an epoch-zero position would
             clamp to the window start and read as a real position. */}
         {clock > 0 && (
