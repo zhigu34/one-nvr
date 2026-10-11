@@ -397,6 +397,10 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   expect(exported.mp4Status).toBe(200)
   expect(exported.mp4Magic).toBe('ftyp')
   expect(exported.mp4Size).toBeGreaterThan(100)
+  // The operator stops watching before managing files: 停止 releases the
+  // playback lease (ARC-05), which is what lets the deletion below proceed.
+  await page.getByRole('button', {name: '停止', exact: true}).click()
+  await expect.poll(async () => (await recordings()).items.find(s => s.id === historical.id)?.state, {timeout: 15000}).toBe('ready')
   // M2: the lifecycle of a real published file. Protection must actually stop a
   // deletion, releasing it must allow one, the file must really disappear, and
   // the recording must then be unplayable -- a status code alone would not prove

@@ -86,7 +86,7 @@ async function fixture(
   pages?: Page[]
 ) {
   calls.probe.mockResolvedValue(probe)
-  calls.request.mockImplementation((path: string) => {
+  calls.request.mockImplementation(async (path: string) => {
     if (path.startsWith('/api/v1/channels'))
       return { items: channels, next_cursor: null }
     if (path.startsWith('/api/v1/site')) {

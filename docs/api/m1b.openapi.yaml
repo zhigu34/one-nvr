@@ -3646,6 +3646,44 @@
         }
       }
     },
+    "/api/v1/recordings/{id}/lease": {
+      "post": {
+        "operationId": "recordingLeaseRenew",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "playback",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The playback lease is renewed for another window; cleanup waits while it is alive."
+          }
+        }
+      },
+      "delete": {
+        "operationId": "recordingLeaseRelease",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "playback",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "The playback lease is released; cleanup no longer waits." }
+        }
+      }
+    },
     "/api/v1/recordings/archive": {
       "post": {
         "operationId": "recordingArchiveUpload",

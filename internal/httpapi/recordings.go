@@ -280,6 +280,23 @@ func (r *router) serveCloudContent(w http.ResponseWriter, q *http.Request, p aut
 	_, _ = io.CopyN(w, body, plan.Length())
 }
 
+// releaseRecordingLease handles DELETE /api/v1/recordings/{id}/lease: the
+// player stopped or navigated away, so cleanup no longer waits.
+func (r *router) releaseRecordingLease(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	recordingID, err := pathID(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	if err := r.d.Recordings.ReleaseLease(q.Context(), p, recordingID); err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, struct {
+		Released bool `json:"released"`
+	}{true})
+}
+
 // renewRecordingLease handles POST /api/v1/recordings/{id}/lease: the player's
 // heartbeat that keeps cleanup away from a segment being watched (ARC-05).
 func (r *router) renewRecordingLease(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {

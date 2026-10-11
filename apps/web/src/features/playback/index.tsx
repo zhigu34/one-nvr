@@ -220,20 +220,33 @@ function Workspace({
   const frame = useRef<HTMLDivElement>(null)
   const controller = useRef<PlaybackController | null>(null)
   const [state, setState] = useState<PlaybackState>(IDLE)
-  // ARC-05: the segment being watched holds a playback lease; the heartbeat
-  // renews it while playback stays on one, and stops when nothing is active.
+  // ARC-05: the segment being watched holds a playback lease. The heartbeat
+  // renews it while the player stays on one segment (playing or paused — a
+  // paused viewer is still watching), and leaving the segment releases it so
+  // cleanup never waits on nobody.
+  const activeEntry = state.entry?.id ?? ''
+  const activePhase = state.phase
   useEffect(() => {
-    const entryID = state.entry?.id
-    if (!entryID || state.phase === 'idle' || state.phase === 'error' || state.phase === 'gap') {
-      return
-    }
+    if (!activeEntry) return
     const beat = () => {
-      void apiRequest(`/api/v1/recordings/${entryID}/lease`, { method: 'POST' }).catch(() => {})
+      // A paused viewer is still watching; only a stopped or failed player
+      // stops the heartbeat (the release travels with the entry change).
+      if (activePhase === 'playing' || activePhase === 'paused' || activePhase === 'loading') {
+        void apiRequest(`/api/v1/recordings/${activeEntry}/lease`, { method: 'POST' }).catch(() => {})
+      }
     }
     beat()
     const timer = window.setInterval(beat, 30_000)
-    return () => window.clearInterval(timer)
-  }, [state.entry?.id, state.phase])
+    return () => {
+      window.clearInterval(timer)
+    }
+  }, [activeEntry, activePhase])
+  useEffect(() => {
+    if (!activeEntry) return
+    return () => {
+      void apiRequest(`/api/v1/recordings/${activeEntry}/lease`, { method: 'DELETE' }).catch(() => {})
+    }
+  }, [activeEntry])
   useEffect(() => {
     if (!video.current) return
     const instance = new PlaybackController(
@@ -437,7 +450,18 @@ function Workspace({
             <SkipForward size={16} />
             下一可用片段
           </Button>
-          <Button variant='outline' onClick={() => controller.current?.stop()}>
+          <Button
+            variant='outline'
+            onClick={() => {
+              // Release the playback lease before the controller drops the
+              // segment, so cleanup never waits on a stopped viewer.
+              const entryID = state.entry?.id
+              const release = entryID
+                ? apiRequest(`/api/v1/recordings/${entryID}/lease`, { method: 'DELETE' }).catch(() => {})
+                : Promise.resolve()
+              void release.finally(() => controller.current?.stop())
+            }}
+          >
             <Square size={16} />
             停止
           </Button>

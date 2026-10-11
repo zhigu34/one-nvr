@@ -145,9 +145,13 @@ func TestArchiveCleanupGuards(t *testing.T) {
 	if len(outcomes) != 1 || outcomes[0].Reason != "lease_held" {
 		t.Fatal("the delete reports the lease", outcomes)
 	}
-	// Lease released, protection engaged: protection still wins over cleanup.
-	if _, err := fixture.DB.Pool.Exec(ctx, `DELETE FROM recording_playback_leases WHERE segment_id=$1`, segment.ID); err != nil {
+	// Lease released through the API surface, protection engaged: protection
+	// still wins over cleanup.
+	if err := fixture.Service.ReleaseLease(ctx, fixture.Admin, segment.ID); err != nil {
 		t.Fatal(err)
+	}
+	if held, err := fixture.Service.LeaseHeld(ctx, segment.ID); err != nil || held {
+		t.Fatal("the release drops the lease", held, err)
 	}
 	if _, err := fixture.Service.SetProtection(ctx, fixture.Admin, segment.ID, true); err != nil {
 		t.Fatal(err)

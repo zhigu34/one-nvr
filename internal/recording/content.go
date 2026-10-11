@@ -198,6 +198,35 @@ func (s *Service) RenewLease(ctx context.Context, p auth.Principal, segmentID id
 	return s.touchLease(ctx, segmentID)
 }
 
+// ReleaseLease drops the playback lease when the player stops or leaves: the
+// operator is no longer watching, and cleanup must not wait for the expiry.
+func (s *Service) ReleaseLease(ctx context.Context, p auth.Principal, segmentID id.ID) error {
+	if s.Auth == nil {
+		return auth.ErrNotFound
+	}
+	err := s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
+		var channelID id.ID
+		if err := tx.QueryRow(ctx, `SELECT channel_id FROM recording_segments WHERE id=$1`, segmentID).Scan(&channelID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return auth.ErrNotFound
+			}
+			return err
+		}
+		if err := s.Auth.RequireChannelTx(ctx, p, channelID, auth.Playback, tx); err != nil {
+			if errors.Is(err, auth.ErrForbidden) {
+				return auth.ErrNotFound
+			}
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	_, err = s.DB.Pool.Exec(ctx, `DELETE FROM recording_playback_leases WHERE segment_id=$1`, segmentID)
+	return err
+}
+
 // LeaseHeld reports whether an active playback lease covers the segment.
 func (s *Service) LeaseHeld(ctx context.Context, segmentID id.ID) (bool, error) {
 	var held bool

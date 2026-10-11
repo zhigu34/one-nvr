@@ -1004,6 +1004,22 @@ export interface paths {
         patch: operations["archiveTargetUpdate"];
         trace?: never;
     };
+    "/api/v1/recordings/{id}/lease": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["recordingLeaseRenew"];
+        delete: operations["recordingLeaseRelease"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recordings/archive": {
         parameters: {
             query?: never;
@@ -5743,6 +5759,46 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ArchiveTarget"];
                 };
+            };
+        };
+    };
+    recordingLeaseRenew: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The playback lease is renewed for another window; cleanup waits while it is alive. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    recordingLeaseRelease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The playback lease is released; cleanup no longer waits. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
