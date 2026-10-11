@@ -402,9 +402,19 @@ func (s *Service) HandleUpload(ctx context.Context, lease jobs.Lease) (jobs.Resu
 	var poolID id.ID
 	var target string
 	var stored int64
-	if err := s.DB.Pool.QueryRow(ctx, `SELECT s.pool_id,s.target_relative_path,s.size_bytes FROM recording_segments s WHERE s.id=$1`, segmentID).
-		Scan(&poolID, &target, &stored); err != nil {
+	var segmentProtected bool
+	var cloudExpires *time.Time
+	if err := s.DB.Pool.QueryRow(ctx, `SELECT s.pool_id,s.target_relative_path,s.size_bytes,s.protected,(SELECT c.cloud_expires_at FROM recording_archive_copies c WHERE c.id=$2) FROM recording_segments s WHERE s.id=$1`, segmentID, copyID).
+		Scan(&poolID, &target, &stored, &segmentProtected, &cloudExpires); err != nil {
 		return jobs.Result{}, err
+	}
+	// ARC-09: a source whose cloud deadline passed while it sat queued is
+	// skipped, never uploaded late — unless it is protected evidence.
+	if cloudExpires != nil && time.Now().After(*cloudExpires) && !segmentProtected {
+		if _, err := s.DB.Pool.Exec(ctx, `UPDATE recording_archive_copies SET state='expired',error_code='archive_expired_skip' WHERE id=$1 AND state='uploading'`, copyID); err != nil {
+			return jobs.Result{}, err
+		}
+		return jobs.Result{}, &jobs.PermanentFailure{Code: "archive_expired_skip"}
 	}
 	root, _, err := s.Pools.OpenMediaRoot(ctx, poolID)
 	if err != nil {

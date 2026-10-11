@@ -47,6 +47,7 @@
 
 ## 当前交接快照（2026-10-09）
 
+- **2026-10-11 云归档批次 3（M2.1 收尾）**：播放租约（`recording_playback_leases`，content 登记+心跳端点+三处清理拦截，理由 `lease_held`）、本地安全清理（归档通道独立 48h 窗口 `sites.archive_local_retention_hours` + verified 副本 + 远端可达 gate，无绑定通道维持 days 语义）、仅云端回放（`/content` 回退代理，deleted+无副本仍 404）、云端到期清理（`cloud_expires_at`=结束时间+保留天数，每小时扫描，保护/租约例外，等待上传过期即跳过）。迁移 `0017`。**M2.1 出口条件全部可验证**；剩余：远端全量对账（ARC-07 部分）、云源导出、容量配额（STO-02/03）。
 - **2026-10-11 交接补充**：功能总结文章在 `docs/功能总结.md`（按模块功能+逻辑+未实现清单，随批更新）；**下一批是云归档批次 3（M2.1 收尾），计划已定稿在 `docs/superpowers/plans/2026-10-12-archive-batch3.md`**（播放租约、本地安全清理、仅云端 Range 回放、云端到期清理），可直接照此实施。
 - **2026-10-11 云归档批次 2（M2.1 第二段）**：通道归档策略与自动上传调度（计划：`docs/superpowers/plans/2026-10-11-archive-batch2.md`）。迁移 `0016`（`archive_policies` PK=channel_id + `archive_schedule_runs` 去重账本）。三种模式：manual/scheduled/immediate；**立即上传经发布事务钩子**（`recording.Service.OnPublished`，失败只记日志）；**定时调度 30s 扫描 + UNIQUE 账本去重**（站点时区每日时刻，单次触发入队 ≤100）。入队内核三路共用（`archive.Service.enqueueUpload`）。前端归档页加「通道归档策略」表。**未做**（批次 3）：本地安全清理+播放租约（ARC-05）、仅云端回放（ARC-04）、云端到期清理（ARC-09）、远端对账、云源导出、配额。
 - **2026-10-11 云归档批次 1（M2.1 第一段）**：WebDAV 目标 + 手动上传链路（计划与裁定：`docs/superpowers/plans/2026-10-11-archive-batch1.md`、`docs/M2-decisions.md`）。迁移 `0015`（`archive_targets` 凭据加密三列 + `recording_archive_copies` + `channel_grants.archive`）。`internal/archive/`（WebDAV 客户端 PUT/GetRange/Delete/Check、目标 CRUD、`HandleUpload`）；worker 两个 `recording.archive_upload` 循环；管理页「上传到云端」+「本地+云端」徽标；侧边栏「归档目标」（admin）。**上传权限是独立 grant（`auth.Archive`）**，admin 全链路默认拥有（setup/SetGrants 强制）。**未做**：定时/立即调度、安全清理+播放租约、仅云端回放、云端到期清理、远端对账、云源导出、配额。

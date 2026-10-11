@@ -6546,6 +6546,10 @@
             "type": "integer",
             "minimum": 0
           },
+          "cloud_only": {
+            "type": "integer",
+            "description": "Segments whose local copy is deleted but a verified cloud copy exists: still playable."
+          },
           "deleted": {
             "type": "integer",
             "minimum": 0

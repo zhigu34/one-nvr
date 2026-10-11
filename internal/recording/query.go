@@ -189,6 +189,7 @@ func (s *Service) Summarize(ctx context.Context, p auth.Principal, q Query) (Sta
 			count(*) FILTER (WHERE state IN ('missing','damaged','conflict')),
 			count(*) FILTER (WHERE protected),
 			count(*) FILTER (WHERE state='deleted'),
+			count(*) FILTER (WHERE state='deleted' AND EXISTS(SELECT 1 FROM recording_archive_copies ac WHERE ac.segment_id=s.id AND ac.state='verified')),
 			coalesce(sum(extract(epoch from (end_at-start_at))*1000)::bigint,0),
 			coalesce(sum(size_bytes) FILTER (WHERE state<>'deleted'),0),
 			coalesce(sum(size_bytes) FILTER (WHERE state='deleted'),0),
@@ -200,7 +201,7 @@ func (s *Service) Summarize(ctx context.Context, p auth.Principal, q Query) (Sta
 			  AND ($6::text[] IS NULL OR s.state=ANY($6))
 			  AND ($7::boolean IS NULL OR s.protected=$7)`,
 			q.ChannelID, q.Start.UTC(), q.End.UTC(), nullableID(q.SourceRevisionID), nullableID(q.PoolID), nullableStates(q.States), q.Protected).
-			Scan(&out.Segments, &out.Ready, &out.Anomalous, &out.Protected, &out.Deleted, &out.DurationMS, &out.LogicalBytes, &out.DeletedBytes, &out.OldestStart, &out.NewestEnd)
+			Scan(&out.Segments, &out.Ready, &out.Anomalous, &out.Protected, &out.Deleted, &out.CloudOnly, &out.DurationMS, &out.LogicalBytes, &out.DeletedBytes, &out.OldestStart, &out.NewestEnd)
 	})
 	return out, err
 }

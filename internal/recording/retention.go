@@ -37,6 +37,10 @@ func (s *Service) RunRetention(ctx context.Context) {
 		// the site's recording retention setting, so this sweep always runs.
 		s.SweepExportArtifacts(ctx)
 		s.SweepRetention(ctx)
+		// Archive-bound channels clean on their own shorter window, gated on a
+		// confirmed remote copy (ARC-05); the gate hook is injected by the
+		// assembly, so without it nothing happens.
+		s.SweepArchiveLocal(ctx)
 		select {
 		case <-ctx.Done():
 			return
@@ -171,10 +175,13 @@ func (s *Service) retentionDays(ctx context.Context) (int, error) {
 }
 
 // expiredSegments lists deletable candidates: published, unprotected, older than
-// the cutoff, and on an enabled pool. The age cutoff carries the freshness delay
-// as well, so a segment that just finished is never a candidate.
+// the cutoff, and on an enabled pool. Archive-bound channels are excluded —
+// they clean on their own shorter window under the safe-copy gate (ARC-05).
+// The age cutoff carries the freshness delay as well, so a segment that just
+// finished is never a candidate.
 func (s *Service) expiredSegments(ctx context.Context, cutoff time.Time, limit int) ([]id.ID, error) {
-	rows, err := s.DB.Pool.Query(ctx, `SELECT s.id FROM recording_segments s JOIN storage_pools p ON p.id=s.pool_id WHERE s.state='ready' AND NOT s.protected AND s.end_at<$1 AND p.enabled ORDER BY s.end_at LIMIT $2`, cutoff, limit)
+	rows, err := s.DB.Pool.Query(ctx, `SELECT s.id FROM recording_segments s JOIN storage_pools p ON p.id=s.pool_id WHERE s.state='ready' AND NOT s.protected AND s.end_at<$1 AND p.enabled
+		AND NOT EXISTS(SELECT 1 FROM archive_policies ap WHERE ap.channel_id=s.channel_id) ORDER BY s.end_at LIMIT $2`, cutoff, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -188,4 +195,80 @@ func (s *Service) expiredSegments(ctx context.Context, cutoff time.Time, limit i
 		out = append(out, segment)
 	}
 	return out, rows.Err()
+}
+
+// ArchiveLocalGate is injected by the assembly: given one candidate segment it
+// confirms the verified cloud copy is really reachable right now (ARC-05
+// requires current availability, not a stale success row). false keeps the
+// local file; an error aborts the sweep round.
+type ArchiveLocalGate func(ctx context.Context, segmentID id.ID) (bool, error)
+
+// SweepArchiveLocal cleans the local sources of archive-bound channels: past
+// the archive window (default 48h, 0 = never), with a verified unexpired cloud
+// copy that the injected gate confirms reachable, and — via the shared delete
+// core — free of protection, task pins and playback leases. The plain days-
+// based retention keeps governing unbound channels.
+func (s *Service) SweepArchiveLocal(ctx context.Context) {
+	if s.Auth == nil || s.Pools == nil || s.DB == nil || s.ArchiveLocalGate == nil {
+		return
+	}
+	var hours int
+	if err := s.DB.Pool.QueryRow(ctx, `SELECT archive_local_retention_hours FROM sites WHERE id=$1`, s.siteID).Scan(&hours); err != nil {
+		if ctx.Err() == nil {
+			slog.Warn("archive local window unavailable")
+		}
+		return
+	}
+	if hours <= 0 {
+		return
+	}
+	cutoff := time.Now().UTC().Add(-time.Duration(hours) * time.Hour).Add(-FreshnessDelay)
+	for {
+		rows, err := s.DB.Pool.Query(ctx, `SELECT s.id FROM recording_segments s
+			JOIN archive_policies ap ON ap.channel_id=s.channel_id
+			JOIN archive_targets t ON t.id=ap.target_id AND t.enabled
+			WHERE s.state='ready' AND NOT s.protected AND s.end_at<$1
+			AND EXISTS(SELECT 1 FROM recording_archive_copies ac WHERE ac.segment_id=s.id AND ac.state='verified'
+				AND (ac.cloud_expires_at IS NULL OR ac.cloud_expires_at>clock_timestamp()))
+			AND NOT EXISTS(SELECT 1 FROM recording_playback_leases l WHERE l.segment_id=s.id AND l.lease_expires_at>clock_timestamp())
+			AND NOT EXISTS(SELECT 1 FROM recording_archive_copies c2 WHERE c2.segment_id=s.id AND c2.state='uploading')
+			ORDER BY s.end_at LIMIT 50`, cutoff)
+		if err != nil {
+			if ctx.Err() == nil {
+				slog.Warn("archive local scan unavailable")
+			}
+			return
+		}
+		var batch []id.ID
+		for rows.Next() {
+			var segment id.ID
+			if err := rows.Scan(&segment); err != nil {
+				rows.Close()
+				return
+			}
+			batch = append(batch, segment)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil || len(batch) == 0 {
+			return
+		}
+		for _, segment := range batch {
+			available, err := s.ArchiveLocalGate(ctx, segment)
+			if err != nil {
+				// Cloud unconfirmable: stop archive-channel cleanup this round
+				// (ARC-05 — never delete when the safe copy cannot be proven).
+				return
+			}
+			if !available {
+				continue
+			}
+			s.deleteLocal(ctx, "", []id.ID{segment}, "retention")
+			if ctx.Err() != nil {
+				return
+			}
+		}
+		if len(batch) < 50 {
+			return
+		}
+	}
 }

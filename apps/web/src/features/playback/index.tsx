@@ -220,6 +220,20 @@ function Workspace({
   const frame = useRef<HTMLDivElement>(null)
   const controller = useRef<PlaybackController | null>(null)
   const [state, setState] = useState<PlaybackState>(IDLE)
+  // ARC-05: the segment being watched holds a playback lease; the heartbeat
+  // renews it while playback stays on one, and stops when nothing is active.
+  useEffect(() => {
+    const entryID = state.entry?.id
+    if (!entryID || state.phase === 'idle' || state.phase === 'error' || state.phase === 'gap') {
+      return
+    }
+    const beat = () => {
+      void apiRequest(`/api/v1/recordings/${entryID}/lease`, { method: 'POST' }).catch(() => {})
+    }
+    beat()
+    const timer = window.setInterval(beat, 30_000)
+    return () => window.clearInterval(timer)
+  }, [state.entry?.id, state.phase])
   useEffect(() => {
     if (!video.current) return
     const instance = new PlaybackController(

@@ -157,6 +157,11 @@ func Run(name string) error {
 		}
 		background.Add(1)
 		go func() { defer background.Done(); runArchiveScheduleSweeper(ctx, archiveService) }()
+		// ARC-05 gate: the local cleanup confirms the remote copy is really
+		// readable through the same client the playback proxy uses.
+		recordings.ArchiveLocalGate = archiveService.ConfirmRemoteAvailable
+		background.Add(1)
+		go func() { defer background.Done(); runCloudExpirySweeper(ctx, archiveService) }()
 		background.Add(6)
 		go func() { defer background.Done(); cleanupImportDrafts(ctx, recordings.Sources) }()
 		go func() {
@@ -240,7 +245,7 @@ func Run(name string) error {
 		if err != nil {
 			return err
 		}
-		handler = httpapi.NewHandler(httpapi.Dependencies{Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, Sources: sources, Live: &live.Service{DB: db, Auth: accounts, Media: media}, PublicURL: c.PublicURL, TrustedProxyToken: proxyKey, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled})
+		handler = httpapi.NewHandler(httpapi.Dependencies{Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, Sources: sources, Live: &live.Service{DB: db, Auth: accounts, Media: media}, PublicURL: c.PublicURL, TrustedProxyToken: proxyKey, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled, Archive: archive.New(db, accounts, secret, pools)})
 	}
 	if name == "worker" {
 		prober := &operations.Prober{Checks: map[string]func(context.Context) error{"zlm": media.Health}, Operations: operations.New(db, nil, c.FrigateEnabled, c.OpenListEnabled), Client: operations.NewProbeClient(), Targets: map[string]operations.ProbeTarget{

@@ -38,3 +38,18 @@ func runArchiveScheduleSweeper(ctx context.Context, s *archive.Service) {
 		}
 	}
 }
+
+// runCloudExpirySweeper drives ARC-09: remote objects past their cloud deadline
+// are deleted within the hour, protection and leases excepted.
+func runCloudExpirySweeper(ctx context.Context, s *archive.Service) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		s.SweepCloudExpiry(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}

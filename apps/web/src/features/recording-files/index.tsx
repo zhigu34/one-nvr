@@ -344,6 +344,7 @@ export function RecordingFiles({
             <span className='text-xs text-muted-foreground'>
               {items.length} 段{selected.size > 0 ? ` · 已选 ${selected.size} 段` : ''}
               {stats.data ? ` · 筛选范围内共 ${stats.data.segments} 段` : ''}
+              {!!stats.data?.cloud_only && ` · 仅云端 ${stats.data.cloud_only} 段`}
             </span>
             {exportable && (
               <Button size='sm' variant='outline' onClick={() => setExportsOpen(true)}>

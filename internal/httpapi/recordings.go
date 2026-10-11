@@ -1,11 +1,16 @@
 package httpapi
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/zhigu34/one-nvr/internal/archive"
+	"github.com/zhigu34/one-nvr/internal/fault"
 
 	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/id"
@@ -84,6 +89,21 @@ func (r *router) recordingContent(w http.ResponseWriter, q *http.Request, p auth
 	}
 	content, err := r.d.Recordings.OpenSegment(q.Context(), p, recordingID)
 	if err != nil {
+		// ARC-04: when the local copy is gone or unreadable, a verified cloud
+		// copy keeps the same recording ID playable through the proxy. Anything
+		// else — including a deliberately deleted segment with no copy — keeps
+		// the original answer.
+		if r.d.Archive != nil && localFailureSupportsCloud(err) {
+			if cloud, cloudErr := r.d.Archive.OpenCloudSegment(q.Context(), p, recordingID); cloudErr == nil {
+				r.serveCloudContent(w, q, p, recordingID, cloud)
+				return
+			}
+		}
+		if errors.Is(err, recording.ErrContentDeleted) {
+			// Deleted with no verified cloud copy: unchanged M1-C semantics.
+			fail(w, q, auth.ErrNotFound)
+			return
+		}
 		fail(w, q, err)
 		return
 	}
@@ -198,4 +218,81 @@ func (r *router) deleteRecordingsLocal(w http.ResponseWriter, q *http.Request, p
 		Items         []recording.DeleteOutcome `json:"items"`
 		ReleasedBytes int64                     `json:"released_bytes"`
 	}{outcomes, released})
+}
+
+// localFailureSupportsCloud says which local read failures may be answered from
+// the verified cloud copy: the file is gone, the pool is unreachable, or the
+// local bytes no longer match their record. "Not ready yet" never falls back —
+// the cloud copy only exists for published segments anyway.
+func localFailureSupportsCloud(err error) bool {
+	var ferr *fault.Error
+	if !errors.As(err, &ferr) {
+		return false
+	}
+	switch ferr.Code {
+	case "recording_deleted", "recording_missing", "recording_damaged", "pool_unavailable":
+		return true
+	}
+	return false
+}
+
+// serveCloudContent streams the verified remote copy through the proxy. The
+// range semantics, ETag discipline and audit-before-bytes rule are the same as
+// the local path, so a client cannot tell which copy answered.
+func (r *router) serveCloudContent(w http.ResponseWriter, q *http.Request, p auth.Principal, recordingID id.ID, cloud *archive.CloudSegment) {
+	plan, err := recording.PlanByteRange(q.Header.Get("Range"), q.Header.Get("If-Range"), cloud.Size, cloud.ETag(), cloud.Modified)
+	if err != nil {
+		var unsatisfiable *fault.Error
+		if errors.As(err, &unsatisfiable) && unsatisfiable.Code == "range_not_satisfiable" {
+			w.Header().Set("Accept-Ranges", "bytes")
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", cloud.Size))
+			w.Header().Set("ETag", cloud.ETag())
+			fail(w, q, err)
+			return
+		}
+		fail(w, q, err)
+		return
+	}
+	if err := r.d.Archive.AuditCloudPlayback(q.Context(), p, cloud, plan.Start, plan.End, plan.Partial); err != nil {
+		fail(w, q, err)
+		return
+	}
+	body, status, readErr := cloud.Read(q.Context(), plan.Start, plan.End)
+	if readErr != nil {
+		fail(w, q, readErr)
+		return
+	}
+	defer body.Close()
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Content-Type", "video/mp4")
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("ETag", cloud.ETag())
+	w.Header().Set("Content-Length", strconv.FormatInt(plan.Length(), 10))
+	responseStatus := http.StatusOK
+	if plan.Partial {
+		responseStatus = http.StatusPartialContent
+		w.Header().Set("Content-Range", plan.ContentRange(cloud.Size))
+	}
+	_ = status
+	w.WriteHeader(responseStatus)
+	// Same operator-signal-only rule as the local path: the audit row and the
+	// response head are committed, an interrupted copy just ends the stream.
+	_, _ = io.CopyN(w, body, plan.Length())
+}
+
+// renewRecordingLease handles POST /api/v1/recordings/{id}/lease: the player's
+// heartbeat that keeps cleanup away from a segment being watched (ARC-05).
+func (r *router) renewRecordingLease(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	recordingID, err := pathID(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	if err := r.d.Recordings.RenewLease(q.Context(), p, recordingID); err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, struct {
+		Renewed bool `json:"renewed"`
+	}{true})
 }

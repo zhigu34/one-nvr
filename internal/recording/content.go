@@ -26,6 +26,10 @@ import (
 // distinguish "outside your authorized scope" from "not published yet": only
 // auth.ErrNotFound is ever produced for the former.
 var (
+	// ErrContentDeleted marks a deliberately deleted local copy. The caller (the
+	// HTTP layer) offers the verified cloud copy when one exists and answers 404
+	// otherwise, keeping "deleted" and "never existed" indistinguishable there.
+	ErrContentDeleted     = fault.New(409, "recording_deleted", "录像的本地副本已删除")
 	ErrContentNotReady    = fault.New(409, "recording_not_ready", "录像尚未完成发布，暂时无法播放")
 	ErrContentMissing     = fault.New(409, "recording_missing", "录像文件不存在或已被移走")
 	ErrContentDamaged     = fault.New(409, "recording_damaged", "录像文件与发布记录不一致")
@@ -42,10 +46,18 @@ type Content struct {
 	Start, End time.Time
 	Size       int64
 	Modified   time.Time
-	File       *os.File
+	// File is nil when the bytes come from the verified cloud copy; the caller
+	// streams those through the archive client and closes its own body.
+	File      *os.File
+	FromCloud bool
 }
 
-func (c *Content) Close() error { return c.File.Close() }
+func (c *Content) Close() error {
+	if c.File == nil {
+		return nil
+	}
+	return c.File.Close()
+}
 
 // ETag is a strong validator over the published bytes: a different segment, or
 // the same segment republished with different content, never reuses one.
@@ -106,7 +118,9 @@ func (s *Service) OpenSegment(ctx context.Context, p auth.Principal, recordingID
 	// the M1-C rule that an absent recording and an unauthorized one are
 	// indistinguishable.
 	if found.State == "deleted" {
-		return nil, auth.ErrNotFound
+		// The caller decides: a verified cloud copy keeps the recording ID
+		// playable; without one the answer is 404 as before.
+		return nil, ErrContentDeleted
 	}
 	if found.State != "ready" {
 		return nil, ErrContentNotReady
@@ -137,7 +151,58 @@ func (s *Service) OpenSegment(ctx context.Context, p auth.Principal, recordingID
 		file.Close()
 		return nil, ErrContentDamaged
 	}
+	if err := s.touchLease(ctx, recordingID); err != nil {
+		file.Close()
+		return nil, err
+	}
 	return &Content{SegmentID: found.ID, ChannelID: found.ChannelID, Start: found.Start, End: found.End, Size: info.Size(), Modified: info.ModTime(), File: file}, nil
+}
+
+// touchLease registers (or renews) the playback lease that keeps cleanup away
+// from a segment someone is watching. ARC-05: leases outrank both the retention
+// sweep and the cloud expiry.
+func (s *Service) touchLease(ctx context.Context, segmentID id.ID) error {
+	if s.DB == nil || s.DB.Pool == nil {
+		return nil
+	}
+	_, err := s.DB.Pool.Exec(ctx, `INSERT INTO recording_playback_leases(segment_id,lease_expires_at) VALUES($1,clock_timestamp()+interval '90 seconds')
+		ON CONFLICT (segment_id) DO UPDATE SET lease_expires_at=clock_timestamp()+interval '90 seconds'`, segmentID)
+	return err
+}
+
+// RenewLease is the player heartbeat: one authorized call renews the lease for
+// another window. An expired lease is simply recreated.
+func (s *Service) RenewLease(ctx context.Context, p auth.Principal, segmentID id.ID) error {
+	if s.Auth == nil {
+		return auth.ErrNotFound
+	}
+	err := s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
+		var channelID id.ID
+		if err := tx.QueryRow(ctx, `SELECT channel_id FROM recording_segments WHERE id=$1`, segmentID).Scan(&channelID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return auth.ErrNotFound
+			}
+			return err
+		}
+		if err := s.Auth.RequireChannelTx(ctx, p, channelID, auth.Playback, tx); err != nil {
+			if errors.Is(err, auth.ErrForbidden) {
+				return auth.ErrNotFound
+			}
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return s.touchLease(ctx, segmentID)
+}
+
+// LeaseHeld reports whether an active playback lease covers the segment.
+func (s *Service) LeaseHeld(ctx context.Context, segmentID id.ID) (bool, error) {
+	var held bool
+	err := s.DB.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM recording_playback_leases WHERE segment_id=$1 AND lease_expires_at>clock_timestamp())`, segmentID).Scan(&held)
+	return held, err
 }
 
 // AuditPlayback records one authorized media read. Playback must not proceed
@@ -169,12 +234,21 @@ func (s *Service) AuditPlayback(ctx context.Context, p auth.Principal, c *Conten
 // requires. An If-Range that no longer matches turns the request back into a
 // full read.
 func (c *Content) PlanRange(header, ifRange string) (BytePlan, error) {
-	if c.Size <= 0 {
+	return PlanByteRange(header, ifRange, c.Size, c.ETag(), c.Modified)
+}
+
+// PlanByteRange resolves the single byte window for any byte source of the
+// given size — local files and verified cloud copies share the semantics, so a
+// browser sees one behaviour regardless of which copy answers.
+func PlanByteRange(header, ifRange string, size int64, etag string, modified time.Time) (BytePlan, error) {
+	if size <= 0 {
 		return BytePlan{}, ErrContentDamaged
 	}
-	full := BytePlan{End: c.Size - 1}
-	if !c.rangeAllowed(ifRange) {
-		return full, nil
+	full := BytePlan{End: size - 1}
+	if ifRange != "" && ifRange != etag {
+		if at, err := http.ParseTime(ifRange); err != nil || modified.Truncate(time.Second).After(at) {
+			return full, nil
+		}
 	}
 	spec, present, ok := parseRangeHeader(header)
 	if !present {
@@ -184,33 +258,20 @@ func (c *Content) PlanRange(header, ifRange string) (BytePlan, error) {
 		return BytePlan{}, ErrRangeUnsatisfiable
 	}
 	if spec.suffix > 0 {
-		start := c.Size - spec.suffix
+		start := size - spec.suffix
 		if start < 0 {
 			start = 0
 		}
-		return BytePlan{Start: start, End: c.Size - 1, Partial: true}, nil
+		return BytePlan{Start: start, End: size - 1, Partial: true}, nil
 	}
-	if spec.start >= c.Size {
+	if spec.start >= size {
 		return BytePlan{}, ErrRangeUnsatisfiable
 	}
-	end := c.Size - 1
+	end := size - 1
 	if spec.end > 0 && spec.end-1 < end {
 		end = spec.end - 1
 	}
 	return BytePlan{Start: spec.start, End: end, Partial: true}, nil
-}
-
-func (c *Content) rangeAllowed(ifRange string) bool {
-	if ifRange == "" {
-		return true
-	}
-	if ifRange == c.ETag() {
-		return true
-	}
-	if at, err := http.ParseTime(ifRange); err == nil {
-		return !c.Modified.Truncate(time.Second).After(at)
-	}
-	return false
 }
 
 type rangeSpec struct {

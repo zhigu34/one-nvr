@@ -57,6 +57,9 @@ type Service struct {
 	// and an error is logged, never propagated — PRD ARC-06 keeps cloud work
 	// from breaking recording.
 	OnPublished func(ctx context.Context, tx pgx.Tx, channelID, segmentID id.ID) error
+	// ArchiveLocalGate confirms a verified cloud copy is really readable before
+	// the archive-bound local cleanup removes the local file (M2.1 ARC-05).
+	ArchiveLocalGate func(ctx context.Context, segmentID id.ID) (bool, error)
 	siteID         id.ID
 	discoveryMu    sync.Mutex
 	discoveryAfter id.ID

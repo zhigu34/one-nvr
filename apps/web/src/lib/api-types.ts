@@ -1841,6 +1841,8 @@ export interface components {
             ready: number;
             anomalous: number;
             protected: number;
+            /** @description Segments whose local copy is deleted but a verified cloud copy exists: still playable. */
+            cloud_only?: number;
             deleted: number;
             duration_ms: number;
             logical_bytes: number;

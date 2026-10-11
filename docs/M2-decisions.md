@@ -73,3 +73,13 @@
 2. **立即上传挂在发布事务里**：`recording.Service.OnPublished` 可选钩子（worker 装配注入 archive 服务），copy 行与分片 ready 同事务落库；hook 失败只记日志、发布不受影响（ARC-06 故障隔离的落点）。
 3. **定时调度以账本去重**：`archive_schedule_runs(policy, date, time)` UNIQUE 是多实例栅栏；每次触发只入队（≤100/次），积压由任务队列消化。入队内核（对象键/幂等键/copy 行）三路共用一个 `enqueueUpload`。
 4. 实现教训：pgx 事务内外层 rows 未关就再查同一事务会「conn busy」——候选先缓冲再入队。
+
+## 2026-10-11 云归档批次 3（M2.1 收尾：安全清理、租约、云端回放、到期）
+
+计划与裁定：`docs/superpowers/plans/2026-10-12-archive-batch3.md`。M2.1 出口条件全部可验证。
+
+1. **播放租约回归**（M1-C 推迟项）：`recording_playback_leases`，content 成功打开（本地或云端）即登记 90s，播放端每 30s 心跳续期（`POST /recordings/{id}/lease`，playback 权限）；删除/保留清理/云端到期三处都跳过活跃租约（理由 `lease_held`）。POSIX fd 语义保证在途播放读完；租约防的是「删完再发新请求」。
+2. **本地安全清理（ARC-05）**：归档绑定通道走独立窗口（`sites.archive_local_retention_hours` 默认 48，0=永不），候选 = 窗口届满 + verified 未到期副本 + **远端此刻真实可达**（gate 钩子对副本做 0-0 读取确认，不可确认整轮停止而非猜测）；无绑定通道维持原 days 语义（候选查询排除归档通道）。保护/上传中/导出 pin/租约均拦截。
+3. **仅云端回放（ARC-04）**：`/content` 本地失败（deleted/missing/damaged/pool 不可达）且存在 verified 副本时代理 WebDAV Range（206/416/ETag/审计与本地同语义）；deleted+无副本仍 404（M1-C 语义不变）；云端读取失败 503 `cloud_read_failed` 独立错误码，远端 404 将副本行对账为 expired（不动归档成功历史）。
+4. **云端到期清理（ARC-09）**：`cloud_expires_at = 分片实际结束时间 + 目标保留天数`（创建时写入，迁移回填，目标天数调整时整批重算）；worker 每小时扫描过期 verified 副本 → DELETE 远端 → 行 `expired` + 审计（`archive.copy_expired`）；保护与活跃租约例外。**等待中的上传不补传已过期源**（`archive_expired_skip`，保护源例外）。
+5. 副本状态 CHECK 扩展 `expired` 终态；Stats 加 `cloud_only`（本地已删、云端可播计数，FILE-01）。

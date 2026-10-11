@@ -110,7 +110,7 @@ func storageReason(err error) string {
 // ('missing'); the reverse order would let a crash hide a real deletion.
 func (s *Service) deleteOne(ctx context.Context, actor id.ID, segmentID id.ID, reason string) (DeleteOutcome, error) {
 	var item publication
-	pinnedByExport, pinnedByArchive := false, false
+	pinnedByExport, pinnedByArchive, pinnedByLease := false, false, false
 	err := s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
 		found, err := scanPublication(tx.QueryRow(ctx, `SELECT `+publicationColumns+` FROM recording_segments s WHERE s.id=$1`, segmentID))
 		if err != nil {
@@ -127,7 +127,12 @@ func (s *Service) deleteOne(ctx context.Context, actor id.ID, segmentID id.ID, r
 		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM recording_export_sources es JOIN recording_exports e ON e.id=es.export_id WHERE es.segment_id=$1 AND e.state IN ('queued','running'))`, segmentID).Scan(&pinnedByExport); err != nil {
 			return err
 		}
-		return tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM recording_archive_copies c WHERE c.segment_id=$1 AND c.state='uploading')`, segmentID).Scan(&pinnedByArchive)
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM recording_archive_copies c WHERE c.segment_id=$1 AND c.state='uploading')`, segmentID).Scan(&pinnedByArchive); err != nil {
+			return err
+		}
+		// ARC-05: an active playback lease outranks deletion — the operator is
+		// watching this exact segment right now.
+		return tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM recording_playback_leases l WHERE l.segment_id=$1 AND l.lease_expires_at>clock_timestamp())`, segmentID).Scan(&pinnedByLease)
 	})
 	if err != nil {
 		if errors.Is(err, auth.ErrNotFound) {
@@ -140,6 +145,8 @@ func (s *Service) deleteOne(ctx context.Context, actor id.ID, segmentID id.ID, r
 		return DeleteOutcome{SegmentID: segmentID, State: deleteStateSkipped, Reason: "pinned_by_export"}, nil
 	case pinnedByArchive:
 		return DeleteOutcome{SegmentID: segmentID, State: deleteStateSkipped, Reason: "archiving"}, nil
+	case pinnedByLease:
+		return DeleteOutcome{SegmentID: segmentID, State: deleteStateSkipped, Reason: "lease_held"}, nil
 	case item.Protected:
 		return DeleteOutcome{SegmentID: segmentID, State: deleteStateProtected, Reason: "protected"}, nil
 	case item.State == deleteStateDeleted:

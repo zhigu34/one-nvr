@@ -78,6 +78,9 @@ type Stats struct {
 	Anomalous    int        `json:"anomalous"`
 	Protected    int        `json:"protected"`
 	Deleted      int        `json:"deleted"`
+	// CloudOnly counts segments whose local copy is gone (deleted) but a
+	// verified cloud copy exists: still playable, different location (FILE-01).
+	CloudOnly    int        `json:"cloud_only"`
 	DurationMS   int64      `json:"duration_ms"`
 	LogicalBytes int64      `json:"logical_bytes"`
 	DeletedBytes int64      `json:"deleted_bytes"`
