@@ -8,6 +8,7 @@ import {
   Settings,
   Activity,
   CalendarClock,
+  CloudUpload,
 } from 'lucide-react'
 import type { NavGroup } from '../types'
 
@@ -39,6 +40,7 @@ export const sidebarData: { navGroups: NavGroup[] } = {
           everyRole: true,
         },
         { title: '存储池', url: '/storage-pools', icon: HardDrive },
+        { title: '归档目标', url: '/archive-targets', icon: CloudUpload },
       ],
     },
     {

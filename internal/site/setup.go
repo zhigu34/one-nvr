@@ -109,7 +109,7 @@ func (s *Service) Setup(ctx context.Context, in SetupInput) (Site, error) {
 			if _, err := tx.Exec(ctx, "INSERT INTO channels(id,site_id,channel_no,channel_name) VALUES($1,$2,$3,$4)", channelID, result.ID, n, fmt.Sprintf("通道 %02d", n)); err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, "INSERT INTO channel_grants(user_id,channel_id,live,playback,export,configure) VALUES($1,$2,true,true,true,true)", adminID, channelID); err != nil {
+			if _, err := tx.Exec(ctx, "INSERT INTO channel_grants(user_id,channel_id,live,playback,export,configure,archive) VALUES($1,$2,true,true,true,true,true)", adminID, channelID); err != nil {
 				return err
 			}
 			if _, err := tx.Exec(ctx, "INSERT INTO recording_policies(channel_id) VALUES($1)", channelID); err != nil {

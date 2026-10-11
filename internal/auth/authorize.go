@@ -15,6 +15,7 @@ const (
 	Playback  Action = "playback"
 	Export    Action = "export"
 	Configure Action = "configure"
+	Archive   Action = "archive"
 )
 
 type Grant struct {
@@ -22,7 +23,7 @@ type Grant struct {
 	Actions   []Action `json:"actions"`
 }
 
-func validAction(a Action) bool { return a == Live || a == Playback || a == Export || a == Configure }
+func validAction(a Action) bool { return a == Live || a == Playback || a == Export || a == Configure || a == Archive }
 func (s *Service) RequireChannel(ctx context.Context, p Principal, channelID id.ID, action Action) error {
 	return s.requireChannel(ctx, p, channelID, action, s.DB.Pool)
 }
@@ -43,18 +44,18 @@ func (s *Service) RequireAnyChannelTx(ctx context.Context, p Principal, ch id.ID
 	if err != nil {
 		return err
 	}
-	var live, playback, export, configure bool
-	err = tx.QueryRow(ctx, "SELECT live,playback,export,configure FROM channel_grants WHERE user_id=$1 AND channel_id=$2", p.UserID, ch).Scan(&live, &playback, &export, &configure)
+	var live, playback, export, configure, archive bool
+	err = tx.QueryRow(ctx, "SELECT live,playback,export,configure,archive FROM channel_grants WHERE user_id=$1 AND channel_id=$2", p.UserID, ch).Scan(&live, &playback, &export, &configure, &archive)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return err
 	}
-	if !live && !playback && !export && !configure {
+	if !live && !playback && !export && !configure && !archive {
 		return ErrNotFound
 	}
-	if live && roleAllows(user.Role, Live) || playback && roleAllows(user.Role, Playback) || export && roleAllows(user.Role, Export) || configure && roleAllows(user.Role, Configure) {
+	if live && roleAllows(user.Role, Live) || playback && roleAllows(user.Role, Playback) || export && roleAllows(user.Role, Export) || configure && roleAllows(user.Role, Configure) || archive && roleAllows(user.Role, Archive) {
 		return nil
 	}
 	return ErrForbidden
@@ -70,18 +71,18 @@ func (s *Service) requireChannel(ctx context.Context, p Principal, channelID id.
 	if err != nil {
 		return err
 	}
-	var live, playback, export, configure bool
-	err = q.QueryRow(ctx, "SELECT live,playback,export,configure FROM channel_grants WHERE user_id=$1 AND channel_id=$2", p.UserID, channelID).Scan(&live, &playback, &export, &configure)
+	var live, playback, export, configure, archive bool
+	err = q.QueryRow(ctx, "SELECT live,playback,export,configure,archive FROM channel_grants WHERE user_id=$1 AND channel_id=$2", p.UserID, channelID).Scan(&live, &playback, &export, &configure, &archive)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return err
 	}
-	if !live && !playback && !export && !configure {
+	if !live && !playback && !export && !configure && !archive {
 		return ErrNotFound
 	}
-	if !roleAllows(user.Role, action) || !map[Action]bool{Live: live, Playback: playback, Export: export, Configure: configure}[action] {
+	if !roleAllows(user.Role, action) || !map[Action]bool{Live: live, Playback: playback, Export: export, Configure: configure, Archive: archive}[action] {
 		return ErrForbidden
 	}
 	return nil
@@ -97,7 +98,7 @@ func (s *Service) GetGrants(ctx context.Context, p Principal, userID id.ID) ([]G
 	if !exists {
 		return nil, ErrNotFound
 	}
-	rows, err := s.DB.Pool.Query(ctx, "SELECT channel_id,live,playback,export,configure FROM channel_grants WHERE user_id=$1 ORDER BY channel_id", userID)
+	rows, err := s.DB.Pool.Query(ctx, "SELECT channel_id,live,playback,export,configure,archive FROM channel_grants WHERE user_id=$1 ORDER BY channel_id", userID)
 	if err != nil {
 		return nil, err
 	}
@@ -105,15 +106,15 @@ func (s *Service) GetGrants(ctx context.Context, p Principal, userID id.ID) ([]G
 	grants := make([]Grant, 0)
 	for rows.Next() {
 		var g Grant
-		var live, playback, export, configure bool
-		if err := rows.Scan(&g.ChannelID, &live, &playback, &export, &configure); err != nil {
+		var live, playback, export, configure, archive bool
+		if err := rows.Scan(&g.ChannelID, &live, &playback, &export, &configure, &archive); err != nil {
 			return nil, err
 		}
 		g.Actions = make([]Action, 0)
 		for _, pair := range []struct {
 			a  Action
 			ok bool
-		}{{Live, live}, {Playback, playback}, {Export, export}, {Configure, configure}} {
+		}{{Live, live}, {Playback, playback}, {Export, export}, {Configure, configure}, {Archive, archive}} {
 			if pair.ok {
 				g.Actions = append(g.Actions, pair.a)
 			}
@@ -127,8 +128,15 @@ func (s *Service) SetGrants(ctx context.Context, p Principal, userID id.ID, expe
 		return ErrInvalid
 	}
 	seen := map[id.ID]bool{}
+	var targetRole string
+	if err := s.DB.Pool.QueryRow(ctx, "SELECT role FROM users WHERE id=$1", userID).Scan(&targetRole); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
 	for _, g := range grants {
-		if seen[g.ChannelID] || len(g.Actions) > 4 {
+		if seen[g.ChannelID] || len(g.Actions) > 5 {
 			return ErrInvalid
 		}
 		seen[g.ChannelID] = true
@@ -181,7 +189,10 @@ func (s *Service) SetGrants(ctx context.Context, p Principal, userID id.ID, expe
 			for _, a := range g.Actions {
 				m[a] = true
 			}
-			if _, err := tx.Exec(ctx, "INSERT INTO channel_grants(user_id,channel_id,live,playback,export,configure) VALUES($1,$2,$3,$4,$5,$6)", userID, g.ChannelID, m[Live], m[Playback], m[Export], m[Configure]); err != nil {
+			// ARC-08: administrators hold the upload permission by default, so
+			// an admin's rows carry it no matter what the request submitted.
+			archiveDefault := m[Archive] || targetRole == "admin"
+			if _, err := tx.Exec(ctx, "INSERT INTO channel_grants(user_id,channel_id,live,playback,export,configure,archive) VALUES($1,$2,$3,$4,$5,$6,$7)", userID, g.ChannelID, m[Live], m[Playback], m[Export], m[Configure], archiveDefault); err != nil {
 				return err
 			}
 		}
@@ -210,15 +221,15 @@ func (s *Service) RequireActorChannelTx(ctx context.Context, actorID id.ID, auth
 		return ErrInvalid
 	}
 	var role string
-	var live, playback, export, configure bool
-	err := tx.QueryRow(ctx, `SELECT u.role,g.live,g.playback,g.export,g.configure FROM users u JOIN channel_grants g ON g.user_id=u.id WHERE u.id=$1 AND u.enabled AND u.auth_version=$2 AND g.channel_id=$3`, actorID, authVersion, channelID).Scan(&role, &live, &playback, &export, &configure)
+	var live, playback, export, configure, archive bool
+	err := tx.QueryRow(ctx, `SELECT u.role,g.live,g.playback,g.export,g.configure,g.archive FROM users u JOIN channel_grants g ON g.user_id=u.id WHERE u.id=$1 AND u.enabled AND u.auth_version=$2 AND g.channel_id=$3`, actorID, authVersion, channelID).Scan(&role, &live, &playback, &export, &configure, &archive)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrForbidden
 	}
 	if err != nil {
 		return err
 	}
-	if !roleAllows(role, action) || !map[Action]bool{Live: live, Playback: playback, Export: export, Configure: configure}[action] {
+	if !roleAllows(role, action) || !map[Action]bool{Live: live, Playback: playback, Export: export, Configure: configure, Archive: archive}[action] {
 		return ErrForbidden
 	}
 	return nil

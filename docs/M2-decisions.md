@@ -53,3 +53,14 @@
 6. **产物 7 天到期**：保留扫描无条件清到期产物（unlink → `expired`），受保护产物豁免（admin 开关，对齐分片保护语义）；下载遇 expired 按 404。
 7. **权限**：analyze/create/list/下载走通道级 `auth.Export`；窗口保护（EXP-04，一次请求标记相交分片）与产物保护 admin-only。下载先审计后出字节。
 8. **单次窗口 ≤30 分钟**服务端强制；更长范围等待批次内的自动拆分编排。容量闸两道：创建时新鲜 `free_bytes` 对比估算（×1.05），不足 409（`capacity_unknown` 前端可先检查存储池重试）；worker 写前复查。
+
+## 2026-10-11 云归档批次 1（M2.1 第一段：WebDAV 目标与手动上传）
+
+计划与裁定：`docs/superpowers/plans/2026-10-11-archive-batch1.md`。范围：ARC-01（配置+探针）、ARC-02（手动入队执行与验证）、ARC-03（远端对象键）、ARC-08 手动模式、FILE-02 位置维度。**未做**（批次 2/3）：定时/立即自动上传调度、本地安全清理与播放租约（ARC-05）、仅云端回放（ARC-04）、云端到期清理（ARC-09）、远端对账与缓存（ARC-07）、云源导出、容量压力淘汰与配额。
+
+1. **上传权限单独授予**（ARC-08）：`channel_grants.archive` 新列，`auth.Archive` action 全链路（requireChannel/grants 读写/permissions 数组/契约枚举）；管理员默认拥有——迁移回填既有 admin 行，`site.setup`/`SetGrants` 写入路径为 admin 行强制 archive=true（防「初始化晚于迁移」的窗口）；操作员默认没有。
+2. **凭据复用源凭据加密**：`secrets.SealCredential/OpenCredential` 以 (site, targetID, targetID, "password") 为 AAD；库中只存 key_id/nonce/ciphertext；目标删除仅在零副本引用时允许（ARC-06），有引用只能停用。
+3. **远端对象键 = `<site_id>/recordings/<通道号>/<本地日期>/<与本地同名文件>`**：直接由本地 `target_relative_path` 推导（ARC-03：共用录像 ID 与冻结命名），客户端拼 base_url。
+4. **探针全链**（ARC-01）：PUT→GET 全量比对→GET Range→DELETE，能力四项落 `last_check`；缺 DELETE 如实显示「到期清理不可用」。审计详情只记名称——safejson 消毒器拒绝 URI 形态的值与含 url 的键，端点只在目标表里。
+5. **验证 = 存在 + Content-Range 总长一致**（ARC-02 底线）；SHA-256 在上传流式计算入库，远端哈希对账留批次 3。上传中（`uploading`）的源被删除保护拦截（理由 `archiving`），与导出 pin 对称；重试期错误码随行展示，任务走 jobs 退避。
+6. **List 带 `archived`**：`publicationColumns` 加 EXISTS 子查询，管理页显示「本地+云端」。

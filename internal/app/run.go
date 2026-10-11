@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/zhigu34/one-nvr/internal/archive"
 	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/channel"
 	"github.com/zhigu34/one-nvr/internal/config"
@@ -138,15 +139,20 @@ func Run(name string) error {
 		// exhausted its attempts, which the jobs table cannot see.
 		background.Add(2)
 		for n := 0; n < 2; n++ {
-			go func() { defer background.Done(); runSourceJobs(ctx, recordings, "recording.export", recordings.HandleExport) }()
+			go func() { defer background.Done(); runSourceJobs(ctx, db, "recording.export", recordings.HandleExport) }()
 		}
 		background.Add(1)
 		go func() { defer background.Done(); runExportReconciliation(ctx, recordings) }()
+		archiveService := archive.New(db, recordings.Sources.Auth, secret, pools)
+		background.Add(2)
+		for n := 0; n < 2; n++ {
+			go func() { defer background.Done(); runSourceJobs(ctx, db, "recording.archive_upload", archiveService.HandleUpload) }()
+		}
 		background.Add(6)
 		go func() { defer background.Done(); cleanupImportDrafts(ctx, recordings.Sources) }()
 		go func() {
 			defer background.Done()
-			runSourceJobs(ctx, recordings, "source.import", recordings.ExecuteImport)
+			runSourceJobs(ctx, db, "source.import", recordings.ExecuteImport)
 		}()
 		for _, kind := range []string{"source.apply", "source.clear", "source.policy_apply", "source.pool_switch"} {
 			go func() { defer background.Done(); runSourceChangeJobs(ctx, recordings, kind) }()

@@ -2948,7 +2948,8 @@
                 "live",
                 "playback",
                 "export",
-                "configure"
+                "configure",
+                "archive"
               ]
             }
           }
@@ -3051,7 +3052,8 @@
                 "live",
                 "playback",
                 "export",
-                "configure"
+                "configure",
+                "archive"
               ]
             }
           }

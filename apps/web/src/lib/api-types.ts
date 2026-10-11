@@ -956,6 +956,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/archive-targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["archiveTargets"];
+        put?: never;
+        post: operations["archiveTargetRegister"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/archive-targets/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["archiveTargetTest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/archive-targets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["archiveTargetDelete"];
+        options?: never;
+        head?: never;
+        patch: operations["archiveTargetUpdate"];
+        trace?: never;
+    };
+    "/api/v1/recordings/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["recordingArchiveUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recordings": {
         parameters: {
             query?: never;
@@ -1150,7 +1214,7 @@ export interface components {
             channel_group: string;
             enabled: boolean;
             version: components["schemas"]["Version"];
-            permissions: ("live" | "playback" | "export" | "configure")[];
+            permissions: ("live" | "playback" | "export" | "configure" | "archive")[];
         };
         SetupInput: {
             token: string;
@@ -1171,7 +1235,7 @@ export interface components {
         };
         Grant: {
             channel_id: components["schemas"]["UUID"];
-            actions: ("live" | "playback" | "export" | "configure")[];
+            actions: ("live" | "playback" | "export" | "configure" | "archive")[];
         };
         Capability: {
             enabled: boolean;
@@ -1681,7 +1745,39 @@ export interface components {
         RecordingWindowProtectionResult: {
             updated?: number;
         };
+        ArchiveTargetCapabilities: {
+            write?: boolean;
+            read?: boolean;
+            range?: boolean;
+            /** @description A target without delete permission cannot run cloud expiry cleanup. */
+            delete?: boolean;
+        };
+        ArchiveTarget: {
+            id?: components["schemas"]["UUID"];
+            name?: string;
+            base_url?: string;
+            remote_root?: string;
+            username?: string;
+            cloud_retention_days?: number;
+            enabled?: boolean;
+            /** @description Latest probe: {state, capabilities, observed_at}. */
+            last_check?: Record<string, never> | null;
+            /** Format: date-time */
+            created_at?: string;
+        };
+        ArchiveTargetPage: {
+            items?: components["schemas"]["ArchiveTarget"][];
+        };
+        ArchiveUploadRequest: {
+            target_id: components["schemas"]["UUID"];
+            segment_ids: components["schemas"]["UUID"][];
+        };
+        ArchiveUploadCreated: {
+            queued?: components["schemas"]["UUID"][];
+        };
         RecordingSegment: {
+            /** @description A verified cloud copy exists in the archive index (M2.1). */
+            archived?: boolean;
             id: components["schemas"]["UUID"];
             channel_id: components["schemas"]["UUID"];
             source_revision_id: components["schemas"]["UUID"];
@@ -5468,6 +5564,181 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecordingWindowProtectionResult"];
+                };
+            };
+        };
+    };
+    archiveTargets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every configured WebDAV archive target, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchiveTargetPage"];
+                };
+            };
+        };
+    };
+    archiveTargetRegister: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name: string;
+                    base_url: string;
+                    remote_root: string;
+                    username: string;
+                    /** @description Stored sealed; never returned. */
+                    password: string;
+                    /** @default 365 */
+                    cloud_retention_days?: number;
+                    /** @default true */
+                    enabled?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The registered target. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchiveTarget"];
+                };
+            };
+        };
+    };
+    archiveTargetTest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    id?: components["schemas"]["UUID"];
+                    name?: string;
+                    base_url?: string;
+                    remote_root?: string;
+                    username?: string;
+                    password?: string;
+                    cloud_retention_days?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Verified capabilities; missing delete means expiry cleanup is unavailable. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchiveTargetCapabilities"];
+                };
+            };
+        };
+    };
+    archiveTargetDelete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The target has archive copies and can only be disabled. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    archiveTargetUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name: string;
+                    base_url: string;
+                    remote_root: string;
+                    username: string;
+                    /** @description Empty keeps the stored password. */
+                    password?: string;
+                    cloud_retention_days?: number;
+                    enabled?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The updated target. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchiveTarget"];
+                };
+            };
+        };
+    };
+    recordingArchiveUpload: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArchiveUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description One upload task per accepted ready segment; rows without the archive grant are silently skipped (partial success). */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchiveUploadCreated"];
                 };
             };
         };

@@ -104,7 +104,7 @@ func (s *Service) Expand(ctx context.Context, p auth.Principal, expected int64) 
 			if _, err := tx.Exec(ctx, "INSERT INTO recording_policies(channel_id) VALUES($1)", cid); err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, "INSERT INTO channel_grants(user_id,channel_id,live,playback,export,configure) VALUES($1,$2,true,true,true,true)", p.UserID, cid); err != nil {
+			if _, err := tx.Exec(ctx, "INSERT INTO channel_grants(user_id,channel_id,live,playback,export,configure,archive) VALUES($1,$2,true,true,true,true,true)", p.UserID, cid); err != nil {
 				return err
 			}
 			out = append(out, channel.Channel{ID: cid, ChannelNo: n, ChannelName: name, Version: 1, Permissions: []auth.Action{auth.Live, auth.Playback, auth.Export, auth.Configure}})

@@ -3490,6 +3490,196 @@
         }
       }
     },
+    "/api/v1/archive-targets": {
+      "get": {
+        "operationId": "archiveTargets",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [{ "sessionCookie": [] }],
+        "responses": {
+          "200": {
+            "description": "Every configured WebDAV archive target, newest first.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ArchiveTargetPage" }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "archiveTargetRegister",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [{ "sessionCookie": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "base_url", "remote_root", "username", "password"],
+                "properties": {
+                  "name": { "type": "string", "maxLength": 64 },
+                  "base_url": { "type": "string" },
+                  "remote_root": { "type": "string" },
+                  "username": { "type": "string" },
+                  "password": { "type": "string", "description": "Stored sealed; never returned." },
+                  "cloud_retention_days": { "type": "integer", "default": 365 },
+                  "enabled": { "type": "boolean", "default": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The registered target.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ArchiveTarget" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/archive-targets/test": {
+      "post": {
+        "operationId": "archiveTargetTest",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [{ "sessionCookie": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+                  "name": { "type": "string" },
+                  "base_url": { "type": "string" },
+                  "remote_root": { "type": "string" },
+                  "username": { "type": "string" },
+                  "password": { "type": "string" },
+                  "cloud_retention_days": { "type": "integer" }
+                },
+                "description": "With id: probe the stored credentials. Without id: probe the submitted draft."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verified capabilities; missing delete means expiry cleanup is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ArchiveTargetCapabilities" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/archive-targets/{id}": {
+      "patch": {
+        "operationId": "archiveTargetUpdate",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "base_url", "remote_root", "username"],
+                "properties": {
+                  "name": { "type": "string", "maxLength": 64 },
+                  "base_url": { "type": "string" },
+                  "remote_root": { "type": "string" },
+                  "username": { "type": "string" },
+                  "password": { "type": "string", "description": "Empty keeps the stored password." },
+                  "cloud_retention_days": { "type": "integer" },
+                  "enabled": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated target.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ArchiveTarget" }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "archiveTargetDelete",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Deleted." },
+          "409": { "description": "The target has archive copies and can only be disabled." }
+        }
+      }
+    },
+    "/api/v1/recordings/archive": {
+      "post": {
+        "operationId": "recordingArchiveUpload",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "archive",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ArchiveUploadRequest" }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "One upload task per accepted ready segment; rows without the archive grant are silently skipped (partial success).",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ArchiveUploadCreated" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/recordings": {
       "get": {
         "operationId": "recordings",
@@ -6092,9 +6282,83 @@
           }
         }
       },
+      "ArchiveTargetCapabilities": {
+        "type": "object",
+        "properties": {
+          "write": { "type": "boolean" },
+          "read": { "type": "boolean" },
+          "range": { "type": "boolean" },
+          "delete": {
+            "type": "boolean",
+            "description": "A target without delete permission cannot run cloud expiry cleanup."
+          }
+        }
+      },
+      "ArchiveTarget": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "name": { "type": "string" },
+          "base_url": { "type": "string" },
+          "remote_root": { "type": "string" },
+          "username": { "type": "string" },
+          "cloud_retention_days": { "type": "integer" },
+          "enabled": { "type": "boolean" },
+          "last_check": {
+            "type": "object",
+            "nullable": true,
+            "description": "Latest probe: {state, capabilities, observed_at}."
+          },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "ArchiveTargetPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArchiveTarget"
+            }
+          }
+        }
+      },
+      "ArchiveUploadRequest": {
+        "type": "object",
+        "required": ["target_id", "segment_ids"],
+        "properties": {
+          "target_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "segment_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            },
+            "maxItems": 100
+          }
+        }
+      },
+      "ArchiveUploadCreated": {
+        "type": "object",
+        "properties": {
+          "queued": {
+            "type": "array",
+            "items": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
+        }
+      },
       "RecordingSegment": {
         "type": "object",
         "properties": {
+          "archived": {
+            "type": "boolean",
+            "description": "A verified cloud copy exists in the archive index (M2.1)."
+          },
           "id": {
             "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
           },

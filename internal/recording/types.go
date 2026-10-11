@@ -40,6 +40,9 @@ type Segment struct {
 	// management view reports codec and resolution without a second probe. Zero
 	// values mean the evidence predates that capture, not that it is absent.
 	Media MediaParams `json:"media"`
+	// Archived reports a verified cloud copy in the archive index (M2.1): the
+	// management view shows 本地+云端 from it without a second query.
+	Archived bool `json:"archived"`
 }
 type MediaParams struct {
 	Codec      string  `json:"codec"`

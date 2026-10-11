@@ -24,6 +24,8 @@ import {
 import { formatMinute } from '@/features/playback/zone'
 import { ExportsDrawer } from '@/features/recording-exports/exports-drawer'
 
+type Target = Schema<'ArchiveTarget'>
+
 type Segment = Schema<'RecordingSegment'>
 type Stats = Schema<'RecordingStats'>
 type Outcome = Schema<'RecordingDeleteOutcome'>
@@ -82,6 +84,7 @@ export function RecordingFiles({
   const channels = useAPI<PageData<Schema<'Channel'>>>('/api/v1/channels?limit=100')
   const site = useAPI<Schema<'Site'>>('/api/v1/site')
   const pools = useAPI<PageData<Schema<'Pool'>>>('/api/v1/storage-pools?limit=100', admin)
+  const archiveTargets = useAPI<PageData<Target>>('/api/v1/archive-targets', admin)
   const [channel, setChannel] = useState(initialChannel)
   const [days, setDays] = useState('7')
   const [revision, setRevision] = useState('')
@@ -91,6 +94,7 @@ export function RecordingFiles({
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [exportsOpen, setExportsOpen] = useState(false)
+  const [archiveTarget, setArchiveTarget] = useState('')
   const [outcomes, setOutcomes] = useState<Outcome[] | null>(null)
   const action = useAction()
 
@@ -205,6 +209,17 @@ export function RecordingFiles({
         ),
       protect ? '已保护该录像' : '已解除保护'
     )
+  }
+
+  async function archiveSelected() {
+    if (!archiveTarget) return
+    await run(async () => {
+      const init = jsonRequest('POST', { target_id: archiveTarget, segment_ids: [...selected] })
+      await apiRequest('/api/v1/recordings/archive', {
+        ...init,
+        headers: { ...init.headers, 'Idempotency-Key': newRequestKey() },
+      })
+    }, `已提交 ${selected.size} 段的上传任务`)
   }
 
   async function deleteSelected() {
@@ -337,6 +352,30 @@ export function RecordingFiles({
             )}
             {selected.size > 0 && (
               <div className='flex items-center gap-2'>
+                {admin && !!archiveTargets.data?.items.length && (
+                  <>
+                    <SelectField
+                      label='上传目标'
+                      value={archiveTarget}
+                      onValueChange={(next) => setArchiveTarget(next ?? '')}
+                      options={[
+                        { value: '', label: '选择归档目标' },
+                        ...(archiveTargets.data?.items || [])
+                          .filter((target) => target.enabled)
+                          .map((target) => ({ value: target.id ?? '', label: target.name ?? '' })),
+                      ]}
+                      className='w-40'
+                    />
+                    <Button
+                      type='button'
+                      variant='outline'
+                      disabled={action.pending || !archiveTarget}
+                      onClick={() => void archiveSelected()}
+                    >
+                      上传到云端（{selected.size} 段）
+                    </Button>
+                  </>
+                )}
                 <Button
                   type='button'
                   variant='ghost'
@@ -419,6 +458,11 @@ export function RecordingFiles({
                       </TableCell>
                       <TableCell className='text-sm'>
                         {STATE_LABELS[item.state] || item.state}
+                        {item.archived && (
+                          <span className='ml-1 text-xs text-emerald-600' title='已归档到云端'>
+                            本地+云端
+                          </span>
+                        )}
                         {item.check_state && item.check_state !== item.state && (
                           <span className='ml-1 text-xs text-muted-foreground'>
                             （{item.check_state}）

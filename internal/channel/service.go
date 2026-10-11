@@ -71,12 +71,12 @@ type Service struct {
 	Auth *auth.Service
 }
 
-func permissions(role string, live, playback, export, configure bool) []auth.Action {
-	out := make([]auth.Action, 0, 4)
+func permissions(role string, live, playback, export, configure, archive bool) []auth.Action {
+	out := make([]auth.Action, 0, 5)
 	for _, p := range []struct {
 		a  auth.Action
 		ok bool
-	}{{auth.Live, live}, {auth.Playback, playback}, {auth.Export, export}, {auth.Configure, configure && role != "viewer"}} {
+	}{{auth.Live, live}, {auth.Playback, playback}, {auth.Export, export}, {auth.Configure, configure && role != "viewer"}, {auth.Archive, archive && role != "viewer"}} {
 		if p.ok {
 			out = append(out, p.a)
 		}
@@ -103,18 +103,18 @@ func (s *Service) List(ctx context.Context, p auth.Principal, cursor id.ID, limi
 			return out, err
 		}
 	}
-	rows, err := s.DB.Pool.Query(ctx, `SELECT c.id,c.channel_no,c.channel_name,c.channel_group,c.enabled,c.version,g.live,g.playback,g.export,g.configure FROM channels c JOIN channel_grants g ON g.channel_id=c.id WHERE g.user_id=$1 AND c.channel_no>$2 AND (g.live OR g.playback OR g.export OR (g.configure AND $3<>'viewer')) ORDER BY c.channel_no LIMIT $4`, p.UserID, from, u.Role, limit+1)
+	rows, err := s.DB.Pool.Query(ctx, `SELECT c.id,c.channel_no,c.channel_name,c.channel_group,c.enabled,c.version,g.live,g.playback,g.export,g.configure,g.archive FROM channels c JOIN channel_grants g ON g.channel_id=c.id WHERE g.user_id=$1 AND c.channel_no>$2 AND (g.live OR g.playback OR g.export OR g.archive OR (g.configure AND $3<>'viewer')) ORDER BY c.channel_no LIMIT $4`, p.UserID, from, u.Role, limit+1)
 	if err != nil {
 		return out, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var c Channel
-		var live, playback, export, configure bool
-		if err := rows.Scan(&c.ID, &c.ChannelNo, &c.ChannelName, &c.ChannelGroup, &c.Enabled, &c.Version, &live, &playback, &export, &configure); err != nil {
+		var live, playback, export, configure, archive bool
+		if err := rows.Scan(&c.ID, &c.ChannelNo, &c.ChannelName, &c.ChannelGroup, &c.Enabled, &c.Version, &live, &playback, &export, &configure, &archive); err != nil {
 			return out, err
 		}
-		c.Permissions = permissions(u.Role, live, playback, export, configure)
+		c.Permissions = permissions(u.Role, live, playback, export, configure, archive)
 		out.Items = append(out.Items, c)
 	}
 	if err := rows.Err(); err != nil {
@@ -165,11 +165,11 @@ func (s *Service) Update(ctx context.Context, p auth.Principal, channelID id.ID,
 			return err
 		}
 		var role string
-		var live, playback, export, configure bool
-		if err := tx.QueryRow(ctx, `SELECT u.role,g.live,g.playback,g.export,g.configure FROM channel_grants g JOIN users u ON u.id=g.user_id WHERE g.user_id=$1 AND g.channel_id=$2`, p.UserID, channelID).Scan(&role, &live, &playback, &export, &configure); err != nil {
+		var live, playback, export, configure, archive bool
+		if err := tx.QueryRow(ctx, `SELECT u.role,g.live,g.playback,g.export,g.configure,g.archive FROM channel_grants g JOIN users u ON u.id=g.user_id WHERE g.user_id=$1 AND g.channel_id=$2`, p.UserID, channelID).Scan(&role, &live, &playback, &export, &configure, &archive); err != nil {
 			return err
 		}
-		out.Permissions = permissions(role, live, playback, export, configure)
+		out.Permissions = permissions(role, live, playback, export, configure, archive)
 		// One entry per attribute actually changed, so the log shows what moved
 		// rather than a single opaque "updated" row.
 		if name != nil {

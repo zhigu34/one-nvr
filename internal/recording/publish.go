@@ -50,12 +50,12 @@ type publication struct {
 	Evidence         probe.FileEvidence
 }
 
-const publicationColumns = `s.id,s.channel_id,s.source_revision_id,s.pool_id,s.run_id,s.start_at,s.end_at,s.size_bytes,s.state,s.naming_timezone,s.utc_offset_seconds,s.original_relative_path,s.target_relative_path,s.file_identity,s.media_evidence,s.protected`
+const publicationColumns = `s.id,s.channel_id,s.source_revision_id,s.pool_id,s.run_id,s.start_at,s.end_at,s.size_bytes,s.state,s.naming_timezone,s.utc_offset_seconds,s.original_relative_path,s.target_relative_path,s.file_identity,s.media_evidence,s.protected,EXISTS(SELECT 1 FROM recording_archive_copies a WHERE a.segment_id=s.id AND a.state='verified') AS archived`
 
 func scanPublication(row pgx.Row) (publication, error) {
 	var p publication
 	var rawIdentity, rawMedia []byte
-	err := row.Scan(&p.ID, &p.ChannelID, &p.SourceRevisionID, &p.PoolID, &p.RunID, &p.Start, &p.End, &p.Bytes, &p.State, &p.NamingTimezone, &p.UTCOffsetSeconds, &p.Original, &p.Target, &rawIdentity, &rawMedia, &p.Protected)
+	err := row.Scan(&p.ID, &p.ChannelID, &p.SourceRevisionID, &p.PoolID, &p.RunID, &p.Start, &p.End, &p.Bytes, &p.State, &p.NamingTimezone, &p.UTCOffsetSeconds, &p.Original, &p.Target, &rawIdentity, &rawMedia, &p.Protected, &p.Archived)
 	if err != nil {
 		return p, err
 	}

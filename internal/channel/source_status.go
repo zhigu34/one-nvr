@@ -105,18 +105,18 @@ func (s *SourceService) Summaries(ctx context.Context, p auth.Principal) (Summar
 		if err != nil {
 			return err
 		}
-		rows, err := tx.Query(ctx, `SELECT c.id,c.channel_no,c.channel_name,c.channel_group,c.enabled,c.version,g.live,g.playback,g.export,g.configure FROM channels c JOIN channel_grants g ON g.channel_id=c.id WHERE g.user_id=$1 AND (g.live OR g.playback OR g.export OR (g.configure AND $2<>'viewer')) ORDER BY c.channel_no`, p.UserID, u.Role)
+		rows, err := tx.Query(ctx, `SELECT c.id,c.channel_no,c.channel_name,c.channel_group,c.enabled,c.version,g.live,g.playback,g.export,g.configure,g.archive FROM channels c JOIN channel_grants g ON g.channel_id=c.id WHERE g.user_id=$1 AND (g.live OR g.playback OR g.export OR g.archive OR (g.configure AND $2<>'viewer')) ORDER BY c.channel_no`, p.UserID, u.Role)
 		if err != nil {
 			return err
 		}
 		for rows.Next() {
 			var item SummaryItem
-			var live, playback, export, configure bool
-			if err := rows.Scan(&item.ChannelID, &item.ChannelNo, &item.ChannelName, &item.ChannelGroup, &item.Enabled, &item.Version, &live, &playback, &export, &configure); err != nil {
+			var live, playback, export, configure, archive bool
+			if err := rows.Scan(&item.ChannelID, &item.ChannelNo, &item.ChannelName, &item.ChannelGroup, &item.Enabled, &item.Version, &live, &playback, &export, &configure, &archive); err != nil {
 				rows.Close()
 				return err
 			}
-			item.Permissions = permissions(u.Role, live, playback, export, configure)
+			item.Permissions = permissions(u.Role, live, playback, export, configure, archive)
 			out.Items = append(out.Items, item)
 		}
 		if err := rows.Err(); err != nil {
