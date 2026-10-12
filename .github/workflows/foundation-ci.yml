@@ -202,19 +202,22 @@ jobs:
       - name: Actual Mosquitto conversion reports no ownership warning
         run: |
           # Mosquitto 2.0.16+ warns when a sensitive file is world readable or
-          # owned by another user. The deployed layout reads the broker-owned
-          # file as root during conversion, so deploy.sh hands it over first
-          # and back afterwards.
+          # owned by a user other than the reader, and future releases will
+          # refuse to load such a file. The deployed layout hits the ownership
+          # case: init-runtime creates the broker password file as 1883:1883,
+          # while the conversion step runs as root, so deploy.sh hands the file
+          # to root before converting and back to 1883 afterwards.
           #
-          # This step reports its measurements as a workflow annotation: job
-          # logs are not readable without authentication, so the only way a
-          # failure here is diagnosable from outside is ::error:: messages.
+          # Both stages write the file while it is still root-owned: once it is
+          # handed to the broker user with mode 0600, neither shell redirection
+          # nor the converting process may modify it.
           image=eclipse-mosquitto:2.0.22@sha256:199ea8ef2e35ec2b1b37e59cfd1dbae538ed4dfa4a2251a121a52215a6248a21
           report=$(docker run --rm --network none --user 0:0 --tmpfs /work --mount "type=bind,source=$PWD/deploy/production/hash-mqtt.sh,target=/hash-mqtt.sh,readonly" --entrypoint sh "$image" -ec '
             set -u
             printf "identity=%s:%s\n" "$(id -u)" "$(id -g)"
             printf "tool=%s\n" "$(command -v mosquitto_passwd || echo MISSING)"
 
+            echo "--- stage 1: broker-owned file read by root (the hazard) ---"
             printf "one_nvr:isolated-test-only\n" > /work/passwords
             chmod 600 /work/passwords
             chown 1883:1883 /work/passwords
@@ -222,21 +225,31 @@ jobs:
             printf "stage1_warned=%s\n" "$(sh /hash-mqtt.sh /work/passwords 2>&1 >/dev/null | tr "\n" ";")"
             printf "stage1_after=%s\n" "$(ls -ln /work/passwords | tr -s " " | cut -d" " -f1,3,4,5)"
 
-            printf "one_nvr:isolated-test-only\n" > /work/passwords
-            chmod 600 /work/passwords
-            chown 1883:1883 /work/passwords
-            chown 0:0 /work/passwords
-            printf "stage2_before=%s\n" "$(ls -ln /work/passwords | tr -s " " | cut -d" " -f1,3,4,5)"
-            printf "stage2_warned=%s\n" "$(sh /hash-mqtt.sh /work/passwords 2>&1 >/dev/null | tr "\n" ";")"
-            chown 1883:1883 /work/passwords
-            printf "stage2_after=%s\n" "$(ls -ln /work/passwords | tr -s " " | cut -d" " -f1,3,4,5)"
-            done=ok
-            printf "done=%s\n" "$done"
+            echo "--- stage 2: handoff first, then convert (expected silent) ---"
+            printf "one_nvr:isolated-test-only\n" > /work/passwords2
+            chmod 600 /work/passwords2
+            chown 0:0 /work/passwords2
+            printf "stage2_before=%s\n" "$(ls -ln /work/passwords2 | tr -s " " | cut -d" " -f1,3,4,5)"
+            printf "stage2_warned=%s\n" "$(sh /hash-mqtt.sh /work/passwords2 2>&1 >/dev/null | tr "\n" ";")"
+            chown 1883:1883 /work/passwords2
+            printf "stage2_after=%s\n" "$(ls -ln /work/passwords2 | tr -s " " | cut -d" " -f1,3,4,5)"
           ' 2>&1) || true
-          # One annotation line per measurement, replacing newlines with " | ".
-          flat=$(printf '%s' "$report" | tr "\n" "|" | sed 's/|/ | /g')
+          flat=$(printf "%s" "$report" | tr "\n" "|" | sed "s/|/ | /g")
           echo "::error title=Mosquitto ownership measurements::${flat}"
-          echo "$report"
+          # Assert on the extraction, not on the tool: stage 1 must show the
+          # ownership warning, stage 2 must be silent and end up broker-owned.
+          case "$report" in
+            *"stage1_warned=Warning: File /work/passwords owner is not root"*) ;;
+            *) echo "stage 1 did not report the expected ownership warning" >&2; exit 1 ;;
+          esac
+          case "$report" in
+            *"stage2_warned= |"*) ;;
+            *) echo "stage 2 was not silent" >&2; exit 1 ;;
+          esac
+          case "$report" in
+            *"stage2_after=-rw------- 1883 1883"*) ;;
+            *) echo "stage 2 did not end broker-owned" >&2; exit 1 ;;
+          esac
       - name: Actual Frigate config seed belongs to the publishing user
         run: |
           # The detection publisher rewrites config.yml on every publication and
