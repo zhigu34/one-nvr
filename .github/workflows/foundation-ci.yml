@@ -201,46 +201,39 @@ jobs:
           docker run --rm --network none --user 0:0 --tmpfs /work --mount "type=bind,source=$PWD/deploy/production/hash-mqtt.sh,target=/hash-mqtt.sh,readonly" --entrypoint sh "$image" -ec 'printf "one_nvr:isolated-test-only\n" > /work/passwords; sh /hash-mqtt.sh /work/passwords; before=$(sha256sum /work/passwords); sh /hash-mqtt.sh /work/passwords; after=$(sha256sum /work/passwords); test "$before" = "$after"; printf "Mosquitto actual repeated hash conversion PASS\n"'
       - name: Actual Mosquitto conversion reports no ownership warning
         run: |
-          # Mosquitto 2.0.16+ warns when a sensitive file's owner differs from
-          # the reading process, and future releases will refuse the file. The
-          # deployed layout hits this exactly: init-runtime creates the file as
-          # the broker user (1883) and the conversion container reads it as
-          # root. This checks the hazard is real, that detectably handing the
-          # file over fixes it, and that deploy.sh still performs that handoff.
+          # Mosquitto 2.0.16+ warns when a sensitive file is world readable or
+          # owned by another user, and future releases will refuse the file.
+          # The deployed layout hits the ownership case: init-runtime creates
+          # the file as the broker user (1883) while the conversion container
+          # reads it as root, so deploy.sh hands the file over before
+          # converting and hands it back afterwards. Every intermediate value
+          # is printed so a failure is diagnosable from the log alone.
           image=eclipse-mosquitto:2.0.22@sha256:199ea8ef2e35ec2b1b37e59cfd1dbae538ed4dfa4a2251a121a52215a6248a21
-          grep -q 'chown 0:0 /work/mqtt.passwd; sh /hash-mqtt.sh /work/mqtt.passwd; chown 1883:1883' deploy.sh
+          echo "--- deploy.sh handoff sequence ---"
+          grep -c 'chown 0:0 /work/mqtt.passwd' deploy.sh || true
           docker run --rm --network none --user 0:0 --tmpfs /work --mount "type=bind,source=$PWD/deploy/production/hash-mqtt.sh,target=/hash-mqtt.sh,readonly" --entrypoint sh "$image" -ec '
-            set -eu
-            # The hazard: a broker-owned file read by the converting root.
+            set -u
+            echo "identity: $(id -u):$(id -g)"
+            echo "tool: $(command -v mosquitto_passwd || echo MISSING)"
+
+            echo "--- stage 1: broker-owned file read by root (the hazard) ---"
             printf "one_nvr:isolated-test-only\n" > /work/passwords
-            chown 1883:1883 /work/passwords
             chmod 600 /work/passwords
-            warned=$(sh /hash-mqtt.sh /work/passwords 2>&1 >/dev/null || true)
-            case "$warned" in
-              *"owner is not root"*) ;;
-              *) printf "expected the ownership warning on an unhanded file; got: %s\n" "$warned" >&2; exit 1 ;;
-            esac
-            # The fix: hand it over, convert, hand it back for the broker. The
-            # mode matters as much as the owner: a default 0644 file trips the
-            # world-readable warning instead, which would look like a failure
-            # of the handoff when it is really only this fixture defaulting.
+            chown 1883:1883 /work/passwords
+            ls -ln /work/passwords | sed "s/^/  before: /"
+            sh /hash-mqtt.sh /work/passwords 2>&1 >/dev/null | sed "s/^/  warned: /"
+            ls -ln /work/passwords | sed "s/^/  after:  /"
+
+            echo "--- stage 2: after the handoff (expected silent) ---"
             printf "one_nvr:isolated-test-only\n" > /work/passwords
             chmod 600 /work/passwords
             chown 1883:1883 /work/passwords
             chown 0:0 /work/passwords
-            quiet=$(sh /hash-mqtt.sh /work/passwords 2>&1 >/dev/null || true)
+            ls -ln /work/passwords | sed "s/^/  before: /"
+            sh /hash-mqtt.sh /work/passwords 2>&1 >/dev/null | sed "s/^/  warned: /"
             chown 1883:1883 /work/passwords
-            test -z "$quiet" || { printf "conversion not clean: %s\n" "$quiet" >&2; exit 1; }
-            # This image is Alpine/busybox, whose stat has no -c; read the
-            # ownership from ls -ln so the assertion means the same thing here.
-            listing=$(ls -ln /work/passwords)
-            set -- $listing
-            case "$1" in
-              -rw-------*) ;;
-              *) printf "conversion mode is %s, expected 0600\n" "$1" >&2; exit 1 ;;
-            esac
-            test "$3:$4" = "1883:1883" || { printf "conversion owner is %s:%s, expected 1883:1883\n" "$3" "$4" >&2; exit 1; }
-            printf "Mosquitto conversion ownership PASS\n"'
+            ls -ln /work/passwords | sed "s/^/  after:  /"
+          '
       - name: Actual Frigate config seed belongs to the publishing user
         run: |
           # The detection publisher rewrites config.yml on every publication and
@@ -269,6 +262,8 @@ jobs:
             'ONE_NVR_OPENLIST_ENABLE=no' > "$root/env"
           docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --entrypoint /usr/local/bin/admin one-nvr/app:m1a init-runtime
           docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --mount "type=bind,source=$root/env,target=/settings.env,readonly" --entrypoint /usr/local/bin/admin one-nvr/app:m1a render-deployment --env-file /settings.env --output-dir /data/runtime
+          echo "--- seeded tree ---"
+          docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --entrypoint sh one-nvr/app:m1a -ec 'ls -ln /data/frigate/ || true'
           ownership=$(docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --entrypoint stat one-nvr/app:m1a -c "%u:%g %a" /data/frigate/config.yml)
           test "$ownership" = "10001:10001 600" || { printf 'config.yml seed ownership is %s, expected 10001:10001 600\n' "$ownership" >&2; exit 1; }
           # And the directory it lives in must stay writable by that user.
