@@ -3,7 +3,10 @@ import { useAuthStore } from '@/stores/auth-store'
 import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { Schema, PageData } from '@/lib/types'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { useAPI, useAction, fields, text } from '@/features/foundation/hooks'
+import { LoadingButton } from '@/features/foundation/loading-button'
+import { StatusDot } from '@/features/foundation/status-badge'
 import {
   PageTitle,
   Panel,
@@ -27,7 +30,7 @@ export function StoragePools() {
     admin,
     5000
   )
-  const action = useAction()
+  const action = useAction(true)
   if (!admin) return <Forbidden />
   return (
     <>
@@ -66,9 +69,14 @@ export function StoragePools() {
             placeholder='/storage/disk1'
             required
           />
-          <Button className='self-end' disabled={action.pending}>
+          <LoadingButton
+            className='self-end'
+            pending={action.pending}
+            pendingText='添加中…'
+            type='submit'
+          >
             添加存储池
-          </Button>
+          </LoadingButton>
         </form>
       </Panel>
       <QueryState
@@ -103,8 +111,9 @@ export function StoragePools() {
   )
 }
 function PoolRow({ pool }: { pool: Schema<'Pool'> }) {
-  const action = useAction()
+  const action = useAction(true)
   const [job, setJob] = useState('')
+  const [confirmRemove, setConfirmRemove] = useState(false)
   const status = useAPI<Schema<'Job'>>(
     `/api/v1/jobs/${job}`,
     !!job,
@@ -114,16 +123,24 @@ function PoolRow({ pool }: { pool: Schema<'Pool'> }) {
     <Panel title={`${pool.name}${pool.is_default ? ' · 默认池' : ''}`}>
       <p className='mb-2 font-mono text-sm break-all'>{pool.path}</p>
       <p className='mb-3 text-sm text-muted-foreground'>
-        状态：
-        {
-          {
-            ready: '可用',
-            pending: '待检查',
-            unavailable: '不可用',
-            low_space: '空间不足',
-            disabled: '已停用',
-          }[pool.state]
-        }{' '}
+        <StatusDot
+          tone={
+            pool.state === 'ready'
+              ? 'success'
+              : pool.state === 'unavailable' || pool.state === 'low_space'
+                ? 'destructive'
+                : 'warning'
+          }
+          label={
+            {
+              ready: '可用',
+              pending: '待检查',
+              unavailable: '不可用',
+              low_space: '空间不足',
+              disabled: '已停用',
+            }[pool.state]
+          }
+        />{' '}
         · 业务占用：
         {pool.used_bytes === null ? '待统计' : bytes(pool.used_bytes)}
         <span className='ms-1 text-xs text-muted-foreground'>
@@ -203,26 +220,32 @@ function PoolRow({ pool }: { pool: Schema<'Pool'> }) {
             type='button'
             variant='destructive'
             disabled={action.pending}
-            onClick={() => {
-              if (
-                window.confirm(
-                  '移除这个空存储池的登记？目录与池身份文件将保留。'
-                )
-              )
-                void action.run(
-                  () =>
-                    apiRequest(
-                      `/api/v1/storage-pools/${pool.id}`,
-                      jsonRequest('DELETE', undefined, pool.version)
-                    ),
-                  '登记已移除'
-                )
-            }}
+            onClick={() => setConfirmRemove(true)}
           >
             移除登记
           </Button>
         </form>
       </details>
+      <ConfirmDialog
+        open={confirmRemove}
+        onOpenChange={setConfirmRemove}
+        title='移除这个空存储池的登记？'
+        desc='目录与池身份文件将保留；已绑定该池的通道会先拒绝解绑。'
+        confirmText='移除登记'
+        cancelBtnText='取消'
+        destructive
+        isLoading={action.pending}
+        handleConfirm={() =>
+          void action.run(
+            () =>
+              apiRequest(
+                `/api/v1/storage-pools/${pool.id}`,
+                jsonRequest('DELETE', undefined, pool.version)
+              ),
+            '登记已移除'
+          )
+        }
+      />
       <details className='mt-3 text-sm'>
         <summary className='cursor-pointer text-muted-foreground'>
           检查详情

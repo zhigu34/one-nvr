@@ -316,6 +316,34 @@ function Workspace({
     if (playing && !timeline.entries.some((entry) => entry.id === playing.id))
       instance.stop()
   }, [timeline])
+  // Keyboard transport: space toggles, arrows seek. Typing in the search or
+  // datetime inputs must never trigger a seek, so editable targets are skipped.
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      )
+        return
+      if (event.key === ' ') {
+        event.preventDefault()
+        if (state.phase === 'playing') controller.current?.pause()
+        else controller.current?.resume()
+      } else if (event.key === 'ArrowLeft') {
+        event.preventDefault()
+        controller.current?.shift(-10)
+      } else if (event.key === 'ArrowRight') {
+        event.preventDefault()
+        controller.current?.shift(10)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [state.phase])
   const filtered = channels.filter((channel) =>
     label(channel).toLowerCase().includes(search.toLowerCase())
   )
@@ -379,12 +407,9 @@ function Workspace({
         <p className='text-xs text-muted-foreground'>
           只有已完成发布、校验通过的片段可播放。缺口不会被静默跳过。
         </p>
-        <Link
-          to='/live'
-          className='block text-sm text-primary underline underline-offset-4'
-        >
-          返回实时预览
-        </Link>
+        <Button asChild variant='link' className='h-auto p-0'>
+          <Link to='/live'>返回实时预览</Link>
+        </Button>
       </aside>
       <section className='space-y-4'>
         <form
@@ -454,104 +479,130 @@ function Workspace({
         <p className='text-xs text-muted-foreground'>
           时间按站点时区 {zone} 填写与显示，单次检索不超过 31 天。
         </p>
-        <div ref={frame} className='overflow-hidden rounded-xl border bg-black'>
+        <div ref={frame} className='group/frame relative overflow-hidden rounded-xl border bg-black'>
           <video
             ref={video}
             data-testid='playback-video'
             playsInline
             className='aspect-video w-full bg-black'
           />
-        </div>
-        <div className='flex flex-wrap items-center gap-2'>
-          <Button
-            onClick={() =>
+          {/* Floating control bar: hovers over the picture, auto-hides while
+              playing, always visible when paused/idle. Buttons keep their
+              accessible names — e2e and keyboard users navigate by them. */}
+          <div
+            className={cn(
+              'absolute inset-x-0 bottom-0 flex flex-wrap items-center gap-1.5 bg-gradient-to-t from-black/85 via-black/60 to-transparent px-3 pb-2.5 pt-8 transition-opacity duration-200',
               state.phase === 'playing'
-                ? controller.current?.pause()
-                : controller.current?.resume()
-            }
-            disabled={!timeline.entries.length}
-          >
-            {state.phase === 'playing' ? (
-              <Pause size={16} />
-            ) : (
-              <Play size={16} />
+                ? 'opacity-0 group-hover/frame:opacity-100 focus-within:opacity-100'
+                : 'opacity-100'
             )}
-            {state.phase === 'playing' ? '暂停' : '播放'}
-          </Button>
-          <Button
-            variant='outline'
-            onClick={() => controller.current?.shift(-10)}
           >
-            <RotateCcw size={16} />
-            -10 秒
-          </Button>
-          <Button
-            variant='outline'
-            onClick={() => controller.current?.shift(10)}
-          >
-            <RotateCcw size={16} className='scale-x-[-1]' />
-            +10 秒
-          </Button>
-          <Button
-            variant='outline'
-            onClick={() => controller.current?.jumpToNext()}
-          >
-            <SkipForward size={16} />
-            下一可用片段
-          </Button>
-          <Button
-            variant='outline'
-            onClick={() => {
-              // Release the playback lease before the controller drops the
-              // segment, so cleanup never waits on a stopped viewer.
-              const entryID = state.entry?.id
-              const release = entryID
-                ? apiRequest(`/api/v1/recordings/${entryID}/lease`, { method: 'DELETE' }).catch(() => {})
-                : Promise.resolve()
-              void release.finally(() => controller.current?.stop())
-            }}
-          >
-            <Square size={16} />
-            停止
-          </Button>
-          <Button
-            variant='outline'
-            onClick={() =>
-              void frame.current?.requestFullscreen().catch(() => {})
-            }
-          >
-            <Maximize size={16} />
-            放大
-          </Button>
-          <div className='flex items-center gap-2 text-sm'>
-            <span>倍速</span>
-            <SelectField
-              ariaLabel='播放倍速'
+            <Button
               size='sm'
-              className='w-20'
-              value={String(state.rate)}
-              onValueChange={(next) =>
-                controller.current?.setRate(Number(next))
+              variant='ghost'
+              className='text-white hover:bg-white/15 hover:text-white'
+              onClick={() =>
+                state.phase === 'playing'
+                  ? controller.current?.pause()
+                  : controller.current?.resume()
               }
-              options={RATES.map((rate) => ({
-                value: String(rate),
-                label: `${rate}x`,
-              }))}
-            />
+              disabled={!timeline.entries.length}
+            >
+              {state.phase === 'playing' ? (
+                <Pause size={16} />
+              ) : (
+                <Play size={16} />
+              )}
+              {state.phase === 'playing' ? '暂停' : '播放'}
+            </Button>
+            <Button
+              size='sm'
+              variant='ghost'
+              className='text-white hover:bg-white/15 hover:text-white'
+              onClick={() => controller.current?.shift(-10)}
+            >
+              <RotateCcw size={16} />
+              -10 秒
+            </Button>
+            <Button
+              size='sm'
+              variant='ghost'
+              className='text-white hover:bg-white/15 hover:text-white'
+              onClick={() => controller.current?.shift(10)}
+            >
+              <RotateCcw size={16} className='scale-x-[-1]' />
+              +10 秒
+            </Button>
+            <Button
+              size='sm'
+              variant='ghost'
+              className='text-white hover:bg-white/15 hover:text-white'
+              onClick={() => controller.current?.jumpToNext()}
+            >
+              <SkipForward size={16} />
+              下一可用片段
+            </Button>
+            <Button
+              size='sm'
+              variant='ghost'
+              className='text-white hover:bg-white/15 hover:text-white'
+              onClick={() => {
+                // Release the playback lease before the controller drops the
+                // segment, so cleanup never waits on a stopped viewer.
+                const entryID = state.entry?.id
+                const release = entryID
+                  ? apiRequest(`/api/v1/recordings/${entryID}/lease`, { method: 'DELETE' }).catch(() => {})
+                  : Promise.resolve()
+                void release.finally(() => controller.current?.stop())
+              }}
+            >
+              <Square size={16} />
+              停止
+            </Button>
+            <Button
+              size='sm'
+              variant='ghost'
+              className='text-white hover:bg-white/15 hover:text-white'
+              onClick={() =>
+                void frame.current?.requestFullscreen().catch(() => {})
+              }
+            >
+              <Maximize size={16} />
+              放大
+            </Button>
+            <div className='flex items-center gap-2 text-xs text-white/90'>
+              <span>倍速</span>
+              <SelectField
+                ariaLabel='播放倍速'
+                size='sm'
+                className='w-20'
+                triggerClassName='bg-white/10 border-white/20 text-white'
+                value={String(state.rate)}
+                onValueChange={(next) =>
+                  controller.current?.setRate(Number(next))
+                }
+                options={RATES.map((rate) => ({
+                  value: String(rate),
+                  label: `${rate}x`,
+                }))}
+              />
+            </div>
+            <Button
+              size='sm'
+              variant='ghost'
+              className='ml-auto text-white hover:bg-white/15 hover:text-white'
+              onClick={() =>
+                startTarget && controller.current?.start(startTarget.start)
+              }
+              disabled={!startTarget}
+            >
+              {selected
+                ? selected.blocked
+                  ? '从下一可用片段开始播放'
+                  : '从此片段开始播放'
+                : '播放首个可用片段'}
+            </Button>
           </div>
-          <Button
-            variant='outline'
-            onClick={() =>
-              startTarget && controller.current?.start(startTarget.start)
-            }
-            disabled={!startTarget}
-          >
-            {selected
-              ? selected.blocked
-                ? '从下一可用片段开始播放'
-                : '从此片段开始播放'
-              : '播放首个可用片段'}
-          </Button>
         </div>
         <div className='rounded-xl border bg-card p-3 text-sm'>
           <p role='status'>{state.message}</p>
@@ -764,6 +815,7 @@ function Timeline({
   onPlay: (entry: Entry) => void
 }) {
   const strip = useRef<HTMLDivElement>(null)
+  const bubble = useRef<HTMLDivElement>(null)
   const [scrubbing, setScrubbing] = useState(false)
   const [stripWidth, setStripWidth] = useState(0)
   const span = timeline.to - timeline.from
@@ -792,6 +844,25 @@ function Timeline({
     event.currentTarget.setPointerCapture(event.pointerId)
     setScrubbing(true)
     scrubTo(event.clientX)
+  }
+  // The scrub preview is written straight to a DOM node, not through state:
+  // a React re-render from pointermove combined with the strip's pointer
+  // capture reliably drops the second click of a double click (the browser
+  // retargets mid-sequence), which would break double-click-to-play.
+  function trackHover(event: ReactPointerEvent<HTMLElement>) {
+    const node = bubble.current
+    const box = strip.current?.getBoundingClientRect()
+    if (!node || !box || !box.width) return
+    node.style.visibility = 'visible'
+    node.style.left = `${Math.min(Math.max(event.clientX - box.left, 0), box.width)}px`
+    node.textContent = formatClock(
+      timeline.from + ((event.clientX - box.left) / box.width) * span,
+      zone
+    )
+  }
+  function hideHover() {
+    const node = bubble.current
+    if (node) node.style.visibility = 'hidden'
   }
   // An empty index is explained once, by the page-level empty state below the
   // timeline. A zoomed view with no segments in it is different information —
@@ -823,9 +894,22 @@ function Timeline({
           }
           beginScrub(event)
         }}
-        onPointerMove={(event) => scrubbing && scrubTo(event.clientX)}
+        onPointerMove={(event) => {
+          // While scrubbing, pointer capture redirects events to the strip and
+          // the pointer is down — the bubble only tracks a free-moving pointer.
+          if (pickMode || scrubbing) return
+          trackHover(event)
+        }}
+        onPointerLeave={hideHover}
         onPointerUp={() => setScrubbing(false)}
       >
+        {/* Scrub preview: the target clock follows the pointer. */}
+        <div
+          ref={bubble}
+          aria-hidden
+          className='pointer-events-none absolute -top-8 z-10 -translate-x-1/2 whitespace-nowrap rounded-md border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md'
+          style={{ visibility: 'hidden', left: 0 }}
+        />
         {timeline.entries.map((entry) => (
           <Button
             key={entry.id}
@@ -837,12 +921,12 @@ function Timeline({
             onClick={() => onSelect(entry)}
             onDoubleClick={() => onPlay(entry)}
             className={cn(
-              'absolute top-1 h-10 rounded p-0',
+              'absolute top-1 h-10 rounded p-0 transition-colors duration-150',
               entry.blocked
-                ? 'bg-amber-500/40'
+                ? 'bg-amber-500/40 hover:bg-amber-500/60'
                 : entry.id === selected?.id
                   ? 'bg-primary'
-                  : 'bg-emerald-600/70'
+                  : 'bg-emerald-600/70 hover:bg-emerald-500/80'
             )}
             style={{
               left: position(entry.start),
@@ -874,33 +958,54 @@ function Timeline({
         {clock > 0 && (
           <div
             data-testid='playback-playhead'
-            className='absolute top-0 bottom-0 -ml-2 w-4 cursor-grab'
+            className='absolute top-0 bottom-0 -ml-2 w-4 cursor-grab active:cursor-grabbing'
             style={{ left: position(clock) }}
             onPointerDown={beginScrub}
             onPointerMove={(event) => scrubbing && scrubTo(event.clientX)}
             onPointerUp={() => setScrubbing(false)}
           >
-            <div className='mx-auto h-full w-0.5 bg-red-600' />
+            <div className='relative mx-auto h-full w-0.5 bg-red-500 shadow-[0_0_4px_rgba(239,68,68,0.6)]'>
+              {/* The grab handle: a small triangle crowning the line so the
+                  draggable affordance is visible, not just the hit area. */}
+              <div
+                aria-hidden
+                className='absolute -top-0.5 left-1/2 h-2.5 w-2.5 -translate-x-1/2 rounded-sm bg-red-500'
+                style={{ clipPath: 'polygon(50% 100%, 0 0, 100% 0)' }}
+              />
+            </div>
           </div>
         )}
       </div>
       {ticks.length > 0 && (
         <div aria-hidden className='relative h-4 select-none text-[10px] leading-4 text-muted-foreground'>
-          {ticks.map((tick) => (
-            <span
-              key={tick.at}
-              className={`absolute whitespace-nowrap ${tick.major ? 'font-medium' : ''}`}
-              style={{ left: position(tick.at), transform: 'translateX(-50%)' }}
-            >
-              {tick.label}
-            </span>
-          ))}
+          {ticks.map((tick, index) => {
+            const first = index === 0
+            const last = index === ticks.length - 1
+            // Edge labels flip their alignment instead of half-vanishing
+            // outside the strip.
+            return (
+              <span
+                key={tick.at}
+                className={`absolute whitespace-nowrap ${tick.major ? 'font-medium' : ''}`}
+                style={{
+                  left: position(tick.at),
+                  transform: first
+                    ? 'none'
+                    : last
+                      ? 'translateX(-100%)'
+                      : 'translateX(-50%)',
+                }}
+              >
+                {tick.label}
+              </span>
+            )
+          })}
         </div>
       )}
       <p className='text-xs text-muted-foreground'>
         {formatClock(timeline.from, zone)} — {formatClock(timeline.to, zone)} ·{' '}
         {timeline.entries.length} 个片段 · {timeline.gaps.length}{' '}
-        处缺口（单击片段选中，双击播放，拖动时间轴定位）
+        处缺口（单击片段选中，双击播放，拖动时间轴定位；空格播放/暂停，← → 快进快退 10 秒）
       </p>
     </div>
   )

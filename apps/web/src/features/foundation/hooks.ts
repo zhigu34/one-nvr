@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiRequest } from '@/lib/api-client'
+import { notifySuccess } from './notify'
 
 export function useAPI<T>(
   path: string,
@@ -15,7 +16,13 @@ export function useAPI<T>(
     retry: false,
   })
 }
-export function useAction() {
+/**
+ * `notify: true` reports success as a transient toast instead of the sticky
+ * inline notice; errors stay on `error` either way so the form keeps its
+ * context. Pages whose notices carry progress or are asserted inline stay on
+ * the default.
+ */
+export function useAction(notify = false) {
   const client = useQueryClient()
   const [pending, setPending] = useState(false),
     [error, setError] = useState(''),
@@ -31,7 +38,8 @@ export function useAction() {
     setNotice('')
     try {
       await action()
-      setNotice(message)
+      if (notify && message) notifySuccess(message)
+      else setNotice(message)
       if (refresh) await client.invalidateQueries()
       return true
     } catch (e) {

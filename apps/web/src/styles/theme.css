@@ -32,6 +32,14 @@
   --sidebar-accent-foreground: var(--accent-foreground);
   --sidebar-border: var(--border);
   --sidebar-ring: var(--ring);
+
+  /* The video wall stays dark in both themes (the picture is the interface);
+     these tokens replace the former hard-coded slate palette on live tiles. */
+  --video-surface: oklch(0.13 0.01 260);
+  --video-surface-raised: oklch(0.2 0.015 260);
+  --video-chrome: oklch(0.13 0.01 260 / 88%);
+  --video-chrome-foreground: oklch(0.97 0.005 260);
+  --video-border: oklch(1 0 0 / 12%);
 }
 
 .dark {
@@ -99,4 +107,9 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-video-surface: var(--video-surface);
+  --color-video-surface-raised: var(--video-surface-raised);
+  --color-video-chrome: var(--video-chrome);
+  --color-video-chrome-foreground: var(--video-chrome-foreground);
+  --color-video-border: var(--video-border);
 }

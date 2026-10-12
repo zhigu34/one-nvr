@@ -1,29 +1,26 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '@/stores/auth-store'
-import { ApiError, apiRequest, jsonRequest } from '@/lib/api-client'
+import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { useAPI } from '@/features/foundation/hooks'
+import { apiErrorText } from '@/features/foundation/api-errors'
 import { Empty, Notices, QueryState, SelectField } from '@/features/foundation/ui'
 
 type Target = Schema<'ArchiveTarget'>
 type Capabilities = Schema<'ArchiveTargetCapabilities'>
 type Policy = Schema<'ArchivePolicy'>
 
-function errorText(error: unknown): string {
-  if (error instanceof ApiError) {
-    const texts: Record<string, string> = {
-      archive_target_referenced: '该目标已有归档副本，只能停用不能删除',
-      archive_target_unavailable: '归档目标当前不可达',
-      archive_target_unauthorized: '归档目标拒绝当前凭据',
-    }
-    if (texts[error.code]) return texts[error.code]
-    return error.message
-  }
-  return error instanceof Error ? error.message : '操作失败'
+const ERROR_CODES: Record<string, string> = {
+  archive_target_referenced: '该目标已有归档副本，只能停用不能删除',
+  archive_target_unavailable: '归档目标当前不可达',
+  archive_target_unauthorized: '归档目标拒绝当前凭据',
 }
+
+const errorText = (error: unknown) => apiErrorText(error, ERROR_CODES)
 
 const EMPTY_FORM = { name: '', base_url: '', remote_root: '', username: '', password: '', cloud_retention_days: 365 }
 
@@ -44,6 +41,7 @@ export function ArchiveTargets() {
   const [notice, setNotice] = useState('')
   const [caps, setCaps] = useState<Capabilities | null>(null)
   const [pending, setPending] = useState(false)
+  const [deleting, setDeleting] = useState<Target | null>(null)
 
   if (!admin)
     return <Empty>归档目标只对管理员开放。</Empty>
@@ -196,9 +194,7 @@ export function ArchiveTargets() {
                     size='sm'
                     variant='ghost'
                     className='text-destructive'
-                    onClick={() => void run(async () => {
-                      await apiRequest(`/api/v1/archive-targets/${target.id}`, { method: 'DELETE' })
-                    }, '目标已删除')}
+                    onClick={() => setDeleting(target)}
                   >
                     删除
                   </Button>
@@ -211,6 +207,24 @@ export function ArchiveTargets() {
           ))}
         </div>
       )}
+      <ConfirmDialog
+        open={!!deleting}
+        onOpenChange={(next) => !next && setDeleting(null)}
+        title={`删除归档目标「${deleting?.name ?? ''}」？`}
+        desc='目标登记与凭据将被移除；已有云端副本不受影响。有归档副本的目标会被服务端拒绝，请先停用。'
+        confirmText='删除'
+        cancelBtnText='取消'
+        destructive
+        isLoading={pending}
+        handleConfirm={() => {
+          const target = deleting
+          if (!target) return
+          setDeleting(null)
+          void run(async () => {
+            await apiRequest(`/api/v1/archive-targets/${target.id}`, { method: 'DELETE' })
+          }, '目标已删除')
+        }}
+      />
     </div>
   )
 }

@@ -43,7 +43,7 @@ export function Users() {
     '/api/v1/channel-slots',
     admin
   )
-  const action = useAction()
+  const action = useAction(true)
   if (!admin) return <Forbidden />
   const user = query.data?.items.find((u) => u.id === selected)
   return (
@@ -162,7 +162,7 @@ function UserRow({
   onGrants: () => void
 }) {
   const current = useAuthStore((s) => s.user)
-  const action = useAction()
+  const action = useAction(true)
   return (
     <article className='rounded-xl border bg-card p-4'>
       <div className='mb-3 flex items-center justify-between'>
@@ -228,7 +228,7 @@ function GrantEditor({
   const query = useAPI<Schema<'Grant'>[]>(
     `/api/v1/users/${user.id}/channel-grants`
   )
-  const action = useAction()
+  const action = useAction(true)
   const [changes, setChanges] = useState<Record<string, boolean>>({})
   const checked = (cid: string, act: string) =>
     changes[cid + ':' + act] ??

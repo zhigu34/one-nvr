@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { ApiError, apiRequest, jsonRequest } from '@/lib/api-client'
+import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -12,6 +12,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useAPI } from '@/features/foundation/hooks'
+import { apiErrorText } from '@/features/foundation/api-errors'
+import { LoadingButton } from '@/features/foundation/loading-button'
+import { StatusBadge } from '@/features/foundation/status-badge'
 import { Empty, Notices, QueryState, SelectField } from '@/features/foundation/ui'
 
 type Config = Schema<'DetectionConfig'>
@@ -28,18 +31,12 @@ const LABEL_TEXT: Record<string, string> = {
 const COMMON_LABELS = ['person', 'car', 'bicycle', 'motorcycle', 'truck', 'bus']
 const MORE_LABELS = ['cat', 'dog', 'bird', 'horse', 'sheep', 'cow', 'bear']
 
-function errorText(error: unknown): string {
-  if (error instanceof ApiError) {
-    const texts: Record<string, string> = {
-      detection_label_unsupported: '模型不支持所选目标类别',
-      detection_version_conflict: '配置已被他人修改，请刷新后重试',
-      detection_publish_failed: '发布失败，已保留原配置',
-    }
-    if (texts[error.code]) return texts[error.code]
-    return error.message
-  }
-  return error instanceof Error ? error.message : '操作失败'
+const ERROR_CODES: Record<string, string> = {
+  detection_label_unsupported: '模型不支持所选目标类别',
+  detection_publish_failed: '发布失败，已保留原配置',
 }
+
+const errorText = (error: unknown) => apiErrorText(error, ERROR_CODES)
 
 /**
  * M3 batch 2 (AI-01/AI-07): per-channel detection settings and the capability
@@ -93,11 +90,17 @@ export function Detection() {
       />
       <Notices notice={notice} error={error} />
       {runtime.data && (
-        <div className='grid gap-2 rounded-xl border bg-card p-4 text-sm sm:grid-cols-2 lg:grid-cols-4'>
-          <div>
-            <p className='text-xs text-muted-foreground'>检测服务</p>
-            <p>{runtime.data.runtime?.reachable ? '运行中' : '不可达'}</p>
-          </div>
+          <div className='grid gap-2 rounded-xl border bg-card p-4 text-sm sm:grid-cols-2 lg:grid-cols-4'>
+            <div>
+              <p className='text-xs text-muted-foreground'>检测服务</p>
+              <p>
+                <StatusBadge
+                  tone={runtime.data.runtime?.reachable ? 'success' : 'destructive'}
+                >
+                  {runtime.data.runtime?.reachable ? '运行中' : '不可达'}
+                </StatusBadge>
+              </p>
+            </div>
           <div>
             <p className='text-xs text-muted-foreground'>版本 / 检测器</p>
             <p>{runtime.data.runtime?.version || '—'} · {runtime.data.runtime?.detector || '—'}</p>
@@ -137,8 +140,9 @@ export function Detection() {
       ) : (
         <>
           <div className='flex items-center gap-2'>
-            <Button
-              disabled={pending}
+            <LoadingButton
+              pending={pending}
+              pendingText='发布中…'
               onClick={() =>
                 void run(async () => {
                   await apiRequest('/api/v1/detection/publish', { method: 'POST' })
@@ -146,7 +150,7 @@ export function Detection() {
               }
             >
               发布检测配置
-            </Button>
+            </LoadingButton>
             <span className='text-xs text-muted-foreground'>
               发布后检测服务会重载一次；失败时保留上一份配置。
             </span>
@@ -304,7 +308,7 @@ function DetectionRow({
       >
         保存
       </Button>
-      {draft && <span className='text-xs text-amber-600'>未保存</span>}
+      {draft && <StatusBadge tone='warning'>未保存</StatusBadge>}
     </div>
   )
 }

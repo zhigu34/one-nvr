@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { ApiError, apiRequest, jsonRequest } from '@/lib/api-client'
+import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -13,6 +13,10 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { useAPI } from '@/features/foundation/hooks'
+import { apiErrorText } from '@/features/foundation/api-errors'
+import { LoadingButton } from '@/features/foundation/loading-button'
+import { StatusBadge, type StatusTone } from '@/features/foundation/status-badge'
+import { CardsSkeleton } from '@/features/foundation/skeletons'
 import { Empty, QueryState, SelectField } from '@/features/foundation/ui'
 import { formatClock, formatMinute, wallClockInput } from '@/features/playback/zone'
 
@@ -26,6 +30,14 @@ const HANDLE_LABELS: Record<string, string> = {
   false_positive: '误报',
 }
 
+/** The one place mapping handling state to the shared badge vocabulary. */
+const HANDLE_TONES: Record<string, StatusTone> = {
+  open: 'warning',
+  acknowledged: 'success',
+  closed: 'neutral',
+  false_positive: 'info',
+}
+
 const CATEGORY_LABELS: Record<string, string> = {
   person: '人',
   car: '车',
@@ -35,19 +47,6 @@ const CATEGORY_LABELS: Record<string, string> = {
   bicycle: '自行车',
   dog: '狗',
   cat: '猫',
-}
-
-function handleError(error: unknown): string {
-  if (error instanceof ApiError) {
-    if (error.code === 'event_version_conflict') return '该事件已被他人处理，请刷新后重试'
-    const texts: Record<string, string> = {
-      snapshot_pending: '抓拍尚未生成，稍后再看',
-      snapshot_unavailable: '抓拍暂时不可读',
-    }
-    if (texts[error.code]) return texts[error.code]
-    return error.message
-  }
-  return error instanceof Error ? error.message : '操作失败'
 }
 
 /**
@@ -69,6 +68,16 @@ export function Events() {
   const [handleState, setHandleState] = useState('')
   const [selected, setSelected] = useState<string>('')
   const [openingEvent, setOpeningEvent] = useState<string>('')
+  // Honest paging: the contract returns a cursor; "load more" appends pages
+  // until the backend says the window is exhausted. Nothing is hidden. The
+  // appended pages belong to one filter combination — changing any filter
+  // resets them during render (the adjusted-state pattern, no effect needed).
+  const [scope, setScope] = useState({ channel: '', category: '', handleState: '' })
+  const [pages, setPages] = useState<Schema<'EventPage'>[]>([])
+  if (scope.channel !== channel || scope.category !== category || scope.handleState !== handleState) {
+    setScope({ channel, category, handleState })
+    setPages([])
+  }
   // The 7-day window is anchored once per mount: re-anchoring it on every
   // render would refetch the list continuously.
   const [window] = useState(() => {
@@ -93,7 +102,28 @@ export function Events() {
     `/api/v1/events?${filters}`,
     active
   )
-  const items = events.data?.items || []
+  const morePath =
+    events.data?.next_cursor
+      ? `/api/v1/events?${new URLSearchParams({
+          start: String(window.start),
+          end: String(window.end),
+          limit: '50',
+          cursor: events.data.next_cursor,
+          ...(channel ? { channel_id: channel } : {}),
+          ...(category ? { category } : {}),
+          ...(handleState ? { handle_state: handleState } : {}),
+        }).toString()}`
+      : ''
+  const more = useAPI<Schema<'EventPage'>>(morePath, active && !!morePath && pages.length > 0)
+  const loadedPages = [events.data, ...pages]
+  const items = loadedPages.flatMap((page) => page?.items || [])
+  const lastCursor =
+    pages.length && more.data ? more.data.next_cursor : events.data?.next_cursor
+  const hasMore = !!lastCursor
+  const loadMore = () => {
+    if (!more.data) return
+    setPages((current) => [...current, more.data!])
+  }
 
   if (!permitted.length && channels.data)
     return <Empty>没有可查看事件的通道，请联系管理员分配录像回放权限。</Empty>
@@ -149,7 +179,15 @@ export function Events() {
               className='w-32'
             />
           </div>
-          <QueryState pending={events.isPending} error={events.error} retry={events.refetch} />
+          <QueryState
+            pending={events.isPending}
+            error={events.error || more.error}
+            retry={() => {
+              void events.refetch()
+              if (more.error) void more.refetch()
+            }}
+            skeleton={<CardsSkeleton />}
+          />
           {events.data && !items.length && <Empty>该筛选范围内没有事件。</Empty>}
           <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3'>
             {items.map((item) => (
@@ -157,7 +195,7 @@ export function Events() {
                 key={item.id}
                 type='button'
                 data-testid='event-card'
-                className='space-y-2 rounded-xl border bg-card p-3 text-left text-sm transition-colors hover:bg-accent'
+                className='group space-y-2 rounded-xl border bg-card p-3 text-left text-sm transition-colors hover:bg-accent hover:shadow-sm'
                 onClick={() => setSelected(item.id ?? '')}
               >
                 <div className='flex items-center justify-between'>
@@ -167,15 +205,9 @@ export function Events() {
                       {Math.round((item.score ?? 0) * 100)}%
                     </span>
                   </span>
-                  <span
-                    className={
-                      item.handle_state === 'open'
-                        ? 'text-xs text-amber-600'
-                        : 'text-xs text-muted-foreground'
-                    }
-                  >
+                  <StatusBadge tone={HANDLE_TONES[item.handle_state ?? 'open'] || 'neutral'}>
                     {HANDLE_LABELS[item.handle_state ?? 'open']}
-                  </span>
+                  </StatusBadge>
                 </div>
                 {item.snapshot_state === 'ready' ? (
                   <img
@@ -183,14 +215,14 @@ export function Events() {
                     alt='事件抓拍'
                     loading='lazy'
                     onError={() => setOpeningEvent(item.id ?? '')}
-                    className='aspect-video w-full rounded object-cover'
+                    className='aspect-video w-full rounded object-cover transition-transform duration-200 group-hover:scale-[1.02]'
                   />
                 ) : (
                   <div className='grid aspect-video w-full place-items-center rounded bg-muted text-xs text-muted-foreground'>
                     {item.snapshot_state === 'pending' ? '抓拍生成中' : '抓拍不可用'}
                   </div>
                 )}
-                <p className='text-xs text-muted-foreground'>
+                <p className='text-xs text-muted-foreground' title={formatClock(Date.parse(item.started_at ?? ''), zone)}>
                   {formatClock(Date.parse(item.started_at ?? ''), zone)}
                   {item.ended_at
                     ? ` · 持续 ${Math.max(1, Math.round((Date.parse(item.ended_at) - Date.parse(item.started_at ?? '')) / 1000))} 秒`
@@ -200,6 +232,28 @@ export function Events() {
               </button>
             ))}
           </div>
+          {more.isPending && pages.length > 0 && (
+            <p role='status' className='text-sm text-muted-foreground'>
+              正在加载更多事件…
+            </p>
+          )}
+          {/* The window is a hard 7 days; the cursor says whether more exists —
+              both facts are stated so a truncated list never reads as "all". */}
+          {items.length > 0 && (
+            <div className='flex items-center justify-between text-xs text-muted-foreground'>
+              <span>已显示 {items.length} 个事件{hasMore ? '，还有更早的' : '，本窗口已全部加载'}</span>
+              {hasMore && (
+                <Button
+                  size='sm'
+                  variant='outline'
+                  disabled={more.isPending}
+                  onClick={loadMore}
+                >
+                  加载更早事件
+                </Button>
+              )}
+            </div>
+          )}
           {selected && (
             <EventDetail
               eventID={selected}
@@ -230,11 +284,13 @@ function EventDetail({
   const [note, setNote] = useState('')
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
+  const [pendingAction, setPendingAction] = useState('')
   const item = event.data
 
   async function transition(state: string) {
     if (!item) return
     setPending(true)
+    setPendingAction(state)
     setError('')
     try {
       const init = jsonRequest('PATCH', { state, note, version: item.version ?? 0 })
@@ -242,9 +298,10 @@ function EventDetail({
       setNote('')
       await client.invalidateQueries()
     } catch (cause) {
-      setError(handleError(cause))
+      setError(apiErrorText(cause))
     } finally {
       setPending(false)
+      setPendingAction('')
     }
   }
 
@@ -322,19 +379,48 @@ function EventDetail({
                 maxLength={500}
                 onChange={(input) => setNote(input.target.value)}
               />
+              {/* Each action owns its pending state, so the operator sees which
+                  transition is running; the rest stay clickable-disabled. */}
               <div className='flex flex-wrap gap-2'>
-                <Button size='sm' disabled={pending} onClick={() => void transition('acknowledged')}>
+                <LoadingButton
+                  size='sm'
+                  pending={pendingAction === 'acknowledged'}
+                  disabled={pending && pendingAction !== 'acknowledged'}
+                  pendingText='确认中…'
+                  onClick={() => void transition('acknowledged')}
+                >
                   已确认
-                </Button>
-                <Button size='sm' variant='outline' disabled={pending} onClick={() => void transition('closed')}>
+                </LoadingButton>
+                <LoadingButton
+                  size='sm'
+                  variant='outline'
+                  pending={pendingAction === 'closed'}
+                  disabled={pending && pendingAction !== 'closed'}
+                  pendingText='关闭中…'
+                  onClick={() => void transition('closed')}
+                >
                   已关闭
-                </Button>
-                <Button size='sm' variant='outline' disabled={pending} onClick={() => void transition('false_positive')}>
+                </LoadingButton>
+                <LoadingButton
+                  size='sm'
+                  variant='outline'
+                  pending={pendingAction === 'false_positive'}
+                  disabled={pending && pendingAction !== 'false_positive'}
+                  pendingText='标记中…'
+                  onClick={() => void transition('false_positive')}
+                >
                   误报
-                </Button>
-                <Button size='sm' variant='ghost' disabled={pending} onClick={() => void transition('open')}>
+                </LoadingButton>
+                <LoadingButton
+                  size='sm'
+                  variant='ghost'
+                  pending={pendingAction === 'open'}
+                  disabled={pending && pendingAction !== 'open'}
+                  pendingText='打开中…'
+                  onClick={() => void transition('open')}
+                >
                   重新打开
-                </Button>
+                </LoadingButton>
               </div>
             </div>
             <div className='space-y-2'>
@@ -342,13 +428,31 @@ function EventDetail({
               {!item.handling?.length && (
                 <p className='text-xs text-muted-foreground'>暂无处理记录。</p>
               )}
-              {(item.handling || []).map((record) => (
-                <p key={record.id} className='text-xs text-muted-foreground'>
-                  {formatClock(Date.parse(record.created_at ?? ''), zone)} · {record.actor_name} ·{' '}
-                  {HANDLE_LABELS[record.state ?? ''] || record.state}
-                  {record.note ? ` · ${record.note}` : ''}
-                </p>
-              ))}
+              {/* The trail reads as a timeline: one rail, one node per action. */}
+              {item.handling && item.handling.length > 0 && (
+                <ol className='relative space-y-3 border-l pl-4'>
+                  {(item.handling || []).map((record) => (
+                    <li key={record.id} className='relative'>
+                      <span
+                        aria-hidden
+                        className='absolute -left-[21px] top-1.5 size-2 rounded-full bg-muted-foreground/50'
+                      />
+                      <p className='text-xs'>
+                        {HANDLE_LABELS[record.state ?? ''] || record.state}
+                        <span className='ml-2 text-muted-foreground'>
+                          {record.actor_name} ·{' '}
+                          {formatClock(Date.parse(record.created_at ?? ''), zone)}
+                        </span>
+                      </p>
+                      {record.note && (
+                        <p className='mt-0.5 text-xs text-muted-foreground'>
+                          {record.note}
+                        </p>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              )}
             </div>
           </div>
         )}

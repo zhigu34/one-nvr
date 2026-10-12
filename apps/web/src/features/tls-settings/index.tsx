@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { useAPI, useAction, fields } from '@/features/foundation/hooks'
 import {
   Panel,
@@ -19,7 +20,8 @@ export function TLSSettings() {
       hour12: false,
     })
   const query = useAPI<Schema<'TLSState'>>('/api/v1/settings/tls', true, 5000)
-  const action = useAction()
+  const action = useAction(true)
+  const [confirmRollback, setConfirmRollback] = useState(false)
   const state = query.data
   const active = state?.certificates.find((c) => c.id === state.active_id)
   return (
@@ -165,21 +167,31 @@ export function TLSSettings() {
                 state.state === 'applying' ||
                 action.pending
               }
-              onClick={() => {
-                if (window.confirm('回滚上一证书并暂停目录自动应用？'))
-                  void action.run(
-                    () =>
-                      apiRequest(
-                        '/api/v1/settings/tls/rollback',
-                        jsonRequest('POST', undefined, state.version)
-                      ),
-                    '回滚已排队，等待网关核验'
-                  )
-              }}
+              onClick={() => setConfirmRollback(true)}
             >
               回滚上一证书
             </Button>
           </div>
+          <ConfirmDialog
+            open={confirmRollback}
+            onOpenChange={setConfirmRollback}
+            title='回滚上一证书并暂停目录自动应用？'
+            desc='已建立的连接不受影响，新连接会使用回滚后的证书。'
+            confirmText='回滚'
+            cancelBtnText='取消'
+            destructive
+            isLoading={action.pending}
+            handleConfirm={() =>
+              void action.run(
+                () =>
+                  apiRequest(
+                    '/api/v1/settings/tls/rollback',
+                    jsonRequest('POST', undefined, state.version)
+                  ),
+                '回滚已排队，等待网关核验'
+              )
+            }
+          />
           {state.certificates.length === 0 && <Empty>尚无已保存证书。</Empty>}
           <div className='grid gap-4'>
             {state.certificates.map((cert) => (

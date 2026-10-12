@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import {
+  Loader2,
   Maximize,
   Minimize,
   MonitorPlay,
   RefreshCw,
+  Square,
   Volume2,
   VolumeX,
   X,
@@ -27,16 +29,63 @@ import { restoreView, type Layout, type View } from './view'
 function label(c: Schema<'Channel'>) {
   return `CH${String(c.channel_no).padStart(2, '0')} ${c.channel_name}`
 }
+
+/** Grid-shaped glyph for the layout switcher, filled up to the cell count. */
+function LayoutGlyph({ layout }: { layout: Layout }) {
+  const cells = { 1: 1, 4: 4, 9: 9, 16: 16 }[layout]
+  const side = Math.sqrt(cells)
+  return (
+    <span
+      aria-hidden
+      className='grid gap-px'
+      style={{ gridTemplateColumns: `repeat(${side}, 1fr)` }}
+    >
+      {Array.from({ length: cells }, (_, index) => (
+        <span key={index} className='size-1.5 rounded-[1px] bg-current' />
+      ))}
+    </span>
+  )
+}
+
+/** The one status dot per tile: green playing, amber reconnecting, red error. */
+function TileDot({ state, paused }: { state: PlayerState; paused: boolean }) {
+  const tone = paused
+    ? 'bg-slate-400'
+    : state.phase === 'playing'
+      ? 'bg-emerald-400'
+      : state.phase === 'error'
+        ? 'bg-red-500'
+        : 'bg-amber-400'
+  const text = paused
+    ? '已暂停'
+    : state.phase === 'playing'
+      ? '播放中'
+      : state.phase === 'error'
+        ? '连接失败'
+        : '连接中'
+  return (
+    <span
+      aria-label={text}
+      title={text}
+      className='inline-flex size-2 shrink-0 rounded-full'
+    >
+      <span aria-hidden className={cn('size-2 animate-none rounded-full', tone)} />
+    </span>
+  )
+}
+
 function Tile({
   channel,
   selected,
   paused,
+  dropActive,
   onSelect,
   onClose,
 }: {
   channel?: Schema<'Channel'>
   selected: boolean
   paused: boolean
+  dropActive: boolean
   onSelect: () => void
   onClose: () => void
 }) {
@@ -71,32 +120,18 @@ function Tile({
     return () => player.stop()
   }, [channelID, paused, stream, retry])
   const message = paused ? '页面在后台，预览已暂停' : state.message
+  const live = !paused && state.phase === 'playing'
   return (
     <section
       ref={container}
       aria-label={channel ? `预览 ${label(channel)}` : '空闲画面'}
       onClick={onSelect}
-      className={`relative flex min-w-0 flex-col overflow-hidden rounded-lg border bg-black text-slate-100 ${selected ? 'ring-2 ring-primary' : 'border-slate-800'}`}
+      className={cn(
+        'group relative flex min-w-0 flex-col overflow-hidden rounded-lg border bg-black text-slate-100 transition-shadow duration-150',
+        selected ? 'ring-2 ring-primary' : 'border-video-border',
+        dropActive && 'ring-2 ring-sky-400'
+      )}
     >
-      <div className='flex min-h-9 items-center justify-between gap-2 bg-slate-950 px-2 text-xs'>
-        <span className='truncate'>
-          {channel ? label(channel) : '选择通道开始预览'}
-        </span>
-        {channel && (
-          <Button
-            variant='ghost'
-            size='icon'
-            aria-label={`关闭 ${label(channel)}`}
-            className='size-6 rounded p-1 text-slate-100 hover:bg-slate-800 hover:text-slate-100'
-            onClick={(e) => {
-              e.stopPropagation()
-              onClose()
-            }}
-          >
-            <X size={14} />
-          </Button>
-        )}
-      </div>
       <div
         data-testid='live-video-area'
         className='relative aspect-video min-h-0 flex-1'
@@ -117,9 +152,44 @@ function Tile({
           muted={!selected || !audio}
           className='h-full w-full object-contain'
         />
+        {/* Status dot: always visible so a wall of tiles reads at a glance. */}
+        {channel && (
+          <div className='absolute left-2 top-2 flex items-center gap-1.5'>
+            <TileDot state={state} paused={paused} />
+          </div>
+        )}
+        {/* Header floats over the picture and fades with the controls. */}
+        <div
+          className={cn(
+            'absolute inset-x-0 top-0 flex min-h-9 items-center justify-between gap-2 bg-gradient-to-b from-video-chrome to-transparent px-2 pb-2 pt-1 text-xs transition-opacity duration-200',
+            fullscreen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+          )}
+        >
+          <span className='truncate'>
+            {channel ? label(channel) : '选择通道开始预览'}
+          </span>
+          {channel && (
+            <Button
+              variant='ghost'
+              size='icon'
+              aria-label={`关闭 ${label(channel)}`}
+              className='size-6 shrink-0 rounded p-1 text-video-chrome-foreground hover:bg-white/15 hover:text-video-chrome-foreground'
+              onClick={(e) => {
+                e.stopPropagation()
+                onClose()
+              }}
+            >
+              <X size={14} />
+            </Button>
+          )}
+        </div>
         {(!channel || paused || state.phase !== 'playing') && (
-          <div className='absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-950/95 px-4 text-center text-xs text-slate-300'>
-            <MonitorPlay size={26} />
+          <div className='absolute inset-0 flex flex-col items-center justify-center gap-3 bg-video-chrome px-4 text-center text-xs text-slate-300 transition-opacity duration-200'>
+            {state.phase === 'connecting' || state.phase === 'retrying' ? (
+              <Loader2 size={26} className='animate-spin' />
+            ) : (
+              <MonitorPlay size={26} />
+            )}
             <p role='status'>
               {channel ? message : '点击左侧通道，放入选中的画面'}
             </p>
@@ -137,16 +207,15 @@ function Tile({
         )}
       </div>
       {channel && (
-        <div className='flex flex-wrap items-center justify-between gap-2 bg-slate-950 px-2 py-1.5 text-xs'>
+        <div className='flex items-center justify-between gap-2 bg-video-chrome px-2 py-1.5 text-xs'>
           <div className='flex min-w-0 flex-1 items-center gap-2'>
             <span
-              className={
-                state.phase === 'playing' && !paused
-                  ? 'text-emerald-400'
-                  : 'text-slate-400'
-              }
+              className={cn(
+                'shrink-0',
+                live ? 'text-emerald-400' : 'text-slate-400'
+              )}
             >
-              {!paused && state.phase === 'playing'
+              {live
                 ? state.fallback
                   ? '主流 · 未配置子流'
                   : state.stream === 'main'
@@ -154,7 +223,7 @@ function Tile({
                     : '子流'
                 : '未播放'}
             </span>
-            {!paused && state.phase === 'playing' && media && (
+            {live && media && (
               <span
                 data-testid='live-media-info'
                 className='truncate text-slate-300'
@@ -164,7 +233,7 @@ function Tile({
               </span>
             )}
           </div>
-          <div className='flex items-center gap-2'>
+          <div className='flex shrink-0 items-center gap-1.5'>
             <SelectField
               ariaLabel={`${label(channel)} 码流`}
               size='sm'
@@ -182,7 +251,7 @@ function Tile({
               aria-label='切换声音'
               disabled={!selected}
               onClick={() => setAudio((v) => !v)}
-              className='size-6 p-1 text-slate-100 hover:bg-slate-800 hover:text-slate-100 disabled:opacity-30'
+              className='size-6 p-1 text-video-chrome-foreground hover:bg-white/15 hover:text-video-chrome-foreground disabled:opacity-30'
             >
               {audio && selected ? (
                 <Volume2 size={14} />
@@ -194,7 +263,7 @@ function Tile({
               variant='ghost'
               size='icon'
               aria-label={fullscreen ? '退出全屏' : '全屏画面'}
-              className='size-6 p-1 text-slate-100 hover:bg-slate-800 hover:text-slate-100'
+              className='size-6 p-1 text-video-chrome-foreground hover:bg-white/15 hover:text-video-chrome-foreground'
               onClick={() => {
                 if (fullscreen)
                   void document.exitFullscreen().catch(() => {})
@@ -261,6 +330,7 @@ function LiveWorkspace({
   const [page, setPage] = useState(0)
   const [paused, setPaused] = useState(document.hidden)
   const [drag, setDrag] = useState<number | null>(null)
+  const [dropTarget, setDropTarget] = useState<number | null>(null)
   const grid = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const changed = () => setPaused(document.hidden)
@@ -304,6 +374,7 @@ function LiveWorkspace({
         </div>
         <div className='flex flex-wrap gap-2'>
           <div
+            role='toolbar'
             aria-label='分屏布局'
             className='flex gap-1 rounded-lg border p-1'
           >
@@ -312,12 +383,16 @@ function LiveWorkspace({
                 key={layout}
                 size='sm'
                 variant={view.layout === layout ? 'secondary' : 'ghost'}
+                aria-pressed={view.layout === layout}
+                aria-label={`${layout} 画面`}
+                title={`${layout} 画面`}
                 onClick={() => {
                   change({ ...view, layout })
                   setSelected(0)
                 }}
               >
-                {layout} 画面
+                <LayoutGlyph layout={layout} />
+                {layout}
               </Button>
             ))}
           </div>
@@ -325,6 +400,7 @@ function LiveWorkspace({
             variant='outline'
             onClick={() => change({ ...view, channels: [] })}
           >
+            <Square size={16} />
             停止全部
           </Button>
           <Button
@@ -364,7 +440,7 @@ function LiveWorkspace({
                 }
                 onClick={() => choose(channel.id)}
                 className={cn(
-                  'h-auto w-full justify-start truncate px-2 py-2 text-left text-sm font-normal',
+                  'h-auto w-full justify-start truncate px-2 py-2 text-left text-sm font-normal transition-colors',
                   displayed[selected]?.id === channel.id &&
                     'bg-accent font-medium'
                 )}
@@ -404,40 +480,48 @@ function LiveWorkspace({
           <p className='text-xs text-muted-foreground'>
             拖动通道到画面，或拖动画面调整顺序。仅选中画面可开启声音。
           </p>
-          <Link
-            to='/channels'
-            search={{ batch: '' }}
-            className='block text-sm text-primary underline underline-offset-4'
-          >
-            配置通道与录像
-          </Link>
-          {displayed[selected]?.permissions.includes('playback') && (
-            <Link
-              to='/recordings'
-              search={{
-                channel: displayed[selected]!.id,
-                at: new Date().toISOString(),
-                // The instant-playback entry belongs to the playback tab.
-                tab: 'playback',
-              }}
-              className='block text-sm text-primary underline underline-offset-4'
-            >
-              查看 {label(displayed[selected]!)} 即时回放
+          <Button asChild variant='link' className='h-auto p-0'>
+            <Link to='/channels' search={{ batch: '' }}>
+              配置通道与录像
             </Link>
+          </Button>
+          {displayed[selected]?.permissions.includes('playback') && (
+            <Button asChild variant='link' className='h-auto p-0'>
+              <Link
+                to='/recordings'
+                search={{
+                  channel: displayed[selected]!.id,
+                  at: new Date().toISOString(),
+                  // The instant-playback entry belongs to the playback tab.
+                  tab: 'playback',
+                }}
+              >
+                查看 {label(displayed[selected]!)} 即时回放
+              </Link>
+            </Button>
           )}
         </aside>
         <div
           ref={grid}
           aria-label='预览画面网格'
-          className={`grid gap-2 rounded-xl bg-slate-950 p-2 ${view.layout === 1 ? 'grid-cols-1' : view.layout === 4 ? 'grid-cols-1 sm:grid-cols-2' : view.layout === 9 ? 'grid-cols-2 lg:grid-cols-3' : 'grid-cols-2 lg:grid-cols-4'}`}
+          className={`grid gap-2 rounded-xl bg-video-surface p-2 ${view.layout === 1 ? 'grid-cols-1' : view.layout === 4 ? 'grid-cols-1 sm:grid-cols-2' : view.layout === 9 ? 'grid-cols-2 lg:grid-cols-3' : 'grid-cols-2 lg:grid-cols-4'}`}
         >
           {Array.from({ length: view.layout }, (_, index) => (
             <div
               key={index}
               draggable={!!displayed[index]}
               onDragStart={() => setDrag(index)}
-              onDragEnd={() => setDrag(null)}
-              onDragOver={(e) => e.preventDefault()}
+              onDragEnd={() => {
+                setDrag(null)
+                setDropTarget(null)
+              }}
+              onDragOver={(e) => {
+                e.preventDefault()
+                setDropTarget(index)
+              }}
+              onDragLeave={() =>
+                setDropTarget((current) => (current === index ? null : current))
+              }
               onDrop={(e) => {
                 e.preventDefault()
                 const next = [...view.channels]
@@ -452,6 +536,7 @@ function LiveWorkspace({
                 change({ ...view, channels: next })
                 setSelected(index)
                 setDrag(null)
+                setDropTarget(null)
               }}
             >
               <Tile
@@ -459,6 +544,7 @@ function LiveWorkspace({
                 channel={displayed[index]}
                 selected={selected === index}
                 paused={paused}
+                dropActive={dropTarget === index && drag !== null}
                 onSelect={() => setSelected(index)}
                 onClose={() => {
                   const next = [...view.channels]

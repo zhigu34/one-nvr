@@ -3,6 +3,7 @@ import { useAuthStore } from '@/stores/auth-store'
 import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { Schema, Capabilities } from '@/lib/types'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { useAPI, useAction, fields, text } from '@/features/foundation/hooks'
 import {
   PageTitle,
@@ -26,7 +27,8 @@ export function Settings() {
     admin && !!modules.data?.frigate.enabled,
     5000
   )
-  const action = useAction()
+  const action = useAction(true)
+  const [confirmExpand, setConfirmExpand] = useState(false)
   if (!admin) return <Forbidden />
   return (
     <>
@@ -98,26 +100,31 @@ export function Settings() {
               <Button
                 variant='outline'
                 disabled={action.pending}
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      '追加 CH17–CH32？现有通道身份保持，扩容不能缩回。'
-                    )
-                  )
-                    void action.run(
-                      () =>
-                        apiRequest(
-                          '/api/v1/site/expand',
-                          jsonRequest('POST', undefined, query.data!.version)
-                        ),
-                      '已扩容至 32 路'
-                    )
-                }}
+                onClick={() => setConfirmExpand(true)}
               >
                 扩容至 32 路
               </Button>
             )}
           </div>
+          <ConfirmDialog
+            open={confirmExpand}
+            onOpenChange={setConfirmExpand}
+            title='追加 CH17–CH32？'
+            desc='现有通道身份保持，扩容不能缩回。'
+            confirmText='扩容至 32 路'
+            cancelBtnText='取消'
+            isLoading={action.pending}
+            handleConfirm={() =>
+              void action.run(
+                () =>
+                  apiRequest(
+                    '/api/v1/site/expand',
+                    jsonRequest('POST', undefined, query.data!.version)
+                  ),
+                '已扩容至 32 路'
+              )
+            }
+          />
         </Panel>
       )}
       <Panel title='功能模块'>
@@ -176,7 +183,7 @@ export function Settings() {
 // recorder producing nothing stay active either way, so the panel states the
 // cost in one sentence rather than hiding it behind a bare label.
 function StorageProofSetting({ site }: { site: Schema<'Site'> }) {
-  const action = useAction()
+  const action = useAction(true)
   return (
     <div className='mt-4 rounded-lg border p-4'>
       <div className='flex flex-wrap items-start justify-between gap-3'>

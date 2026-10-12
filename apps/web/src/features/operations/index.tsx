@@ -2,6 +2,15 @@ import { useState } from 'react'
 import { useAuthStore } from '@/stores/auth-store'
 import type { Schema, PageData } from '@/lib/types'
 import { Button } from '@/components/ui/button'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { StatusDot } from '@/features/foundation/status-badge'
 import { useAPI, fields, text } from '@/features/foundation/hooks'
 import {
   PageTitle,
@@ -54,7 +63,11 @@ export function Operations() {
             <article key={c.name} className='rounded-lg border p-4'>
               <h3 className='font-medium'>{c.name}</h3>
               <p className='my-2 text-sm'>
-                {c.enabled ? c.state : '功能未启用'} · {c.reason}
+                <StatusDot
+                  tone={c.enabled ? 'success' : 'neutral'}
+                  label={c.enabled ? c.state : '功能未启用'}
+                />{' '}
+                · {c.reason}
               </p>
               <p className='text-xs text-muted-foreground'>
                 最近观测{' '}
@@ -100,33 +113,33 @@ export function Operations() {
           retry={() => audits.refetch()}
         />
         {audits.data?.items.length === 0 && <Empty>尚无操作记录。</Empty>}
-        <div className='overflow-x-auto'>
-          <table className='w-full text-left text-sm'>
-            <thead>
-              <tr className='border-b'>
-                <th className='py-3'>时间</th>
-                <th>操作</th>
-                <th>操作者</th>
-                <th>对象</th>
-              </tr>
-            </thead>
-            <tbody>
+        <div className='overflow-x-auto rounded-lg border'>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>时间</TableHead>
+                <TableHead>操作</TableHead>
+                <TableHead>操作者</TableHead>
+                <TableHead>对象</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {audits.data?.items.map((a) => (
-                <tr key={a.id} className='border-b'>
-                  <td className='py-3 pr-3 whitespace-nowrap'>
+                <TableRow key={a.id}>
+                  <TableCell className='whitespace-nowrap'>
                     {displayTime(a.created_at)}
-                  </td>
-                  <td className='pr-3'>{a.action}</td>
-                  <td className='max-w-40 truncate font-mono text-xs'>
+                  </TableCell>
+                  <TableCell>{a.action}</TableCell>
+                  <TableCell className='max-w-40 truncate font-mono text-xs'>
                     {a.actor_id || '系统'}
-                  </td>
-                  <td className='max-w-40 truncate font-mono text-xs'>
+                  </TableCell>
+                  <TableCell className='max-w-40 truncate font-mono text-xs'>
                     {a.object_id || '—'}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
         <div className='mt-4 flex gap-3'>
           {audits.data?.next_cursor && (

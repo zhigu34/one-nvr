@@ -207,16 +207,21 @@ export function QueryState({
   pending,
   error,
   retry,
+  skeleton,
 }: {
   pending: boolean
   error: Error | null
   retry?: () => unknown
+  /** Opt-in skeleton shape shown while pending; text remains for AT. */
+  skeleton?: ReactNode
 }) {
   if (pending)
     return (
-      <p role='status' className='py-8 text-muted-foreground'>
-        正在加载…
-      </p>
+      <div role='status' aria-label='正在加载…' className='py-1'>
+        {skeleton ?? (
+          <p className='py-8 text-muted-foreground'>正在加载…</p>
+        )}
+      </div>
     )
   if (error)
     return (
@@ -242,10 +247,18 @@ export function Forbidden() {
     </div>
   )
 }
-export function Empty({ children }: { children: ReactNode }) {
+export function Empty({
+  children,
+  action,
+}: {
+  children: ReactNode
+  /** Optional call to action rendered under the text (a Button or link). */
+  action?: ReactNode
+}) {
   return (
-    <p className='rounded-xl border border-dashed p-8 text-center text-muted-foreground'>
-      {children}
-    </p>
+    <div className='flex flex-col items-center gap-3 rounded-xl border border-dashed p-8 text-center text-muted-foreground'>
+      <p>{children}</p>
+      {action}
+    </div>
   )
 }
