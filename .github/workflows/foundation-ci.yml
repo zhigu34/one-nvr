@@ -247,17 +247,18 @@ jobs:
           mkdir "$root/storage"
           chmod 755 "$root" "$root/storage"
           mkdir -p "$root/data"
-          # The heredoc must start at column zero, or the leading spaces land
-          # in the values and the env parser rejects them.
-          cat > "$root/env" <<ENV
-ONE_NVR_PUBLIC_URL=https://127.0.0.1:19443
-ONE_NVR_HTTPS_PORT=19443
-ONE_NVR_RTC_PORT=19000
-ONE_NVR_DATA_DIR=$root/data
-ONE_NVR_STORAGE_ROOT=$root/storage
-ONE_NVR_FRIGATE_ENABLE=yes
-ONE_NVR_OPENLIST_ENABLE=no
-ENV
+          # printf rather than a heredoc: a YAML block scalar ends at the first
+          # line dedented past it, so a column-zero heredoc terminator inside
+          # `run: |` breaks the workflow file itself, and an indented one is a
+          # shell syntax error.
+          printf '%s\n' \
+            'ONE_NVR_PUBLIC_URL=https://127.0.0.1:19443' \
+            'ONE_NVR_HTTPS_PORT=19443' \
+            'ONE_NVR_RTC_PORT=19000' \
+            "ONE_NVR_DATA_DIR=$root/data" \
+            "ONE_NVR_STORAGE_ROOT=$root/storage" \
+            'ONE_NVR_FRIGATE_ENABLE=yes' \
+            'ONE_NVR_OPENLIST_ENABLE=no' > "$root/env"
           docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --entrypoint /usr/local/bin/admin one-nvr/app:m1a init-runtime
           docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --mount "type=bind,source=$root/env,target=/settings.env,readonly" --entrypoint /usr/local/bin/admin one-nvr/app:m1a render-deployment --env-file /settings.env --output-dir /data/runtime
           ownership=$(docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --entrypoint stat one-nvr/app:m1a -c "%u:%g %a" /data/frigate/config.yml)
