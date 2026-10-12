@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -37,6 +38,13 @@ func (s *Service) Publish(ctx context.Context, p auth.Principal) (Revision, erro
 		if camera.Enabled {
 			enabled++
 		}
+	}
+	// The rendered camera keys are the detection identity the event stream
+	// will report; without a matching mapping row every event is dropped as
+	// "unmapped camera". Publishing is therefore also where the mapping is
+	// established, so the feature is usable without a hidden manual step.
+	if err := s.syncCameraMappings(ctx, cameras); err != nil {
+		return Revision{}, err
 	}
 	hash, err := s.PublishRendered(ctx, rendered, p.UserID, enabled)
 	if err != nil {
@@ -266,4 +274,41 @@ var mqttDial = func(ctx context.Context, address, username, password string) (mq
 type mqttPublisher interface {
 	Publish(ctx context.Context, topic string, payload []byte) error
 	Close() error
+}
+
+// syncCameraMappings makes the event-routing table match what was just
+// rendered: one row per enabled camera, keyed by the stable channel name.
+// Rows for cameras that are no longer rendered are dropped, so a disabled
+// channel stops matching events instead of silently attributing them.
+func (s *Service) syncCameraMappings(ctx context.Context, cameras map[string]CameraConfig) error {
+	names := make([]string, 0, len(cameras))
+	for name, camera := range cameras {
+		if camera.Enabled {
+			names = append(names, name)
+		}
+	}
+	return s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
+		if len(names) == 0 {
+			_, err := tx.Exec(ctx, `DELETE FROM frigate_cameras`)
+			return err
+		}
+		// Channel number is the last two digits of the stable camera name; the
+		// name itself is generated from it, never parsed from user input.
+		if _, err := tx.Exec(ctx, `DELETE FROM frigate_cameras WHERE frigate_name <> ALL($1)`, names); err != nil {
+			return err
+		}
+		for _, name := range names {
+			var channelNo int
+			if _, err := fmt.Sscanf(name, "ch%02d", &channelNo); err != nil {
+				continue
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO frigate_cameras(channel_id,frigate_name)
+				SELECT id,$2 FROM channels WHERE channel_no=$1
+				ON CONFLICT (channel_id) DO UPDATE SET frigate_name=EXCLUDED.frigate_name`,
+				channelNo, name); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }

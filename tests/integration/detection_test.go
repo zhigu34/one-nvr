@@ -100,6 +100,16 @@ func TestDetectionConfigLifecycle(t *testing.T) {
 	if len(rendered) == 0 || string(rendered) == "" {
 		t.Fatal("rendered config is empty")
 	}
+	// Publishing also establishes the event-routing table: without a mapping
+	// row the event stream would drop this channel's events as unmapped.
+	// The fixture has no live stream session, so no camera was rendered.
+	var mapped int
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM frigate_cameras`).Scan(&mapped); err != nil {
+		t.Fatal(err)
+	}
+	if mapped != 0 {
+		t.Fatal("no session means no rendered camera, so no mapping", mapped)
+	}
 }
 
 func TestDetectionPublishFailureKeepsPrevious(t *testing.T) {
