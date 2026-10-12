@@ -12,6 +12,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/channel"
 	"github.com/zhigu34/one-nvr/internal/config"
 	"github.com/zhigu34/one-nvr/internal/database"
+	"github.com/zhigu34/one-nvr/internal/events"
 	"github.com/zhigu34/one-nvr/internal/httpapi"
 	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/live"
@@ -162,6 +163,18 @@ func Run(name string) error {
 		recordings.ArchiveLocalGate = archiveService.ConfirmRemoteAvailable
 		background.Add(1)
 		go func() { defer background.Done(); runCloudExpirySweeper(ctx, archiveService) }()
+		if c.FrigateEnabled {
+			mqttKey, err := secret.ComponentCredential("mqtt")
+			if err != nil {
+				return err
+			}
+			// The event index lives with the worker: same database, same
+			// grants, and the ingestion loop dies with the process.
+			eventsService := events.New(db, recordings.Sources.Auth, "http://frigate:5000", secret.SiteID)
+			background.Add(2)
+			go func() { defer background.Done(); eventsService.Run(ctx, "mqtt:1883", "one_nvr", mqttKey) }()
+			go func() { defer background.Done(); eventsService.RunExpiry(ctx) }()
+		}
 		background.Add(6)
 		go func() { defer background.Done(); cleanupImportDrafts(ctx, recordings.Sources) }()
 		go func() {
@@ -245,7 +258,11 @@ func Run(name string) error {
 		if err != nil {
 			return err
 		}
-		handler = httpapi.NewHandler(httpapi.Dependencies{Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, Sources: sources, Live: &live.Service{DB: db, Auth: accounts, Media: media}, PublicURL: c.PublicURL, TrustedProxyToken: proxyKey, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled, Archive: archive.New(db, accounts, secret, pools)})
+		var intelligence *events.Service
+		if c.FrigateEnabled {
+			intelligence = events.New(db, accounts, "http://frigate:5000", secret.SiteID)
+		}
+		handler = httpapi.NewHandler(httpapi.Dependencies{Events: intelligence, Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, Sources: sources, Live: &live.Service{DB: db, Auth: accounts, Media: media}, PublicURL: c.PublicURL, TrustedProxyToken: proxyKey, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled, Archive: archive.New(db, accounts, secret, pools)})
 	}
 	if name == "worker" {
 		prober := &operations.Prober{Checks: map[string]func(context.Context) error{"zlm": media.Health}, Operations: operations.New(db, nil, c.FrigateEnabled, c.OpenListEnabled), Client: operations.NewProbeClient(), Targets: map[string]operations.ProbeTarget{

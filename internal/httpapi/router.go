@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"github.com/zhigu34/one-nvr/internal/archive"
+	"github.com/zhigu34/one-nvr/internal/events"
 	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/capability"
 	"github.com/zhigu34/one-nvr/internal/channel"
@@ -35,6 +36,7 @@ type Dependencies struct {
 	Sources                         *channel.SourceService
 	Recordings                      *recording.Service
 	Archive                         *archive.Service
+	Events                          *events.Service
 	Live                            *live.Service
 	Storage                         *storage.Service
 	TLS                             *tlsmanager.Service
@@ -156,6 +158,12 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("DELETE /api/v1/archive-targets/{id}", r.protected(r.deleteArchiveTarget))
 	r.mux.HandleFunc("POST /api/v1/archive-targets/test", r.protected(r.testArchiveTarget))
 	r.mux.HandleFunc("POST /api/v1/recordings/archive", r.protected(r.requestArchiveUploads))
+	r.mux.HandleFunc("GET /api/v1/events", r.protected(r.listEvents))
+	r.mux.HandleFunc("GET /api/v1/events/{id}", r.protected(r.getEvent))
+	r.mux.HandleFunc("PATCH /api/v1/events/{id}", r.protected(r.handleEvent))
+	r.mux.HandleFunc("GET /api/v1/events/{id}/snapshot", r.protected(r.eventSnapshot))
+	r.mux.HandleFunc("GET /api/v1/event-mappings", r.protected(r.eventMappings))
+	r.mux.HandleFunc("PUT /api/v1/event-mappings", r.protected(r.setEventMappings))
 	r.mux.HandleFunc("GET /api/v1/archive-policies", r.protected(r.listArchivePolicies))
 	r.mux.HandleFunc("PUT /api/v1/archive-policies", r.protected(r.upsertArchivePolicy))
 	r.mux.HandleFunc("GET /api/v1/storage-pools", r.protected(r.listPools))

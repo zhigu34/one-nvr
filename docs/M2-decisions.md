@@ -83,3 +83,16 @@
 3. **仅云端回放（ARC-04）**：`/content` 本地失败（deleted/missing/damaged/pool 不可达）且存在 verified 副本时代理 WebDAV Range（206/416/ETag/审计与本地同语义）；deleted+无副本仍 404（M1-C 语义不变）；云端读取失败 503 `cloud_read_failed` 独立错误码，远端 404 将副本行对账为 expired（不动归档成功历史）。
 4. **云端到期清理（ARC-09）**：`cloud_expires_at = 分片实际结束时间 + 目标保留天数`（创建时写入，迁移回填，目标天数调整时整批重算）；worker 每小时扫描过期 verified 副本 → DELETE 远端 → 行 `expired` + 审计（`archive.copy_expired`）；保护与活跃租约例外。**等待中的上传不补传已过期源**（`archive_expired_skip`，保护源例外）。
 5. 副本状态 CHECK 扩展 `expired` 终态；Stats 加 `cloud_only`（本地已删、云端可播计数，FILE-01）。
+
+## 2026-10-12 M3 批次 1：事件接收链路与事件中心
+
+计划：`docs/superpowers/plans/2026-10-12-intelligence-batch1.md`。范围：EVT-01/02/03/07 主体 + CH-07 事件侧。
+
+1. **MQTT 客户端自实现**（`internal/events/mqtt.go`，零新依赖）：照 `operations/probe.go` 的 3.1.1 帧格式扩展到 CONNECT/SUBSCRIBE/QoS-0 PUBLISH 接收/PINGREQ 保活；单主题 `frigate/events`、256KB 帧上限、断线指数退避重连。SUBACK 前到达的 PUBLISH 缓存不丢。
+2. **归一与去重**（AI-05 落地侧）：上游事件 id 唯一（`UNIQUE(source,source_id)`）；「update」只做单调前进（结束时间取最新、分数取最大、抓拍 pending→ready），迟到的「new」不会重开已结束事件；**未映射摄像头记审计丢弃，不猜通道**（CH-07/CH-08）。
+3. **流中断即记录**：订阅断开写 `event_stream_gaps`（含原因），恢复留痕——静默会被误读为「没有事件」（EVT-04 雏形）。
+4. **抓拍不落盘**：`GET /events/{id}/snapshot` 代理 Frigate HTTP API（`http://frigate:5000`），未授权 404、未生成 409 `snapshot_pending`、远端 404 把 `snapshot_state` 对账为 gone；抓拍字节不进 one-nvr 存储。
+5. **处理流程**（EVT-03）：`PATCH /events/{id}` 状态机 open/acknowledged/closed/false_positive，版本守卫（409 `event_version_conflict`），`event_handling` 记录操作者姓名/时间/备注；事件可重开。
+6. **90 天到期**（EVT-07）：`expires_at = ended_at + 90 天`；未处理**不**延长期限；唯一例外是「与受保护分片时间重叠」（±回放窗口）；只清事件索引，不动录像/云对象/审计。
+7. **权限**：列表/详情/抓拍/处理都走通道级 `playback` grant；无授权的行缺席而非报错；映射表 admin-only。
+8. 前端新增「事件」一级菜单（监控组）：7 天窗口、通道/类别/处理状态筛选、抓拍卡片、详情抽屉（处理按钮+记录+「查看事件录像」深链带事件前 10 秒定位）。

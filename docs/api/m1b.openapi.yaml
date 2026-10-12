@@ -3760,6 +3760,146 @@
         }
       }
     },
+    "/api/v1/events": {
+      "get": {
+        "operationId": "events",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "playback",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "start", "in": "query", "required": true, "schema": { "type": "integer" } },
+          { "name": "end", "in": "query", "required": true, "schema": { "type": "integer" } },
+          { "name": "channel_id", "in": "query", "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
+          { "name": "source_revision_id", "in": "query", "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
+          { "name": "category", "in": "query", "schema": { "type": "string" } },
+          { "name": "handle_state", "in": "query", "schema": { "type": "string" } },
+          { "name": "cursor", "in": "query", "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Detection events newest-first; rows without a playback grant on their channel are absent.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/EventPage" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events/{id}": {
+      "get": {
+        "operationId": "eventGet",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "playback",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "One event with its handling trail.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Event" }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "eventHandle",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "playback",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["state"],
+                "properties": {
+                  "state": { "type": "string", "enum": ["open", "acknowledged", "closed", "false_positive"] },
+                  "note": { "type": "string", "maxLength": 500 },
+                  "version": { "type": "integer", "description": "Expected current version; 0 skips the check." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated event with the new handling record.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Event" }
+              }
+            }
+          },
+          "409": { "description": "Version conflict: someone else handled it first." }
+        }
+      }
+    },
+    "/api/v1/events/{id}/snapshot": {
+      "get": {
+        "operationId": "eventSnapshot",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "playback",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "The snapshot image, proxied from the detector. Never a direct path.",
+            "content": {
+              "image/jpeg": { "schema": { "type": "string", "format": "binary" } }
+            }
+          },
+          "409": { "description": "The snapshot has not been produced yet." }
+        }
+      }
+    },
+    "/api/v1/event-mappings": {
+      "get": {
+        "operationId": "eventMappings",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [{ "sessionCookie": [] }],
+        "responses": {
+          "200": { "description": "Frigate camera name to channel mapping." }
+        }
+      },
+      "put": {
+        "operationId": "eventMappingsSet",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [{ "sessionCookie": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["mappings"],
+                "properties": {
+                  "mappings": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Mappings replaced." } }
+      }
+    },
     "/api/v1/recordings": {
       "get": {
         "operationId": "recordings",
@@ -6451,6 +6591,48 @@
             "type": "array",
             "items": { "$ref": "#/components/schemas/ArchivePolicy" }
           }
+        }
+      },
+      "Event": {
+        "type": "object",
+        "properties": {
+          "id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+          "channel_id": { "type": "string", "format": "uuid", "nullable": true },
+          "source_revision_id": { "type": "string", "format": "uuid", "nullable": true },
+          "source": { "type": "string", "enum": ["frigate"] },
+          "source_id": { "type": "string" },
+          "category": { "type": "string" },
+          "score": { "type": "number" },
+          "zones": { "type": "array", "items": { "type": "string" } },
+          "started_at": { "type": "string", "format": "date-time" },
+          "ended_at": { "type": "string", "format": "date-time", "nullable": true },
+          "snapshot_state": { "type": "string", "enum": ["pending", "ready", "gone"] },
+          "media_state": { "type": "string", "enum": ["pending", "linked", "unavailable"] },
+          "handle_state": { "type": "string", "enum": ["open", "acknowledged", "closed", "false_positive"] },
+          "handle_note": { "type": "string" },
+          "version": { "type": "integer" },
+          "expires_at": { "type": "string", "format": "date-time", "nullable": true },
+          "handling": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/EventHandlingRecord" }
+          }
+        }
+      },
+      "EventHandlingRecord": {
+        "type": "object",
+        "properties": {
+          "id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+          "actor_name": { "type": "string" },
+          "state": { "type": "string" },
+          "note": { "type": "string" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "EventPage": {
+        "type": "object",
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/Event" } },
+          "next_cursor": { "type": "string", "format": "uuid", "nullable": true }
         }
       },
       "RecordingSegment": {

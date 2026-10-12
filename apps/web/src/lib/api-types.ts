@@ -1052,6 +1052,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["events"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/events/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["eventGet"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["eventHandle"];
+        trace?: never;
+    };
+    "/api/v1/events/{id}/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["eventSnapshot"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/event-mappings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["eventMappings"];
+        put: operations["eventMappingsSet"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recordings": {
         parameters: {
             query?: never;
@@ -1817,6 +1881,47 @@ export interface components {
         };
         ArchivePolicyPage: {
             items?: components["schemas"]["ArchivePolicy"][];
+        };
+        Event: {
+            id?: components["schemas"]["UUID"];
+            /** Format: uuid */
+            channel_id?: string | null;
+            /** Format: uuid */
+            source_revision_id?: string | null;
+            /** @enum {string} */
+            source?: "frigate";
+            source_id?: string;
+            category?: string;
+            score?: number;
+            zones?: string[];
+            /** Format: date-time */
+            started_at?: string;
+            /** Format: date-time */
+            ended_at?: string | null;
+            /** @enum {string} */
+            snapshot_state?: "pending" | "ready" | "gone";
+            /** @enum {string} */
+            media_state?: "pending" | "linked" | "unavailable";
+            /** @enum {string} */
+            handle_state?: "open" | "acknowledged" | "closed" | "false_positive";
+            handle_note?: string;
+            version?: number;
+            /** Format: date-time */
+            expires_at?: string | null;
+            handling?: components["schemas"]["EventHandlingRecord"][];
+        };
+        EventHandlingRecord: {
+            id?: components["schemas"]["UUID"];
+            actor_name?: string;
+            state?: string;
+            note?: string;
+            /** Format: date-time */
+            created_at?: string;
+        };
+        EventPage: {
+            items?: components["schemas"]["Event"][];
+            /** Format: uuid */
+            next_cursor?: string | null;
         };
         RecordingSegment: {
             /** @description A verified cloud copy exists in the archive index (M2.1). */
@@ -5869,6 +5974,169 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ArchivePolicy"];
                 };
+            };
+        };
+    };
+    events: {
+        parameters: {
+            query: {
+                start: number;
+                end: number;
+                channel_id?: components["schemas"]["UUID"];
+                source_revision_id?: components["schemas"]["UUID"];
+                category?: string;
+                handle_state?: string;
+                cursor?: components["schemas"]["UUID"];
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Detection events newest-first; rows without a playback grant on their channel are absent. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventPage"];
+                };
+            };
+        };
+    };
+    eventGet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One event with its handling trail. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Event"];
+                };
+            };
+        };
+    };
+    eventHandle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    state: "open" | "acknowledged" | "closed" | "false_positive";
+                    note?: string;
+                    /** @description Expected current version; 0 skips the check. */
+                    version?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description The updated event with the new handling record. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Event"];
+                };
+            };
+            /** @description Version conflict: someone else handled it first. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    eventSnapshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The snapshot image, proxied from the detector. Never a direct path. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                };
+            };
+            /** @description The snapshot has not been produced yet. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    eventMappings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frigate camera name to channel mapping. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    eventMappingsSet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    mappings: {
+                        [key: string]: string;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Mappings replaced. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

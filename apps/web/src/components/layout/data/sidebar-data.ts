@@ -9,6 +9,7 @@ import {
   Activity,
   CalendarClock,
   CloudUpload,
+  Bell,
 } from 'lucide-react'
 import type { NavGroup } from '../types'
 
@@ -19,6 +20,7 @@ export const sidebarData: { navGroups: NavGroup[] } = {
       items: [
         { title: '总览', url: '/', icon: LayoutDashboard, everyRole: true },
         { title: '实时预览', url: '/live', icon: MonitorPlay, everyRole: true },
+        { title: '事件', url: '/events', icon: Bell, everyRole: true },
         {
           // One "recordings" entry holding playback and file management, as the
           // product decided; both tabs live at /recordings.
