@@ -63,11 +63,11 @@ type HandleRecord struct {
 
 // Service owns ingestion, reading, handling and expiry.
 type Service struct {
-	DB        *database.DB
-	Auth      *auth.Service
-	Frigate   string // base URL of the Frigate HTTP API, empty when disabled
-	siteID    id.ID
-	now       func() time.Time
+	DB      *database.DB
+	Auth    *auth.Service
+	Frigate string // base URL of the Frigate HTTP API, empty when disabled
+	siteID  id.ID
+	now     func() time.Time
 }
 
 func New(db *database.DB, accounts *auth.Service, frigateURL string, siteID id.ID) *Service {
@@ -94,28 +94,28 @@ func scanEvent(row pgx.Row) (Event, error) {
 type frigateMessage struct {
 	Type   string `json:"type"`
 	Before struct {
-		ID          string   `json:"id"`
-		Camera      string   `json:"camera"`
-		Label       string   `json:"label"`
-		Score       float64  `json:"score"`
-		TopScore    float64  `json:"top_score"`
-		Zones       []string `json:"zones"`
+		ID           string   `json:"id"`
+		Camera       string   `json:"camera"`
+		Label        string   `json:"label"`
+		Score        float64  `json:"score"`
+		TopScore     float64  `json:"top_score"`
+		Zones        []string `json:"zones"`
 		EnteredZones []string `json:"entered_zones"`
-		StartTime   float64  `json:"start_time"`
-		EndTime     *float64 `json:"end_time"`
-		HasSnapshot bool     `json:"has_snapshot"`
+		StartTime    float64  `json:"start_time"`
+		EndTime      *float64 `json:"end_time"`
+		HasSnapshot  bool     `json:"has_snapshot"`
 	} `json:"before"`
 	After struct {
-		ID          string   `json:"id"`
-		Camera      string   `json:"camera"`
-		Label       string   `json:"label"`
-		Score       float64  `json:"score"`
-		TopScore    float64  `json:"top_score"`
-		Zones       []string `json:"zones"`
+		ID           string   `json:"id"`
+		Camera       string   `json:"camera"`
+		Label        string   `json:"label"`
+		Score        float64  `json:"score"`
+		TopScore     float64  `json:"top_score"`
+		Zones        []string `json:"zones"`
 		EnteredZones []string `json:"entered_zones"`
-		StartTime   float64  `json:"start_time"`
-		EndTime     *float64 `json:"end_time"`
-		HasSnapshot bool     `json:"has_snapshot"`
+		StartTime    float64  `json:"start_time"`
+		EndTime      *float64 `json:"end_time"`
+		HasSnapshot  bool     `json:"has_snapshot"`
 	} `json:"after"`
 }
 

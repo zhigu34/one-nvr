@@ -162,6 +162,22 @@ func (c *Client) Receive(ctx context.Context) ([]byte, error) {
 	}
 }
 
+// Publish sends one QoS-0 message. The detection publisher uses it for the
+// Frigate reload command; the event subscriber never publishes.
+func (c *Client) Publish(ctx context.Context, topic string, payload []byte) error {
+	if len(topic) == 0 || len(topic) > 256 || len(payload) > maxPacket {
+		return ErrMQTTUnavailable
+	}
+	body := make([]byte, 2+len(topic)+len(payload))
+	binary.BigEndian.PutUint16(body, uint16(len(topic)))
+	copy(body[2:], topic)
+	copy(body[2+len(topic):], payload)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return c.writePacket(0x30, body)
+}
+
 func (c *Client) Close() error {
 	_, _ = c.conn.Write([]byte{0xe0, 0x00})
 	return c.conn.Close()

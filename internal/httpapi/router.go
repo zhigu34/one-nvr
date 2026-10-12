@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"github.com/zhigu34/one-nvr/internal/archive"
+	"github.com/zhigu34/one-nvr/internal/detection"
 	"github.com/zhigu34/one-nvr/internal/events"
 	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/capability"
@@ -37,6 +38,7 @@ type Dependencies struct {
 	Recordings                      *recording.Service
 	Archive                         *archive.Service
 	Events                          *events.Service
+	Detection                       *detection.Service
 	Live                            *live.Service
 	Storage                         *storage.Service
 	TLS                             *tlsmanager.Service
@@ -158,6 +160,10 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("DELETE /api/v1/archive-targets/{id}", r.protected(r.deleteArchiveTarget))
 	r.mux.HandleFunc("POST /api/v1/archive-targets/test", r.protected(r.testArchiveTarget))
 	r.mux.HandleFunc("POST /api/v1/recordings/archive", r.protected(r.requestArchiveUploads))
+	r.mux.HandleFunc("GET /api/v1/detection/configs", r.protected(r.detectionConfigs))
+	r.mux.HandleFunc("PUT /api/v1/detection/configs/{id}", r.protected(r.updateDetectionConfig))
+	r.mux.HandleFunc("POST /api/v1/detection/publish", r.protected(r.publishDetection))
+	r.mux.HandleFunc("GET /api/v1/detection/runtime", r.protected(r.detectionRuntime))
 	r.mux.HandleFunc("GET /api/v1/events", r.protected(r.listEvents))
 	r.mux.HandleFunc("GET /api/v1/events/{id}", r.protected(r.getEvent))
 	r.mux.HandleFunc("PATCH /api/v1/events/{id}", r.protected(r.handleEvent))

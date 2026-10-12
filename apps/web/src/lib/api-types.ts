@@ -1052,6 +1052,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/detection/configs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["detectionConfigs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/detection/configs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["detectionConfigUpdate"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/detection/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["detectionPublish"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/detection/runtime": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["detectionRuntime"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/events": {
         parameters: {
             query?: never;
@@ -1881,6 +1945,36 @@ export interface components {
         };
         ArchivePolicyPage: {
             items?: components["schemas"]["ArchivePolicy"][];
+        };
+        DetectionConfig: {
+            channel_id?: components["schemas"]["UUID"];
+            enabled?: boolean;
+            /** @enum {string} */
+            stream?: "main" | "sub";
+            fps?: number;
+            labels?: string[];
+            version?: number;
+        };
+        DetectionRevision: {
+            id?: components["schemas"]["UUID"];
+            config_hash?: string;
+            /** @enum {string} */
+            state?: "published" | "failed";
+            camera_count?: number;
+            error_code?: string | null;
+            created_at?: string;
+        };
+        DetectionRuntime: {
+            runtime?: {
+                version?: string;
+                detector?: string;
+                inference_ms?: number | null;
+                overloaded?: boolean;
+                reachable?: boolean;
+                observed_at?: string;
+            };
+            revision?: components["schemas"]["DetectionRevision"];
+            supported_labels?: string[];
         };
         Event: {
             id?: components["schemas"]["UUID"];
@@ -5973,6 +6067,116 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ArchivePolicy"];
+                };
+            };
+        };
+    };
+    detectionConfigs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every channel's detection settings; rows without the configure grant are absent. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items?: components["schemas"]["DetectionConfig"][];
+                    };
+                };
+            };
+        };
+    };
+    detectionConfigUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    enabled: boolean;
+                    /** @enum {string} */
+                    stream: "main" | "sub";
+                    fps: number;
+                    labels: string[];
+                    /** @description Expected current version; 0 skips the check. */
+                    version?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description The stored configuration. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DetectionConfig"];
+                };
+            };
+            /** @description Version conflict. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unsupported label. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    detectionPublish: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The publication revision. A failed reload keeps the previous config and records the failure. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DetectionRevision"];
+                };
+            };
+        };
+    };
+    detectionRuntime: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Detector capability snapshot and latest publication. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DetectionRuntime"];
                 };
             };
         };

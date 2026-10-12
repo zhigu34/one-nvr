@@ -21,6 +21,7 @@ import { Route as AuthenticatedRecordingPlanIndexRouteImport } from './routes/_a
 import { Route as AuthenticatedOperationsIndexRouteImport } from './routes/_authenticated/operations/index'
 import { Route as AuthenticatedLiveIndexRouteImport } from './routes/_authenticated/live/index'
 import { Route as AuthenticatedEventsIndexRouteImport } from './routes/_authenticated/events/index'
+import { Route as AuthenticatedDetectionIndexRouteImport } from './routes/_authenticated/detection/index'
 import { Route as AuthenticatedChannelsIndexRouteImport } from './routes/_authenticated/channels/index'
 import { Route as AuthenticatedArchiveTargetsIndexRouteImport } from './routes/_authenticated/archive-targets/index'
 import { Route as AuthenticatedChannelsConfigureRouteImport } from './routes/_authenticated/channels/configure'
@@ -90,6 +91,12 @@ const AuthenticatedEventsIndexRoute =
     path: '/events/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedDetectionIndexRoute =
+  AuthenticatedDetectionIndexRouteImport.update({
+    id: '/detection/',
+    path: '/detection/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedChannelsIndexRoute =
   AuthenticatedChannelsIndexRouteImport.update({
     id: '/channels/',
@@ -116,6 +123,7 @@ export interface FileRoutesByFullPath {
   '/channels/configure': typeof AuthenticatedChannelsConfigureRoute
   '/archive-targets/': typeof AuthenticatedArchiveTargetsIndexRoute
   '/channels/': typeof AuthenticatedChannelsIndexRoute
+  '/detection/': typeof AuthenticatedDetectionIndexRoute
   '/events/': typeof AuthenticatedEventsIndexRoute
   '/live/': typeof AuthenticatedLiveIndexRoute
   '/operations/': typeof AuthenticatedOperationsIndexRoute
@@ -132,6 +140,7 @@ export interface FileRoutesByTo {
   '/channels/configure': typeof AuthenticatedChannelsConfigureRoute
   '/archive-targets': typeof AuthenticatedArchiveTargetsIndexRoute
   '/channels': typeof AuthenticatedChannelsIndexRoute
+  '/detection': typeof AuthenticatedDetectionIndexRoute
   '/events': typeof AuthenticatedEventsIndexRoute
   '/live': typeof AuthenticatedLiveIndexRoute
   '/operations': typeof AuthenticatedOperationsIndexRoute
@@ -150,6 +159,7 @@ export interface FileRoutesById {
   '/_authenticated/channels/configure': typeof AuthenticatedChannelsConfigureRoute
   '/_authenticated/archive-targets/': typeof AuthenticatedArchiveTargetsIndexRoute
   '/_authenticated/channels/': typeof AuthenticatedChannelsIndexRoute
+  '/_authenticated/detection/': typeof AuthenticatedDetectionIndexRoute
   '/_authenticated/events/': typeof AuthenticatedEventsIndexRoute
   '/_authenticated/live/': typeof AuthenticatedLiveIndexRoute
   '/_authenticated/operations/': typeof AuthenticatedOperationsIndexRoute
@@ -168,6 +178,7 @@ export interface FileRouteTypes {
     | '/channels/configure'
     | '/archive-targets/'
     | '/channels/'
+    | '/detection/'
     | '/events/'
     | '/live/'
     | '/operations/'
@@ -184,6 +195,7 @@ export interface FileRouteTypes {
     | '/channels/configure'
     | '/archive-targets'
     | '/channels'
+    | '/detection'
     | '/events'
     | '/live'
     | '/operations'
@@ -201,6 +213,7 @@ export interface FileRouteTypes {
     | '/_authenticated/channels/configure'
     | '/_authenticated/archive-targets/'
     | '/_authenticated/channels/'
+    | '/_authenticated/detection/'
     | '/_authenticated/events/'
     | '/_authenticated/live/'
     | '/_authenticated/operations/'
@@ -303,6 +316,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedEventsIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/detection/': {
+      id: '/_authenticated/detection/'
+      path: '/detection'
+      fullPath: '/detection/'
+      preLoaderRoute: typeof AuthenticatedDetectionIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/channels/': {
       id: '/_authenticated/channels/'
       path: '/channels'
@@ -332,6 +352,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedChannelsConfigureRoute: typeof AuthenticatedChannelsConfigureRoute
   AuthenticatedArchiveTargetsIndexRoute: typeof AuthenticatedArchiveTargetsIndexRoute
   AuthenticatedChannelsIndexRoute: typeof AuthenticatedChannelsIndexRoute
+  AuthenticatedDetectionIndexRoute: typeof AuthenticatedDetectionIndexRoute
   AuthenticatedEventsIndexRoute: typeof AuthenticatedEventsIndexRoute
   AuthenticatedLiveIndexRoute: typeof AuthenticatedLiveIndexRoute
   AuthenticatedOperationsIndexRoute: typeof AuthenticatedOperationsIndexRoute
@@ -347,6 +368,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedChannelsConfigureRoute: AuthenticatedChannelsConfigureRoute,
   AuthenticatedArchiveTargetsIndexRoute: AuthenticatedArchiveTargetsIndexRoute,
   AuthenticatedChannelsIndexRoute: AuthenticatedChannelsIndexRoute,
+  AuthenticatedDetectionIndexRoute: AuthenticatedDetectionIndexRoute,
   AuthenticatedEventsIndexRoute: AuthenticatedEventsIndexRoute,
   AuthenticatedLiveIndexRoute: AuthenticatedLiveIndexRoute,
   AuthenticatedOperationsIndexRoute: AuthenticatedOperationsIndexRoute,

@@ -3760,6 +3760,79 @@
         }
       }
     },
+    "/api/v1/detection/configs": {
+      "get": {
+        "operationId": "detectionConfigs",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [{ "sessionCookie": [] }],
+        "responses": {
+          "200": {
+            "description": "Every channel's detection settings; rows without the configure grant are absent.",
+            "content": { "application/json": { "schema": { "type": "object", "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/DetectionConfig" } } } } } }
+          }
+        }
+      }
+    },
+    "/api/v1/detection/configs/{id}": {
+      "put": {
+        "operationId": "detectionConfigUpdate",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["enabled", "stream", "fps", "labels"],
+                "properties": {
+                  "enabled": { "type": "boolean" },
+                  "stream": { "type": "string", "enum": ["main", "sub"] },
+                  "fps": { "type": "integer" },
+                  "labels": { "type": "array", "items": { "type": "string" } },
+                  "version": { "type": "integer", "description": "Expected current version; 0 skips the check." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "The stored configuration.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DetectionConfig" } } } },
+          "409": { "description": "Version conflict." },
+          "422": { "description": "Unsupported label." }
+        }
+      }
+    },
+    "/api/v1/detection/publish": {
+      "post": {
+        "operationId": "detectionPublish",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [{ "sessionCookie": [] }],
+        "responses": {
+          "200": {
+            "description": "The publication revision. A failed reload keeps the previous config and records the failure.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DetectionRevision" } } }
+          }
+        }
+      }
+    },
+    "/api/v1/detection/runtime": {
+      "get": {
+        "operationId": "detectionRuntime",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [{ "sessionCookie": [] }],
+        "responses": {
+          "200": { "description": "Detector capability snapshot and latest publication.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DetectionRuntime" } } } }
+        }
+      }
+    },
     "/api/v1/events": {
       "get": {
         "operationId": "events",
@@ -6591,6 +6664,46 @@
             "type": "array",
             "items": { "$ref": "#/components/schemas/ArchivePolicy" }
           }
+        }
+      },
+      "DetectionConfig": {
+        "type": "object",
+        "properties": {
+          "channel_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+          "enabled": { "type": "boolean" },
+          "stream": { "type": "string", "enum": ["main", "sub"] },
+          "fps": { "type": "integer", "minimum": 1, "maximum": 30 },
+          "labels": { "type": "array", "items": { "type": "string" } },
+          "version": { "type": "integer" }
+        }
+      },
+      "DetectionRevision": {
+        "type": "object",
+        "properties": {
+          "id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+          "config_hash": { "type": "string" },
+          "state": { "type": "string", "enum": ["published", "failed"] },
+          "camera_count": { "type": "integer" },
+          "error_code": { "type": "string", "nullable": true },
+          "created_at": { "type": "string" }
+        }
+      },
+      "DetectionRuntime": {
+        "type": "object",
+        "properties": {
+          "runtime": {
+            "type": "object",
+            "properties": {
+              "version": { "type": "string" },
+              "detector": { "type": "string" },
+              "inference_ms": { "type": "number", "nullable": true },
+              "overloaded": { "type": "boolean" },
+              "reachable": { "type": "boolean" },
+              "observed_at": { "type": "string" }
+            }
+          },
+          "revision": { "$ref": "#/components/schemas/DetectionRevision" },
+          "supported_labels": { "type": "array", "items": { "type": "string" } }
         }
       },
       "Event": {

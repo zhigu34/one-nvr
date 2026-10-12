@@ -1,0 +1,66 @@
+package detection
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func TestRenderGolden(t *testing.T) {
+	base := map[string]any{
+		"mqtt":      map[string]any{"host": "mqtt", "user": "one_nvr", "password": "secret", "topic_prefix": "frigate"},
+		"detectors": map[string]any{"cpu": map[string]any{"type": "cpu", "num_threads": 2}},
+		"model":     map[string]any{"path": "/cpu_model.tflite"},
+		"version":   "0.17-0",
+	}
+	cameras := map[string]CameraConfig{
+		"ch01": {Enabled: true, InputURL: "rtsp://zlm:554/one_nvr/session-1", FPS: 5, Width: 640, Height: 360, Labels: []string{"person", "car"}},
+		"ch02": {Enabled: false, InputURL: "rtsp://zlm:554/one_nvr/session-2", FPS: 5, Width: 640, Height: 360, Labels: []string{"person"}},
+	}
+	rendered, err := Render(base, cameras)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(rendered, &config); err != nil {
+		t.Fatal("rendered config must be valid JSON", err)
+	}
+	cameraList, ok := config["cameras"].(map[string]any)
+	if !ok || len(cameraList) != 1 {
+		t.Fatal("only enabled cameras are rendered", config["cameras"])
+	}
+	camera, ok := cameraList["ch01"].(map[string]any)
+	if !ok {
+		t.Fatal("the camera key is its stable name")
+	}
+	// Detection must never pull from the camera directly (PRD §10.2): the
+	// input is the media server's internal path.
+	inputs := camera["ffmpeg"].(map[string]any)["inputs"].([]any)
+	path := inputs[0].(map[string]any)["path"].(string)
+	if !strings.HasPrefix(path, "rtsp://zlm:554/one_nvr/") {
+		t.Fatal("detection input must be the ZLM internal path", path)
+	}
+	// Detection never owns recording; ZLM keeps the recording pipeline.
+	if record := camera["record"].(map[string]any)["enabled"]; record != false {
+		t.Fatal("record must stay disabled in Frigate", record)
+	}
+	track := camera["objects"].(map[string]any)["track"].([]any)
+	if len(track) != 2 {
+		t.Fatal("labels ride into objects.track", track)
+	}
+	// Deterministic bytes: the same rows must hash identically for the
+	// revision ledger to mean anything.
+	again, err := Render(base, cameras)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(again) != string(rendered) {
+		t.Fatal("rendering is not deterministic")
+	}
+}
+
+func TestCameraNameStable(t *testing.T) {
+	if CameraName(1) != "ch01" || CameraName(16) != "ch16" {
+		t.Fatal("camera names must be the fixed channel key", CameraName(1), CameraName(16))
+	}
+}

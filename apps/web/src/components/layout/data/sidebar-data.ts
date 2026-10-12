@@ -10,6 +10,7 @@ import {
   CalendarClock,
   CloudUpload,
   Bell,
+  ScanEye,
 } from 'lucide-react'
 import type { NavGroup } from '../types'
 
@@ -35,6 +36,11 @@ export const sidebarData: { navGroups: NavGroup[] } = {
       title: '配置',
       items: [
         { title: '通道管理', url: '/channels', icon: Video, everyRole: true },
+        {
+          title: '检测配置',
+          url: '/detection',
+          icon: ScanEye,
+        },
         {
           title: '录像计划',
           url: '/recording-plan',

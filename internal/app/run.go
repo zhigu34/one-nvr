@@ -12,6 +12,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/channel"
 	"github.com/zhigu34/one-nvr/internal/config"
 	"github.com/zhigu34/one-nvr/internal/database"
+	"github.com/zhigu34/one-nvr/internal/detection"
 	"github.com/zhigu34/one-nvr/internal/events"
 	"github.com/zhigu34/one-nvr/internal/httpapi"
 	"github.com/zhigu34/one-nvr/internal/id"
@@ -30,6 +31,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -174,6 +176,13 @@ func Run(name string) error {
 			background.Add(2)
 			go func() { defer background.Done(); eventsService.Run(ctx, "mqtt:1883", "one_nvr", mqttKey) }()
 			go func() { defer background.Done(); eventsService.RunExpiry(ctx) }()
+			// Detection configuration publishes into the Frigate config bind
+			// mount and reloads it over the same broker.
+			detectionService := detection.New(db, recordings.Sources.Auth, "http://frigate:5000", filepath.Join(c.DataDir, "frigate", "config.yml"))
+			detectionService.MQTTKey = mqttKey
+			detectionService.Reload = detection.MQTTReloader{Address: "mqtt:1883", Username: "one_nvr", Password: mqttKey}.Reload
+			background.Add(1)
+			go func() { defer background.Done(); detectionService.RunRuntime(ctx) }()
 		}
 		background.Add(6)
 		go func() { defer background.Done(); cleanupImportDrafts(ctx, recordings.Sources) }()
@@ -259,10 +268,12 @@ func Run(name string) error {
 			return err
 		}
 		var intelligence *events.Service
+		var detectionService *detection.Service
 		if c.FrigateEnabled {
 			intelligence = events.New(db, accounts, "http://frigate:5000", secret.SiteID)
+			detectionService = detection.New(db, accounts, "http://frigate:5000", filepath.Join(c.DataDir, "frigate", "config.yml"))
 		}
-		handler = httpapi.NewHandler(httpapi.Dependencies{Events: intelligence, Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, Sources: sources, Live: &live.Service{DB: db, Auth: accounts, Media: media}, PublicURL: c.PublicURL, TrustedProxyToken: proxyKey, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled, Archive: archive.New(db, accounts, secret, pools)})
+		handler = httpapi.NewHandler(httpapi.Dependencies{Events: intelligence, Detection: detectionService, Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, Sources: sources, Live: &live.Service{DB: db, Auth: accounts, Media: media}, PublicURL: c.PublicURL, TrustedProxyToken: proxyKey, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled, Archive: archive.New(db, accounts, secret, pools)})
 	}
 	if name == "worker" {
 		prober := &operations.Prober{Checks: map[string]func(context.Context) error{"zlm": media.Health}, Operations: operations.New(db, nil, c.FrigateEnabled, c.OpenListEnabled), Client: operations.NewProbeClient(), Targets: map[string]operations.ProbeTarget{
