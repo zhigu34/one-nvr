@@ -4,6 +4,13 @@ import { ApiError, apiRequest, jsonRequest } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { useAPI } from '@/features/foundation/hooks'
 import { Empty, Notices, QueryState, SelectField } from '@/features/foundation/ui'
 
@@ -15,6 +22,11 @@ const LABEL_TEXT: Record<string, string> = {
   person: '人', bicycle: '自行车', car: '轿车', motorcycle: '摩托车', bus: '巴士',
   truck: '卡车', cat: '猫', dog: '狗', bird: '鸟', horse: '马', sheep: '羊', cow: '牛', bear: '熊',
 }
+
+// The detector's vocabulary is broad; a row shows the common six and keeps the
+// rest one click away instead of spraying the whole model across every row.
+const COMMON_LABELS = ['person', 'car', 'bicycle', 'motorcycle', 'truck', 'bus']
+const MORE_LABELS = ['cat', 'dog', 'bird', 'horse', 'sheep', 'cow', 'bear']
 
 function errorText(error: unknown): string {
   if (error instanceof ApiError) {
@@ -131,7 +143,6 @@ export function Detection() {
                   key={channel.id}
                   channel={channel}
                   config={config}
-                  labels={runtime.data?.supported_labels || []}
                   pending={pending}
                   onSave={(next) =>
                     void run(async () => {
@@ -154,13 +165,11 @@ export function Detection() {
 function DetectionRow({
   channel,
   config,
-  labels,
   pending,
   onSave,
 }: {
   channel: Channel
   config?: Config
-  labels: string[]
   pending: boolean
   onSave: (next: { enabled: boolean; stream: string; fps: number; labels: string[] }) => void
 }) {
@@ -169,52 +178,97 @@ function DetectionRow({
   const [fps, setFps] = useState(config?.fps ?? 5)
   const [selected, setSelected] = useState<string[]>(config?.labels ?? ['person'])
   const label = `CH${String(channel.channel_no ?? 0).padStart(2, '0')} ${channel.channel_name}`
+  const extra = selected.filter((value) => !COMMON_LABELS.includes(value))
+  const summary =
+    selected.length === 0
+      ? '未选择'
+      : selected.length <= 3
+        ? selected.map((value) => LABEL_TEXT[value] || value).join('、')
+        : `${selected.length} 类`
+
+  function toggle(value: string, next: boolean) {
+    setSelected((current) =>
+      next ? [...new Set([...current, value])] : current.filter((item) => item !== value)
+    )
+  }
 
   return (
-    <div className='flex flex-wrap items-center gap-3 rounded-xl border bg-card p-3 text-sm' data-testid='detection-row'>
-      <span className='w-40 truncate'>{label}</span>
+    <div
+      className='flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border bg-card p-3 text-sm'
+      data-testid='detection-row'
+    >
+      <span className='w-40 shrink-0 truncate font-medium'>{label}</span>
       <label className='flex items-center gap-2'>
         <Checkbox
           checked={enabled}
           onCheckedChange={(next) => setEnabled(next === true)}
           aria-label={`${label} 启用检测`}
         />
-        启用
+        启用检测
       </label>
-      <SelectField
-        label={`${label} 检测码流`}
-        value={stream}
-        onValueChange={(next) => setStream((next ?? 'sub') as 'main' | 'sub')}
-        options={[
-          { value: 'sub', label: '子码流' },
-          { value: 'main', label: '主码流' },
-        ]}
-        className='w-28'
-      />
-      <SelectField
-        label={`${label} 检测帧率`}
-        value={String(fps)}
-        onValueChange={(next) => setFps(Number(next ?? 5))}
-        options={[2, 5, 10, 15].map((value) => ({ value: String(value), label: `${value} fps` }))}
-        className='w-24'
-      />
-      <div className='flex flex-wrap items-center gap-2'>
-        {labels.map((value) => (
-          <label key={value} className='flex items-center gap-1 text-xs'>
-            <Checkbox
-              checked={selected.includes(value)}
-              onCheckedChange={(next) => {
-                setSelected((current) =>
-                  next === true
-                    ? [...new Set([...current, value])]
-                    : current.filter((item) => item !== value)
-                )
-              }}
-              aria-label={`${label} 目标 ${LABEL_TEXT[value] || value}`}
-            />
-            {LABEL_TEXT[value] || value}
-          </label>
-        ))}
+      {/* Labels live in the row header via ariaLabel only: repeating the
+          channel name on every control is what pushed these to two lines. */}
+      <div className='flex items-center gap-2'>
+        <span className='text-xs text-muted-foreground'>码流</span>
+        <SelectField
+          ariaLabel={`${label} 检测码流`}
+          value={stream}
+          onValueChange={(next) => setStream((next ?? 'sub') as 'main' | 'sub')}
+          options={[
+            { value: 'sub', label: '子码流' },
+            { value: 'main', label: '主码流' },
+          ]}
+          className='w-24'
+        />
+      </div>
+      <div className='flex items-center gap-2'>
+        <span className='text-xs text-muted-foreground'>帧率</span>
+        <SelectField
+          ariaLabel={`${label} 检测帧率`}
+          value={String(fps)}
+          onValueChange={(next) => setFps(Number(next ?? 5))}
+          options={[2, 5, 10, 15].map((value) => ({ value: String(value), label: `${value} fps` }))}
+          className='w-20'
+        />
+      </div>
+      <div className='flex items-center gap-2'>
+        <span className='text-xs text-muted-foreground'>目标</span>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant='outline' size='sm' aria-label={`${label} 目标类别`}>
+              {summary}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align='start' className='w-44'>
+            <DropdownMenuLabel>常用目标</DropdownMenuLabel>
+            {COMMON_LABELS.map((value) => (
+              <DropdownMenuCheckboxItem
+                key={value}
+                checked={selected.includes(value)}
+                onSelect={(event) => event.preventDefault()}
+                onCheckedChange={(next) => toggle(value, next === true)}
+              >
+                {LABEL_TEXT[value] || value}
+              </DropdownMenuCheckboxItem>
+            ))}
+            <DropdownMenuLabel>其他</DropdownMenuLabel>
+            {MORE_LABELS.map((value) => (
+              <DropdownMenuCheckboxItem
+                key={value}
+                checked={selected.includes(value)}
+                onSelect={(event) => event.preventDefault()}
+                onCheckedChange={(next) => toggle(value, next === true)}
+              >
+                {LABEL_TEXT[value] || value}
+              </DropdownMenuCheckboxItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        {extra.length > 0 && (
+          <span className='text-xs text-muted-foreground'>
+            +{extra.length} 类
+          </span>
+        )}
       </div>
       <Button
         size='sm'
