@@ -120,6 +120,28 @@ func TestDetectionConfigLifecycle(t *testing.T) {
 		t.Fatal("an edit after the last publication must read as pending", revision)
 	}
 
+	// The session sync must not overwrite an operator's pending edit: settings
+	// that moved on since the last publication stay the operator's decision.
+	reloadsBefore := reloads
+	service.SyncAfterSessionChange(ctx)
+	if reloads != reloadsBefore {
+		t.Fatal("the session sync republished while a setting change was pending")
+	}
+	if config, err := service.Upsert(ctx, fixture.Admin, detection.Config{
+		ChannelID: fixture.Channel, Enabled: true, Stream: "sub", FPS: 5, Labels: []string{"person", "car"}, Version: 2,
+	}); err != nil || config.FPS != 5 {
+		t.Fatal("reverting the setting must succeed", config, err)
+	}
+	if _, err := service.Publish(ctx, fixture.Admin); err != nil {
+		t.Fatal(err)
+	}
+	// With nothing pending, a sync against an unchanged render writes nothing.
+	reloadsBefore = reloads
+	service.SyncAfterSessionChange(ctx)
+	if reloads != reloadsBefore {
+		t.Fatal("the session sync published although nothing drifted")
+	}
+
 	// Publishing also establishes the event-routing table: without a mapping
 	// row the event stream would drop this channel's events as unmapped.
 	// The fixture has no live stream session, so no camera was rendered.

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/zhigu34/one-nvr/internal/archive"
+	"github.com/zhigu34/one-nvr/internal/detection"
 	"github.com/zhigu34/one-nvr/internal/recording"
 )
 
@@ -46,6 +47,23 @@ func runCloudExpirySweeper(ctx context.Context, s *archive.Service) {
 	defer ticker.Stop()
 	for {
 		s.SweepCloudExpiry(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// runDetectionSessionSync republishes detector configuration when a channel's
+// media session moved on. It runs on a short interval because a reconnecting
+// channel should resume detection within seconds, not minutes; the sync itself
+// is a no-op whenever the published config still matches.
+func runDetectionSessionSync(ctx context.Context, s *detection.Service) {
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+	for {
+		s.SyncAfterSessionChange(ctx)
 		select {
 		case <-ctx.Done():
 			return

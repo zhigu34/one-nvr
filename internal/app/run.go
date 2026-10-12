@@ -214,8 +214,14 @@ func Run(name string) error {
 			if err != nil {
 				return fmt.Errorf("detection service wiring incomplete")
 			}
-			background.Add(1)
+			background.Add(2)
 			go func() { defer background.Done(); detectionService.RunRuntime(ctx) }()
+			// A channel gets a new media session whenever it reconnects or
+			// switches source, which invalidates the input URL in the
+			// published detector configuration. Reconciling keeps detection
+			// running across those events instead of waiting for an operator
+			// to notice and publish again.
+			go func() { defer background.Done(); runDetectionSessionSync(ctx, detectionService) }()
 		}
 		background.Add(6)
 		go func() { defer background.Done(); cleanupImportDrafts(ctx, recordings.Sources) }()

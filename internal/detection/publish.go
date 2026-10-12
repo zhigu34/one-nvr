@@ -2,6 +2,8 @@ package detection
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +29,14 @@ func (s *Service) Publish(ctx context.Context, p auth.Principal) (Revision, erro
 	if err := s.Auth.RequireAdmin(ctx, p); err != nil {
 		return Revision{}, err
 	}
+	return s.publish(ctx, p.UserID)
+}
+
+// publish is the shared publication core. The manual endpoint and the
+// session-drift sync both go through it, so an automatic publication writes
+// exactly what a manual one would: same render, same mapping sync, same
+// revision record.
+func (s *Service) publish(ctx context.Context, actor id.ID) (Revision, error) {
 	cameras, base, err := s.cameraConfigs(ctx)
 	if err != nil {
 		return Revision{}, err
@@ -48,14 +58,14 @@ func (s *Service) Publish(ctx context.Context, p auth.Principal) (Revision, erro
 	if err := s.syncCameraMappings(ctx, cameras); err != nil {
 		return Revision{}, err
 	}
-	hash, err := s.PublishRendered(ctx, rendered, p.UserID, enabled)
+	hash, err := s.PublishRendered(ctx, rendered, actor, enabled)
 	if err != nil {
 		return Revision{}, err
 	}
 	// The visible result of the publication for the page.
 	var revision Revision
-	err = s.DB.Pool.QueryRow(ctx, `SELECT id,config_hash,state,camera_count,error_code,to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SSOF') FROM detection_config_revisions WHERE config_hash=$1 ORDER BY created_at DESC LIMIT 1`, hash).
-		Scan(&revision.ID, &revision.ConfigHash, &revision.State, &revision.CameraCount, &revision.ErrorCode, &revision.CreatedAt)
+	err = s.DB.Pool.QueryRow(ctx, `SELECT id,config_hash,state,camera_count,error_code,to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SSOF'),config_versions FROM detection_config_revisions WHERE config_hash=$1 ORDER BY created_at DESC LIMIT 1`, hash).
+		Scan(&revision.ID, &revision.ConfigHash, &revision.State, &revision.CameraCount, &revision.ErrorCode, &revision.CreatedAt, &revision.ConfigVersions)
 	if err != nil {
 		return Revision{}, err
 	}
@@ -398,4 +408,93 @@ func detectorConfig(inference string) (map[string]any, map[string]any) {
 		}, map[string]any{
 			"path": "/cpu_model.tflite",
 		}
+}
+
+// SyncAfterSessionChange republishes when the running detector points at a
+// media session that no longer exists, without waiting for an operator.
+//
+// The published input URL contains the channel's stream-session id, and a
+// channel gets a new session whenever it reconnects, restarts or switches
+// source. The detector would otherwise keep pulling a dead path until someone
+// noticed and pressed publish again.
+//
+// This deliberately does NOT publish pending setting edits: an operator's
+// unsaved-then-saved change must stay visible as "not yet published" until
+// they choose to apply it. The distinction is the configuration version — if
+// any channel's settings moved on since the last publication, the drift is the
+// operator's to resolve, not the sync's to overwrite.
+func (s *Service) SyncAfterSessionChange(ctx context.Context) {
+	if s.DB == nil || s.DB.Pool == nil || s.Auth == nil {
+		return
+	}
+	latest, err := s.latestRevisionRow(ctx)
+	if err != nil || latest == nil || latest.State != "published" {
+		return
+	}
+	current, err := s.configVersions(ctx)
+	if err != nil {
+		return
+	}
+	var published, now map[string]int64
+	if json.Unmarshal(latest.ConfigVersions, &published) != nil || json.Unmarshal(current, &now) != nil {
+		return
+	}
+	if !sameVersions(published, now) {
+		// Settings changed: an operator decision is pending, not a drift.
+		return
+	}
+	// Only a session drift may be corrected here. If an enabled channel is
+	// currently without a session it is offline, and its camera would drop out
+	// of the render — publishing that would restart the detector just because
+	// a camera blinked, and restart it again when the camera returns. Waiting
+	// costs nothing: the sync runs continuously, so the reconnect is picked up
+	// on a later pass.
+	enabled, err := s.enabledConfigCount(ctx)
+	if err != nil {
+		return
+	}
+	cameras, base, err := s.cameraConfigs(ctx)
+	if err != nil || len(cameras) == 0 || len(cameras) != enabled {
+		return
+	}
+	rendered, err := Render(base, cameras)
+	if err != nil {
+		return
+	}
+	sum := sha256.Sum256(rendered)
+	if hex.EncodeToString(sum[:]) == latest.ConfigHash {
+		// Nothing drifted — the published configuration still matches.
+		return
+	}
+	revision, err := s.publish(ctx, "")
+	if err != nil {
+		slog.Warn("detection session resync failed", "error", err)
+		return
+	}
+	slog.Info("detection configuration resynced after a session change", "cameras", revision.CameraCount)
+}
+
+// latestRevisionRow returns the newest publication attempt, or nil when none
+// exists. It is the unauthenticated counterpart of LatestRevision, used by the
+// worker-side sync.
+func (s *Service) latestRevisionRow(ctx context.Context) (*Revision, error) {
+	var revision Revision
+	err := s.DB.Pool.QueryRow(ctx, `SELECT id,config_hash,state,camera_count,error_code,to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SSOF'),config_versions FROM detection_config_revisions ORDER BY created_at DESC LIMIT 1`).
+		Scan(&revision.ID, &revision.ConfigHash, &revision.State, &revision.CameraCount, &revision.ErrorCode, &revision.CreatedAt, &revision.ConfigVersions)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &revision, nil
+}
+
+// enabledConfigCount is how many channels have detection switched on. The
+// session sync compares it against the cameras a render produced to tell
+// "every channel is online" from "some channel is down right now".
+func (s *Service) enabledConfigCount(ctx context.Context) (int, error) {
+	var count int
+	err := s.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM detection_configs WHERE enabled`).Scan(&count)
+	return count, err
 }
