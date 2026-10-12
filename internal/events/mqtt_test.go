@@ -40,7 +40,27 @@ func fakeBroker(t *testing.T, script func(packetType byte, payload []byte) [][]b
 				// the client only checks the return code.
 				_, _ = conn.Write([]byte{0x20, 0x02, 0x00, 0x00})
 			case 8: // SUBSCRIBE
+				// Parse per MQTT 3.1.1: packet id, then a UTF-8 topic filter
+				// carrying its own two-byte length. Validating the prefix here
+				// is what catches a client that forgets it — the broker would
+				// otherwise reject the whole packet as malformed.
+				if len(payload) < 5 {
+					t.Errorf("SUBSCRIBE too short: % x", payload)
+					return
+				}
 				packetID := binary.BigEndian.Uint16(payload)
+				topicLen := int(binary.BigEndian.Uint16(payload[2:]))
+				if topicLen == 0 || 4+topicLen > len(payload) {
+					t.Errorf("SUBSCRIBE topic length prefix invalid (got %d, payload %d bytes): % x", topicLen, len(payload), payload)
+					return
+				}
+				topic := string(payload[4 : 4+topicLen])
+				if topic != TopicPrefix {
+					t.Errorf("SUBSCRIBE topic = %q, want %q", topic, TopicPrefix)
+				}
+				if payload[4+topicLen] != 0x00 {
+					t.Errorf("SUBSCRIBE must request QoS 0, got 0x%02x", payload[4+topicLen])
+				}
 				_, _ = conn.Write([]byte{0x90, 0x03, byte(packetID >> 8), byte(packetID), 0x00})
 				for _, frame := range script(packetType, payload) {
 					_, _ = conn.Write(frame)

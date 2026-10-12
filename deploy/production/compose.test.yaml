@@ -11,9 +11,16 @@ services:
       - ../..:/workspace
       - go-mod:/go/pkg/mod
       - go-build:/root/.cache/go-build
+    depends_on:
+      mqtt:
+        condition: service_healthy
     environment:
       GOPROXY: ${ONE_NVR_GOPROXY:-https://proxy.golang.org,direct}
       ONE_NVR_REQUIRE_MEDIA_TOOLS: "yes"
+      # Points the event tests at the real broker in this file.
+      ONE_NVR_TEST_MQTT: mqtt:1883
+      ONE_NVR_TEST_MQTT_USER: one_nvr
+      ONE_NVR_TEST_MQTT_PASSWORD: isolated-test-only
   web:
     image: node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
     platform: linux/amd64
@@ -40,6 +47,26 @@ services:
       interval: 1s
       timeout: 3s
       retries: 30
+  # A real broker for the event-ingestion tests. A fake broker answers whatever
+  # the client sends, so it cannot catch a malformed frame; only the real
+  # protocol stack rejects one (a missing UTF-8 length prefix once reached
+  # production that way).
+  mqtt:
+    image: eclipse-mosquitto:2.0.22@sha256:199ea8ef2e35ec2b1b37e59cfd1dbae538ed4dfa4a2251a121a52215a6248a21
+    platform: linux/amd64
+    entrypoint: ["sh", "-ec"]
+    command:
+      - |
+        printf 'listener 1883\nallow_anonymous false\npassword_file /mosquitto/config/passwords\nlog_dest stdout\n' > /mosquitto/config/mosquitto.conf
+        mosquitto_passwd -c -b /mosquitto/config/passwords one_nvr isolated-test-only
+        exec mosquitto -c /mosquitto/config/mosquitto.conf
+    healthcheck:
+      # Publishes rather than subscribes: mosquitto_sub's -C 1 would wait for a
+      # message that never comes and the health check would always time out.
+      test: ["CMD-SHELL", "mosquitto_pub -h 127.0.0.1 -u one_nvr -P isolated-test-only -t health -m ok"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
 volumes:
   go-mod:
   go-build:

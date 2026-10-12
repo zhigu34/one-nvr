@@ -32,6 +32,10 @@ type Client struct {
 	reader  *bufio.Reader
 	nextID  uint16
 	lastPkt time.Time
+	// Trace, when set, receives a hex dump of every frame this client writes.
+	// Diagnosing a broker's "malformed packet" needs the client's own bytes,
+	// not a description of them.
+	Trace func(direction string, frame []byte)
 	// pending holds PUBLISH frames that arrived before the SUBACK; Receive
 	// drains them first so a retained message is never dropped.
 	pending []pendingPublish
@@ -83,6 +87,13 @@ func (c *Client) Subscribe(ctx context.Context, topic string) error {
 	}
 	packetID := c.takeID()
 	body := []byte{byte(packetID >> 8), byte(packetID)}
+	// The topic filter is a UTF-8 string: MQTT requires a two-byte length
+	// prefix in front of it, exactly like the CONNECT fields. Writing the raw
+	// topic here makes the broker reject the whole packet as malformed.
+	if len(topic) > 65535 {
+		return ErrMQTTUnavailable
+	}
+	body = append(body, byte(len(topic)>>8), byte(len(topic)))
 	body = append(body, []byte(topic)...)
 	body = append(body, 0x00)
 	if err := c.writePacket(0x82, body); err != nil {
@@ -215,6 +226,9 @@ func (c *Client) writePacket(first byte, body []byte) error {
 		}
 	}
 	frame = append(frame, body...)
+	if c.Trace != nil {
+		c.Trace("out", frame)
+	}
 	_ = c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	_, err := c.conn.Write(frame)
 	return err
@@ -244,6 +258,9 @@ func (c *Client) readPacket() (byte, []byte, error) {
 	body := make([]byte, length)
 	if _, err := io.ReadFull(c.reader, body); err != nil {
 		return 0, nil, err
+	}
+	if c.Trace != nil {
+		c.Trace("in", append([]byte{header}, body...))
 	}
 	return header, body, nil
 }
