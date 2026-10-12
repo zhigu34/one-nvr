@@ -146,6 +146,14 @@ func (s *Service) baseConfig(ctx context.Context) (map[string]any, error) {
 		"detectors": map[string]any{"cpu": map[string]any{"type": "cpu", "num_threads": 2}},
 		"model":     map[string]any{"path": "/cpu_model.tflite"},
 		"version":   version,
+		// Frigate's TLS listener is deliberately off. It exists only for
+		// direct browser access to Frigate itself, which this deployment never
+		// uses: the detector is reached over the container network and all
+		// operator access goes through one-nvr. Left unset, Frigate defaults
+		// it to enabled, generates a self-signed certificate, and its certsync
+		// service polls 127.0.0.1:8971 with a TLS handshake every minute
+		// forever — the "empty request, 400" line in its nginx log.
+		"tls": map[string]any{"enabled": false},
 	}, nil
 }
 

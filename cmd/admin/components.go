@@ -81,7 +81,10 @@ func writeComponentConfigs(v map[string]string, secret secrets.State) error {
 		if e = os.Chown("/data/mqtt", 1883, 1883); e != nil {
 			return e
 		}
-		cfg := map[string]any{"mqtt": map[string]any{"host": "mqtt", "user": "one_nvr", "password": mqtt}, "record": map[string]any{"enabled": false}, "snapshots": map[string]any{"enabled": true}, "cameras": map[string]any{}, "detectors": map[string]any{"cpu": map[string]any{"type": "cpu", "num_threads": 2}}, "model": map[string]any{"path": "/cpu_model.tflite"}, "version": "0.17-0"}
+		// tls.enabled is explicit: Frigate defaults it to true, which adds a
+		// self-signed HTTPS listener and a per-minute TLS probe against
+		// 127.0.0.1:8971 that this deployment has no use for.
+		cfg := map[string]any{"mqtt": map[string]any{"host": "mqtt", "user": "one_nvr", "password": mqtt}, "record": map[string]any{"enabled": false}, "snapshots": map[string]any{"enabled": true}, "cameras": map[string]any{}, "detectors": map[string]any{"cpu": map[string]any{"type": "cpu", "num_threads": 2}}, "model": map[string]any{"path": "/cpu_model.tflite"}, "tls": map[string]any{"enabled": false}, "version": "0.17-0"}
 		b, _ := json.MarshalIndent(cfg, "", "  ")
 		// This file is only the seed: the running service rewrites it on every
 		// detection publication, so it belongs to the application user rather

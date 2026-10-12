@@ -59,6 +59,33 @@ func TestRenderGolden(t *testing.T) {
 	}
 }
 
+// Frigate defaults tls.enabled to true, which adds a self-signed HTTPS
+// listener plus a per-minute TLS handshake against 127.0.0.1:8971 (the
+// certsync service). A deployment that never exposes Frigate directly must
+// say so explicitly, or that loop runs forever.
+func TestRenderDisablesFrigateTLS(t *testing.T) {
+	base := map[string]any{
+		"mqtt":    map[string]any{"host": "mqtt"},
+		"version": "0.17-0",
+		"tls":     map[string]any{"enabled": false},
+	}
+	rendered, err := Render(base, map[string]CameraConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(rendered, &config); err != nil {
+		t.Fatal(err)
+	}
+	tlsSection, ok := config["tls"].(map[string]any)
+	if !ok {
+		t.Fatal("the rendered config must state tls explicitly")
+	}
+	if enabled, _ := tlsSection["enabled"].(bool); enabled {
+		t.Fatal("Frigate TLS must be off: this deployment never exposes it")
+	}
+}
+
 func TestCameraNameStable(t *testing.T) {
 	if CameraName(1) != "ch01" || CameraName(16) != "ch16" {
 		t.Fatal("camera names must be the fixed channel key", CameraName(1), CameraName(16))
