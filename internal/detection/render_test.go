@@ -134,11 +134,23 @@ func TestRenderFollowsInferenceProfile(t *testing.T) {
 	if _, ok := config["detectors"].(map[string]any)["cpu"]; !ok {
 		t.Fatal("without a validated accelerator the detector stays on CPU")
 	}
+	// An explicit "cpu" profile must also stay on the CPU path.
+	explicitCPU := &Service{MQTTKey: "k", Inference: "cpu"}
+	config, err = explicitCPU.baseConfig(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := config["detectors"].(map[string]any)["cpu"]; !ok {
+		t.Fatal("an explicit cpu profile must not select OpenVINO")
+	}
 	if model, _ := config["model"].(map[string]any)["path"].(string); model != "/cpu_model.tflite" {
 		t.Fatalf("cpu profile must use the bundled CPU model, got %q", model)
 	}
 
-	accelerated := &Service{MQTTKey: "k", Inference: "intel"}
+	// A validated Intel proposal carries its PCI address, not the word
+	// "intel": matching on the vendor name would silently fall back to CPU on
+	// every real deployment (the reported bug).
+	accelerated := &Service{MQTTKey: "k", Inference: "0000:00:02.0"}
 	config, err = accelerated.baseConfig(context.Background())
 	if err != nil {
 		t.Fatal(err)

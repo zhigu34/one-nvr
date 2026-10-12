@@ -342,7 +342,12 @@ func (s *Service) syncCameraMappings(ctx context.Context, cameras map[string]Cam
 // the hardware report, so a machine without a validated accelerator keeps the
 // CPU detector instead of being pointed at a device that is not there.
 func detectorConfig(inference string) (map[string]any, map[string]any) {
-	if inference == "intel" {
+	// The criterion matches the deployment-time probe exactly (cmd/admin/
+	// hardware.go): anything that is not "cpu" is an accelerated profile. The
+	// value is not always a vendor name — a validated Intel proposal carries
+	// its PCI address ("0000:00:02.0") — so comparing against "intel" would
+	// send every real deployment back to the CPU detector.
+	if inference != "" && inference != "cpu" {
 		// Identical to the deployment-time hardware probe's profile
 		// (cmd/admin/hardware.go): one definition of "Intel accelerated" means
 		// a publish can never disagree with what the probe validated.
