@@ -231,7 +231,15 @@ jobs:
             quiet=$(sh /hash-mqtt.sh /work/passwords 2>&1 >/dev/null || true)
             chown 1883:1883 /work/passwords
             test -z "$quiet" || { printf "conversion not clean: %s\n" "$quiet" >&2; exit 1; }
-            test "$(stat -c "%u:%g %a" /work/passwords)" = "1883:1883 600"
+            # This image is Alpine/busybox, whose stat has no -c; read the
+            # ownership from ls -ln so the assertion means the same thing here.
+            listing=$(ls -ln /work/passwords)
+            set -- $listing
+            case "$1" in
+              -rw-------*) ;;
+              *) printf "conversion mode is %s, expected 0600\n" "$1" >&2; exit 1 ;;
+            esac
+            test "$3:$4" = "1883:1883" || { printf "conversion owner is %s:%s, expected 1883:1883\n" "$3" "$4" >&2; exit 1; }
             printf "Mosquitto conversion ownership PASS\n"'
       - name: Actual Frigate config seed belongs to the publishing user
         run: |
