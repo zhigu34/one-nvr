@@ -173,10 +173,19 @@ function DetectionRow({
   pending: boolean
   onSave: (next: { enabled: boolean; stream: string; fps: number; labels: string[] }) => void
 }) {
-  const [enabled, setEnabled] = useState(config?.enabled ?? false)
-  const [stream, setStream] = useState(config?.stream ?? 'sub')
-  const [fps, setFps] = useState(config?.fps ?? 5)
-  const [selected, setSelected] = useState<string[]>(config?.labels ?? ['person'])
+  // The row must follow the stored configuration, not a snapshot taken at
+  // mount: the page renders before the config query resolves, and React reuses
+  // these component instances once it does, so state seeded from an initially
+  // undefined config would silently show defaults for every channel.
+  const [draft, setDraft] = useState<{ enabled: boolean; stream: string; fps: number; labels: string[] } | null>(null)
+  const enabled = draft?.enabled ?? config?.enabled ?? false
+  const stream = draft?.stream ?? config?.stream ?? 'sub'
+  const fps = draft?.fps ?? config?.fps ?? 5
+  const selected = draft?.labels ?? config?.labels ?? ['person']
+  const setEnabled = (next: boolean) => setDraft({ enabled: next, stream, fps, labels: selected })
+  const setStream = (next: string) => setDraft({ enabled, stream: next, fps, labels: selected })
+  const setFps = (next: number) => setDraft({ enabled, stream, fps: next, labels: selected })
+  const setSelected = (update: (current: string[]) => string[]) => setDraft({ enabled, stream, fps, labels: update(selected) })
   const label = `CH${String(channel.channel_no ?? 0).padStart(2, '0')} ${channel.channel_name}`
   const extra = selected.filter((value) => !COMMON_LABELS.includes(value))
   const summary =

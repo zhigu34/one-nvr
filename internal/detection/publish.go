@@ -8,9 +8,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
-	"github.com/zhigu34/one-nvr/internal/events"
+	"github.com/zhigu34/one-nvr/internal/media/probe"
+	"github.com/zhigu34/one-nvr/internal/media/zlm"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/zhigu34/one-nvr/internal/auth"
@@ -95,9 +97,17 @@ func (s *Service) cameraConfigs(ctx context.Context) (map[string]CameraConfig, m
 		if session == "" {
 			continue
 		}
+		// The media server authorizes every play through its on_play hook, and
+		// the detector holds no user session. It therefore reads through the
+		// same internal token the media probes use — without it the hook
+		// refuses the pull and detection silently never sees a frame.
+		input, err := probe.InternalURL(zlm.StreamKey{VHost: "__defaultVhost__", App: "one_nvr", Stream: session}, s.ProbeToken)
+		if err != nil {
+			return nil, nil, err
+		}
 		cameras[CameraName(channelNo)] = CameraConfig{
 			Enabled:  enabled,
-			InputURL: "rtsp://zlm:554/one_nvr/" + session,
+			InputURL: input,
 			FPS:      fps,
 			Width:    640,
 			Height:   360,
@@ -207,20 +217,38 @@ func getJSON(ctx context.Context, client *http.Client, url string) ([]byte, erro
 	return io.ReadAll(io.LimitReader(response.Body, 1<<20))
 }
 
-// MQTTReloader publishes the Frigate reload command through one short-lived
-// broker connection per publication. A reload is rare; keeping a persistent
-// second connection would add failure modes without buying anything.
-type MQTTReloader struct {
-	Address, Username, Password string
+// HTTPReloader makes Frigate re-read the config file by restarting its
+// process. Frigate 0.17.2 has no config-reload MQTT command — the only way a
+// changed config.yml takes effect is a restart, and its own API is the
+// supported path (POST /api/restart). Requests from inside the container
+// network are treated as the admin role, so no credential is involved.
+type HTTPReloader struct {
+	BaseURL string
+	Client  *http.Client
 }
 
-func (r MQTTReloader) Reload(ctx context.Context) error {
-	client, err := mqttDial(ctx, r.Address, r.Username, r.Password)
-	if err != nil {
-		return err
+func (r HTTPReloader) Reload(ctx context.Context) error {
+	if r.BaseURL == "" {
+		return ErrPublishFailed
 	}
-	defer client.Close()
-	return client.Publish(ctx, "frigate/reload", []byte("{}"))
+	client := r.Client
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(r.BaseURL, "/")+"/api/restart", nil)
+	if err != nil {
+		return ErrPublishFailed
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return ErrPublishFailed
+	}
+	defer response.Body.Close()
+	io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
+	if response.StatusCode/100 != 2 {
+		return ErrPublishFailed
+	}
+	return nil
 }
 
 // RunRuntime polls the detector every minute for the capability card.
@@ -259,21 +287,6 @@ func (s *Service) requireAdminRead(ctx context.Context, p auth.Principal) (struc
 		return struct{}{}, err
 	}
 	return struct{}{}, nil
-}
-
-// mqttDial is the broker connector, kept behind a variable so the publication
-// test can substitute a fake without a real broker.
-var mqttDial = func(ctx context.Context, address, username, password string) (mqttPublisher, error) {
-	client, err := events.Dial(ctx, address, username, password, "one-nvr-detection")
-	if err != nil {
-		return nil, err
-	}
-	return client, nil
-}
-
-type mqttPublisher interface {
-	Publish(ctx context.Context, topic string, payload []byte) error
-	Close() error
 }
 
 // syncCameraMappings makes the event-routing table match what was just

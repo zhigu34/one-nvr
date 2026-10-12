@@ -20,6 +20,7 @@ func TestDetectionConfigLifecycle(t *testing.T) {
 	configPath := filepath.Join(dir, "config.yml")
 	service := detection.New(fixture.DB, fixture.Auth, "", configPath)
 	service.MQTTKey = "mqtt-secret"
+	service.ProbeToken = "probe-secret"
 	reloads := 0
 	service.Reload = func(ctx context.Context) error {
 		reloads++
@@ -123,8 +124,9 @@ func TestDetectionPublishFailureKeepsPrevious(t *testing.T) {
 	}
 	service := detection.New(fixture.DB, fixture.Auth, "", configPath)
 	service.MQTTKey = "mqtt-secret"
+	service.ProbeToken = "probe-secret"
 	service.Reload = func(ctx context.Context) error {
-		return errors.New("broker down")
+		return errors.New("restart refused")
 	}
 	if _, err := service.Upsert(ctx, fixture.Admin, detection.Config{
 		ChannelID: fixture.Channel, Enabled: true, Stream: "sub", FPS: 5, Labels: []string{"person"},

@@ -72,9 +72,9 @@ func TestNewCompleteRefusesIncompleteWiring(t *testing.T) {
 		name string
 		in   ServiceConfig
 	}{
-		{"no config path", ServiceConfig{FrigateURL: "http://frigate:5000", MQTTKey: "k", MQTTAddress: "mqtt:1883"}},
-		{"no mqtt key", ServiceConfig{FrigateURL: "http://frigate:5000", ConfigPath: "/tmp/config.yml", MQTTAddress: "mqtt:1883"}},
-		{"no mqtt address", ServiceConfig{FrigateURL: "http://frigate:5000", ConfigPath: "/tmp/config.yml", MQTTKey: "k"}},
+		{"no config path", ServiceConfig{FrigateURL: "http://frigate:5000", MQTTKey: "k", ProbeToken: "p"}},
+		{"no mqtt key", ServiceConfig{FrigateURL: "http://frigate:5000", ConfigPath: "/tmp/config.yml", ProbeToken: "p"}},
+		{"no probe token", ServiceConfig{FrigateURL: "http://frigate:5000", ConfigPath: "/tmp/config.yml", MQTTKey: "k"}},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -84,12 +84,12 @@ func TestNewCompleteRefusesIncompleteWiring(t *testing.T) {
 		})
 	}
 	service, err := NewComplete(nil, nil, ServiceConfig{
-		FrigateURL: "http://frigate:5000", ConfigPath: "/tmp/config.yml", MQTTKey: "k", MQTTAddress: "mqtt:1883",
+		FrigateURL: "http://frigate:5000", ConfigPath: "/tmp/config.yml", MQTTKey: "k", ProbeToken: "p",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if service.MQTTKey != "k" || service.Reload == nil {
-		t.Fatal("a complete wiring must carry both the key and the reload hook")
+	if service.MQTTKey != "k" || service.ProbeToken != "p" || service.Reload == nil {
+		t.Fatal("a complete wiring must carry the key, the probe token and the reload hook")
 	}
 }

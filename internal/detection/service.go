@@ -86,6 +86,9 @@ type Service struct {
 	// MQTTKey is the broker credential Frigate must reconnect with; it is the
 	// same component secret the bundle generated, injected at assembly.
 	MQTTKey string
+	// ProbeToken authorizes the detector's internal pull through the media
+	// server's on_play hook (the detector holds no user session).
+	ProbeToken string
 }
 
 func New(db *database.DB, accounts *auth.Service, frigateURL, configPath string) *Service {
@@ -97,16 +100,18 @@ func New(db *database.DB, accounts *auth.Service, frigateURL, configPath string)
 // constructor that silently omits one of these produces a feature that fails
 // at the first click — the defect this type exists to prevent.
 type ServiceConfig struct {
-	FrigateURL  string
-	ConfigPath  string
-	MQTTKey     string
-	MQTTAddress string
+	FrigateURL string
+	ConfigPath string
+	MQTTKey    string
+	// ProbeToken authorizes the detector's internal pull through the media
+	// server on_play hook; the detector holds no user session.
+	ProbeToken string
 }
 
 // Complete reports whether every field the publication path needs is set.
 // Callers assert this at startup rather than discovering it per request.
 func (c ServiceConfig) Complete() bool {
-	return c.ConfigPath != "" && c.MQTTKey != "" && c.MQTTAddress != ""
+	return c.ConfigPath != "" && c.MQTTKey != "" && c.ProbeToken != ""
 }
 
 // NewComplete builds a service that can both render and reload, or reports why
@@ -118,7 +123,8 @@ func NewComplete(db *database.DB, accounts *auth.Service, in ServiceConfig) (*Se
 	}
 	service := New(db, accounts, in.FrigateURL, in.ConfigPath)
 	service.MQTTKey = in.MQTTKey
-	service.Reload = MQTTReloader{Address: in.MQTTAddress, Username: "one_nvr", Password: in.MQTTKey}.Reload
+	service.ProbeToken = in.ProbeToken
+	service.Reload = HTTPReloader{BaseURL: in.FrigateURL}.Reload
 	return service, nil
 }
 

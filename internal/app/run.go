@@ -44,12 +44,12 @@ import (
 // feature — which is exactly what happened when only the worker's copy carried
 // the MQTT key and reload hook. A missing field is now a startup error instead
 // of a per-request "publish failed".
-func newDetectionService(db *database.DB, accounts *auth.Service, dataDir, mqttKey string) (*detection.Service, error) {
+func newDetectionService(db *database.DB, accounts *auth.Service, dataDir, mqttKey, probeToken string) (*detection.Service, error) {
 	return detection.NewComplete(db, accounts, detection.ServiceConfig{
-		FrigateURL:  "http://frigate:5000",
-		ConfigPath:  filepath.Join(dataDir, "frigate", "config.yml"),
-		MQTTKey:     mqttKey,
-		MQTTAddress: "mqtt:1883",
+		FrigateURL: "http://frigate:5000",
+		ConfigPath: filepath.Join(dataDir, "frigate", "config.yml"),
+		MQTTKey:    mqttKey,
+		ProbeToken: probeToken,
 	})
 }
 
@@ -195,8 +195,8 @@ func Run(name string) error {
 			go func() { defer background.Done(); eventsService.Run(ctx, "mqtt:1883", "one_nvr", mqttKey) }()
 			go func() { defer background.Done(); eventsService.RunExpiry(ctx) }()
 			// Detection configuration publishes into the Frigate config bind
-			// mount and reloads it over the same broker.
-			detectionService, err := newDetectionService(db, recordings.Sources.Auth, c.DataDir, mqttKey)
+			// mount and makes it take effect through the detector's restart API.
+			detectionService, err := newDetectionService(db, recordings.Sources.Auth, c.DataDir, mqttKey, probeKey)
 			if err != nil {
 				return fmt.Errorf("detection service wiring incomplete")
 			}
@@ -298,7 +298,11 @@ func Run(name string) error {
 			// API's detection service needs the same render input and reload
 			// path as the worker's — sharing one constructor is what keeps
 			// the two from drifting again.
-			detectionService, err = newDetectionService(db, accounts, c.DataDir, mqttKey)
+			apiProbeKey, err := secret.ComponentCredential("media-probe")
+			if err != nil {
+				return err
+			}
+			detectionService, err = newDetectionService(db, accounts, c.DataDir, mqttKey, apiProbeKey)
 			if err != nil {
 				return fmt.Errorf("detection service wiring incomplete")
 			}
