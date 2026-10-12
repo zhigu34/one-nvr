@@ -49,6 +49,15 @@ type Revision struct {
 	CameraCount int     `json:"camera_count"`
 	ErrorCode   *string `json:"error_code"`
 	CreatedAt   string  `json:"created_at"`
+	// Pending reports that the stored settings have changed since this
+	// publication. Without it the page shows "published" while the running
+	// detector serves earlier settings — and a publication is a snapshot, not
+	// a standing subscription, so being pending is the normal state after any
+	// edit.
+	Pending bool `json:"pending"`
+	// ConfigVersions is the per-channel detection version captured at
+	// publication; it is what Pending compares against.
+	ConfigVersions json.RawMessage `json:"-"`
 }
 
 // SupportedLabels is the locked model's label set. Unknown categories are
@@ -305,8 +314,36 @@ func (s *Service) recordRevision(ctx context.Context, hash, state string, camera
 	if _, err := id.Parse(string(actor)); err == nil {
 		actorRef = actor
 	}
-	_, _ = s.DB.Pool.Exec(ctx, `INSERT INTO detection_config_revisions(id,config_hash,state,camera_count,error_code,published_by) VALUES($1,$2,$3,$4,NULLIF($5,''),$6)`,
-		revisionID, hash, state, cameras, code, actorRef)
+	// Capture the per-channel versions this publication covers. The rendered
+	// hash alone cannot answer "did anything change since?", because the render
+	// depends on which channels currently have a live session.
+	versions, err := s.configVersions(ctx)
+	if err != nil {
+		versions = []byte("{}")
+	}
+	_, _ = s.DB.Pool.Exec(ctx, `INSERT INTO detection_config_revisions(id,config_hash,state,camera_count,error_code,published_by,config_versions) VALUES($1,$2,$3,$4,NULLIF($5,''),$6,$7)`,
+		revisionID, hash, state, cameras, code, actorRef, versions)
+}
+
+// configVersions is the current per-channel detection version map, used both
+// when recording a publication and when deciding whether settings have moved
+// on since the last one.
+func (s *Service) configVersions(ctx context.Context) ([]byte, error) {
+	rows, err := s.DB.Pool.Query(ctx, `SELECT channel_id, version FROM detection_configs`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	versions := map[string]int64{}
+	for rows.Next() {
+		var channelID id.ID
+		var version int64
+		if err := rows.Scan(&channelID, &version); err != nil {
+			return nil, err
+		}
+		versions[string(channelID)] = version
+	}
+	return json.Marshal(versions)
 }
 
 // Render builds the full Frigate config.yml from every channel's settings.

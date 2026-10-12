@@ -280,15 +280,46 @@ func (s *Service) LatestRevision(ctx context.Context, p auth.Principal) (*Revisi
 		return nil, err
 	}
 	var revision Revision
-	err := s.DB.Pool.QueryRow(ctx, `SELECT id,config_hash,state,camera_count,error_code,to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SSOF') FROM detection_config_revisions ORDER BY created_at DESC LIMIT 1`).
-		Scan(&revision.ID, &revision.ConfigHash, &revision.State, &revision.CameraCount, &revision.ErrorCode, &revision.CreatedAt)
+	err := s.DB.Pool.QueryRow(ctx, `SELECT id,config_hash,state,camera_count,error_code,to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SSOF'),config_versions FROM detection_config_revisions ORDER BY created_at DESC LIMIT 1`).
+		Scan(&revision.ID, &revision.ConfigHash, &revision.State, &revision.CameraCount, &revision.ErrorCode, &revision.CreatedAt, &revision.ConfigVersions)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	// "Pending" means the stored settings have moved on since the publication
+	// the detector is running. Compare the per-channel versions that
+	// publication captured, not the rendered hash: the render includes the
+	// live session identifier, so it differs after any restart even when no
+	// setting changed — and it would report "changed" for reasons the operator
+	// cannot act on.
+	var published map[string]int64
+	if err := json.Unmarshal(revision.ConfigVersions, &published); err != nil {
+		published = map[string]int64{}
+	}
+	current, err := s.configVersions(ctx)
+	if err != nil {
+		return &revision, nil
+	}
+	var now map[string]int64
+	if err := json.Unmarshal(current, &now); err != nil {
+		return &revision, nil
+	}
+	revision.Pending = !sameVersions(published, now)
 	return &revision, nil
+}
+
+func sameVersions(a, b map[string]int64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, value := range a {
+		if other, ok := b[key]; !ok || other != value {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) requireAdminRead(ctx context.Context, p auth.Principal) (struct{}, error) {

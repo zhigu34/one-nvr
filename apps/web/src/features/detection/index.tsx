@@ -80,7 +80,10 @@ export function Detection() {
       <div>
         <h1 className='text-2xl font-semibold tracking-tight'>检测配置</h1>
         <p className='mt-1 text-sm text-muted-foreground'>
-          按通道启停智能检测并选择码流、帧率与目标类别。检测从媒体服务器内部取流，只做检测与抓拍，不接管录像；发布只影响检测服务，不中断录像。
+          按通道启停智能检测并选择码流、帧率与目标类别。检测从媒体服务器内部取流，只做检测与抓拍，不接管录像。
+        </p>
+        <p className='mt-1 text-xs text-muted-foreground'>
+          发布会把当前设置写入检测服务并使其重载；检测源绑定在通道当前的取流会话上，因此<b>通道重新取流或服务重启后需要重新发布</b>。修改设置后请手动发布，设置本身不会自动生效。
         </p>
       </div>
       <QueryState
@@ -113,6 +116,19 @@ export function Detection() {
                 ? `${runtime.data.revision.state === 'published' ? '成功' : '失败'} · ${runtime.data.revision.camera_count} 路`
                 : '尚未发布'}
             </p>
+            {runtime.data.revision && (
+              <p
+                className={
+                  runtime.data.revision.pending
+                    ? 'mt-1 text-xs text-amber-600'
+                    : 'mt-1 text-xs text-muted-foreground'
+                }
+              >
+                {runtime.data.revision.pending
+                  ? '有设置尚未发布'
+                  : '与检测服务一致'}
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -132,7 +148,7 @@ export function Detection() {
               发布检测配置
             </Button>
             <span className='text-xs text-muted-foreground'>
-              发布将渲染检测服务配置并触发热加载；失败会保留原配置。
+              发布后检测服务会重载一次；失败时保留上一份配置。
             </span>
           </div>
           <div className='space-y-2'>
@@ -288,6 +304,7 @@ function DetectionRow({
       >
         保存
       </Button>
+      {draft && <span className='text-xs text-amber-600'>未保存</span>}
     </div>
   )
 }

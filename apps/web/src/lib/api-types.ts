@@ -1963,6 +1963,8 @@ export interface components {
             camera_count?: number;
             error_code?: string | null;
             created_at?: string;
+            /** @description The stored settings no longer render to the published hash: a publication is a snapshot, so this is true after any edit. */
+            pending?: boolean;
         };
         DetectionRuntime: {
             runtime?: {

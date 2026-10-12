@@ -6685,7 +6685,11 @@
           "state": { "type": "string", "enum": ["published", "failed"] },
           "camera_count": { "type": "integer" },
           "error_code": { "type": "string", "nullable": true },
-          "created_at": { "type": "string" }
+          "created_at": { "type": "string" },
+          "pending": {
+            "type": "boolean",
+            "description": "The stored settings no longer render to the published hash: a publication is a snapshot, so this is true after any edit."
+          }
         }
       },
       "DetectionRuntime": {

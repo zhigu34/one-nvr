@@ -101,6 +101,25 @@ func TestDetectionConfigLifecycle(t *testing.T) {
 	if len(rendered) == 0 || string(rendered) == "" {
 		t.Fatal("rendered config is empty")
 	}
+	// The page must be able to say whether the running detector matches the
+	// stored settings: a publication is a snapshot, so any later edit has to
+	// read as pending rather than as "published".
+	if revision, err := service.LatestRevision(ctx, fixture.Admin); err != nil {
+		t.Fatal(err)
+	} else if revision == nil || revision.Pending {
+		t.Fatal("immediately after a publication nothing may be pending", revision)
+	}
+	if _, err := service.Upsert(ctx, fixture.Admin, detection.Config{
+		ChannelID: fixture.Channel, Enabled: true, Stream: "sub", FPS: 10, Labels: []string{"person", "car"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if revision, err := service.LatestRevision(ctx, fixture.Admin); err != nil {
+		t.Fatal(err)
+	} else if revision == nil || !revision.Pending {
+		t.Fatal("an edit after the last publication must read as pending", revision)
+	}
+
 	// Publishing also establishes the event-routing table: without a mapping
 	// row the event stream would drop this channel's events as unmapped.
 	// The fixture has no live stream session, so no camera was rendered.
