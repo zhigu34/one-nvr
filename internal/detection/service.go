@@ -92,6 +92,36 @@ func New(db *database.DB, accounts *auth.Service, frigateURL, configPath string)
 	return &Service{DB: db, Auth: accounts, Frigate: frigateURL, ConfigPath: configPath}
 }
 
+// ServiceConfig carries everything a fully working detection service needs.
+// Publication runs on the API and the runtime probe runs on the worker, so a
+// constructor that silently omits one of these produces a feature that fails
+// at the first click — the defect this type exists to prevent.
+type ServiceConfig struct {
+	FrigateURL  string
+	ConfigPath  string
+	MQTTKey     string
+	MQTTAddress string
+}
+
+// Complete reports whether every field the publication path needs is set.
+// Callers assert this at startup rather than discovering it per request.
+func (c ServiceConfig) Complete() bool {
+	return c.ConfigPath != "" && c.MQTTKey != "" && c.MQTTAddress != ""
+}
+
+// NewComplete builds a service that can both render and reload, or reports why
+// it cannot. An incomplete configuration is a wiring error, not a runtime
+// condition, so it is returned rather than deferred to the first publish.
+func NewComplete(db *database.DB, accounts *auth.Service, in ServiceConfig) (*Service, error) {
+	if !in.Complete() {
+		return nil, ErrPublishFailed
+	}
+	service := New(db, accounts, in.FrigateURL, in.ConfigPath)
+	service.MQTTKey = in.MQTTKey
+	service.Reload = MQTTReloader{Address: in.MQTTAddress, Username: "one_nvr", Password: in.MQTTKey}.Reload
+	return service, nil
+}
+
 // List returns every channel's configuration with defaults filled in.
 func (s *Service) List(ctx context.Context, p auth.Principal) ([]Config, error) {
 	rows, err := s.DB.Pool.Query(ctx, `SELECT c.id, COALESCE(d.enabled,false), COALESCE(d.stream,'sub'), COALESCE(d.fps,5), COALESCE(d.labels,'["person"]'), COALESCE(d.version,1)

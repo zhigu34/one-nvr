@@ -220,15 +220,52 @@ jobs:
               *"owner is not root"*) ;;
               *) printf "expected the ownership warning on an unhanded file; got: %s\n" "$warned" >&2; exit 1 ;;
             esac
-            # The fix: hand it over, convert, hand it back for the broker.
+            # The fix: hand it over, convert, hand it back for the broker. The
+            # mode matters as much as the owner: a default 0644 file trips the
+            # world-readable warning instead, which would look like a failure
+            # of the handoff when it is really the test's own fixture.
             printf "one_nvr:isolated-test-only\n" > /work/passwords
+            chmod 600 /work/passwords
             chown 1883:1883 /work/passwords
             chown 0:0 /work/passwords
             quiet=$(sh /hash-mqtt.sh /work/passwords 2>&1 >/dev/null || true)
             chown 1883:1883 /work/passwords
             test -z "$quiet" || { printf "conversion not clean: %s\n" "$quiet" >&2; exit 1; }
-            test "$(stat -c "%u:%g" /work/passwords)" = "1883:1883"
+            test "$(stat -c "%u:%g %a" /work/passwords)" = "1883:1883 600"
             printf "Mosquitto conversion ownership PASS\n"'
+      - name: Actual Frigate config seed belongs to the publishing user
+        run: |
+          # The detection publisher rewrites config.yml on every publication and
+          # runs as the application user (10001). The deploy-time seed must be
+          # handed to that user, otherwise every publication fails with an
+          # unhelpful "publish failed" while the seeded file sits at root:0600
+          # — the exact shape of the reported field failure. render-deployment
+          # is the writer (init-runtime only creates the directories), and the
+          # non-check path is the one that reaches it.
+          root=$(mktemp -d /tmp/one-nvr-frigate-owner.XXXXXX)
+          trap 'rm -rf "$root"' EXIT
+          mkdir "$root/storage"
+          chmod 755 "$root" "$root/storage"
+          mkdir -p "$root/data"
+          # The heredoc must start at column zero, or the leading spaces land
+          # in the values and the env parser rejects them.
+          cat > "$root/env" <<ENV
+ONE_NVR_PUBLIC_URL=https://127.0.0.1:19443
+ONE_NVR_HTTPS_PORT=19443
+ONE_NVR_RTC_PORT=19000
+ONE_NVR_DATA_DIR=$root/data
+ONE_NVR_STORAGE_ROOT=$root/storage
+ONE_NVR_FRIGATE_ENABLE=yes
+ONE_NVR_OPENLIST_ENABLE=no
+ENV
+          docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --entrypoint /usr/local/bin/admin one-nvr/app:m1a init-runtime
+          docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --mount "type=bind,source=$root/env,target=/settings.env,readonly" --entrypoint /usr/local/bin/admin one-nvr/app:m1a render-deployment --env-file /settings.env --output-dir /data/runtime
+          ownership=$(docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --entrypoint stat one-nvr/app:m1a -c "%u:%g %a" /data/frigate/config.yml)
+          test "$ownership" = "10001:10001 600" || { printf 'config.yml seed ownership is %s, expected 10001:10001 600\n' "$ownership" >&2; exit 1; }
+          # And the directory it lives in must stay writable by that user.
+          dir_ownership=$(docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --entrypoint stat one-nvr/app:m1a -c "%u:%g" /data/frigate)
+          test "$dir_ownership" = "10001:10001" || { printf 'frigate dir ownership is %s, expected 10001:10001\n' "$dir_ownership" >&2; exit 1; }
+          printf 'Frigate config seed ownership PASS\n'
 
   hardware-cpu-runtime:
     needs: [backend]

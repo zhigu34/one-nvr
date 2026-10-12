@@ -5,8 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/zhigu34/one-nvr/internal/archive"
 	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/channel"
@@ -37,6 +37,21 @@ import (
 	"syscall"
 	"time"
 )
+
+// newDetectionService builds the one detection service both processes use.
+// The publication endpoint runs on the API and the runtime probe runs on the
+// worker, so an incomplete construction on either side silently breaks the
+// feature — which is exactly what happened when only the worker's copy carried
+// the MQTT key and reload hook. A missing field is now a startup error instead
+// of a per-request "publish failed".
+func newDetectionService(db *database.DB, accounts *auth.Service, dataDir, mqttKey string) (*detection.Service, error) {
+	return detection.NewComplete(db, accounts, detection.ServiceConfig{
+		FrigateURL:  "http://frigate:5000",
+		ConfigPath:  filepath.Join(dataDir, "frigate", "config.yml"),
+		MQTTKey:     mqttKey,
+		MQTTAddress: "mqtt:1883",
+	})
+}
 
 func Run(name string) error {
 	c, err := config.Load()
@@ -156,7 +171,10 @@ func Run(name string) error {
 		go func() { defer background.Done(); runExportReconciliation(ctx, recordings) }()
 		background.Add(2)
 		for n := 0; n < 2; n++ {
-			go func() { defer background.Done(); runSourceJobs(ctx, db, "recording.archive_upload", archiveService.HandleUpload) }()
+			go func() {
+				defer background.Done()
+				runSourceJobs(ctx, db, "recording.archive_upload", archiveService.HandleUpload)
+			}()
 		}
 		background.Add(1)
 		go func() { defer background.Done(); runArchiveScheduleSweeper(ctx, archiveService) }()
@@ -178,9 +196,10 @@ func Run(name string) error {
 			go func() { defer background.Done(); eventsService.RunExpiry(ctx) }()
 			// Detection configuration publishes into the Frigate config bind
 			// mount and reloads it over the same broker.
-			detectionService := detection.New(db, recordings.Sources.Auth, "http://frigate:5000", filepath.Join(c.DataDir, "frigate", "config.yml"))
-			detectionService.MQTTKey = mqttKey
-			detectionService.Reload = detection.MQTTReloader{Address: "mqtt:1883", Username: "one_nvr", Password: mqttKey}.Reload
+			detectionService, err := newDetectionService(db, recordings.Sources.Auth, c.DataDir, mqttKey)
+			if err != nil {
+				return fmt.Errorf("detection service wiring incomplete")
+			}
 			background.Add(1)
 			go func() { defer background.Done(); detectionService.RunRuntime(ctx) }()
 		}
@@ -270,8 +289,19 @@ func Run(name string) error {
 		var intelligence *events.Service
 		var detectionService *detection.Service
 		if c.FrigateEnabled {
+			mqttKey, err := secret.ComponentCredential("mqtt")
+			if err != nil {
+				return err
+			}
 			intelligence = events.New(db, accounts, "http://frigate:5000", secret.SiteID)
-			detectionService = detection.New(db, accounts, "http://frigate:5000", filepath.Join(c.DataDir, "frigate", "config.yml"))
+			// The publication endpoint is served by the API process, so the
+			// API's detection service needs the same render input and reload
+			// path as the worker's — sharing one constructor is what keeps
+			// the two from drifting again.
+			detectionService, err = newDetectionService(db, accounts, c.DataDir, mqttKey)
+			if err != nil {
+				return fmt.Errorf("detection service wiring incomplete")
+			}
 		}
 		handler = httpapi.NewHandler(httpapi.Dependencies{Events: intelligence, Detection: detectionService, Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, Sources: sources, Live: &live.Service{DB: db, Auth: accounts, Media: media}, PublicURL: c.PublicURL, TrustedProxyToken: proxyKey, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled, Archive: archive.New(db, accounts, secret, pools)})
 	}

@@ -83,11 +83,27 @@ func writeComponentConfigs(v map[string]string, secret secrets.State) error {
 		}
 		cfg := map[string]any{"mqtt": map[string]any{"host": "mqtt", "user": "one_nvr", "password": mqtt}, "record": map[string]any{"enabled": false}, "snapshots": map[string]any{"enabled": true}, "cameras": map[string]any{}, "detectors": map[string]any{"cpu": map[string]any{"type": "cpu", "num_threads": 2}}, "model": map[string]any{"path": "/cpu_model.tflite"}, "version": "0.17-0"}
 		b, _ := json.MarshalIndent(cfg, "", "  ")
+		// This file is only the seed: the running service rewrites it on every
+		// detection publication, so it belongs to the application user rather
+		// than to root. Frigate itself only reads it. init-runtime creates the
+		// directory as root 0700 first, so both owner and mode are set here.
+		if e = os.MkdirAll("/data/frigate", 0700); e != nil {
+			return e
+		}
+		if e = os.Chmod("/data/frigate", 0700); e != nil {
+			return e
+		}
+		if e = os.Chown("/data/frigate", 10001, 10001); e != nil {
+			return e
+		}
 		cfgPath := filepath.Join("/data/frigate", "config.yml")
 		if _, statErr := os.Lstat(cfgPath); os.IsNotExist(statErr) {
 			e = immutableFile(cfgPath, b, 0600)
 		}
 		if e != nil {
+			return e
+		}
+		if e = os.Chown(cfgPath, 10001, 10001); e != nil {
 			return e
 		}
 	}

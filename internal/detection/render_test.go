@@ -64,3 +64,32 @@ func TestCameraNameStable(t *testing.T) {
 		t.Fatal("camera names must be the fixed channel key", CameraName(1), CameraName(16))
 	}
 }
+
+// An incomplete wiring used to surface only when an operator clicked publish,
+// as an unhelpful "publish failed". The constructor must refuse it up front.
+func TestNewCompleteRefusesIncompleteWiring(t *testing.T) {
+	cases := []struct {
+		name string
+		in   ServiceConfig
+	}{
+		{"no config path", ServiceConfig{FrigateURL: "http://frigate:5000", MQTTKey: "k", MQTTAddress: "mqtt:1883"}},
+		{"no mqtt key", ServiceConfig{FrigateURL: "http://frigate:5000", ConfigPath: "/tmp/config.yml", MQTTAddress: "mqtt:1883"}},
+		{"no mqtt address", ServiceConfig{FrigateURL: "http://frigate:5000", ConfigPath: "/tmp/config.yml", MQTTKey: "k"}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := NewComplete(nil, nil, testCase.in); err == nil {
+				t.Fatal("an incomplete detection wiring must be refused at construction")
+			}
+		})
+	}
+	service, err := NewComplete(nil, nil, ServiceConfig{
+		FrigateURL: "http://frigate:5000", ConfigPath: "/tmp/config.yml", MQTTKey: "k", MQTTAddress: "mqtt:1883",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.MQTTKey != "k" || service.Reload == nil {
+		t.Fatal("a complete wiring must carry both the key and the reload hook")
+	}
+}
