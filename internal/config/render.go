@@ -100,6 +100,10 @@ func BuildDeployment(v map[string]string) (Deployment, error) {
 	}
 	common := map[string]string{"ONE_NVR_PUBLIC_URL": c.PublicURL, "ONE_NVR_HTTP_PORT": fmt.Sprint(c.HTTPPort), "ONE_NVR_HTTPS_PORT": fmt.Sprint(c.HTTPSPort), "ONE_NVR_RTC_PORT": fmt.Sprint(c.RTCPort), "ONE_NVR_MEDIA_HOST": c.MediaHost, "ONE_NVR_DATA_DIR": "/data", "ONE_NVR_HARDWARE_PROFILE": c.HardwareProfile, "ONE_NVR_DATABASE_URL": "postgres://one_nvr:" + url.QueryEscape(v["ONE_NVR_POSTGRES_PASSWORD"]) + "@postgres:5432/one_nvr?sslmode=disable", "ONE_NVR_FRIGATE_ENABLE": boolValue(c.FrigateEnabled), "ONE_NVR_OPENLIST_ENABLE": boolValue(c.OpenListEnabled)}
 	common["ONE_NVR_CAMERA_CIDRS"] = c.CameraCIDRs
+	// Every container follows the site zone so its timestamps can be read
+	// against the operator's clock: database logs, recorder job times,
+	// detector events and ZLM's own log lines all agree.
+	common["TZ"] = c.Timezone
 	vols := []Mount{mount(root, "/data", false), mount(poolRoot, "/storage", false)}
 	if c.TLSDir != "" {
 		common["ONE_NVR_TLS_DIR"] = "/tls-input"
@@ -138,17 +142,17 @@ func BuildDeployment(v map[string]string) (Deployment, error) {
 	if e != nil {
 		return d, e
 	}
-	d.Services["postgres"] = Service{Image: pg, Environment: map[string]string{"POSTGRES_USER": "one_nvr", "POSTGRES_DB": "one_nvr", "POSTGRES_PASSWORD": v["ONE_NVR_POSTGRES_PASSWORD"]}, Volumes: []Mount{mount(filepath.Join(root, "postgres"), "/var/lib/postgresql/data", false)}, Restart: "unless-stopped", HealthCheck: map[string]any{"test": []string{"CMD-SHELL", "pg_isready -U one_nvr -d one_nvr"}, "interval": "2s", "timeout": "5s", "retries": 30}}
+	d.Services["postgres"] = Service{Image: pg, Environment: map[string]string{"POSTGRES_USER": "one_nvr", "POSTGRES_DB": "one_nvr", "POSTGRES_PASSWORD": v["ONE_NVR_POSTGRES_PASSWORD"], "TZ": c.Timezone}, Volumes: []Mount{mount(filepath.Join(root, "postgres"), "/var/lib/postgresql/data", false)}, Restart: "unless-stopped", HealthCheck: map[string]any{"test": []string{"CMD-SHELL", "pg_isready -U one_nvr -d one_nvr"}, "interval": "2s", "timeout": "5s", "retries": 30}}
 	webPort := fmt.Sprintf("%d:443/tcp", c.HTTPSPort)
 	if u.Scheme == "http" {
 		webPort = fmt.Sprintf("%d:80/tcp", c.HTTPPort)
 	}
-	d.Services["gateway"] = Service{Image: gatewayImage, User: "10001:10001", Environment: map[string]string{"ONE_NVR_PUBLIC_URL": c.PublicURL}, EntryPoint: []string{"sh", "-ec"}, Command: []string{`export ONE_NVR_GATEWAY_PROXY_TOKEN="$(cat /control/proxy-token)"; exec /usr/local/bin/gateway-entrypoint`}, Ports: []string{webPort}, Volumes: []Mount{mount(filepath.Join(root, "gateway"), "/control", false), mount(filepath.Join(root, "tls"), "/certs", true)}, Restart: "unless-stopped", Sysctls: map[string]string{"net.ipv4.ip_unprivileged_port_start": "0"}, HealthCheck: map[string]any{"test": []string{"CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/health"}, "interval": "10s", "timeout": "5s", "retries": 6}}
+	d.Services["gateway"] = Service{Image: gatewayImage, User: "10001:10001", Environment: map[string]string{"ONE_NVR_PUBLIC_URL": c.PublicURL, "TZ": c.Timezone}, EntryPoint: []string{"sh", "-ec"}, Command: []string{`export ONE_NVR_GATEWAY_PROXY_TOKEN="$(cat /control/proxy-token)"; exec /usr/local/bin/gateway-entrypoint`}, Ports: []string{webPort}, Volumes: []Mount{mount(filepath.Join(root, "gateway"), "/control", false), mount(filepath.Join(root, "tls"), "/certs", true)}, Restart: "unless-stopped", Sysctls: map[string]string{"net.ipv4.ip_unprivileged_port_start": "0"}, HealthCheck: map[string]any{"test": []string{"CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/health"}, "interval": "10s", "timeout": "5s", "retries": 6}}
 	zlm, e := image("zlm")
 	if e != nil {
 		return d, e
 	}
-	d.Services["zlm"] = Service{Image: zlm, Environment: map[string]string{"TZ": "UTC"}, EntryPoint: []string{"/usr/local/bin/media-launcher"}, Command: []string{"/opt/media/conf/egress.json", "./MediaServer", "-c", "/opt/media/conf/config.ini", "-l", "4", "--log-dir", "/tmp/one-nvr-media-log"}, CapAdd: []string{"NET_ADMIN"}, Sysctls: map[string]string{"net.ipv4.ip_unprivileged_port_start": "0"}, Volumes: []Mount{mount(filepath.Join(runtime, "zlm.ini"), "/opt/media/conf/config.ini", true), mount(filepath.Join(runtime, "zlm-egress.json"), "/opt/media/conf/egress.json", true), mount(filepath.Join(runtime, "zlm-launcher"), "/usr/local/bin/media-launcher", true), mount(poolRoot, "/storage", false)}, Ports: []string{fmt.Sprintf("%d:%d/tcp", c.RTCPort, c.RTCPort), fmt.Sprintf("%d:%d/udp", c.RTCPort, c.RTCPort)}, Restart: "unless-stopped"}
+	d.Services["zlm"] = Service{Image: zlm, Environment: map[string]string{"TZ": c.Timezone}, EntryPoint: []string{"/usr/local/bin/media-launcher"}, Command: []string{"/opt/media/conf/egress.json", "./MediaServer", "-c", "/opt/media/conf/config.ini", "-l", "4", "--log-dir", "/tmp/one-nvr-media-log"}, CapAdd: []string{"NET_ADMIN"}, Sysctls: map[string]string{"net.ipv4.ip_unprivileged_port_start": "0"}, Volumes: []Mount{mount(filepath.Join(runtime, "zlm.ini"), "/opt/media/conf/config.ini", true), mount(filepath.Join(runtime, "zlm-egress.json"), "/opt/media/conf/egress.json", true), mount(filepath.Join(runtime, "zlm-launcher"), "/usr/local/bin/media-launcher", true), mount(poolRoot, "/storage", false)}, Ports: []string{fmt.Sprintf("%d:%d/tcp", c.RTCPort, c.RTCPort), fmt.Sprintf("%d:%d/udp", c.RTCPort, c.RTCPort)}, Restart: "unless-stopped"}
 	// The callback peer is outside the dynamic allocation range. Ordinary
 	// addresses may change on restart without invalidating the fixed firewall.
 	worker := d.Services["worker"]
@@ -167,8 +171,8 @@ func BuildDeployment(v map[string]string) (Deployment, error) {
 		if e != nil {
 			return d, e
 		}
-		d.Services["mqtt"] = Service{Image: mq, Volumes: []Mount{mount(filepath.Join(runtime, "mosquitto.conf"), "/mosquitto/config/mosquitto.conf", true), mount(filepath.Join(runtime, "mqtt.passwd"), "/mosquitto/config/passwords", true), mount(filepath.Join(root, "mqtt"), "/mosquitto/data", false)}, Restart: "unless-stopped"}
-		frigate := Service{Image: fg, Volumes: []Mount{mount(filepath.Join(root, "frigate"), "/config", false)}, ShmSize: "256mb", Restart: "unless-stopped"}
+		d.Services["mqtt"] = Service{Image: mq, Environment: map[string]string{"TZ": c.Timezone}, Volumes: []Mount{mount(filepath.Join(runtime, "mosquitto.conf"), "/mosquitto/config/mosquitto.conf", true), mount(filepath.Join(runtime, "mqtt.passwd"), "/mosquitto/config/passwords", true), mount(filepath.Join(root, "mqtt"), "/mosquitto/data", false)}, Restart: "unless-stopped"}
+		frigate := Service{Image: fg, Environment: map[string]string{"TZ": c.Timezone}, Volumes: []Mount{mount(filepath.Join(root, "frigate"), "/config", false)}, ShmSize: "256mb", Restart: "unless-stopped"}
 		// The detector's own web UI is for troubleshooting, not for operators:
 		// it is published only when a port is configured, and Frigate keeps its
 		// internal-only listener otherwise.
@@ -182,7 +186,7 @@ func BuildDeployment(v map[string]string) (Deployment, error) {
 		if e != nil {
 			return d, e
 		}
-		d.Services["openlist"] = Service{Image: im, Volumes: []Mount{mount(filepath.Join(root, "openlist"), "/opt/openlist/data", false)}, Restart: "unless-stopped"}
+		d.Services["openlist"] = Service{Image: im, Environment: map[string]string{"TZ": c.Timezone}, Volumes: []Mount{mount(filepath.Join(root, "openlist"), "/opt/openlist/data", false)}, Restart: "unless-stopped"}
 	}
 	return d, nil
 }

@@ -117,3 +117,53 @@ func TestFrigateUIPortValidation(t *testing.T) {
 		t.Fatalf("zero keeps the UI unpublished and must be accepted: %v", err)
 	}
 }
+
+// Every container must follow the site zone: an operator comparing a database
+// log line, a recorder job and a detector event otherwise has to convert three
+// different clocks in their head.
+func TestTimezoneReachesEveryService(t *testing.T) {
+	deployment, err := BuildDeployment(map[string]string{
+		"ONE_NVR_PUBLIC_URL":      "https://192.168.1.10:8443",
+		"ONE_NVR_HTTPS_PORT":      "8443",
+		"ONE_NVR_DATA_DIR":        "/srv/one-nvr",
+		"ONE_NVR_TZ":              "Europe/Berlin",
+		"ONE_NVR_FRIGATE_ENABLE":  "yes",
+		"ONE_NVR_OPENLIST_ENABLE": "yes",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"api", "worker", "postgres", "gateway", "zlm", "mqtt", "frigate", "openlist"} {
+		service, ok := deployment.Services[name]
+		if !ok {
+			t.Fatalf("service %s missing from the deployment", name)
+		}
+		if service.Environment["TZ"] != "Europe/Berlin" {
+			t.Fatalf("service %s has TZ=%q, want Europe/Berlin", name, service.Environment["TZ"])
+		}
+	}
+}
+
+func TestTimezoneDefaultsAndValidation(t *testing.T) {
+	base := map[string]string{
+		"ONE_NVR_PUBLIC_URL": "https://192.168.1.10:8443",
+		"ONE_NVR_HTTPS_PORT": "8443",
+		"ONE_NVR_DATA_DIR":   "/srv/one-nvr",
+	}
+	c, err := FromValues(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Timezone != "Asia/Shanghai" {
+		t.Fatalf("the default zone must match the default site, got %q", c.Timezone)
+	}
+	bad := map[string]string{}
+	for k, v := range base {
+		bad[k] = v
+	}
+	bad["ONE_NVR_TZ"] = "Mars/Olympus"
+	// BuildDeployment is the path a real deployment takes; it validates.
+	if _, err := BuildDeployment(bad); err == nil {
+		t.Fatal("a non-IANA zone must be refused before it reaches the containers")
+	}
+}

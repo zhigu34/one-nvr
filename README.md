@@ -30,6 +30,8 @@ channel_no,channel_name,ip,rtsp_port,username,password,main_path,sub_path
 
 路径直接填 `/main`、`/sub`，可追加 `onvif_port`。存储池登记已挂载目录，例如 `/storage/disk1`；不管理底层 NAS、RAID 或磁盘挂载。
 
+`.env` 的 `ONE_NVR_TZ` 为站点时区（IANA 名称，默认 `Asia/Shanghai`），所有容器统一使用：数据库、录像任务、检测事件与媒体服务的日志时间戳都按它显示，可与界面上的站点时间直接对照。站点初始化时填写的时区应与此一致。
+
 基础常驻 5 个容器：gateway（含前端）、api、worker、postgres、zlm。Frigate 开关增加 frigate/mqtt，OpenList 开关增加 openlist；全部启用为 8 个。默认两模块关闭。
 
 排查检测问题时可以临时把检测服务自带的界面暴露到宿主机：在 `.env` 里设 `ONE_NVR_FRIGATE_UI_PORT`（例如 `5001`），重新部署后访问 `http://<NAS>:5001`。它只用于诊断（看检测器状态、区域、事件流），日常操作仍走 one-nvr 的「事件」「检测配置」页；不需要时留空或设 0，界面即不对外监听。

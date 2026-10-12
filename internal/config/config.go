@@ -9,13 +9,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Config struct {
 	PublicURL                                                               string
 	HTTPPort, HTTPSPort, RTCPort, FrigateUIPort                             int
 	MediaHost, DataDir, DatabaseURL, TLSDir, HardwareProfile, ListenAddress string
-	CameraCIDRs, HookSubnet                                                 string
+	CameraCIDRs, HookSubnet, Timezone                                       string
 	FrigateEnabled, OpenListEnabled                                         bool
 }
 
@@ -34,6 +35,12 @@ func Load() (Config, error) {
 	return c, c.Validate()
 }
 func (c *Config) Validate() error {
+	if c.Timezone == "" {
+		return fmt.Errorf("ONE_NVR_TZ must be an IANA time zone name")
+	}
+	if _, err := time.LoadLocation(c.Timezone); err != nil {
+		return fmt.Errorf("ONE_NVR_TZ must be an IANA time zone name")
+	}
 	for k, p := range map[string]int{"HTTP": c.HTTPPort, "HTTPS": c.HTTPSPort, "RTC": c.RTCPort} {
 		if p < 1 || p > 65535 {
 			return fmt.Errorf("%s port must be 1–65535", k)

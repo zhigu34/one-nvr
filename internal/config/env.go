@@ -74,9 +74,12 @@ func Parse(r io.Reader) (Config, error) {
 	return FromValues(values)
 }
 func FromValues(v map[string]string) (Config, error) {
-	c := Config{PublicURL: "https://127.0.0.1", HTTPPort: 8080, HTTPSPort: 443, RTCPort: 8000, DataDir: "/data", HardwareProfile: "auto", ListenAddress: ":8081", HookSubnet: "172.30.254.0/29"}
+	// The default zone matches the product's default site (Asia/Shanghai); a
+	// deployment elsewhere sets ONE_NVR_TZ, and every container follows it so
+	// log timestamps, detector events and the operator's clock agree.
+	c := Config{PublicURL: "https://127.0.0.1", HTTPPort: 8080, HTTPSPort: 443, RTCPort: 8000, DataDir: "/data", HardwareProfile: "auto", ListenAddress: ":8081", HookSubnet: "172.30.254.0/29", Timezone: "Asia/Shanghai"}
 	c.CameraCIDRs = v["ONE_NVR_CAMERA_CIDRS"]
-	for k, target := range map[string]*string{"ONE_NVR_PUBLIC_URL": &c.PublicURL, "ONE_NVR_MEDIA_HOST": &c.MediaHost, "ONE_NVR_DATA_DIR": &c.DataDir, "ONE_NVR_DATABASE_URL": &c.DatabaseURL, "ONE_NVR_TLS_DIR": &c.TLSDir, "ONE_NVR_HARDWARE_PROFILE": &c.HardwareProfile, "ONE_NVR_LISTEN_ADDRESS": &c.ListenAddress, "ONE_NVR_HOOK_SUBNET": &c.HookSubnet} {
+	for k, target := range map[string]*string{"ONE_NVR_PUBLIC_URL": &c.PublicURL, "ONE_NVR_MEDIA_HOST": &c.MediaHost, "ONE_NVR_DATA_DIR": &c.DataDir, "ONE_NVR_DATABASE_URL": &c.DatabaseURL, "ONE_NVR_TLS_DIR": &c.TLSDir, "ONE_NVR_HARDWARE_PROFILE": &c.HardwareProfile, "ONE_NVR_LISTEN_ADDRESS": &c.ListenAddress, "ONE_NVR_HOOK_SUBNET": &c.HookSubnet, "ONE_NVR_TZ": &c.Timezone} {
 		if s, ok := v[k]; ok {
 			*target = s
 		}
