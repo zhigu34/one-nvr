@@ -202,38 +202,41 @@ jobs:
       - name: Actual Mosquitto conversion reports no ownership warning
         run: |
           # Mosquitto 2.0.16+ warns when a sensitive file is world readable or
-          # owned by another user, and future releases will refuse the file.
-          # The deployed layout hits the ownership case: init-runtime creates
-          # the file as the broker user (1883) while the conversion container
-          # reads it as root, so deploy.sh hands the file over before
-          # converting and hands it back afterwards. Every intermediate value
-          # is printed so a failure is diagnosable from the log alone.
+          # owned by another user. The deployed layout reads the broker-owned
+          # file as root during conversion, so deploy.sh hands it over first
+          # and back afterwards.
+          #
+          # This step reports its measurements as a workflow annotation: job
+          # logs are not readable without authentication, so the only way a
+          # failure here is diagnosable from outside is ::error:: messages.
           image=eclipse-mosquitto:2.0.22@sha256:199ea8ef2e35ec2b1b37e59cfd1dbae538ed4dfa4a2251a121a52215a6248a21
-          echo "--- deploy.sh handoff sequence ---"
-          grep -c 'chown 0:0 /work/mqtt.passwd' deploy.sh || true
-          docker run --rm --network none --user 0:0 --tmpfs /work --mount "type=bind,source=$PWD/deploy/production/hash-mqtt.sh,target=/hash-mqtt.sh,readonly" --entrypoint sh "$image" -ec '
+          report=$(docker run --rm --network none --user 0:0 --tmpfs /work --mount "type=bind,source=$PWD/deploy/production/hash-mqtt.sh,target=/hash-mqtt.sh,readonly" --entrypoint sh "$image" -ec '
             set -u
-            echo "identity: $(id -u):$(id -g)"
-            echo "tool: $(command -v mosquitto_passwd || echo MISSING)"
+            printf "identity=%s:%s\n" "$(id -u)" "$(id -g)"
+            printf "tool=%s\n" "$(command -v mosquitto_passwd || echo MISSING)"
 
-            echo "--- stage 1: broker-owned file read by root (the hazard) ---"
             printf "one_nvr:isolated-test-only\n" > /work/passwords
             chmod 600 /work/passwords
             chown 1883:1883 /work/passwords
-            ls -ln /work/passwords | sed "s/^/  before: /"
-            sh /hash-mqtt.sh /work/passwords 2>&1 >/dev/null | sed "s/^/  warned: /"
-            ls -ln /work/passwords | sed "s/^/  after:  /"
+            printf "stage1_before=%s\n" "$(ls -ln /work/passwords | tr -s " " | cut -d" " -f1,3,4,5)"
+            printf "stage1_warned=%s\n" "$(sh /hash-mqtt.sh /work/passwords 2>&1 >/dev/null | tr "\n" ";")"
+            printf "stage1_after=%s\n" "$(ls -ln /work/passwords | tr -s " " | cut -d" " -f1,3,4,5)"
 
-            echo "--- stage 2: after the handoff (expected silent) ---"
             printf "one_nvr:isolated-test-only\n" > /work/passwords
             chmod 600 /work/passwords
             chown 1883:1883 /work/passwords
             chown 0:0 /work/passwords
-            ls -ln /work/passwords | sed "s/^/  before: /"
-            sh /hash-mqtt.sh /work/passwords 2>&1 >/dev/null | sed "s/^/  warned: /"
+            printf "stage2_before=%s\n" "$(ls -ln /work/passwords | tr -s " " | cut -d" " -f1,3,4,5)"
+            printf "stage2_warned=%s\n" "$(sh /hash-mqtt.sh /work/passwords 2>&1 >/dev/null | tr "\n" ";")"
             chown 1883:1883 /work/passwords
-            ls -ln /work/passwords | sed "s/^/  after:  /"
-          '
+            printf "stage2_after=%s\n" "$(ls -ln /work/passwords | tr -s " " | cut -d" " -f1,3,4,5)"
+            done=ok
+            printf "done=%s\n" "$done"
+          ' 2>&1) || true
+          # One annotation line per measurement, replacing newlines with " | ".
+          flat=$(printf '%s' "$report" | tr "\n" "|" | sed 's/|/ | /g')
+          echo "::error title=Mosquitto ownership measurements::${flat}"
+          echo "$report"
       - name: Actual Frigate config seed belongs to the publishing user
         run: |
           # The detection publisher rewrites config.yml on every publication and
