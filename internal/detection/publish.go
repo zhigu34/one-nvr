@@ -136,16 +136,17 @@ func (s *Service) baseConfig(ctx context.Context) (map[string]any, error) {
 	if snapshot, err := s.Runtime(ctx, auth.Principal{}); err == nil && snapshot.Version != "" {
 		version = snapshot.Version
 	}
+	detectors, model := detectorConfig(s.Inference)
 	return map[string]any{
+		"detectors": detectors,
+		"model":     model,
 		"mqtt": map[string]any{
 			"host":         "mqtt",
 			"user":         "one_nvr",
 			"password":     s.MQTTKey,
 			"topic_prefix": "frigate",
 		},
-		"detectors": map[string]any{"cpu": map[string]any{"type": "cpu", "num_threads": 2}},
-		"model":     map[string]any{"path": "/cpu_model.tflite"},
-		"version":   version,
+		"version": version,
 		// Frigate's TLS listener is deliberately off. It exists only for
 		// direct browser access to Frigate itself, which this deployment never
 		// uses: the detector is reached over the container network and all
@@ -332,4 +333,33 @@ func (s *Service) syncCameraMappings(ctx context.Context, cameras map[string]Cam
 		}
 		return nil
 	})
+}
+
+// detectorConfig expresses the deployment's validated detection hardware the
+// way Frigate expects it. The CPU path is the universal fallback; the Intel
+// path runs the OpenVINO model the pinned image already bundles
+// (/openvino-model/ssdlite_mobilenet_v2.xml) on the GPU. Selection comes from
+// the hardware report, so a machine without a validated accelerator keeps the
+// CPU detector instead of being pointed at a device that is not there.
+func detectorConfig(inference string) (map[string]any, map[string]any) {
+	if inference == "intel" {
+		// Identical to the deployment-time hardware probe's profile
+		// (cmd/admin/hardware.go): one definition of "Intel accelerated" means
+		// a publish can never disagree with what the probe validated.
+		return map[string]any{
+				"intel": map[string]any{"type": "openvino", "device": "GPU"},
+			}, map[string]any{
+				"path":               "/openvino-model/ssdlite_mobilenet_v2.xml",
+				"labelmap_path":      "/openvino-model/coco_91cl_bkgr.txt",
+				"width":              300,
+				"height":             300,
+				"input_tensor":       "nhwc",
+				"input_pixel_format": "bgr",
+			}
+	}
+	return map[string]any{
+			"cpu": map[string]any{"type": "cpu", "num_threads": 2},
+		}, map[string]any{
+			"path": "/cpu_model.tflite",
+		}
 }

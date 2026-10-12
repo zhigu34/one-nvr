@@ -89,6 +89,11 @@ type Service struct {
 	// ProbeToken authorizes the detector's internal pull through the media
 	// server's on_play hook (the detector holds no user session).
 	ProbeToken string
+	// Inference names the validated hardware profile the detector runs on
+	// ("intel" for the accelerated path, empty for CPU). It comes from the
+	// deployment's hardware report; a detector pointed at unaccelerated
+	// hardware fails at startup, so this is never guessed.
+	Inference string
 }
 
 func New(db *database.DB, accounts *auth.Service, frigateURL, configPath string) *Service {
@@ -106,6 +111,9 @@ type ServiceConfig struct {
 	// ProbeToken authorizes the detector's internal pull through the media
 	// server on_play hook; the detector holds no user session.
 	ProbeToken string
+	// Inference is the hardware profile the detector should run on: "intel"
+	// for the accelerated path, empty for CPU.
+	Inference string
 }
 
 // Complete reports whether every field the publication path needs is set.
@@ -124,6 +132,7 @@ func NewComplete(db *database.DB, accounts *auth.Service, in ServiceConfig) (*Se
 	service := New(db, accounts, in.FrigateURL, in.ConfigPath)
 	service.MQTTKey = in.MQTTKey
 	service.ProbeToken = in.ProbeToken
+	service.Inference = in.Inference
 	service.Reload = HTTPReloader{BaseURL: in.FrigateURL}.Reload
 	return service, nil
 }
@@ -161,9 +170,13 @@ func (s *Service) List(ctx context.Context, p auth.Principal) ([]Config, error) 
 	return visible, nil
 }
 
-// Runtime returns the worker's last capability snapshot.
+// Runtime returns the worker's last capability snapshot. A service without a
+// database (as in configuration-only rendering) has no snapshot to report.
 func (s *Service) Runtime(ctx context.Context, _ auth.Principal) (RuntimeSnapshot, error) {
 	var out RuntimeSnapshot
+	if s.DB == nil || s.DB.Pool == nil {
+		return RuntimeSnapshot{Reachable: false}, nil
+	}
 	var observed []byte
 	var inference *float64
 	err := s.DB.Pool.QueryRow(ctx, `SELECT version,detector,inference_ms,overloaded,reachable,to_char(observed_at,'YYYY-MM-DD"T"HH24:MI:SSOF') FROM detection_runtime WHERE id='current'`).

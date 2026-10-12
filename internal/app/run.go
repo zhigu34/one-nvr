@@ -14,6 +14,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/database"
 	"github.com/zhigu34/one-nvr/internal/detection"
 	"github.com/zhigu34/one-nvr/internal/events"
+	"github.com/zhigu34/one-nvr/internal/hardware"
 	"github.com/zhigu34/one-nvr/internal/httpapi"
 	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/live"
@@ -50,7 +51,20 @@ func newDetectionService(db *database.DB, accounts *auth.Service, dataDir, mqttK
 		ConfigPath: filepath.Join(dataDir, "frigate", "config.yml"),
 		MQTTKey:    mqttKey,
 		ProbeToken: probeToken,
+		Inference:  validatedInference(dataDir),
 	})
+}
+
+// validatedInference reads the deployment's hardware report and returns the
+// inference profile the detector should use. Only a validated proposal is
+// trusted: an unvalidated or failed probe leaves the detector on CPU, because
+// pointing Frigate at a GPU the probe never confirmed makes it fail to start.
+func validatedInference(dataDir string) string {
+	report, err := hardware.ReadReport(dataDir)
+	if err != nil || !report.Validated || report.Proposal.InferenceID == "" || report.Proposal.InferenceID == "cpu" {
+		return ""
+	}
+	return report.Proposal.InferenceID
 }
 
 func Run(name string) error {

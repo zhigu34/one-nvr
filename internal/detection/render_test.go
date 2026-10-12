@@ -1,6 +1,7 @@
 package detection
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -118,5 +119,42 @@ func TestNewCompleteRefusesIncompleteWiring(t *testing.T) {
 	}
 	if service.MQTTKey != "k" || service.ProbeToken != "p" || service.Reload == nil {
 		t.Fatal("a complete wiring must carry the key, the probe token and the reload hook")
+	}
+}
+
+// The detector must follow the deployment's validated hardware: an accelerated
+// profile switches Frigate to the OpenVINO model on the GPU, and anything else
+// stays on CPU. Publishing a CPU detector on a GPU host was the reported bug.
+func TestRenderFollowsInferenceProfile(t *testing.T) {
+	cpu := &Service{MQTTKey: "k"}
+	config, err := cpu.baseConfig(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := config["detectors"].(map[string]any)["cpu"]; !ok {
+		t.Fatal("without a validated accelerator the detector stays on CPU")
+	}
+	if model, _ := config["model"].(map[string]any)["path"].(string); model != "/cpu_model.tflite" {
+		t.Fatalf("cpu profile must use the bundled CPU model, got %q", model)
+	}
+
+	accelerated := &Service{MQTTKey: "k", Inference: "intel"}
+	config, err = accelerated.baseConfig(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ov, ok := config["detectors"].(map[string]any)["intel"].(map[string]any)
+	if !ok {
+		t.Fatal("a validated intel profile must select the OpenVINO detector")
+	}
+	if ov["type"] != "openvino" || ov["device"] != "GPU" {
+		t.Fatalf("OpenVINO detector must target the GPU, got %v", ov)
+	}
+	model := config["model"].(map[string]any)
+	if model["path"] != "/openvino-model/ssdlite_mobilenet_v2.xml" {
+		t.Fatalf("accelerated profile must use the image's bundled OpenVINO model, got %v", model["path"])
+	}
+	if model["labelmap_path"] == "" || model["input_tensor"] != "nhwc" {
+		t.Fatalf("the OpenVINO model must match the validated profile, got %v", model)
 	}
 }
