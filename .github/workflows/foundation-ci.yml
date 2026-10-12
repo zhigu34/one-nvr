@@ -223,7 +223,7 @@ jobs:
             # The fix: hand it over, convert, hand it back for the broker. The
             # mode matters as much as the owner: a default 0644 file trips the
             # world-readable warning instead, which would look like a failure
-            # of the handoff when it is really the test's own fixture.
+            # of the handoff when it is really only this fixture defaulting.
             printf "one_nvr:isolated-test-only\n" > /work/passwords
             chmod 600 /work/passwords
             chown 1883:1883 /work/passwords
