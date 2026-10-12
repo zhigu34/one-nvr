@@ -144,8 +144,12 @@ done | docker run --rm -i --network none --user 0:0 --mount "type=bind,source=$r
 optional_failed=no
 if [[ " ${services[*]} " == *' frigate '* ]]; then
  # Hash the existing authentication file once; no password is exposed as a command argument.
+ # The converter runs as root, and Mosquitto 2.0.16+ warns (and later refuses)
+ # when a sensitive file's owner differs from the process reading it, so the
+ # file is handed to root for the conversion and back to the runtime broker
+ # user (1883) afterwards — the broker reads it only after dropping privileges.
  mqtt_image=$(docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/image-mqtt)
- docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/work" --mount "type=bind,source=$PWD/deploy/production/hash-mqtt.sh,target=/hash-mqtt.sh,readonly" --entrypoint sh "$mqtt_image" -ec 'sh /hash-mqtt.sh /work/mqtt.passwd; chown 1883:1883 /work/mqtt.passwd; chmod 600 /work/mqtt.passwd'
+ docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/work" --mount "type=bind,source=$PWD/deploy/production/hash-mqtt.sh,target=/hash-mqtt.sh,readonly" --entrypoint sh "$mqtt_image" -ec 'chown 0:0 /work/mqtt.passwd; sh /hash-mqtt.sh /work/mqtt.passwd; chown 1883:1883 /work/mqtt.passwd; chmod 600 /work/mqtt.passwd'
  if ! ./deploy/production/probe-hardware.sh "$admin_image" "$data" "$tmp/compose.json" "$project"; then optional_failed=yes; printf 'Intelligence hardware validation failed; core remains available.\n' >&2
  else
   docker run --rm --network none --user 0:0 --mount "type=bind,source=$runtime,target=/output,readonly" --entrypoint cat "$admin_image" /output/hardware.compose.json > "$tmp/hardware.compose.json"
