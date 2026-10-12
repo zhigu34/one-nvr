@@ -147,7 +147,10 @@ func (s *Service) Ingest(ctx context.Context, payload []byte) error {
 		err := tx.QueryRow(ctx, `SELECT c.id,c.current_revision_id FROM frigate_cameras f JOIN channels c ON c.id=f.channel_id WHERE f.frigate_name=$1`, after.Camera).Scan(&channelID, &revision)
 		if errors.Is(err, pgx.ErrNoRows) {
 			// An unmapped camera is dropped with a record, not silently merged
-			// into another channel (CH-07/CH-08).
+			// into another channel (CH-07/CH-08). It is also logged: without a
+			// line here, "events arrive but are dropped" is indistinguishable
+			// from "no events arrive" when reading the worker log.
+			slog.Warn("event dropped: camera has no channel mapping", "camera", after.Camera, "source_id", after.ID)
 			return s.recordUnmapped(ctx, tx, after.Camera, after.ID)
 		}
 		if err != nil {
