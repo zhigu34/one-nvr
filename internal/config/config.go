@@ -13,7 +13,7 @@ import (
 
 type Config struct {
 	PublicURL                                                               string
-	HTTPPort, HTTPSPort, RTCPort                                            int
+	HTTPPort, HTTPSPort, RTCPort, FrigateUIPort                             int
 	MediaHost, DataDir, DatabaseURL, TLSDir, HardwareProfile, ListenAddress string
 	CameraCIDRs, HookSubnet                                                 string
 	FrigateEnabled, OpenListEnabled                                         bool
@@ -38,6 +38,10 @@ func (c *Config) Validate() error {
 		if p < 1 || p > 65535 {
 			return fmt.Errorf("%s port must be 1–65535", k)
 		}
+	}
+	// The detector UI port is optional: 0 keeps it unpublished.
+	if c.FrigateUIPort != 0 && (c.FrigateUIPort < 1 || c.FrigateUIPort > 65535) {
+		return fmt.Errorf("FRIGATE_UI port must be 0 or 1–65535")
 	}
 	u, err := url.Parse(c.PublicURL)
 	if err != nil || u.Host == "" || u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {

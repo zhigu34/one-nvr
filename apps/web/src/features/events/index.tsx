@@ -75,21 +75,23 @@ export function Events() {
     const end = Date.now()
     return { start: end - 7 * 86_400_000, end }
   })
-  const activeChannel = channel || permitted[0]?.id || ''
+  // The page opens on every channel, not on an arbitrary first one: an
+  // operator asking "are there events" must not have to guess which channel
+  // the page happened to select. Choosing a channel in the filter narrows it.
   const filters = (() => {
     const params = new URLSearchParams({
       start: String(window.start),
       end: String(window.end),
       limit: '50',
     })
-    if (activeChannel) params.set('channel_id', activeChannel)
+    if (channel) params.set('channel_id', channel)
     if (category) params.set('category', category)
     if (handleState) params.set('handle_state', handleState)
     return params.toString()
   })()
   const events = useAPI<Schema<'EventPage'>>(
     `/api/v1/events?${filters}`,
-    active && !!activeChannel
+    active
   )
   const items = events.data?.items || []
 
@@ -115,12 +117,15 @@ export function Events() {
           <div className='flex flex-wrap items-end gap-3 rounded-xl border bg-card p-4'>
             <SelectField
               label='通道'
-              value={activeChannel}
+              value={channel}
               onValueChange={(next) => setChannel(next ?? '')}
-              options={permitted.map((channel) => ({
-                value: channel.id ?? '',
-                label: `CH${String(channel.channel_no ?? 0).padStart(2, '0')} ${channel.channel_name}`,
-              }))}
+              options={[
+                { value: '', label: '全部通道' },
+                ...permitted.map((channel) => ({
+                  value: channel.id ?? '',
+                  label: `CH${String(channel.channel_no ?? 0).padStart(2, '0')} ${channel.channel_name}`,
+                })),
+              ]}
               className='w-44'
             />
             <SelectField

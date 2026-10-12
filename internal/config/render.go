@@ -168,7 +168,14 @@ func BuildDeployment(v map[string]string) (Deployment, error) {
 			return d, e
 		}
 		d.Services["mqtt"] = Service{Image: mq, Volumes: []Mount{mount(filepath.Join(runtime, "mosquitto.conf"), "/mosquitto/config/mosquitto.conf", true), mount(filepath.Join(runtime, "mqtt.passwd"), "/mosquitto/config/passwords", true), mount(filepath.Join(root, "mqtt"), "/mosquitto/data", false)}, Restart: "unless-stopped"}
-		d.Services["frigate"] = Service{Image: fg, Volumes: []Mount{mount(filepath.Join(root, "frigate"), "/config", false)}, ShmSize: "256mb", Restart: "unless-stopped"}
+		frigate := Service{Image: fg, Volumes: []Mount{mount(filepath.Join(root, "frigate"), "/config", false)}, ShmSize: "256mb", Restart: "unless-stopped"}
+		// The detector's own web UI is for troubleshooting, not for operators:
+		// it is published only when a port is configured, and Frigate keeps its
+		// internal-only listener otherwise.
+		if c.FrigateUIPort != 0 {
+			frigate.Ports = []string{fmt.Sprintf("%d:%d/tcp", c.FrigateUIPort, 5000)}
+		}
+		d.Services["frigate"] = frigate
 	}
 	if c.OpenListEnabled {
 		im, e := image("openlist")

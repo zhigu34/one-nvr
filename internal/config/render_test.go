@@ -53,4 +53,67 @@ func TestDeploymentLiteralAndReadOnlyDirectory(t *testing.T) {
 		}
 	}
 }
-func TestDeploymentRefusesSharedSystemRoots(t *testing.T){for _,p:=range []string{"/","/etc","/var","/srv","/usr","/home","/opt","/mnt","/tmp"}{if _,e:=BuildDeployment(map[string]string{"ONE_NVR_DATA_DIR":p});e==nil{t.Fatalf("shared system root accepted: %s",p)}}}
+func TestDeploymentRefusesSharedSystemRoots(t *testing.T) {
+	for _, p := range []string{"/", "/etc", "/var", "/srv", "/usr", "/home", "/opt", "/mnt", "/tmp"} {
+		if _, e := BuildDeployment(map[string]string{"ONE_NVR_DATA_DIR": p}); e == nil {
+			t.Fatalf("shared system root accepted: %s", p)
+		}
+	}
+}
+
+// The detector's own UI is published only when a port is asked for: an
+// operator who never reads Frigate's interface should not have it reachable
+// on the host, and internal-only must stay the default.
+func TestFrigateUIPortIsOptIn(t *testing.T) {
+	base := map[string]string{
+		"ONE_NVR_PUBLIC_URL":     "https://192.168.1.10:8443",
+		"ONE_NVR_HTTPS_PORT":     "8443",
+		"ONE_NVR_DATA_DIR":       "/srv/one-nvr",
+		"ONE_NVR_FRIGATE_ENABLE": "yes",
+	}
+	deployment, err := BuildDeployment(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ports := deployment.Services["frigate"].Ports; len(ports) != 0 {
+		t.Fatalf("frigate must not publish a host port by default, got %v", ports)
+	}
+
+	withUI := map[string]string{}
+	for k, v := range base {
+		withUI[k] = v
+	}
+	withUI["ONE_NVR_FRIGATE_UI_PORT"] = "5001"
+	deployment, err = BuildDeployment(withUI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ports := deployment.Services["frigate"].Ports
+	if !reflect.DeepEqual(ports, []string{"5001:5000/tcp"}) {
+		t.Fatalf("a configured UI port must be published to Frigate's 5000, got %v", ports)
+	}
+}
+
+func TestFrigateUIPortValidation(t *testing.T) {
+	base := map[string]string{
+		"ONE_NVR_PUBLIC_URL": "https://192.168.1.10:8443",
+		"ONE_NVR_HTTPS_PORT": "8443",
+		"ONE_NVR_DATA_DIR":   "/srv/one-nvr",
+	}
+	bad := map[string]string{}
+	for k, v := range base {
+		bad[k] = v
+	}
+	bad["ONE_NVR_FRIGATE_UI_PORT"] = "70000"
+	if _, err := BuildDeployment(bad); err == nil {
+		t.Fatal("an out-of-range detector UI port must be refused")
+	}
+	ok := map[string]string{}
+	for k, v := range base {
+		ok[k] = v
+	}
+	ok["ONE_NVR_FRIGATE_UI_PORT"] = "0"
+	if _, err := BuildDeployment(ok); err != nil {
+		t.Fatalf("zero keeps the UI unpublished and must be accepted: %v", err)
+	}
+}
