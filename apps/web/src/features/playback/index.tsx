@@ -617,6 +617,50 @@ return (
                 </span>
               )}
             </div>
+            {/* Top-right playback-state badge: red dot + wall-clock when
+                playing, amber dot when paused, and a soft spinner while the
+                byte-range request is in flight. Hidden in idle so the
+                placeholder stays uncluttered. */}
+            <div
+              data-testid='playback-state-badge'
+              className={cn(
+                'pointer-events-none absolute right-3 top-3 flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px] tabular-nums shadow-sm backdrop-blur',
+                state.phase === 'playing' &&
+                  'border-red-400/60 bg-red-500/15 text-red-300',
+                state.phase === 'paused' &&
+                  'border-amber-400/40 bg-amber-400/15 text-amber-300',
+                state.phase === 'loading' &&
+                  'border-amber-400/40 bg-amber-400/15 text-amber-300'
+              )}
+            >
+              {state.phase === 'playing' && (
+                <>
+                  <span className='inline-block size-2 rounded-full bg-red-400 shadow-[0_0_6px_rgba(248,113,113,0.8)] animate-[pulse_1.6s_ease-in-out_infinite]' />
+                  <span>REC · {state.clock > 0 ? formatClock(state.clock, zone) : '—'}</span>
+                </>
+              )}
+              {state.phase === 'paused' && (
+                <>
+                  <span className='inline-block size-2 rounded-full bg-amber-400' />
+                  <span>已暂停 · {state.clock > 0 ? formatClock(state.clock, zone) : '—'}</span>
+                </>
+              )}
+              {state.phase === 'loading' && (
+                <>
+                  <svg
+                    className='size-3 animate-spin'
+                    viewBox='0 0 24 24'
+                    fill='none'
+                    stroke='currentColor'
+                    strokeWidth='2.5'
+                    aria-hidden
+                  >
+                    <path d='M21 12a9 9 0 1 1-6.2-8.55' />
+                  </svg>
+                  <span>加载中…</span>
+                </>
+              )}
+            </div>
             {/* Idle placeholder: a clear "waiting for the operator" cue lives
                 inside the same frame as the video, so the OSD bar below it
                 always reads as a control bar over a real picture rather than
