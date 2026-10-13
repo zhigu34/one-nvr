@@ -119,11 +119,15 @@ export function RecordingsWorkspace({
   return (
     <div
       data-testid='recordings-workspace'
-      // The route wraps this in <Main fixed> (grow + overflow-hidden), so
-      // h-full is the exact leftover height under the sticky header. The
-      // whole workspace — top row + timeline band — fits one viewport and
-      // never page-scrolls.
-      className='flex h-full min-h-0 flex-col gap-3 overflow-hidden bg-video-surface text-video-chrome-foreground'
+      // Exact viewport leftover: the layout chain is SidebarProvider
+      // (min-h-svh — content-driven, NOT a definite height) → sticky header
+      // h-16 → Main fixed py-0. Because the provider only sets a *minimum*,
+      // h-full here resolves to auto and the grid's 1fr rows collapse to
+      // content — the file panel then stretches row 1 beyond the viewport.
+      // The only chrome above this div is the h-16 header, so an explicit
+      // calc is the precise, stable value; overflow-hidden keeps the page
+      // at exactly one viewport.
+      className='flex h-[calc(100dvh-4rem)] min-h-0 flex-col gap-3 overflow-hidden bg-video-surface text-video-chrome-foreground'
     >
       <QueryState
         pending={channelsQuery.isPending || site.isPending}
