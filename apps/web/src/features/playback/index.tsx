@@ -532,7 +532,10 @@ return (
       style={
         layout?.kind === 'workspace'
           ? {
-              gridTemplateColumns: 'auto minmax(0, 1fr) auto',
+              // Fixed rail/files widths so long content (retention copy,
+              // channel names) can never stretch the columns; only the
+              // console flexes.
+              gridTemplateColumns: '200px minmax(0, 1fr) 340px',
               gridTemplateRows: 'minmax(0, 1fr) auto',
             }
           : undefined
@@ -1198,11 +1201,26 @@ function Timeline({
     const node = bubble.current
     if (node) node.style.visibility = 'hidden'
   }
-  // An empty index is explained once, by the page-level empty state below the
-  // timeline. A zoomed view with no segments in it is different information —
-  // the full index has content, this window simply does not.
+  // An empty index is explained inside the band itself: the full-width row
+  // must still occupy its slot (the workspace grid reserves it), so the
+  // empty state renders as a slim notice inside the band, not a null.
+  // A zoomed view with no segments is different information — the full index
+  // has content, this window simply does not.
   if (!timeline.entries.length || span <= 0) {
-    if (viewIsFull) return null
+    if (viewIsFull) {
+      return (
+        <div className='rounded-xl border border-dashed border-video-border p-4 text-center text-sm text-video-chrome-foreground/60'>
+          {zone ? (
+            <>
+              {formatClock(timeline.from, zone)} — {formatClock(timeline.to, zone)} ·
+              该时间范围没有已登记录像
+            </>
+          ) : (
+            '该时间范围没有已登记录像'
+          )}
+        </div>
+      )
+    }
     return (
       <p className='rounded-xl border border-dashed p-4 text-center text-sm text-muted-foreground'>
         该视图范围内没有片段——用「显示完整范围」返回，或调整缩放。

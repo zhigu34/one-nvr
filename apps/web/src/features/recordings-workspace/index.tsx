@@ -119,10 +119,10 @@ export function RecordingsWorkspace({
   return (
     <div
       data-testid='recordings-workspace'
-      // Flex column filling the viewport below the header; `min-h-0` on the
-      // Playback child keeps the grid from overflowing, and the outer
-      // overflow-hidden clips any residual so the page itself never scrolls.
-      className='flex h-[calc(100vh-4rem)] min-h-[560px] flex-col gap-3 bg-video-surface text-video-chrome-foreground'
+      // The route wraps this in <Main fixed> (grow + overflow-hidden), so a
+      // plain h-full is the exact leftover height between the sticky header
+      // and the viewport bottom — no viewport-calc guessing.
+      className='flex h-full min-h-0 flex-col gap-3 bg-video-surface text-video-chrome-foreground'
     >
       <QueryState
         pending={channelsQuery.isPending || site.isPending}
