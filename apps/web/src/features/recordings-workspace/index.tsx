@@ -64,14 +64,9 @@ export function RecordingsWorkspace({
     [navigate, initialChannel, initialAt]
   )
   return (
-    <div className='space-y-4'>
+    <div className='flex min-h-[calc(100vh-6rem)] flex-col gap-3'>
       <div className='flex flex-wrap items-center justify-between gap-3'>
-        <div>
-          <h1 className='text-2xl font-semibold tracking-tight'>录像</h1>
-          <p className='mt-1 text-sm text-muted-foreground'>
-            回放查看与文件管理在同一个工作区，通道与时间在两者之间保留。
-          </p>
-        </div>
+        <h1 className='text-lg font-semibold tracking-tight'>录像</h1>
         <div
           role='tablist'
           aria-label='录像视图'
@@ -101,11 +96,14 @@ export function RecordingsWorkspace({
       {/* Both panels stay mounted so switching tabs cannot discard an in-flight
           query or the current selection; only visibility changes. The playback
           side additionally gates its heavy index fetch on being the active tab. */}
-      <div role='tabpanel' hidden={tab !== 'playback'}>
+      <div
+        role='tabpanel'
+        hidden={tab !== 'playback'}
+        className={tab === 'playback' ? 'flex min-h-0 flex-1 flex-col' : undefined}
+      >
         <Playback
           initialChannel={initialChannel}
           initialAt={initialAt}
-          embedded={tab === 'playback'}
           active={tab === 'playback'}
         />
       </div>

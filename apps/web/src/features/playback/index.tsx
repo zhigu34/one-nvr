@@ -97,14 +97,10 @@ const QUICK_RANGES: { kind: QuickRangeKind; label: string }[] = [
 export function Playback({
   initialChannel = '',
   initialAt = '',
-  embedded = false,
   active = true,
 }: {
   initialChannel?: string
   initialAt?: string
-  // Embedded under the recordings workspace's playback tab, which already
-  // renders the page heading and the tab strip.
-  embedded?: boolean
   // False while the workspace shows the other tab: the channel/site queries
   // (and the index below) stay idle instead of both tabs fetching on mount.
   active?: boolean
@@ -120,25 +116,16 @@ export function Playback({
   // The site zone is never assumed: every clock in this page is derived from it,
   // so the workspace waits for the value the API reports.
   const zone = site.data?.timezone || ''
+  // The zone announcement the unit test relies on lives on the loading gate:
+  // prose about how playback works has no place on the page itself.
+  if (!zone)
+    return (
+      <p role='status' className='py-8 text-sm text-muted-foreground'>
+        正在读取站点时区…
+      </p>
+    )
   return (
-    <div className='space-y-4'>
-      {!embedded && (
-        <div>
-          <h1 className='text-2xl font-semibold tracking-tight'>录像回放</h1>
-          <p className='mt-1 text-sm text-muted-foreground'>
-            {zone
-              ? `按站点时区 ${zone} 检索与播放。进入本页只加载索引，播放由播放按钮、双击片段或时间轴定位触发。`
-              : '正在读取站点时区…'}
-          </p>
-        </div>
-      )}
-      {embedded && (
-        <p className='text-xs text-muted-foreground'>
-          {zone
-            ? `按站点时区 ${zone} 检索与播放；播放由播放按钮、双击片段或时间轴定位触发。`
-            : '正在读取站点时区…'}
-        </p>
-      )}
+    <div className='flex min-h-[calc(100vh-9rem)] flex-col'>
       <QueryState
         pending={channelsQuery.isPending || site.isPending}
         error={channelsQuery.error || site.error}
@@ -147,10 +134,10 @@ export function Playback({
           void site.refetch()
         }}
       />
-      {!!zone && channelsQuery.data && !channels.length && (
+      {channelsQuery.data && !channels.length && (
         <Empty>没有可回放的通道，请联系管理员分配录像回放权限。</Empty>
       )}
-      {!!zone && !!channels.length && (
+      {!!channels.length && (
         <Workspace
           // A site timezone change invalidates every wall-clock value below.
           key={zone}
@@ -436,19 +423,22 @@ function Workspace({
     })
   }
   return (
-    <div className='grid items-start gap-4 xl:grid-cols-[240px_minmax(0,1fr)]'>
-      <aside className='space-y-3 rounded-xl border bg-card p-3'>
-        <div className='flex items-center justify-between text-sm font-medium'>
-          <span>回放通道</span>
-          <span className='text-muted-foreground'>{channels.length} 路</span>
+    // The page IS the player: one dark surface spanning the viewport, channel
+    // rail on the left, console on the right. No prose anywhere.
+    <div className='flex min-h-0 flex-1 flex-col gap-3 lg:flex-row'>
+      <aside className='flex shrink-0 flex-col gap-2 rounded-xl bg-video-surface p-2.5 text-video-chrome-foreground lg:w-52'>
+        <div className='flex items-center justify-between px-1 text-xs font-medium text-video-chrome-foreground/80'>
+          <span>通道</span>
+          <span className='text-video-chrome-foreground/50'>{filtered.length}/{channels.length}</span>
         </div>
         <Input
           aria-label='搜索回放通道'
           placeholder='搜索编号或名称'
           value={search}
           onChange={(event) => setSearch(event.target.value)}
+          className='h-8 border-video-border bg-white/5 text-video-chrome-foreground placeholder:text-video-chrome-foreground/40'
         />
-        <div className='grid max-h-80 gap-1 overflow-y-auto'>
+        <div className='grid min-h-0 flex-1 content-start gap-0.5 overflow-y-auto max-lg:grid-flow-col max-lg:auto-cols-max max-lg:overflow-x-auto'>
           {filtered.map((channel) => (
             <Button
               key={channel.id}
@@ -460,28 +450,30 @@ function Workspace({
                 setBracket(null)
               }}
               className={cn(
-                'h-auto w-full justify-start truncate px-2 py-2 text-left text-sm font-normal',
-                channel.id === channelID && 'bg-accent font-medium'
+                'h-8 w-full justify-start truncate px-2 text-left text-sm font-normal text-video-chrome-foreground hover:bg-white/10 hover:text-video-chrome-foreground',
+                channel.id === channelID && 'bg-white/15 font-medium'
               )}
             >
               {label(channel)}
             </Button>
           ))}
         </div>
-        <p className='text-xs text-muted-foreground'>
-          只有已完成发布、校验通过的片段可播放。缺口不会被静默跳过。
-        </p>
-        <Button asChild variant='link' className='h-auto p-0'>
+        <Button
+          asChild
+          variant='ghost'
+          className='h-8 justify-start px-2 text-xs text-video-chrome-foreground/70 hover:bg-white/10 hover:text-video-chrome-foreground'
+        >
           <Link to='/live'>返回实时预览</Link>
         </Button>
       </aside>
-      <section className='space-y-3'>
-        {/* The console: one dark surface holds the picture, its status line and
-            the timeline, so the operator's eyes never leave the video. Only
-            the search toolbar above stays on the page background. */}
-        <form
-          className='flex flex-wrap items-end gap-2'
-          onSubmit={(event) => {
+      <section className='flex min-h-0 min-w-0 flex-1 flex-col gap-2'>
+        {/* The console: search rides INSIDE the dark surface as one slim
+            toolbar — dates, search, quick ranges, no visible labels. */}
+        <div className='flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-video-border bg-video-surface text-video-chrome-foreground shadow-sm'>
+          <form
+            className='flex flex-wrap items-center gap-1.5 border-b border-video-border px-3 py-2'
+            title={`时间按站点时区 ${zone} 填写与显示，单次检索不超过 31 天`}
+            onSubmit={(event) => {
             event.preventDefault()
             const start = parseWallClock(draft.start, zone),
               end = parseWallClock(draft.end, zone)
@@ -499,62 +491,57 @@ function Workspace({
             }
             applyRange({ start, end })
           }}
-        >
-          <label className='grid gap-1 text-sm'>
-            <span className='text-xs text-muted-foreground'>开始（{zone}）</span>
+          >
             <Input
               type='datetime-local'
-              step='1'
+              step='60'
               aria-label='检索开始时间'
               value={draft.start}
               onChange={(event) =>
                 setDraft({ ...draft, start: event.target.value })
               }
-              className='w-56'
+              className='h-8 w-52 border-video-border bg-white/5 text-video-chrome-foreground'
               required
             />
-          </label>
-          <label className='grid gap-1 text-sm'>
-            <span className='text-xs text-muted-foreground'>结束（{zone}）</span>
+            <span aria-hidden className='text-video-chrome-foreground/40'>→</span>
             <Input
               type='datetime-local'
-              step='1'
+              step='60'
               aria-label='检索结束时间'
               value={draft.end}
               onChange={(event) =>
                 setDraft({ ...draft, end: event.target.value })
               }
-              className='w-56'
+              className='h-8 w-52 border-video-border bg-white/5 text-video-chrome-foreground'
               required
             />
-          </label>
-          <Button type='submit' className='mb-0.5'>检索录像</Button>
-          <div className='mb-0.5 flex flex-wrap items-center gap-1.5'>
-            {QUICK_RANGES.map(({ kind, label: name }) => (
-              <Button
-                key={kind}
-                type='button'
-                size='sm'
-                variant='outline'
-                onClick={() => applyRange(quickRange(kind, Date.now(), zone))}
-              >
-                {name}
-              </Button>
-            ))}
-          </div>
-          {rangeError && (
-            <p role='alert' className='mb-1 w-full text-sm text-destructive'>
-              {rangeError}
-            </p>
-          )}
-        </form>
-        <div className='overflow-hidden rounded-xl border bg-video-surface text-video-chrome-foreground shadow-sm'>
-          <div ref={frame} className='group/frame relative'>
+            <Button type='submit' size='sm' className='h-8'>检索录像</Button>
+            <div className='flex items-center gap-1'>
+              {QUICK_RANGES.map(({ kind, label: name }) => (
+                <Button
+                  key={kind}
+                  type='button'
+                  size='sm'
+                  variant='ghost'
+                  className='h-8 px-2 text-xs text-video-chrome-foreground/80 hover:bg-white/10 hover:text-video-chrome-foreground'
+                  onClick={() => applyRange(quickRange(kind, Date.now(), zone))}
+                >
+                  {name}
+                </Button>
+              ))}
+            </div>
+            {rangeError && (
+              <p role='alert' className='w-full text-sm text-red-400'>
+                {rangeError}
+              </p>
+            )}
+          </form>
+          <div ref={frame} className='group/frame relative min-h-0 flex-1 bg-black'>
             <video
               ref={video}
               data-testid='playback-video'
               playsInline
-              className='aspect-video w-full bg-black'
+              className='absolute inset-0 h-full w-full bg-black object-contain'
             />
             {/* Floating control bar: hovers over the picture, auto-hides while
                 playing, always visible when paused/idle. Buttons keep their
@@ -687,13 +674,12 @@ function Workspace({
               </Button>
             </div>
           </div>
-          {/* Status strip between the picture and the timeline: phase message,
-              position and the warnings, all on the console surface. */}
-          <div className='flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-video-border px-3 py-2 text-xs'>
-            <p role='status' className='font-medium'>
+          {/* Status strip: one quiet line between the picture and the
+              timeline — phase, position, and any warning, no card walls. */}
+          <div className='flex flex-wrap items-center gap-x-4 gap-y-0.5 border-t border-video-border px-3 py-1.5 text-[11px] text-video-chrome-foreground/70'>
+            <p role='status'>
               {state.message}
-            </p>
-            <p className='text-video-chrome-foreground/70'>
+              <span className='mx-2 text-video-chrome-foreground/30'>·</span>
               当前位置{' '}
               {state.clock > 0
                 ? formatClock(state.clock, zone)
@@ -894,9 +880,9 @@ function Workspace({
             onOpenChange={setExportOpen}
           />
         )}
-        <p className='text-xs text-muted-foreground'>
+        <p className='px-1 text-[11px] text-muted-foreground'>
           当前通道 {label(active)}
-          。暂停、拖动、±10 秒与倍速都在同一条时间轴上生效。
+          。缺口不会静默跳过；暂停、拖动、±10 秒与倍速都在同一条时间轴上生效。
         </p>
       </section>
     </div>
