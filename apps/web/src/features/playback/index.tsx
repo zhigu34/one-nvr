@@ -1354,7 +1354,11 @@ function Timeline({
           <div
             key={tick.at}
             aria-hidden
-            className={`pointer-events-none absolute w-px ${tick.major ? 'top-0 h-full bg-foreground/25' : 'top-1 h-1/2 bg-foreground/15'}`}
+            className={`pointer-events-none absolute w-px ${
+              tick.major
+                ? 'top-0 h-full bg-amber-300/70'
+                : 'top-2 h-1/2 bg-amber-300/30'
+            }`}
             style={{ left: position(tick.at) }}
           />
         ))}
@@ -1382,7 +1386,7 @@ function Timeline({
         )}
       </div>
       {ticks.length > 0 && (
-        <div aria-hidden className='relative h-4 select-none text-[10px] leading-4 text-muted-foreground'>
+        <div aria-hidden className='relative h-4 select-none text-[10px] leading-4 text-amber-300/85'>
           {ticks.map((tick, index) => {
             const first = index === 0
             const last = index === ticks.length - 1
@@ -1391,7 +1395,11 @@ function Timeline({
             return (
               <span
                 key={tick.at}
-                className={`absolute whitespace-nowrap ${tick.major ? 'font-medium' : ''}`}
+                className={`absolute whitespace-nowrap tabular-nums ${
+                  tick.major
+                    ? 'font-semibold text-amber-400'
+                    : 'text-amber-300/70'
+                }`}
                 style={{
                   left: position(tick.at),
                   transform: first
@@ -1405,12 +1413,37 @@ function Timeline({
               </span>
             )
           })}
+          {/* Floating right-edge wall-clock: parallel to the red playhead.
+              Hidden in idle so the timestamps don't disagree with no
+              selection. */}
+          {clock > 0 && (
+            <span
+              data-testid='playback-timeline-clock'
+              className='absolute right-0 top-0 -translate-y-3 rounded bg-red-500/15 px-1.5 text-[10px] tabular-nums text-red-400 shadow-sm'
+            >
+              {formatClock(clock, zone)}
+            </span>
+          )}
         </div>
       )}
-      <p className='text-xs text-muted-foreground'>
-        {formatClock(timeline.from, zone)} — {formatClock(timeline.to, zone)} ·{' '}
-        {timeline.entries.length} 个片段 · {timeline.gaps.length}{' '}
-        处缺口（单击片段选中，双击播放，拖动时间轴定位；空格播放/暂停，← → 快进快退 10 秒）
+      <p className='flex flex-wrap items-center gap-x-2 gap-y-0.5 px-1 text-[11px]'>
+        <span
+          data-testid='playback-timeline-density'
+          className='rounded bg-black/30 px-1.5 py-0.5 tabular-nums text-amber-300'
+        >
+          密度 {timeline.entries.length} 段
+          {timeline.gaps.length > 0 && (
+            <span className='ml-1 text-red-400'>· 缺口 {timeline.gaps.length}</span>
+          )}
+        </span>
+        <span className='text-video-chrome-foreground/40'>·</span>
+        <span className='text-video-chrome-foreground/60 tabular-nums'>
+          {formatClock(timeline.from, zone)} — {formatClock(timeline.to, zone)}
+        </span>
+        <span className='text-video-chrome-foreground/40'>·</span>
+        <span className='text-video-chrome-foreground/60'>
+          单击片段选中，双击播放，拖动时间轴定位；空格播放/暂停，← → 快进快退 10 秒
+        </span>
       </p>
     </div>
   )

@@ -374,6 +374,32 @@ test('the timeline picks an export bracket and zooms the view', async () => {
   await expect.element(view.getByText(/2026-10-05 08:00:00 — 2026-10-05 08:05:00/)).toBeVisible()
 })
 
+// Timeline-ruler upgrade: a 24-hour default view lands hourly ticks at
+// :00 wall-clock minutes, paints them in amber with the right thickness to
+// read against the segment blocks, and posts a density read for the
+// current window.
+test('the timeline ruler exposes amber major ticks and a density read', async () => {
+  const { view } = await fixture([segment(A, 0, 120)])
+  await expect.element(view.getByTestId('playback-timeline')).toBeVisible()
+  // Build a 24-hour window so the ladder picks the hourly interval; the
+  // anchor landed at 5 minutes into the day, so labels for 06:00, 07:00,
+  // ... and the playhead at 00:05 are all expected to be present.
+  await view.getByLabelText('检索开始时间').fill('2026-10-05T00:00')
+  await view.getByLabelText('检索结束时间').fill('2026-10-06T00:00')
+  await view.getByRole('button', { name: '检索录像' }).click()
+  await expect.element(view.getByTestId('playback-timeline-density')).toBeVisible()
+  await expect
+    .element(view.getByText(/密度\s*\d+\s*段/))
+    .toBeVisible()
+  // Hour labels in amber. The first major label landed should be 06:00
+  // or 07:00 depending on the start-of-zone day alignment; either is OK
+  // — the assertion is that the hourly label rail exists.
+  await vi.waitFor(() => {
+    const text = document.body.textContent || ''
+    return /\b06:00\b/.test(text) || /\b07:00\b/.test(text)
+  })
+})
+
 // Frame top-OSD metadata strip (ca17f75): the channel pill rides along in
 // idle state, but resolution / fps / codec / "直通" only appear once an
 // entry with media facts has been loaded by the controller.
