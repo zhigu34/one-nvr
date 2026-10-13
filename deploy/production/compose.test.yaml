@@ -58,7 +58,12 @@ services:
     command:
       - |
         printf 'listener 1883\nallow_anonymous false\npassword_file /mosquitto/config/passwords\nlog_dest stdout\n' > /mosquitto/config/mosquitto.conf
-        mosquitto_passwd -c -b /mosquitto/config/passwords one_nvr isolated-test-only
+        # Idempotent: mosquitto_passwd -c refuses to overwrite an existing
+        # file, so a recreated container would exit before the broker starts
+        # and every dependent step would stall waiting for it.
+        if [ ! -f /mosquitto/config/passwords ]; then
+          mosquitto_passwd -c -b /mosquitto/config/passwords one_nvr isolated-test-only
+        fi
         exec mosquitto -c /mosquitto/config/mosquitto.conf
     healthcheck:
       # Publishes rather than subscribes: mosquitto_sub's -C 1 would wait for a
