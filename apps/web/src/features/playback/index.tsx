@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from 'react'
-import { createPortal } from 'react-dom'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
@@ -105,7 +104,7 @@ export function Playback({
   controlledChannelId = '',
   onChannelChange,
   hideChannelList = false,
-  timelineHostId = '',
+  layout,
 }: {
   initialChannel?: string
   initialAt?: string
@@ -116,11 +115,18 @@ export function Playback({
   controlledChannelId?: string
   onChannelChange?: (id: string) => void
   hideChannelList?: boolean
-  // DOM id of the element the timeline band portals into. The workspace
-  // shell owns a full-width row under the three columns; when the id is
-  // present (and the element exists), the Timeline mounts there instead of
-  // inside the console column, matching the sample's bottom band.
-  timelineHostId?: string
+  // Workspace layout descriptor. `workspace` hands the rail and the files
+  // panel in as slots: Playback renders the top row (rail / console / files)
+  // plus the full-width timeline band row itself — the sample layout — all
+  // in one tree, so no portal or cross-component timing is involved.
+  // `plain` keeps the standalone shape.
+  layout?:
+    | { kind: 'plain' }
+    | {
+        kind: 'workspace'
+        rail: React.ReactNode
+        files: React.ReactNode | null
+      }
 }) {
   const channelsQuery = useAPI<PageData<Schema<'Channel'>>>(
     '/api/v1/channels?limit=100',
@@ -171,7 +177,7 @@ export function Playback({
           controlledChannelId={controlledChannelId}
           onChannelChange={onChannelChange}
           hideChannelList={hideChannelList}
-          timelineHostId={timelineHostId}
+          layout={layout}
         />
       )}
     </div>
@@ -187,7 +193,7 @@ function Workspace({
   controlledChannelId = '',
   onChannelChange,
   hideChannelList = false,
-  timelineHostId = '',
+  layout,
 }: {
   channels: Schema<'Channel'>[]
   zone: string
@@ -197,21 +203,19 @@ function Workspace({
   controlledChannelId?: string
   onChannelChange?: (id: string) => void
   hideChannelList?: boolean
-  timelineHostId?: string
+  layout?:
+    | { kind: 'plain' }
+    | {
+        kind: 'workspace'
+        rail: React.ReactNode
+        files: React.ReactNode | null
+      }
 }) {
   const [internalChannelID, setInternalChannelID] = useState(
     () =>
       channels.find((channel) => channel.id === initialChannel)?.id ||
       channels[0].id
   )
-  // The portal target for the timeline band. Looked up during render (a
-  // getElementById read, no external-system subscription needed); the shell
-  // row renders in the same commit as the console, so by the time Playback's
-  // second render happens the host exists. If it is not there yet (standalone
-  // renders, tests), the band falls back to inline.
-  const timelineHost = timelineHostId
-    ? document.getElementById(timelineHostId)
-    : null
   // A controlled id from the workspace shell overrides the local store; the
   // shell owns the URL state and we never write to it on our own.
   const controlledMatches = channels.some(
@@ -477,11 +481,68 @@ function Workspace({
       end: wallClockInput(next.end, zone),
     })
   }
+  // The timeline band element. Built once per render; the placement below
+  // decides whether it lives inside the console (plain mode) or spans the
+  // full workspace width as row 2 (workspace mode).
+  const timelineBand = (
+    <Timeline
+      timeline={viewTimeline}
+      zone={zone}
+      clock={state.clock}
+      selected={selected}
+      viewIsFull={!view}
+      pickMode={pickMode}
+      bracket={pickMode ? bracket : null}
+      channelID={channelID}
+      fullRange={range}
+      viewBounds={viewBounds}
+      fullDensity={fullDensity}
+      onZoomAt={zoomAt}
+      onMoveView={moveViewTo}
+      onPick={(at) => {
+        setBracket((current) => {
+          if (!current) return { start: at, end: at }
+          if (current.end === current.start) {
+            const start = Math.min(current.start, at)
+            const end = Math.max(current.start, at)
+            return end - start >= 1000 ? { start, end } : { start: at, end: at }
+          }
+          return { start: at, end: at }
+        })
+      }}
+      onSelect={setSelected}
+      onSeek={(at) => {
+        const snap = snapToPlayable(timeline, at)
+        controller.current?.seek(snap.at)
+      }}
+      onPlay={(entry) => {
+        setSelected(entry)
+        controller.current?.start(entry.start)
+      }}
+    />
+  )
 return (
     // The page IS the player: one dark surface spanning the viewport, channel
     // rail on the left, console on the right. No prose anywhere.
-    <div className={cn('flex min-h-0 flex-1 flex-col gap-3', hideChannelList ? '' : 'lg:flex-row')}>
-      {!hideChannelList && (
+    // In workspace mode the outer div becomes a 2-row grid: row 1 is the
+    // rail slot / console / files slot, row 2 is the full-width timeline
+    // band. The rail/files slots come from the shell via `layout`.
+    <div
+      className={cn('min-h-0 flex-1 gap-3', layout?.kind === 'workspace' ? 'grid' : 'flex flex-col' + (hideChannelList ? '' : ' lg:flex-row'))}
+      style={
+        layout?.kind === 'workspace'
+          ? {
+              gridTemplateColumns: 'auto minmax(0, 1fr) auto',
+              gridTemplateRows: 'minmax(0, 1fr) auto',
+            }
+          : undefined
+      }
+    >
+      {/* Workspace mode: the rail comes from the shell's slot; the built-in
+          aside is for the standalone (plain) render only. */}
+      {layout?.kind === 'workspace'
+        ? layout.rail
+        : !hideChannelList && (
       <aside className='flex shrink-0 flex-col gap-2 rounded-xl bg-video-surface p-2.5 text-video-chrome-foreground lg:w-52'>
         <div className='flex items-center justify-between px-1 text-xs font-medium text-video-chrome-foreground/80'>
           <span>通道</span>
@@ -926,42 +987,9 @@ return (
               </Button>
             </div>
           </div>
-          <Timeline
-            timeline={viewTimeline}
-            zone={zone}
-            clock={state.clock}
-            selected={selected}
-            viewIsFull={!view}
-            pickMode={pickMode}
-            bracket={pickMode ? bracket : null}
-            channelID={channelID}
-            fullRange={range}
-            viewBounds={viewBounds}
-            fullDensity={fullDensity}
-            portalHost={timelineHost}
-            onZoomAt={zoomAt}
-            onMoveView={moveViewTo}
-            onPick={(at) => {
-              setBracket((current) => {
-                if (!current) return { start: at, end: at }
-                if (current.end === current.start) {
-                  const start = Math.min(current.start, at)
-                  const end = Math.max(current.start, at)
-                  return end - start >= 1000 ? { start, end } : { start: at, end: at }
-                }
-                return { start: at, end: at }
-              })
-            }}
-            onSelect={setSelected}
-            onSeek={(at) => {
-              const snap = snapToPlayable(timeline, at)
-              controller.current?.seek(snap.at)
-            }}
-            onPlay={(entry) => {
-              setSelected(entry)
-              controller.current?.start(entry.start)
-            }}
-          />
+          {/* Workspace mode renders the band in the full-width row below the
+              grid; plain (standalone) keeps it inside the console. */}
+          {layout?.kind !== 'workspace' && timelineBand}
         </div>
         <QueryState
           pending={isPending}
@@ -1036,6 +1064,14 @@ return (
           。缺口不会静默跳过；暂停、拖动、±10 秒与倍速都在同一条时间轴上生效。
         </p>
       </section>
+      {/* Workspace mode extras: the files slot rides column 3 of row 1, and
+          the timeline band spans the full width as row 2. */}
+      {layout?.kind === 'workspace' && (
+        <>
+          {layout.files}
+          <div style={{ gridColumn: '1 / -1' }}>{timelineBand}</div>
+        </>
+      )}
     </div>
   )
 }
@@ -1052,7 +1088,6 @@ function Timeline({
   fullRange,
   viewBounds,
   fullDensity,
-  portalHost,
   onZoomAt,
   onMoveView,
   onPick,
@@ -1071,9 +1106,6 @@ function Timeline({
   fullRange: { start: number; end: number }
   viewBounds: { start: number; end: number }
   fullDensity: ReturnType<typeof coverageDensity>
-  /** When set, the band renders into this element (the shell's full-width
-      row) instead of inline in the console column. */
-  portalHost: HTMLElement | null
   onZoomAt: (anchor: number, factor: number) => void
   onMoveView: (center: number) => void
   onPick: (at: number) => void
@@ -1465,6 +1497,5 @@ function Timeline({
   // band portals there so the timeline reads as one band across the whole
   // workspace, exactly like the sample layout. Falls back to inline when no
   // host id was given (standalone /playback-style renders, tests).
-  if (portalHost) return createPortal(band, portalHost)
   return band
 }

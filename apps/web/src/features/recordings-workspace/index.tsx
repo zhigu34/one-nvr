@@ -119,7 +119,10 @@ export function RecordingsWorkspace({
   return (
     <div
       data-testid='recordings-workspace'
-      className='flex h-[calc(100vh-4rem)] flex-col gap-3 overflow-hidden bg-video-surface text-video-chrome-foreground'
+      // Flex column filling the viewport below the header; `min-h-0` on the
+      // Playback child keeps the grid from overflowing, and the outer
+      // overflow-hidden clips any residual so the page itself never scrolls.
+      className='flex h-[calc(100vh-4rem)] min-h-[560px] flex-col gap-3 bg-video-surface text-video-chrome-foreground'
     >
       <QueryState
         pending={channelsQuery.isPending || site.isPending}
@@ -144,75 +147,59 @@ export function RecordingsWorkspace({
         <Empty>没有可回放的通道，请联系管理员分配录像回放权限。</Empty>
       )}
       {!!channels.length && (
-        <div
-          className='grid min-h-0 flex-1 gap-3 overflow-hidden'
-          style={{
-            gridTemplateColumns: narrow
-              ? '192px minmax(0, 1fr)'
-              : rightOpen
-                ? '192px minmax(0, 1fr) 320px'
-                : '192px minmax(0, 1fr) 56px',
-            // Row 1 is the three columns (rail / player / files); row 2 is
-            // the timeline, which spans every column like the sample does —
-            // a full-width band under the workspace. The 1fr keeps the top
-            // row filling all height left over by the fixed timeline row.
-            gridTemplateRows: 'minmax(0, 1fr) auto',
-          }}
-        >
-          <ChannelsRail
-            channels={channels}
-            activeID={channelID}
-            onSelect={onChannelChange}
-          />
-          <div className='flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-video-border bg-black'>
-            <Playback
-              providedChannels={channels}
-              controlledChannelId={channelID}
-              onChannelChange={onChannelChange}
-              hideChannelList
-              initialChannel={channelID}
-              initialAt={initialAt}
-              active
-              timelineHostId='recordings-timeline-host'
-            />
-          </div>
-          {!narrow && admin ? (
-            inlineFileVisible ? (
-              <div
-                data-testid='files-panel'
-                className='flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-video-border bg-video-surface-raised'
-              >
-                <RecordingFiles
-                  controlledChannelId={channelID}
-                  initialChannel={channelID}
-                  active
-                />
-              </div>
-            ) : (
-              <button
-                type='button'
-                aria-label='展开文件面板'
-                title='展开文件面板'
-                onClick={() => setRightOpen(true)}
-                className='flex w-full flex-col items-center justify-center gap-2 rounded-xl border border-video-border bg-video-surface-raised text-video-chrome-foreground/70 hover:text-video-chrome-foreground'
-              >
-                <PanelRightOpen className='size-5' />
-                <span className='writing-mode-vertical text-xs'>
-                  文件 {stats.data?.segments ?? '…'} 段
-                </span>
-              </button>
-            )
-          ) : null}
-          {/* Row 2: the timeline band spans every column, exactly like the
-              sample — one band under the whole workspace instead of a strip
-              trapped inside the player column. Playback portals its Timeline
-              into this host. */}
-          <div
-            id='recordings-timeline-host'
-            className='min-h-0'
-            style={{ gridColumn: narrow ? 'span 2' : 'span 3' }}
-          />
-        </div>
+        <Playback
+          providedChannels={channels}
+          controlledChannelId={channelID}
+          onChannelChange={onChannelChange}
+          initialChannel={channelID}
+          initialAt={initialAt}
+          active
+          // The workspace layout (rail / player / files + full-width timeline
+          // row) is rendered by Playback itself now — the shell hands over
+          // the file panel as a slot so it lands in the third column, and
+          // Playback owns the timeline band in row 2. No portal, no timing
+          // games: one tree, one commit.
+          layout={
+            narrow
+              ? { kind: 'plain' }
+              : {
+                  kind: 'workspace',
+                  rail: (
+                    <ChannelsRail
+                      channels={channels}
+                      activeID={channelID}
+                      onSelect={onChannelChange}
+                    />
+                  ),
+                  files:
+                    admin && inlineFileVisible ? (
+                      <div
+                        data-testid='files-panel'
+                        className='flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-video-border bg-video-surface-raised'
+                      >
+                        <RecordingFiles
+                          controlledChannelId={channelID}
+                          initialChannel={channelID}
+                          active
+                        />
+                      </div>
+                    ) : admin ? (
+                      <button
+                        type='button'
+                        aria-label='展开文件面板'
+                        title='展开文件面板'
+                        onClick={() => setRightOpen(true)}
+                        className='flex w-full flex-col items-center justify-center gap-2 rounded-xl border border-video-border bg-video-surface-raised text-video-chrome-foreground/70 hover:text-video-chrome-foreground'
+                      >
+                        <PanelRightOpen className='size-5' />
+                        <span className='writing-mode-vertical text-xs'>
+                          文件 {stats.data?.segments ?? '…'} 段
+                        </span>
+                      </button>
+                    ) : null,
+                }
+          }
+        />
       )}
       {/* On narrow viewports the file panel rides a side Sheet instead of
           a third grid column. Mount the same panel as the wide layout uses
