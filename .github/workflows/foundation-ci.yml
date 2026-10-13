@@ -296,6 +296,11 @@ jobs:
           # — the exact shape of the reported field failure. render-deployment
           # is the writer (init-runtime only creates the directories), and the
           # non-check path is the one that reaches it.
+          #
+          # Every observation is printed as one annotation because job logs are
+          # not readable without authentication: a bare "exit code 1" is not
+          # actionable, and this step stayed opaque for several rounds precisely
+          # because it published nothing.
           root=$(mktemp -d /tmp/one-nvr-frigate-owner.XXXXXX)
           trap 'rm -rf "$root"' EXIT
           mkdir "$root/storage"
@@ -313,15 +318,33 @@ jobs:
             "ONE_NVR_STORAGE_ROOT=$root/storage" \
             'ONE_NVR_FRIGATE_ENABLE=yes' \
             'ONE_NVR_OPENLIST_ENABLE=no' > "$root/env"
-          docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --entrypoint /usr/local/bin/admin one-nvr/app:m1a init-runtime
-          docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --mount "type=bind,source=$root/env,target=/settings.env,readonly" --entrypoint /usr/local/bin/admin one-nvr/app:m1a render-deployment --env-file /settings.env --output-dir /data/runtime
-          echo "--- seeded tree ---"
-          docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --entrypoint sh one-nvr/app:m1a -ec 'ls -ln /data/frigate/ || true'
-          ownership=$(docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --entrypoint stat one-nvr/app:m1a -c "%u:%g %a" /data/frigate/config.yml)
-          test "$ownership" = "10001:10001 600" || { printf 'config.yml seed ownership is %s, expected 10001:10001 600\n' "$ownership" >&2; exit 1; }
+          report=""
+          record() { report="$report | $1"; }
+          init_status=0
+          init_out=$(docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --entrypoint /usr/local/bin/admin one-nvr/app:m1a init-runtime 2>&1) || init_status=$?
+          record "init_status=$init_status"
+          record "init_out=$(printf '%s' "$init_out" | tr '\n' ';')"
+          render_status=0
+          render_out=$(docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --mount "type=bind,source=$root/env,target=/settings.env,readonly" --entrypoint /usr/local/bin/admin one-nvr/app:m1a render-deployment --env-file /settings.env --output-dir /data/runtime 2>&1) || render_status=$?
+          record "render_status=$render_status"
+          record "render_out=$(printf '%s' "$render_out" | tr '\n' ';' | cut -c1-400)"
+          record "tree=$(docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --entrypoint sh one-nvr/app:m1a -ec 'ls -ln /data/frigate/ 2>&1 | tr "\n" ";"' || true)"
+          ownership=$(docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --entrypoint stat one-nvr/app:m1a -c "%u:%g %a" /data/frigate/config.yml 2>&1) || true
+          record "config_ownership=$ownership"
+          dir_ownership=$(docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --entrypoint stat one-nvr/app:m1a -c "%u:%g" /data/frigate 2>&1) || true
+          record "dir_ownership=$dir_ownership"
+          echo "::error title=Frigate seed ownership measurements::${report}"
+
+          fail=0
+          # init-runtime must succeed, otherwise there is no seed to judge and
+          # the ownership below would be measuring an empty directory.
+          [ "$init_status" = "0" ] || { echo "init-runtime failed: $init_out" >&2; fail=1; }
+          [ "$render_status" = "0" ] || { echo "render-deployment failed: $render_out" >&2; fail=1; }
+          # The seed belongs to the publishing user, and only to it.
+          [ "$ownership" = "10001:10001 600" ] || { echo "config.yml seed ownership is $ownership, expected 10001:10001 600" >&2; fail=1; }
           # And the directory it lives in must stay writable by that user.
-          dir_ownership=$(docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --entrypoint stat one-nvr/app:m1a -c "%u:%g" /data/frigate)
-          test "$dir_ownership" = "10001:10001" || { printf 'frigate dir ownership is %s, expected 10001:10001\n' "$dir_ownership" >&2; exit 1; }
+          [ "$dir_ownership" = "10001:10001" ] || { echo "frigate dir ownership is $dir_ownership, expected 10001:10001" >&2; fail=1; }
+          if [ "$fail" = "1" ]; then exit 1; fi
           printf 'Frigate config seed ownership PASS\n'
 
   hardware-cpu-runtime:
