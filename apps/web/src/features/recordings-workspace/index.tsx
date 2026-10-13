@@ -1,6 +1,6 @@
 import { useMemo, useState, useSyncExternalStore } from 'react'
-import { Filter, PanelRightClose, PanelRightOpen, Search } from 'lucide-react'
-import { useNavigate } from '@tanstack/react-router'
+import { ArrowLeft, Filter, PanelRightClose, PanelRightOpen, Search } from 'lucide-react'
+import { Link, useNavigate } from '@tanstack/react-router'
 import type { PageData, Schema } from '@/lib/types'
 import { useAPI } from '@/features/foundation/hooks'
 import { Empty, QueryState } from '@/features/foundation/ui'
@@ -259,6 +259,15 @@ function WorkspaceHeader({
 }) {
   return (
     <header className='flex flex-wrap items-center gap-3 border-b border-video-border px-1 pb-2'>
+      <Link
+        to='/live'
+        aria-label='返回实时预览'
+        title='返回实时预览'
+        className='inline-flex h-7 items-center gap-1 rounded-md border border-video-border bg-video-surface-raised px-2 text-xs text-video-chrome-foreground/80 hover:bg-white/10 hover:text-video-chrome-foreground'
+      >
+        <ArrowLeft className='size-3.5' />
+        实时
+      </Link>
       <h1 className='text-lg font-semibold tracking-tight'>录像</h1>
       <span className='text-video-chrome-foreground/40'>·</span>
       <span className='text-sm text-video-chrome-foreground/70'>
@@ -351,6 +360,7 @@ function ChannelsRail({
         {filtered.map((channel) => {
           const label = `CH${String(channel.channel_no).padStart(2, '0')} ${channel.channel_name}`
           const active = channel.id === activeID
+          const online = channel.enabled !== false
           return (
             <button
               key={channel.id}
@@ -363,10 +373,28 @@ function ChannelsRail({
                 active && 'bg-white/15 font-medium text-video-chrome-foreground'
               )}
             >
-              <span className='inline-grid size-5 place-items-center rounded bg-white/10 text-[10px] font-semibold tabular-nums'>
+              <span
+                aria-hidden
+                title={online ? '已启用' : '已停用'}
+                className={cn(
+                  'inline-block size-1.5 rounded-full',
+                  online
+                    ? 'bg-emerald-400 shadow-[0_0_5px_rgba(52,211,153,0.7)]'
+                    : 'bg-video-chrome-foreground/30'
+                )}
+              />
+              <span className='inline-grid min-w-6 place-items-center rounded bg-white/10 px-1 py-0.5 text-[10px] font-semibold tabular-nums'>
                 {String(channel.channel_no).padStart(2, '0')}
               </span>
               <span className='flex-1 truncate'>{channel.channel_name}</span>
+              {channel.channel_group && (
+                <span
+                  title={`分组 · ${channel.channel_group}`}
+                  className='rounded bg-white/10 px-1 py-0.5 text-[10px] text-video-chrome-foreground/60'
+                >
+                  {channel.channel_group}
+                </span>
+              )}
             </button>
           )
         })}
