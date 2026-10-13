@@ -1138,16 +1138,6 @@ function Timeline({
     () => buildTicks(timeline.from, timeline.to, stripWidth, zone),
     [timeline.from, timeline.to, stripWidth, zone]
   )
-  // Density adapts to the strip: roughly one bucket per 8px, bounded so both
-  // a month view and a minute view render a smooth profile.
-  const density = useMemo(
-    () =>
-      coverageDensity(
-        timeline,
-        Math.max(8, Math.min(160, Math.round(stripWidth / 8)))
-      ),
-    [timeline, stripWidth]
-  )
   // The event track shows the events the API vouches for: the view window
   // clamped to the newest day. It is a bounded, honest query, not a full set.
   const eventWindow = useMemo(
@@ -1294,11 +1284,12 @@ function Timeline({
           />
         )}
       </div>
-      {/* Band 3 — event rail. Slim 8px track; open events carry a halo. */}
+      {/* Band 3 — event rail, always present (the sample draws it whether or
+          not events exist). Slim 8px track; open events carry a halo. */}
       <div
         aria-hidden
         data-testid='playback-events-track'
-        className='relative h-2'
+        className='relative h-2 rounded-sm bg-white/[0.03]'
       >
         {clusters.map((mark) => (
           <span
@@ -1314,14 +1305,16 @@ function Timeline({
           />
         ))}
       </div>
-      {/* Band 4 — the interactive strip: segments, bracket, ticks and the
-          playhead. Same behaviours as before (click select, double-click
-          play, drag scrub, wheel zoom), now at full width. */}
+      {/* Band 4 — the interactive strip: clean segment blocks over the tick
+          grid, nothing else. The sample's strip has no second gradient layer
+          pressed under the segments — density lives in band 2 alone; here a
+          segment is a segment. Same behaviours as before (click select,
+          double-click play, drag scrub, wheel zoom). */}
       <div
         ref={strip}
         data-testid='playback-timeline'
         aria-label='录像时间轴'
-        className={`relative h-10 touch-none rounded-md bg-white/[0.04] shadow-[inset_0_0_0_1px_var(--video-border,var(--border))] ${
+        className={`relative h-8 touch-none rounded-md bg-white/[0.04] shadow-[inset_0_0_0_1px_var(--video-border,var(--border))] ${
           scrubbing ? 'cursor-grabbing' : 'cursor-crosshair'
         }`}
         onPointerDown={(event) => {
@@ -1342,25 +1335,6 @@ function Timeline({
         onPointerUp={() => setScrubbing(false)}
         onWheel={onWheel}
       >
-        <div aria-hidden className='pointer-events-none absolute inset-x-0 bottom-0 top-0'>
-          {density.map((bucket, index) => {
-            const ratio = bucket.to > bucket.from ? bucket.coveredMs / (bucket.to - bucket.from) : 0
-            if (ratio <= 0) return null
-            const top = `${Math.min(0.92, 0.30 + ratio * 0.6)}`
-            return (
-              <div
-                key={index}
-                className='absolute bottom-0'
-                style={{
-                  left: position(bucket.from),
-                  width: `calc(${position(bucket.to)} - ${position(bucket.from)})`,
-                  height: `${Math.max(ratio * 100, 4)}%`,
-                  background: `linear-gradient(to top, oklch(0.55 0.13 70 / 35%), oklch(0.78 0.13 75 / ${top}))`,
-                }}
-              />
-            )
-          })}
-        </div>
         <div
           ref={bubble}
           aria-hidden
@@ -1378,12 +1352,12 @@ function Timeline({
             onClick={() => onSelect(entry)}
             onDoubleClick={() => onPlay(entry)}
             className={cn(
-              'absolute top-1 h-8 rounded p-0 transition-colors duration-150',
+              'absolute top-0 h-full rounded-sm p-0 transition-colors duration-150',
               entry.blocked
                 ? 'bg-amber-500/40 hover:bg-amber-500/60'
                 : entry.id === selected?.id
                   ? 'bg-primary'
-                  : 'bg-emerald-600/70 hover:bg-emerald-500/80'
+                  : 'bg-emerald-600/80 hover:bg-emerald-500/90'
             )}
             style={{
               left: position(entry.start),
@@ -1409,18 +1383,6 @@ function Timeline({
             </span>
           </div>
         )}
-        {ticks.map((tick) => (
-          <div
-            key={tick.at}
-            aria-hidden
-            className={`pointer-events-none absolute w-px ${
-              tick.major
-                ? 'top-0 h-full bg-amber-300/70'
-                : 'top-2 h-1/2 bg-amber-300/30'
-            }`}
-            style={{ left: position(tick.at) }}
-          />
-        ))}
         {clock > 0 && (
           <div
             data-testid='playback-playhead'
