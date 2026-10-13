@@ -528,15 +528,18 @@ return (
     // rail slot / console / files slot, row 2 is the full-width timeline
     // band. The rail/files slots come from the shell via `layout`.
     <div
-      className={cn('min-h-0 flex-1 gap-3', layout?.kind === 'workspace' ? 'grid' : 'flex flex-col' + (hideChannelList ? '' : ' lg:flex-row'))}
+      className={cn('gap-3', layout?.kind === 'workspace' ? 'grid' : 'flex flex-col' + (hideChannelList ? '' : ' lg:flex-row'))}
       style={
         layout?.kind === 'workspace'
           ? {
               // Fixed rail/files widths so long content (retention copy,
               // channel names) can never stretch the columns; only the
-              // console flexes.
+              // console flexes. Row 1 is `auto`: in natural document flow
+              // the row's height comes from the console's own aspect-ratio
+              // video frame, not from a constrained parent — the page grows
+              // and the browser scrollbar is the only scroll.
               gridTemplateColumns: '200px minmax(0, 1fr) 340px',
-              gridTemplateRows: 'minmax(0, 1fr) auto',
+              gridTemplateRows: 'auto auto',
             }
           : undefined
       }
@@ -654,7 +657,11 @@ return (
           </form>
           <div
             ref={frame}
-            className='group/frame relative flex min-h-[260px] flex-1 items-center justify-center overflow-hidden bg-black'
+            // 16:9 by default; once decoded the live tile's approach applies
+            // elsewhere — here the frame stays 16:9 so the natural-flow row
+            // height is stable regardless of the stream's own shape, and
+            // object-contain letterboxes anything else.
+            className='group/frame relative flex aspect-video min-h-[260px] flex-1 items-center justify-center overflow-hidden bg-black'
           >
             <video
               ref={video}
