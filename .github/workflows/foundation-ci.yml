@@ -163,9 +163,11 @@ jobs:
           persist-credentials: false
       - name: Build pinned runtime and browser images
         run: |
-          for image in app gateway browser; do docker build -f "deploy/production/Dockerfile.$image" -t "one-nvr/$image:ci" .; done
+          for image in app gateway browser; do
+            ./deploy/production/ci-run.sh "browser image $image" docker build -f "deploy/production/Dockerfile.$image" -t "one-nvr/$image:ci" . || exit 1
+          done
       - name: Frontend browser unit tests
-        run: docker run --rm --init --shm-size=256m one-nvr/browser:ci pnpm test
+        run: ./deploy/production/ci-run.sh "frontend browser unit tests" docker run --rm --init --shm-size=256m one-nvr/browser:ci pnpm test
       - name: Real browser with modules disabled and manual certificate
         run: ./deploy/production/ci-run.sh "E2E modules disabled" ./deploy/production/dev.sh e2e --no-build
       - name: Real browser with modules enabled
