@@ -14,10 +14,12 @@ export const Route = createFileRoute('/_authenticated/recordings/')({
   component: function RecordingsPage() {
     const { channel, at, tab } = Route.useSearch()
     return (
-      // Natural document flow: the page is as tall as its content and the
-      // browser's own scrollbar is the only scroll. No viewport-calc, no
-      // inner scroll-locking — scroll to the bottom and you have seen it all.
-      <Main fluid className='py-0'>
+      // `fixed` puts this page inside the layout's real flex chain
+      // (SidebarInset flex-col → Main grow + overflow-hidden), so the
+      // workspace is exactly one viewport tall: top row + timeline band all
+      // visible, no page scrolling. py-0 drops the default padding — the
+      // player page manages its own spacing.
+      <Main fixed fluid className='py-0'>
         <RecordingsWorkspace initialChannel={channel} initialAt={at} initialTab={tab} />
       </Main>
     )

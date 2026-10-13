@@ -119,10 +119,11 @@ export function RecordingsWorkspace({
   return (
     <div
       data-testid='recordings-workspace'
-      // Natural document flow: at least one viewport tall (header is h-16),
-      // but free to grow taller — the page scrolls as one document, and the
-      // bottom of the timeline band is simply where the document ends.
-      className='flex min-h-[calc(100dvh-4rem)] flex-col gap-3 bg-video-surface text-video-chrome-foreground'
+      // The route wraps this in <Main fixed> (grow + overflow-hidden), so
+      // h-full is the exact leftover height under the sticky header. The
+      // whole workspace — top row + timeline band — fits one viewport and
+      // never page-scrolls.
+      className='flex h-full min-h-0 flex-col gap-3 overflow-hidden bg-video-surface text-video-chrome-foreground'
     >
       <QueryState
         pending={channelsQuery.isPending || site.isPending}
@@ -175,7 +176,7 @@ export function RecordingsWorkspace({
                     admin && inlineFileVisible ? (
                       <div
                         data-testid='files-panel'
-                        className='flex max-h-[70dvh] min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-video-border bg-video-surface-raised'
+                        className='flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-video-border bg-video-surface-raised'
                       >
                         <RecordingFiles
                           controlledChannelId={channelID}
@@ -334,10 +335,7 @@ function ChannelsRail({
   return (
     <aside
       data-testid='channels-rail'
-      // The list scrolls inside its own box after ~70% of the viewport so a
-      // 32-channel site never stretches the page; the rail otherwise hugs
-      // row 1's height.
-      className='flex max-h-[70dvh] min-h-0 flex-col gap-2 overflow-hidden rounded-xl border border-video-border bg-video-surface p-2.5 text-video-chrome-foreground'
+      className='flex min-h-0 flex-col gap-2 overflow-hidden rounded-xl border border-video-border bg-video-surface p-2.5 text-video-chrome-foreground'
     >
       <div className='flex items-center justify-between px-1 text-xs font-medium text-video-chrome-foreground/80'>
         <span>通道</span>
