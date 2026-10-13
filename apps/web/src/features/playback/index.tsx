@@ -138,8 +138,12 @@ export function Playback({
   return (
     <div className='flex min-h-0 flex-1 flex-col'>
       <QueryState
-        pending={(channelsQuery.isPending && !providedChannels) || site.isPending}
-        error={(channelsQuery.error && !providedChannels) || site.error}
+        pending={(!providedChannels && channelsQuery.isPending) || site.isPending}
+        error={
+          !providedChannels
+            ? channelsQuery.error ?? site.error
+            : site.error
+        }
         retry={() => {
           void channelsQuery.refetch()
           void site.refetch()
