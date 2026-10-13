@@ -167,11 +167,11 @@ jobs:
       - name: Frontend browser unit tests
         run: docker run --rm --init --shm-size=256m one-nvr/browser:ci pnpm test
       - name: Real browser with modules disabled and manual certificate
-        run: ./deploy/production/dev.sh e2e --no-build
+        run: ./deploy/production/ci-run.sh "E2E modules disabled" ./deploy/production/dev.sh e2e --no-build
       - name: Real browser with modules enabled
-        run: ONE_NVR_E2E_MODULES=yes ./deploy/production/dev.sh e2e --no-build
+        run: ./deploy/production/ci-run.sh "E2E modules enabled" env ONE_NVR_E2E_MODULES=yes ./deploy/production/dev.sh e2e --no-build
       - name: Real browser with read-only certificate directory
-        run: ONE_NVR_E2E_TLS_DIR=/tls-input ./deploy/production/dev.sh e2e --no-build
+        run: ./deploy/production/ci-run.sh "E2E read-only TLS dir" env ONE_NVR_E2E_TLS_DIR=/tls-input ./deploy/production/dev.sh e2e --no-build
   media-browser-runtime:
     needs: [frontend]
     runs-on: ubuntu-24.04
@@ -224,7 +224,7 @@ jobs:
           docker build -f deploy/production/Dockerfile.app -t one-nvr/app:m1a .
           docker build -f deploy/production/Dockerfile.gateway -t one-nvr/gateway:m1a .
       - name: Actual production core and repeat deployment
-        run: ./deploy/production/test-deployment.sh
+        run: ./deploy/production/ci-run.sh "Production core and repeat deployment" ./deploy/production/test-deployment.sh
       - name: Actual Mosquitto password conversion remains idempotent
         run: |
           image=eclipse-mosquitto:2.0.22@sha256:199ea8ef2e35ec2b1b37e59cfd1dbae538ed4dfa4a2251a121a52215a6248a21
