@@ -139,6 +139,62 @@ export function offsetIn(entry: Entry, at: number): number {
   return Math.min(Math.max((at - entry.start) / 1000, 0), Math.max(seconds, 0))
 }
 
+/** One density bucket of the timeline: covered milliseconds, nothing more. */
+export type DensityBucket = {
+  from: number
+  to: number
+  /** Milliseconds of merged coverage inside the bucket, 0..bucket span. */
+  coveredMs: number
+  /** Segment count before merging (how busy, not how long). */
+  segments: number
+}
+
+/**
+ * Coverage density for the strip's second layer. Overlapping segments (a
+ * source switched mid-run) are merged first — density measures recorded
+ * time, not index rows. The bucket count adapts to the view span so both a
+ * month and an hour render as a smooth, readable profile. Two passes, both
+ * linear: a merge sweep, then per bucket a bounded intersection walk — each
+ * merge span is visited only while it overlaps the bucket's window, so a
+ * long span is re-entered from the start of the bucket scan instead of
+ * tracked across iterations (bucketCount is bounded by the strip width).
+ */
+export function coverageDensity(
+  timeline: Timeline,
+  bucketCount: number
+): DensityBucket[] {
+  if (!(timeline.to > timeline.from) || bucketCount < 1) return []
+  const span = timeline.to - timeline.from
+  const width = span / bucketCount
+  const spans: [number, number][] = timeline.entries
+    .map((entry): [number, number] => [entry.start, entry.end])
+    .filter(([start, end]) => end > start)
+    .sort((a, b) => a[0] - b[0])
+  const merged: [number, number][] = []
+  for (const [start, end] of spans) {
+    const last = merged[merged.length - 1]
+    if (last && start <= last[1]) last[1] = Math.max(last[1], end)
+    else merged.push([start, end])
+  }
+  const buckets: DensityBucket[] = []
+  for (let index = 0; index < bucketCount; index++) {
+    const from = timeline.from + index * width
+    const to = from + width
+    let coveredMs = 0
+    let segments = 0
+    for (const entry of timeline.entries) {
+      if (entry.end > from && entry.start < to) segments++
+    }
+    for (const [start, end] of merged) {
+      if (end <= from) continue
+      if (start >= to) break
+      coveredMs += Math.min(end, to) - Math.max(start, from)
+    }
+    buckets.push({ from, to, coveredMs: Math.min(coveredMs, width), segments })
+  }
+  return buckets
+}
+
 export function formatDuration(milliseconds: number): string {
   const total = Math.max(0, Math.round(milliseconds / 1000))
   const hours = Math.floor(total / 3600),

@@ -257,9 +257,8 @@ export function RecordingFiles({
       />
       {!!permitted.length && (
         <>
-          <RetentionPanel site={site.data} stats={stats.data} />
           <form
-            className='grid items-end gap-3 rounded-xl border bg-card p-4 md:grid-cols-5'
+            className='grid items-end gap-3 rounded-xl border bg-card p-4 sm:grid-cols-2 lg:grid-cols-3'
             onSubmit={(event) => event.preventDefault()}
           >
             <SelectField
@@ -340,7 +339,10 @@ export function RecordingFiles({
           </form>
           <Notices error={action.error} notice={action.notice} />
           {outcomes && <OutcomeTable outcomes={outcomes} />}
-          <div className='flex flex-wrap items-center justify-between gap-3'>
+          {/* Stats read as one quiet line; the toolbar below only exists when
+              there is something to act on, so selecting never reflows the
+              numbers. */}
+          <div className='flex flex-wrap items-center justify-between gap-2'>
             <span className='text-xs text-muted-foreground'>
               {items.length} 段{selected.size > 0 ? ` · 已选 ${selected.size} 段` : ''}
               {stats.data ? ` · 筛选范围内共 ${stats.data.segments} 段` : ''}
@@ -351,12 +353,15 @@ export function RecordingFiles({
                 导出记录
               </Button>
             )}
-            {selected.size > 0 && (
-              <div className='flex items-center gap-2'>
+          </div>
+          {selected.size > 0 && (
+            <div className='sticky bottom-0 z-10 flex flex-wrap items-center gap-3 rounded-xl border bg-card/95 p-3 shadow-sm backdrop-blur'>
+              <span className='text-sm font-medium'>已选 {selected.size} 段</span>
+              <div className='ml-auto flex flex-wrap items-center gap-2'>
                 {admin && !!archiveTargets.data?.items.length && (
                   <>
                     <SelectField
-                      label='上传目标'
+                      ariaLabel='上传目标'
                       value={archiveTarget}
                       onValueChange={(next) => setArchiveTarget(next ?? '')}
                       options={[
@@ -393,8 +398,8 @@ export function RecordingFiles({
                   删除本地副本（{willDelete.length} 段）
                 </Button>
               </div>
-            )}
-          </div>
+            </div>
+          )}
           <QueryState
             pending={list.isPending}
             error={list.error}
@@ -508,6 +513,9 @@ export function RecordingFiles({
               )}
             </div>
           )}
+          {/* Retention deletes footage without anyone present, so it sits after
+              the working area rather than pushing every filter below the fold. */}
+          <RetentionPanel site={site.data} stats={stats.data} />
         </>
       )}
       <ConfirmDialog
