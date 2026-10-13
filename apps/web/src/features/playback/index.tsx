@@ -587,7 +587,7 @@ return (
             toolbar — dates, search, quick ranges, no visible labels. */}
         <div data-testid='playback-console' className='flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-video-border bg-video-surface text-video-chrome-foreground shadow-sm'>
           <form
-            className='flex flex-wrap items-center gap-1.5 border-b border-video-border px-3 py-2'
+            className='flex flex-nowrap items-center gap-1.5 overflow-x-auto border-b border-video-border px-3 py-2'
             title={`时间按站点时区 ${zone} 填写与显示，单次检索不超过 31 天`}
             onSubmit={(event) => {
             event.preventDefault()
@@ -616,10 +616,10 @@ return (
               onChange={(event) =>
                 setDraft({ ...draft, start: event.target.value })
               }
-              className='h-8 w-52 border-video-border bg-white/5 text-video-chrome-foreground'
+              className='h-8 w-52 shrink-0 border-video-border bg-white/5 text-video-chrome-foreground [color-scheme:dark]'
               required
             />
-            <span aria-hidden className='text-video-chrome-foreground/40'>→</span>
+            <span aria-hidden className='shrink-0 text-video-chrome-foreground/40'>→</span>
             <Input
               type='datetime-local'
               step='60'
@@ -628,18 +628,18 @@ return (
               onChange={(event) =>
                 setDraft({ ...draft, end: event.target.value })
               }
-              className='h-8 w-52 border-video-border bg-white/5 text-video-chrome-foreground'
+              className='h-8 w-52 shrink-0 border-video-border bg-white/5 text-video-chrome-foreground [color-scheme:dark]'
               required
             />
-            <Button type='submit' size='sm' className='h-8'>检索录像</Button>
-            <div className='flex items-center gap-1'>
+            <Button type='submit' size='sm' className='h-8 shrink-0'>检索录像</Button>
+            <div className='flex shrink-0 items-center gap-1'>
               {QUICK_RANGES.map(({ kind, label: name }) => (
                 <Button
                   key={kind}
                   type='button'
                   size='sm'
                   variant='ghost'
-                  className='h-8 px-2 text-xs text-video-chrome-foreground/80 hover:bg-white/10 hover:text-video-chrome-foreground'
+                  className='h-8 whitespace-nowrap px-2 text-xs text-video-chrome-foreground/80 hover:bg-white/10 hover:text-video-chrome-foreground'
                   onClick={() => applyRange(quickRange(kind, Date.now(), zone))}
                 >
                   {name}
@@ -647,7 +647,7 @@ return (
               ))}
             </div>
             {rangeError && (
-              <p role='alert' className='w-full text-sm text-red-400'>
+              <p role='alert' className='w-full shrink-0 text-sm text-red-400'>
                 {rangeError}
               </p>
             )}
@@ -1036,12 +1036,15 @@ return (
           </p>
         )}
         {selected && (
-          <div className='flex flex-wrap items-center justify-between gap-2 rounded-xl border bg-card px-3 py-2 text-sm'>
-            <p>
+          <div
+            data-testid='playback-selected'
+            className='flex flex-wrap items-center justify-between gap-2 rounded-lg border border-video-border bg-video-surface-raised px-3 py-1.5 text-xs text-video-chrome-foreground'
+          >
+            <p className='min-w-0 truncate'>
               <span className='font-medium'>
                 片段 {selected.id.slice(0, 8)} · {selected.blocked || '可用'}
               </span>
-              <span className='ml-3 text-muted-foreground'>
+              <span className='ml-2 tabular-nums text-video-chrome-foreground/60'>
                 {formatClock(selected.start, zone)} —{' '}
                 {formatClock(selected.end, zone)} ·{' '}
                 {formatDuration(selected.end - selected.start)} ·{' '}
@@ -1049,7 +1052,7 @@ return (
               </span>
             </p>
             {active.permissions.includes('export') && !selected.blocked && (
-              <Button size='sm' variant='outline' onClick={() => setExportOpen(true)}>
+              <Button size='sm' variant='outline' className='h-6 px-2 text-xs' onClick={() => setExportOpen(true)}>
                 导出
               </Button>
             )}
@@ -1065,10 +1068,12 @@ return (
             onOpenChange={setExportOpen}
           />
         )}
-        <p className='px-1 text-[11px] text-muted-foreground'>
-          当前通道 {label(active)}
-          。缺口不会静默跳过；暂停、拖动、±10 秒与倍速都在同一条时间轴上生效。
-        </p>
+        {!selected && (
+          <p className='px-1 text-[11px] text-video-chrome-foreground/50'>
+            当前通道 {label(active)}
+            。缺口不会静默跳过；暂停、拖动、±10 秒与倍速都在同一条时间轴上生效。
+          </p>
+        )}
       </section>
       {/* Workspace mode extras: the files slot rides column 3 of row 1, and
           the timeline band spans the full width as row 2. */}
