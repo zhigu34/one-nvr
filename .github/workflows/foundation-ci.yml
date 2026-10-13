@@ -264,7 +264,6 @@ jobs:
             printf "stage2_after=%s\n" "$(ls -ln /work/passwords2 | tr -s " " | cut -d" " -f1,3,4)"
           ' 2>&1) || true
           flat=$(printf "%s" "$report" | tr "\n" "|" | sed "s/|/ | /g")
-          echo "::error title=Mosquitto ownership measurements::${flat}"
 
           fail=0
           # Assertions read the flattened form, the same text the annotation
@@ -285,7 +284,15 @@ jobs:
             *"stage2_after=-rw------- 1883 1883"*) ;;
             *) echo "stage 2 did not end broker-owned: $(printf "%s" "$flat" | tr "|" "\n" | grep stage2_after)" >&2; fail=1 ;;
           esac
-          if [ "$fail" = "1" ]; then exit 1; fi
+          if [ "$fail" = "1" ]; then
+            # Emitted only on failure: an unconditional ::error fails the step
+            # on its own, so a passing check would report red forever.
+            echo "::error title=Mosquitto ownership failure::${flat}"
+            exit 1
+          fi
+          # A warning carries the measurements into the UI without failing the
+          # step; job logs need authentication, this annotation does not.
+          echo "::warning title=Mosquitto ownership measurements::${flat}"
           printf 'Mosquitto conversion ownership PASS\n'
       - name: Actual Frigate config seed belongs to the publishing user
         run: |
