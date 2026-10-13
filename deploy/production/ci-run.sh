@@ -3,9 +3,12 @@
 #
 # Job logs are not readable without authentication, so a failing step otherwise
 # shows only "Process completed with exit code 1" — the reason this suite spent
-# several rounds red with no diagnosable cause. The command's output still goes
-# to the log for anyone signed in; the last lines also ride the annotation, so
-# the cause is visible from the checks page alone.
+# several rounds red with no diagnosable cause.
+#
+# Output is streamed to the log as it happens (so a step that is killed by its
+# timeout still shows everything up to that point) and tee'd to a file; on
+# failure the last lines additionally ride an annotation, making the cause
+# visible from the checks page alone.
 #
 # Only failures annotate as errors: an unconditional ::error makes a passing
 # command report red, which is the same trap in the other direction.
@@ -13,11 +16,13 @@ set -uo pipefail
 [[ $# -ge 2 ]] || { printf '%s\n' 'Usage: ci-run.sh <title> <command> [args...]' >&2; exit 2; }
 title=$1
 shift
-out=$("$@" 2>&1)
-status=$?
-printf '%s\n' "$out"
+
+capture=$(mktemp)
+trap 'rm -f "$capture"' EXIT
+"$@" 2>&1 | tee "$capture"
+status=${PIPESTATUS[0]}
 if [[ $status -ne 0 ]]; then
-  summary=$(printf '%s' "$out" | tail -25 | tr '\n' '|')
+  summary=$(tail -25 "$capture" | tr '\n' '|')
   printf '::error title=%s failed::%s\n' "$title" "$summary"
 fi
 exit "$status"
