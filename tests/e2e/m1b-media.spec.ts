@@ -278,9 +278,10 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   // M1-C: measure the authorized byte-range read path against the real
   // published segment, through the real gateway.
   await page.goto('/recordings')
-  // One "recordings" entry holds playback and file management.
+  // One "recordings" entry holds playback and file management on the same
+  // dark surface; the playback console is the visible entry point.
   await expect(page.getByRole('heading', {name: '录像', exact: true})).toBeVisible()
-  await expect(page.getByRole('tab', {name: '回放', exact: true})).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByTestId('playback-console')).toBeVisible()
   await page.getByRole('button', {name: 'CH01 通道 01', exact: true}).click()
   // The index must reach the timeline; a short segment inside a 24 hour window
   // is only a few pixels wide, so playback is started from the control instead

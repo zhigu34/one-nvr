@@ -9,7 +9,12 @@ import { playwright } from '@vitest/browser-playwright'
 // https://vite.dev/config/
 export default defineConfig({
   optimizeDeps: {
-    include: ['zustand', '@tanstack/react-query', '@radix-ui/react-tabs'],
+    include: [
+      'zustand',
+      '@tanstack/react-query',
+      '@radix-ui/react-tabs',
+      '@radix-ui/react-collapsible',
+    ],
   },
   server: {
     proxy: {

@@ -1,19 +1,17 @@
 import { useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { ChevronDown, Download, Shield, ShieldOff, Trash2 } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth-store'
 import { apiRequest, jsonRequest, newRequestKey } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { ConfirmDialog } from '@/components/confirm-dialog'
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { useAPI, useAction } from '@/features/foundation/hooks'
 import {
   Empty,
@@ -21,6 +19,7 @@ import {
   QueryState,
   SelectField,
 } from '@/features/foundation/ui'
+import { cn } from '@/lib/utils'
 import { formatMinute } from '@/features/playback/zone'
 import { ExportsDrawer } from '@/features/recording-exports/exports-drawer'
 
@@ -75,9 +74,13 @@ function rangeFor(days: number): { start: string; end: string } {
 export function RecordingFiles({
   initialChannel = '',
   active = true,
+  // The workspace shell owns the active channel; the panel no longer asks for
+  // it, so the channel button shows the same channel as the playback above.
+  controlledChannelId = '',
 }: {
   initialChannel?: string
   active?: boolean
+  controlledChannelId?: string
 }) {
   const admin = useAuthStore((state) => state.user?.role === 'admin')
   const client = useQueryClient()
@@ -85,7 +88,6 @@ export function RecordingFiles({
   const site = useAPI<Schema<'Site'>>('/api/v1/site')
   const pools = useAPI<PageData<Schema<'Pool'>>>('/api/v1/storage-pools?limit=100', admin)
   const archiveTargets = useAPI<PageData<Target>>('/api/v1/archive-targets', admin)
-  const [channel, setChannel] = useState(initialChannel)
   const [days, setDays] = useState('7')
   const [revision, setRevision] = useState('')
   const [pool, setPool] = useState('')
@@ -101,7 +103,7 @@ export function RecordingFiles({
   const permitted = (channels.data?.items || []).filter((entry) =>
     entry.permissions.includes('playback')
   )
-  const activeChannel = channel || permitted[0]?.id || ''
+  const activeChannel = controlledChannelId || initialChannel || permitted[0]?.id || ''
   const exportable = permitted.find(
     (entry) => entry.id === activeChannel && entry.permissions.includes('export')
   )
@@ -246,7 +248,7 @@ export function RecordingFiles({
   }
 
   return (
-    <div className='space-y-4'>
+    <div className='flex min-h-0 flex-1 flex-col gap-3 text-video-chrome-foreground'>
       <QueryState
         pending={channels.isPending || site.isPending}
         error={channels.error || site.error}
@@ -258,24 +260,11 @@ export function RecordingFiles({
       {!!permitted.length && (
         <>
           <form
-            className='grid items-end gap-3 rounded-xl border bg-card p-4 sm:grid-cols-2 lg:grid-cols-3'
+            className='grid grid-cols-2 gap-2 rounded-lg border border-video-border bg-video-surface-raised p-2.5'
             onSubmit={(event) => event.preventDefault()}
           >
             <SelectField
-              label='通道'
-              value={activeChannel}
-              onValueChange={(next) => {
-                setChannel(next)
-                setSelected(new Set())
-                setRevision('')
-              }}
-              options={permitted.map((entry) => ({
-                value: entry.id,
-                label: `CH${String(entry.channel_no).padStart(2, '0')} · ${entry.channel_name}`,
-              }))}
-            />
-            <SelectField
-              label='时间范围'
+              ariaLabel='时间范围'
               value={days}
               onValueChange={(next) => {
                 setDays(next)
@@ -289,7 +278,17 @@ export function RecordingFiles({
               ]}
             />
             <SelectField
-              label='来源版本'
+              ariaLabel='保护状态'
+              value={protection}
+              onValueChange={setProtectionFilter}
+              options={[
+                { value: 'all', label: '全部保护' },
+                { value: 'yes', label: '仅已保护' },
+                { value: 'no', label: '仅未保护' },
+              ]}
+            />
+            <SelectField
+              ariaLabel='来源版本'
               value={revision}
               onValueChange={(next) => {
                 setRevision(next)
@@ -304,7 +303,7 @@ export function RecordingFiles({
               ]}
             />
             <SelectField
-              label='存储池'
+              ariaLabel='存储池'
               value={pool}
               onValueChange={(next) => setPool(next)}
               options={[
@@ -316,24 +315,15 @@ export function RecordingFiles({
               ]}
             />
             <SelectField
-              label='文件健康'
+              ariaLabel='文件健康'
+              className='col-span-2'
               value={health}
               onValueChange={(next) => setHealth(next)}
               options={[
-                { value: 'all', label: '全部' },
+                { value: 'all', label: '全部健康' },
                 { value: 'ready', label: '仅可用' },
                 { value: 'anomalous', label: '仅异常' },
                 { value: 'deleted', label: '仅已删除' },
-              ]}
-            />
-            <SelectField
-              label='保护状态'
-              value={protection}
-              onValueChange={setProtectionFilter}
-              options={[
-                { value: 'all', label: '全部' },
-                { value: 'yes', label: '仅已保护' },
-                { value: 'no', label: '仅未保护' },
               ]}
             />
           </form>
@@ -342,8 +332,8 @@ export function RecordingFiles({
           {/* Stats read as one quiet line; the toolbar below only exists when
               there is something to act on, so selecting never reflows the
               numbers. */}
-          <div className='flex flex-wrap items-center justify-between gap-2'>
-            <span className='text-xs text-muted-foreground'>
+          <div className='flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-video-chrome-foreground/70'>
+            <span>
               {items.length} 段{selected.size > 0 ? ` · 已选 ${selected.size} 段` : ''}
               {stats.data ? ` · 筛选范围内共 ${stats.data.segments} 段` : ''}
               {!!stats.data?.cloud_only && ` · 仅云端 ${stats.data.cloud_only} 段`}
@@ -355,9 +345,11 @@ export function RecordingFiles({
             )}
           </div>
           {selected.size > 0 && (
-            <div className='sticky bottom-0 z-10 flex flex-wrap items-center gap-3 rounded-xl border bg-card/95 p-3 shadow-sm backdrop-blur'>
-              <span className='text-sm font-medium'>已选 {selected.size} 段</span>
-              <div className='ml-auto flex flex-wrap items-center gap-2'>
+            <div className='sticky bottom-0 z-10 flex flex-wrap items-center gap-2 rounded-lg border border-amber-400/40 bg-video-surface-raised/95 px-3 py-2 shadow-lg backdrop-blur'>
+              <span className='text-sm font-medium text-amber-400'>
+                已选 {selected.size} 段
+              </span>
+              <div className='ml-auto flex flex-wrap items-center gap-1.5'>
                 {admin && !!archiveTargets.data?.items.length && (
                   <>
                     <SelectField
@@ -370,28 +362,31 @@ export function RecordingFiles({
                           .filter((target) => target.enabled)
                           .map((target) => ({ value: target.id ?? '', label: target.name ?? '' })),
                       ]}
-                      className='w-40'
+                      className='w-32'
                     />
                     <Button
                       type='button'
                       variant='outline'
+                      size='sm'
                       disabled={action.pending || !archiveTarget}
                       onClick={() => void archiveSelected()}
                     >
-                      上传到云端（{selected.size} 段）
+                      上传云端（{selected.size}）
                     </Button>
                   </>
                 )}
                 <Button
                   type='button'
                   variant='ghost'
+                  size='sm'
                   onClick={() => setSelected(new Set())}
                 >
-                  取消选择
+                  取消
                 </Button>
                 <Button
                   type='button'
                   variant='destructive'
+                  size='sm'
                   disabled={action.pending || !willDelete.length}
                   onClick={() => setConfirmDelete(true)}
                 >
@@ -406,116 +401,66 @@ export function RecordingFiles({
             retry={() => list.refetch()}
           />
           {list.data && (
-            <div className='overflow-x-auto rounded-xl border bg-card'>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className='w-10'>
-                      <Checkbox
-                        aria-label='选择当前结果'
-                        checked={allChecked}
-                        disabled={!selectable.length}
-                        onCheckedChange={(state) => {
-                          setSelected(
-                            state === true
-                              ? new Set(selectable.map((item) => item.id))
-                              : new Set()
-                          )
-                        }}
-                      />
-                    </TableHead>
-                    <TableHead>时间</TableHead>
-                    <TableHead>时长</TableHead>
-                    <TableHead>大小</TableHead>
-                    <TableHead>媒体</TableHead>
-                    <TableHead>状态</TableHead>
-                    <TableHead>保护</TableHead>
-                    <TableHead className='text-right'>操作</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {items.map((item) => (
-                    <TableRow key={item.id} data-testid='recording-row'>
-                      <TableCell>
-                        <Checkbox
-                          aria-label={`选择 ${item.id}`}
-                          checked={selected.has(item.id)}
-                          // A file that is still being written, or one that
-                          // already vanished, is not something to delete here.
-                          disabled={item.state !== 'ready'}
-                          onCheckedChange={(state) =>
-                            toggle(item.id, state === true)
-                          }
-                        />
-                      </TableCell>
-                      <TableCell className='font-mono text-xs'>
-                        {zone ? formatMinute(Date.parse(item.start), zone) : '—'}
-                      </TableCell>
-                      <TableCell className='text-sm tabular-nums'>
-                        {duration(Date.parse(item.end) - Date.parse(item.start))}
-                      </TableCell>
-                      <TableCell className='text-sm tabular-nums'>
-                        {bytes(item.bytes)}
-                      </TableCell>
-                      <TableCell className='text-xs text-muted-foreground'>
-                        {item.media.codec
-                          ? `${item.media.width}×${item.media.height} · ${item.media.codec}`
-                          : '—'}
-                      </TableCell>
-                      <TableCell className='text-sm'>
-                        {STATE_LABELS[item.state] || item.state}
-                        {item.archived && (
-                          <span className='ml-1 text-xs text-emerald-600' title='已归档到云端'>
-                            本地+云端
-                          </span>
-                        )}
-                        {item.check_state && item.check_state !== item.state && (
-                          <span className='ml-1 text-xs text-muted-foreground'>
-                            （{item.check_state}）
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell className='text-sm'>
-                        {item.protected ? '已保护' : '—'}
-                      </TableCell>
-                      <TableCell className='text-right'>
-                        <div className='flex items-center justify-end gap-2'>
-                          {item.state === 'ready' && (
-                            <a
-                              href={`/api/v1/recordings/${item.id}/content`}
-                              className='text-xs underline underline-offset-4'
-                            >
-                              下载
-                            </a>
-                          )}
-                          <Button
-                            type='button'
-                            variant='ghost'
-                            size='sm'
-                            aria-label={`${item.protected ? '解除保护' : '保护'} ${
-                              zone ? formatMinute(Date.parse(item.start), zone) : item.id
-                            }`}
-                            disabled={action.pending || item.state === 'deleted'}
-                            onClick={() => void setProtection(item, !item.protected)}
-                          >
-                            {item.protected ? '解除保护' : '保护'}
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+            <div
+              data-testid='files-rows'
+              className='flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto rounded-lg border border-video-border bg-video-surface-raised/40 p-2'
+            >
+              {selectable.length > 0 && (
+                <div className='flex items-center gap-2 px-1 pb-1'>
+                  <Checkbox
+                    aria-label='选择当前结果'
+                    checked={allChecked}
+                    onCheckedChange={(state) =>
+                      setSelected(
+                        state === true
+                          ? new Set(selectable.map((item) => item.id))
+                          : new Set()
+                      )
+                    }
+                  />
+                  <span className='text-[11px] text-video-chrome-foreground/60'>
+                    全选当前页（{selectable.length} 段可选）
+                  </span>
+                </div>
+              )}
+              {items.map((item) => (
+                <RecordingRow
+                  key={item.id}
+                  item={item}
+                  zone={zone}
+                  actionPending={action.pending}
+                  selected={selected.has(item.id)}
+                  onToggle={(next) => toggle(item.id, next)}
+                  onProtect={() => void setProtection(item, !item.protected)}
+                />
+              ))}
               {!items.length && (
-                <div className='p-8 text-center text-sm text-muted-foreground'>
+                <div className='p-8 text-center text-sm text-video-chrome-foreground/60'>
                   该范围内没有录像
                 </div>
               )}
             </div>
           )}
           {/* Retention deletes footage without anyone present, so it sits after
-              the working area rather than pushing every filter below the fold. */}
-          <RetentionPanel site={site.data} stats={stats.data} />
+              the working area rather than pushing every filter below the fold;
+              collapsed by default because it is rarely the daily concern. */}
+          <Collapsible className='rounded-lg border border-video-border bg-video-surface-raised/40'>
+            <CollapsibleTrigger asChild>
+              <button
+                type='button'
+                className='flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm text-video-chrome-foreground hover:bg-white/5'
+              >
+                <span className='flex items-center gap-2'>
+                  <span className='inline-block h-2 w-2 rounded-sm bg-amber-400' />
+                  本地保留策略
+                </span>
+                <ChevronDown className='size-4 transition-transform group-data-[state=open]:rotate-180' />
+              </button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className='border-t border-video-border p-3'>
+              <RetentionPanel site={site.data} stats={stats.data} />
+            </CollapsibleContent>
+          </Collapsible>
         </>
       )}
       <ConfirmDialog
@@ -559,43 +504,147 @@ function OutcomeTable({ outcomes }: { outcomes: Outcome[] }) {
     not_found: '未找到',
   }
   return (
-    <div className='overflow-x-auto rounded-xl border bg-card'>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>录像</TableHead>
-            <TableHead>结果</TableHead>
-            <TableHead className='text-right'>释放</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {outcomes.map((outcome) => (
-            <TableRow key={outcome.segment_id} data-testid='delete-outcome'>
-              <TableCell className='font-mono text-xs'>
-                {outcome.segment_id.slice(0, 8)}
-              </TableCell>
-              <TableCell className='text-sm'>
-                {LABELS[outcome.state] || outcome.state}
-                {outcome.reason && outcome.state !== 'deleted' && (
-                  <span className='ml-1 text-xs text-muted-foreground'>
-                    （{outcome.reason}）
-                  </span>
-                )}
-              </TableCell>
-              <TableCell className='text-right text-sm tabular-nums'>
-                {outcome.bytes ? bytes(outcome.bytes) : '—'}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+    <div className='flex flex-col gap-1.5 rounded-lg border border-video-border bg-video-surface-raised/40 p-2'>
+      {outcomes.map((outcome) => (
+        <div
+          key={outcome.segment_id}
+          data-testid='delete-outcome'
+          className='flex items-center justify-between gap-3 rounded border border-video-border bg-video-surface px-2 py-1.5 text-xs'
+        >
+          <span className='font-mono text-video-chrome-foreground/70'>
+            {outcome.segment_id.slice(0, 8)}
+          </span>
+          <span className='flex-1 truncate'>
+            {LABELS[outcome.state] || outcome.state}
+            {outcome.reason && outcome.state !== 'deleted' && (
+              <span className='ml-1 text-video-chrome-foreground/50'>（{outcome.reason}）</span>
+            )}
+          </span>
+          <span className='tabular-nums text-video-chrome-foreground/80'>
+            {outcome.bytes ? bytes(outcome.bytes) : '—'}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// One row in the right rail. Compact vertical layout: top line carries the
+// time range and state badges, the bottom line carries media facts, the
+// hover-only actions keep the panel quiet at rest.
+function RecordingRow({
+  item,
+  zone,
+  actionPending,
+  selected,
+  onToggle,
+  onProtect,
+}: {
+  item: Segment
+  zone: string
+  actionPending: boolean
+  selected: boolean
+  onToggle: (next: boolean) => void
+  onProtect: () => void
+}) {
+  const time = zone ? formatMinute(Date.parse(item.start), zone) : '—'
+  const span = duration(Date.parse(item.end) - Date.parse(item.start))
+  const media = item.media.codec
+    ? `${item.media.width}×${item.media.height} · ${item.media.codec}`
+    : '—'
+  const stateLabel = STATE_LABELS[item.state] || item.state
+  const fillable = item.state === 'ready'
+  return (
+    <div
+      data-testid='recording-row'
+      className={cn(
+        'group/row relative grid grid-cols-[16px_1fr_auto] gap-2 rounded border px-2.5 py-2 text-xs',
+        selected
+          ? 'border-amber-400/60 bg-amber-400/10'
+          : item.state === 'missing' || item.state === 'damaged' || item.state === 'conflict'
+            ? 'border-red-500/30 bg-red-500/5 opacity-90'
+            : 'border-video-border bg-video-surface hover:border-video-chrome-foreground/30'
+      )}
+    >
+      <Checkbox
+        aria-label={`选择 ${item.id}`}
+        checked={selected}
+        disabled={!fillable}
+        onCheckedChange={(state) => onToggle(state === true)}
+      />
+      <div className='min-w-0 space-y-1'>
+        <div className='flex flex-wrap items-center gap-x-2 gap-y-0.5'>
+          <span className='font-mono text-[12px] text-video-chrome-foreground'>{time}</span>
+          {item.protected && (
+            <span className='rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] text-amber-400'>
+              已保护
+            </span>
+          )}
+          {item.archived && (
+            <span className='rounded bg-emerald-400/15 px-1.5 py-0.5 text-[10px] text-emerald-400'>
+              本地+云端
+            </span>
+          )}
+          <span
+            className={cn(
+              'rounded px-1.5 py-0.5 text-[10px]',
+              item.state === 'ready'
+                ? 'bg-emerald-400/10 text-emerald-400'
+                : item.state === 'deleted'
+                  ? 'bg-video-chrome-foreground/5 text-video-chrome-foreground/40 line-through'
+                  : 'bg-red-500/10 text-red-400'
+            )}
+          >
+            {stateLabel}
+          </span>
+        </div>
+        <div className='flex flex-wrap items-center gap-x-2 text-[10.5px] text-video-chrome-foreground/60'>
+          <span className='tabular-nums'>{span}</span>
+          <span className='text-video-chrome-foreground/30'>·</span>
+          <span className='tabular-nums'>{bytes(item.bytes)}</span>
+          <span className='text-video-chrome-foreground/30'>·</span>
+          <span>{media}</span>
+        </div>
+      </div>
+      <div className='flex items-center gap-1 opacity-0 transition-opacity group-hover/row:opacity-100'>
+        {item.state === 'ready' && (
+          <a
+            href={`/api/v1/recordings/${item.id}/content`}
+            aria-label={`下载 ${item.id}`}
+            className='grid size-6 place-items-center rounded border border-video-border bg-video-surface-raised text-video-chrome-foreground/70 hover:text-video-chrome-foreground'
+            title='下载'
+          >
+            <Download className='size-3.5' />
+          </a>
+        )}
+        <button
+          type='button'
+          aria-label={`${item.protected ? '解除保护' : '保护'} ${time}`}
+          disabled={actionPending || item.state === 'deleted'}
+          onClick={onProtect}
+          className='grid size-6 place-items-center rounded border border-video-border bg-video-surface-raised text-video-chrome-foreground/70 hover:text-amber-400 disabled:opacity-30'
+          title={item.protected ? '解除保护' : '保护'}
+        >
+          {item.protected ? <ShieldOff className='size-3.5' /> : <Shield className='size-3.5' />}
+        </button>
+        <button
+          type='button'
+          aria-label={`删除本地副本 ${time}`}
+          disabled={actionPending || !fillable}
+          className='grid size-6 place-items-center rounded border border-video-border bg-video-surface-raised text-video-chrome-foreground/70 hover:text-red-400 disabled:opacity-30'
+          title='删除本地副本'
+        >
+          <Trash2 className='size-3.5' />
+        </button>
+      </div>
     </div>
   )
 }
 
 // Retention is the one setting that deletes footage without anyone present, so
 // the panel states the current occupancy and what the period would keep before
-// the operator turns it on.
+// the operator turns it on. The Collapsible wrapper around this panel renders
+// the heading and the toggle; everything here is the body the trigger reveals.
 function RetentionPanel({
   site,
   stats,
@@ -608,62 +657,56 @@ function RetentionPanel({
   if (!site) return null
   const enabled = site.recording_retention_days > 0
   return (
-    <div className='rounded-xl border bg-card p-4'>
-      <div className='flex flex-wrap items-start justify-between gap-3'>
-        <div className='min-w-0'>
-          <p className='text-sm font-medium'>本地保留策略</p>
-          <p className='mt-1 text-sm text-muted-foreground'>
-            {enabled
-              ? `超过 ${site.recording_retention_days} 天的录像会自动删除本地副本；已保护的录像始终跳过。`
-              : '当前不自动删除任何录像。设置天数后，超过该期限的录像会自动删除本地副本（已保护的除外）。'}
-          </p>
-          {stats && (
-            <p className='mt-1 text-xs text-muted-foreground'>
-              当前筛选范围：{stats.segments} 段 · {bytes(stats.logical_bytes)} 可播放 ·
-              已删除释放 {bytes(stats.deleted_bytes)}
-            </p>
-          )}
-        </div>
-        <div className='flex items-end gap-2'>
-          <SelectField
-            label='保留天数'
-            ariaLabel='保留天数'
-            value={days}
-            onValueChange={setDays}
-            options={[
-              { value: '0', label: '不自动删除' },
-              { value: '1', label: '1 天' },
-              { value: '3', label: '3 天' },
-              { value: '7', label: '7 天' },
-              { value: '14', label: '14 天' },
-              { value: '30', label: '30 天' },
-              { value: '90', label: '90 天' },
-              { value: '180', label: '180 天' },
-              { value: '365', label: '365 天' },
-            ]}
-          />
-          <Button
-            type='button'
-            variant='outline'
-            disabled={action.pending}
-            onClick={() =>
-              void action.run(
-                () =>
-                  apiRequest(
-                    '/api/v1/site',
-                    jsonRequest(
-                      'PATCH',
-                      { recording_retention_days: Number(days) },
-                      site.version
-                    )
-                  ),
-                Number(days) > 0 ? '已启用本地保留策略' : '已关闭自动删除'
-              )
-            }
-          >
-            保存保留策略
-          </Button>
-        </div>
+    <div className='space-y-2'>
+      <p className='text-xs text-video-chrome-foreground/70'>
+        {enabled
+          ? `超过 ${site.recording_retention_days} 天的录像会自动删除本地副本；已保护的录像始终跳过。`
+          : '当前不自动删除任何录像。设置天数后，超过该期限的录像会自动删除本地副本（已保护的除外）。'}
+      </p>
+      {stats && (
+        <p className='text-[11px] text-video-chrome-foreground/50'>
+          当前筛选范围：{stats.segments} 段 · {bytes(stats.logical_bytes)} 可播放 ·
+          已删除释放 {bytes(stats.deleted_bytes)}
+        </p>
+      )}
+      <div className='flex items-end gap-2'>
+        <SelectField
+          ariaLabel='保留天数'
+          value={days}
+          onValueChange={setDays}
+          options={[
+            { value: '0', label: '不自动删除' },
+            { value: '1', label: '1 天' },
+            { value: '3', label: '3 天' },
+            { value: '7', label: '7 天' },
+            { value: '14', label: '14 天' },
+            { value: '30', label: '30 天' },
+            { value: '90', label: '90 天' },
+            { value: '180', label: '180 天' },
+            { value: '365', label: '365 天' },
+          ]}
+        />
+        <Button
+          type='button'
+          variant='outline'
+          disabled={action.pending}
+          onClick={() =>
+            void action.run(
+              () =>
+                apiRequest(
+                  '/api/v1/site',
+                  jsonRequest(
+                    'PATCH',
+                    { recording_retention_days: Number(days) },
+                    site.version
+                  )
+                ),
+              Number(days) > 0 ? '已启用本地保留策略' : '已关闭自动删除'
+            )
+          }
+        >
+          保存保留策略
+        </Button>
       </div>
       <Notices {...action} />
     </div>

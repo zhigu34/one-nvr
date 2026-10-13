@@ -225,6 +225,8 @@ test('protection can be toggled per row and is sent as a single PATCH', async ()
 test('the retention panel states what each mode does and saves the chosen period', async () => {
   const setup = fixture({ retentionDays: 0 })
   const view = await render(setup.view)
+  // The retention card is collapsed by default; open it to reach the body.
+  await userEvent.click(view.getByText('本地保留策略'))
   await expect
     .element(view.getByText(/当前不自动删除任何录像/))
     .toBeVisible()
@@ -241,6 +243,8 @@ test('the retention panel states what each mode does and saves the chosen period
 test('an enabled retention period says it deletes and that protection is skipped', async () => {
   const setup = fixture({ retentionDays: 30 })
   const view = await render(setup.view)
+  // The retention card is collapsed by default; open it to reach the body.
+  await userEvent.click(view.getByText('本地保留策略'))
   await expect.element(view.getByText(/超过 30 天的录像会自动删除本地副本/)).toBeVisible()
   await expect.element(view.getByText(/已保护的录像始终跳过/)).toBeVisible()
 })

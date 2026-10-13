@@ -98,21 +98,32 @@ export function Playback({
   initialChannel = '',
   initialAt = '',
   active = true,
+  // The shell hoists the channel list and selection; the shell passes both so
+  // this component renders without its own rail and follows the shell's choice.
+  providedChannels,
+  controlledChannelId = '',
+  onChannelChange,
+  hideChannelList = false,
 }: {
   initialChannel?: string
   initialAt?: string
   // False while the workspace shows the other tab: the channel/site queries
   // (and the index below) stay idle instead of both tabs fetching on mount.
   active?: boolean
+  providedChannels?: Schema<'Channel'>[]
+  controlledChannelId?: string
+  onChannelChange?: (id: string) => void
+  hideChannelList?: boolean
 }) {
   const channelsQuery = useAPI<PageData<Schema<'Channel'>>>(
     '/api/v1/channels?limit=100',
-    active
+    active && !providedChannels
   )
   const site = useAPI<Schema<'Site'>>('/api/v1/site', active)
-  const channels = (channelsQuery.data?.items || []).filter((channel) =>
-    channel.permissions.includes('playback')
+  const filtered = (providedChannels ?? channelsQuery.data?.items ?? []).filter(
+    (channel) => channel.permissions.includes('playback')
   )
+  const channels = filtered
   // The site zone is never assumed: every clock in this page is derived from it,
   // so the workspace waits for the value the API reports.
   const zone = site.data?.timezone || ''
@@ -125,16 +136,16 @@ export function Playback({
       </p>
     )
   return (
-    <div className='flex min-h-[calc(100vh-9rem)] flex-col'>
+    <div className='flex min-h-0 flex-1 flex-col'>
       <QueryState
-        pending={channelsQuery.isPending || site.isPending}
-        error={channelsQuery.error || site.error}
+        pending={(channelsQuery.isPending && !providedChannels) || site.isPending}
+        error={(channelsQuery.error && !providedChannels) || site.error}
         retry={() => {
           void channelsQuery.refetch()
           void site.refetch()
         }}
       />
-      {channelsQuery.data && !channels.length && (
+      {!channels.length && (providedChannels || channelsQuery.data) && (
         <Empty>没有可回放的通道，请联系管理员分配录像回放权限。</Empty>
       )}
       {!!channels.length && (
@@ -146,6 +157,9 @@ export function Playback({
           initialChannel={initialChannel}
           initialAt={initialAt}
           isActive={active}
+          controlledChannelId={controlledChannelId}
+          onChannelChange={onChannelChange}
+          hideChannelList={hideChannelList}
         />
       )}
     </div>
@@ -158,18 +172,37 @@ function Workspace({
   initialChannel,
   initialAt,
   isActive = true,
+  controlledChannelId = '',
+  onChannelChange,
+  hideChannelList = false,
 }: {
   channels: Schema<'Channel'>[]
   zone: string
   initialChannel: string
   initialAt: string
   isActive?: boolean
+  controlledChannelId?: string
+  onChannelChange?: (id: string) => void
+  hideChannelList?: boolean
 }) {
-  const [channelID, setChannelID] = useState(
+  const [internalChannelID, setInternalChannelID] = useState(
     () =>
       channels.find((channel) => channel.id === initialChannel)?.id ||
       channels[0].id
   )
+  // A controlled id from the workspace shell overrides the local store; the
+  // shell owns the URL state and we never write to it on our own.
+  const controlledMatches = channels.some(
+    (channel) => channel.id === controlledChannelId
+  )
+  const channelID = controlledMatches ? controlledChannelId : internalChannelID
+  function selectChannel(next: Schema<'Channel'>) {
+    setSelected(null)
+    setView(null)
+    setBracket(null)
+    if (controlledMatches) onChannelChange?.(next.id)
+    else setInternalChannelID(next.id)
+  }
   const [range, setRange] = useState(() => defaultRange(initialAt))
   // The inputs hold site-zone wall clock text so the operator reads and types
   // the same clock the timeline shows; only `range` is sent to the API, in UTC.
@@ -422,10 +455,11 @@ function Workspace({
       end: wallClockInput(next.end, zone),
     })
   }
-  return (
+return (
     // The page IS the player: one dark surface spanning the viewport, channel
     // rail on the left, console on the right. No prose anywhere.
-    <div className='flex min-h-0 flex-1 flex-col gap-3 lg:flex-row'>
+    <div className={cn('flex min-h-0 flex-1 flex-col gap-3', hideChannelList ? '' : 'lg:flex-row')}>
+      {!hideChannelList && (
       <aside className='flex shrink-0 flex-col gap-2 rounded-xl bg-video-surface p-2.5 text-video-chrome-foreground lg:w-52'>
         <div className='flex items-center justify-between px-1 text-xs font-medium text-video-chrome-foreground/80'>
           <span>通道</span>
@@ -443,12 +477,7 @@ function Workspace({
             <Button
               key={channel.id}
               variant='ghost'
-              onClick={() => {
-                setChannelID(channel.id)
-                setSelected(null)
-                setView(null)
-                setBracket(null)
-              }}
+              onClick={() => selectChannel(channel)}
               className={cn(
                 'h-8 w-full justify-start truncate px-2 text-left text-sm font-normal text-video-chrome-foreground hover:bg-white/10 hover:text-video-chrome-foreground',
                 channel.id === channelID && 'bg-white/15 font-medium'
@@ -466,10 +495,11 @@ function Workspace({
           <Link to='/live'>返回实时预览</Link>
         </Button>
       </aside>
+      )}
       <section className='flex min-h-0 min-w-0 flex-1 flex-col gap-2'>
         {/* The console: search rides INSIDE the dark surface as one slim
             toolbar — dates, search, quick ranges, no visible labels. */}
-        <div className='flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-video-border bg-video-surface text-video-chrome-foreground shadow-sm'>
+        <div data-testid='playback-console' className='flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-video-border bg-video-surface text-video-chrome-foreground shadow-sm'>
           <form
             className='flex flex-wrap items-center gap-1.5 border-b border-video-border px-3 py-2'
             title={`时间按站点时区 ${zone} 填写与显示，单次检索不超过 31 天`}

@@ -22,17 +22,9 @@ afterEach(() => {
 })
 
 const CH = '00000000-0000-4000-8000-000000000001'
+const CH2 = '00000000-0000-4000-8000-000000000002'
 
-// One entry holds both views: the tab strip must switch between them without
-// losing the channel and time context the other view is looking at.
-test('the recordings entry switches between playback and file management', async () => {
-  useAuthStore.getState().setUser({
-    id: 'admin',
-    username: 'admin',
-    role: 'admin',
-    enabled: true,
-    version: 1,
-  })
+function mockCommon() {
   calls.request.mockImplementation(async (path: string) => {
     if (path === '/api/v1/channels?limit=100')
       return {
@@ -41,6 +33,15 @@ test('the recordings entry switches between playback and file management', async
             id: CH,
             channel_no: 1,
             channel_name: '大门',
+            channel_group: '',
+            enabled: true,
+            version: 1,
+            permissions: ['playback'],
+          },
+          {
+            id: CH2,
+            channel_no: 2,
+            channel_name: '仓库',
             channel_group: '',
             enabled: true,
             version: 1,
@@ -61,14 +62,14 @@ test('the recordings entry switches between playback and file management', async
       }
     if (path.startsWith('/api/v1/recordings/stats'))
       return {
-        segments: 0,
-        ready: 0,
-        anomalous: 0,
-        protected: 0,
-        deleted: 0,
-        duration_ms: 0,
-        logical_bytes: 0,
-        deleted_bytes: 0,
+        segments: 42,
+        ready: 40,
+        anomalous: 2,
+        protected: 4,
+        deleted: 1,
+        duration_ms: 9_600_000,
+        logical_bytes: 8 * 1024 * 1024 * 1024,
+        deleted_bytes: 256 * 1024 * 1024,
         oldest_start: null,
         newest_end: null,
       }
@@ -80,8 +81,52 @@ test('the recordings entry switches between playback and file management', async
       return { items: [], next_cursor: null }
     throw new Error('Unexpected query ' + path)
   })
-  // The playback panel links back to the live page, so the workspace needs a
-  // router in scope even when the management tab is the one selected.
+}
+
+// The workspace is one dark surface: the channels rail, the playback console
+// and the file panel all live side by side without a tab switch in between.
+test('the recordings workspace renders channels, playback and the file panel side by side', async () => {
+  useAuthStore.getState().setUser({
+    id: 'admin',
+    username: 'admin',
+    role: 'admin',
+    enabled: true,
+    version: 1,
+  })
+  mockCommon()
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const route = createRootRoute({
+    component: () => (
+      <QueryClientProvider client={client}>
+        <RecordingsWorkspace initialChannel={CH} />
+      </QueryClientProvider>
+    ),
+  })
+  const router = createRouter({
+    routeTree: route,
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+  })
+  const view = await render(<RouterProvider router={router} />)
+  await expect.element(view.getByRole('heading', { name: '录像' })).toBeVisible()
+  await expect.element(view.getByTestId('channels-rail')).toBeVisible()
+  await expect.element(view.getByRole('button', { name: 'CH01 大门' })).toBeVisible()
+  await expect.element(view.getByTestId('playback-console')).toBeVisible()
+  await expect.element(view.getByTestId('files-panel')).toBeVisible()
+  // No tab role is rendered any more; the previous entry split is gone.
+  expect(view.getByRole('tab').query()).toBeNull()
+})
+
+// Legacy deep links like /recordings?tab=files still resolve, even though the
+// URL parameter no longer drives a tab; the page must not throw or refuse.
+test('a legacy ?tab=files deep link still mounts the workspace', async () => {
+  useAuthStore.getState().setUser({
+    id: 'admin',
+    username: 'admin',
+    role: 'admin',
+    enabled: true,
+    version: 1,
+  })
+  mockCommon()
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const route = createRootRoute({
     component: () => (
@@ -92,29 +137,73 @@ test('the recordings entry switches between playback and file management', async
   })
   const router = createRouter({
     routeTree: route,
+    history: createMemoryHistory({ initialEntries: ['/?tab=files'] }),
+  })
+  const view = await render(<RouterProvider router={router} />)
+  await expect.element(view.getByTestId('files-panel')).toBeVisible()
+})
+
+// Selecting a different channel from the rail updates the URL state and is
+// reflected in the playback region.
+test('clicking a channel in the rail switches the active channel', async () => {
+  useAuthStore.getState().setUser({
+    id: 'admin',
+    username: 'admin',
+    role: 'admin',
+    enabled: true,
+    version: 1,
+  })
+  mockCommon()
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const route = createRootRoute({
+    component: () => (
+      <QueryClientProvider client={client}>
+        <RecordingsWorkspace initialChannel={CH} />
+      </QueryClientProvider>
+    ),
+  })
+  const router = createRouter({
+    routeTree: route,
     history: createMemoryHistory({ initialEntries: ['/'] }),
   })
   const view = await render(<RouterProvider router={router} />)
-  await expect.element(view.getByRole('heading', { name: '录像' })).toBeVisible()
-  const tabs = view.getByRole('tab')
-  await expect.element(tabs).toHaveLength(2)
-  // The deep link selected the management tab; the channel it carried is the
-  // one that tab is filtering on.
   await expect
-    .element(view.getByRole('tab', { name: '录像管理' }))
-    .toHaveAttribute('aria-selected', 'true')
+    .element(view.getByRole('button', { name: 'CH01 大门' }))
+    .toHaveAttribute('aria-pressed', 'true')
+  await userEvent.click(view.getByRole('button', { name: 'CH02 仓库' }))
   await expect
-    .element(view.getByRole('tab', { name: '回放' }))
-    .toHaveAttribute('aria-selected', 'false')
-  await userEvent.click(view.getByRole('tab', { name: '回放' }))
-  await expect
-    .element(view.getByRole('tab', { name: '回放' }))
-    .toHaveAttribute('aria-selected', 'true')
-  // Both panels stay mounted so switching cannot discard loaded data; the
-  // inactive one is hidden rather than unmounted, so it leaves the
-  // accessibility tree while its queries and selection survive.
-  const panels = document.querySelectorAll('[role="tabpanel"]')
-  expect(panels).toHaveLength(2)
-  expect((panels[0] as HTMLElement).hidden).toBe(false)
-  expect((panels[1] as HTMLElement).hidden).toBe(true)
+    .element(view.getByRole('button', { name: 'CH02 仓库' }))
+    .toHaveAttribute('aria-pressed', 'true')
+})
+
+// The right panel is admin-only: a viewer must not see file management even
+// if they have playback permission.
+test('a non-admin viewer does not see the file panel', async () => {
+  useAuthStore.getState().setUser({
+    id: 'op',
+    username: 'operator',
+    role: 'operator',
+    enabled: true,
+    version: 1,
+  })
+  mockCommon()
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const route = createRootRoute({
+    component: () => (
+      <QueryClientProvider client={client}>
+        <RecordingsWorkspace initialChannel={CH} />
+      </QueryClientProvider>
+    ),
+  })
+  const router = createRouter({
+    routeTree: route,
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+  })
+  const view = await render(<RouterProvider router={router} />)
+  await expect.element(view.getByTestId('channels-rail')).toBeVisible()
+  await expect.element(view.getByTestId('playback-console')).toBeVisible()
+  // No file panel and no toggle button for non-admins; the third grid column
+  // is dropped entirely instead of being hidden behind closed state.
+  expect(view.getByTestId('files-panel').query()).toBeNull()
+  expect(view.getByLabelText('展开文件面板').query()).toBeNull()
 })
