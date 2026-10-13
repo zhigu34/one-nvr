@@ -580,6 +580,43 @@ return (
               playsInline
               className='absolute inset-0 h-full w-full bg-black object-contain'
             />
+            {/* Top-OSD metadata strip: channel + media facts the operator reads
+                at a glance, the same way the live feature does. Backed by
+                the segment currently loaded for playback; shows the channel
+                pill alone when idle. */}
+            <div
+              data-testid='playback-frame-osd'
+              className='pointer-events-none absolute inset-x-0 top-0 flex flex-wrap items-center gap-1.5 p-3'
+            >
+              {active && (
+                <span className='rounded-md border border-white/15 bg-black/55 px-2 py-0.5 text-[11px] text-white shadow-sm backdrop-blur'>
+                  CH{String(active.channel_no).padStart(2, '0')} {active.channel_name}
+                </span>
+              )}
+              {state.entry?.media && state.entry.media.width > 0 && (
+                <span className='rounded-md border border-white/15 bg-black/55 px-2 py-0.5 text-[11px] tabular-nums text-white/85 shadow-sm backdrop-blur'>
+                  {state.entry.media.width}×{state.entry.media.height}
+                </span>
+              )}
+              {state.entry?.media?.fps ? (
+                <span className='rounded-md border border-white/15 bg-black/55 px-2 py-0.5 text-[11px] tabular-nums text-white/85 shadow-sm backdrop-blur'>
+                  {Math.round(state.entry.media.fps)}fps
+                </span>
+              ) : null}
+              {state.entry?.media?.codec ? (
+                <span className='rounded-md border border-white/15 bg-black/55 px-2 py-0.5 text-[11px] uppercase text-white/85 shadow-sm backdrop-blur'>
+                  {state.entry.media.codec}
+                </span>
+              ) : null}
+              {state.entry && (
+                <span
+                  title='本回放不经转码'
+                  className='rounded-md border border-emerald-400/40 bg-emerald-400/15 px-2 py-0.5 text-[11px] text-emerald-300 shadow-sm backdrop-blur'
+                >
+                  直通
+                </span>
+              )}
+            </div>
             {/* Idle placeholder: a clear "waiting for the operator" cue lives
                 inside the same frame as the video, so the OSD bar below it
                 always reads as a control bar over a real picture rather than

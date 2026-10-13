@@ -17,6 +17,9 @@ export type Entry = {
   checkState: string
   /** Empty when the segment can be served, otherwise the reason it cannot. */
   blocked: string
+  /** Carried for the player-frame metadata pills; optional because the
+   *  placement in this view can be built without it. */
+  media?: Segment['media']
 }
 
 /** Time with no indexed segment at all. A damaged segment is not a gap. */
@@ -73,6 +76,7 @@ export function buildTimeline(
       state: segment.state,
       checkState: segment.check_state,
       blocked: blockedReason(segment),
+      media: segment.media,
     }))
     .filter((entry) => Number.isFinite(entry.start) && entry.end > entry.start)
     .sort(
