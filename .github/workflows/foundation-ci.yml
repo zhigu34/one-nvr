@@ -267,20 +267,23 @@ jobs:
           echo "::error title=Mosquitto ownership measurements::${flat}"
 
           fail=0
+          # Assertions read the flattened form, the same text the annotation
+          # carries. Comparing the raw report here would silently never match a
+          # line boundary and fail a correct product.
           # The hazard must be real: a broker-owned file read by root warns.
-          case "$report" in
+          case "$flat" in
             *"owner is not root"*) ;;
             *) echo "stage 1 produced no ownership warning; the hazard this guards against is not being exercised" >&2; fail=1 ;;
           esac
           # The handoff must fix it: silent conversion from a root-owned file.
-          case "$report" in
-            *"stage2_warned= |"*|*"stage2_warned=| |"*) ;;
-            *) echo "stage 2 was not silent: $(printf "%s" "$report" | tr "|" "\n" | grep stage2_warned)" >&2; fail=1 ;;
+          case "$flat" in
+            *"stage2_warned= |"*|*"stage2_warned=| "*) ;;
+            *) echo "stage 2 was not silent: $(printf "%s" "$flat" | tr "|" "\n" | grep stage2_warned)" >&2; fail=1 ;;
           esac
           # ...and the file must end up owned by the broker user again.
-          case "$report" in
+          case "$flat" in
             *"stage2_after=-rw------- 1883 1883"*) ;;
-            *) echo "stage 2 did not end broker-owned: $(printf "%s" "$report" | tr "|" "\n" | grep stage2_after)" >&2; fail=1 ;;
+            *) echo "stage 2 did not end broker-owned: $(printf "%s" "$flat" | tr "|" "\n" | grep stage2_after)" >&2; fail=1 ;;
           esac
           if [ "$fail" = "1" ]; then exit 1; fi
           printf 'Mosquitto conversion ownership PASS\n'
