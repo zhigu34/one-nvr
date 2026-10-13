@@ -54,11 +54,41 @@ jobs:
           python3 -m unittest discover -s deploy/production/tests -v
           sh -n deploy/production/web-tool.sh
       - name: Go unit race tests
-        run: ./deploy/production/dev.sh test-go -race ./internal/... ./cmd/... ./migrations
+        run: |
+          # CI logs are not readable without authentication, so a failure here
+          # must publish its own diagnostics as an annotation. Without this the
+          # only visible signal is "exit code 1".
+          set +e
+          out=$(./deploy/production/dev.sh test-go -race ./internal/... ./cmd/... ./migrations 2>&1)
+          status=$?
+          printf '%s\n' "$out"
+          if [ $status -ne 0 ]; then
+            summary=$(printf '%s' "$out" | grep -E "FAIL|--- FAIL|build failed|cannot|error:" | head -12 | tr "\n" "|")
+            echo "::error title=Go unit race tests failed::${summary}"
+          fi
+          exit $status
       - name: PostgreSQL 17.11 integration race tests
-        run: ./deploy/production/dev.sh test-db -race -timeout 20m ./tests/integration
+        run: |
+          set +e
+          out=$(./deploy/production/dev.sh test-db -race -timeout 20m ./tests/integration 2>&1)
+          status=$?
+          printf '%s\n' "$out"
+          if [ $status -ne 0 ]; then
+            summary=$(printf '%s' "$out" | grep -E "FAIL|--- FAIL|build failed|cannot|error:" | head -12 | tr "\n" "|")
+            echo "::error title=Integration race tests failed::${summary}"
+          fi
+          exit $status
       - name: Vet
-        run: docker compose -p one-nvr-dev -f deploy/production/compose.test.yaml run --rm go go vet ./...
+        run: |
+          set +e
+          out=$(docker compose -p one-nvr-dev -f deploy/production/compose.test.yaml run --rm go go vet ./... 2>&1)
+          status=$?
+          printf '%s\n' "$out"
+          if [ $status -ne 0 ]; then
+            summary=$(printf '%s' "$out" | head -12 | tr "\n" "|")
+            echo "::error title=go vet failed::${summary}"
+          fi
+          exit $status
       - name: Cleanup development containers
         if: always()
         run: docker compose -p one-nvr-dev -f deploy/production/compose.test.yaml down --volumes --remove-orphans

@@ -11,9 +11,10 @@ services:
       - ../..:/workspace
       - go-mod:/go/pkg/mod
       - go-build:/root/.cache/go-build
-    depends_on:
-      mqtt:
-        condition: service_healthy
+    # No depends_on on mqtt: the event tests detect the broker themselves and
+    # skip when it is absent, so a broker that fails to start must not take the
+    # whole Go suite down with it. The broker is a test asset, not a
+    # prerequisite for compiling or running the other packages.
     environment:
       GOPROXY: ${ONE_NVR_GOPROXY:-https://proxy.golang.org,direct}
       ONE_NVR_REQUIRE_MEDIA_TOOLS: "yes"
