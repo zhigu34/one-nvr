@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { eventMarks, eventWindowSize, markLabel, wouldCollide } from './event-marks'
+import { clusterMarks, eventMarks, eventWindowSize, markLabel } from './event-marks'
 import type { Schema } from '@/lib/types'
 
 const base = Date.parse('2026-10-05T00:00:00Z')
@@ -68,20 +68,58 @@ describe('eventMarks', () => {
 })
 
 describe('eventWindowSize', () => {
-  test('clamps the query window to a day ending now', () => {
+  test('covers the whole view window up to now', () => {
     const now = Date.now()
-    const { start, end } = eventWindowSize(now - 30 * 86_400_000, now + 1000)
-    expect(end - start).toBeLessThanOrEqual(86_400_000)
+    const { start, end } = eventWindowSize(now - 3 * 86_400_000, now + 1000)
     expect(end).toBeLessThanOrEqual(now + 1000)
+    expect(end - start).toBeGreaterThan(3 * 86_400_000 - 60_000)
+  })
+
+  test('clamps to the events index retention', () => {
+    const now = Date.now()
+    const { start, end } = eventWindowSize(now - 200 * 86_400_000, now)
+    expect(end - start).toBeLessThanOrEqual(90 * 86_400_000)
   })
 })
 
-describe('wouldCollide', () => {
-  test('two marks closer than the minimum pixel width collide', () => {
-    const from = 0
-    const span = 1000
-    expect(wouldCollide({ at: 0 }, { at: 4 }, from, span, 100, 5)).toBe(true)
-    expect(wouldCollide({ at: 0 }, { at: 100 }, from, span, 100, 5)).toBe(false)
+describe('clusterMarks', () => {
+  // Offsets are milliseconds from `base`, matching the 1000ms window below.
+  const marks = (offsetsMs: number[]) =>
+    offsetsMs.map((offset, index) => ({
+      id: `e${index}`,
+      at: base + offset,
+      end: base + offset + 1,
+      category: 'person',
+      score: 0.5 + index / 100,
+      handleState: 'open',
+    }))
+
+  test('marks within the pixel minimum fold into one cluster', () => {
+    // 1000ms span on 100px: 1ms == 0.1px, so 4ms apart (0.4px) folds at min 5px.
+    const clustered = clusterMarks(marks([0, 4]), base, base + 1000, 100, 5)
+    expect(clustered).toHaveLength(1)
+    expect(clustered[0].count).toBe(2)
+  })
+
+  test('marks far enough apart stay separate', () => {
+    const clustered = clusterMarks(marks([0, 500]), base, base + 1000, 100, 5)
+    expect(clustered).toHaveLength(2)
+  })
+
+  test('a cluster keeps the highest score and the widest end', () => {
+    const clustered = clusterMarks(
+      [
+        { id: 'a', at: base, end: base + 10, category: 'car', score: 0.9, handleState: 'open' },
+        { id: 'b', at: base + 1, end: base + 12, category: 'person', score: 0.6, handleState: 'open' },
+      ],
+      base,
+      base + 1000,
+      100,
+      5
+    )
+    expect(clustered).toHaveLength(1)
+    expect(clustered[0].category).toBe('car')
+    expect(clustered[0].end).toBe(base + 12)
   })
 })
 

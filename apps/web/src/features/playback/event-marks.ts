@@ -66,35 +66,55 @@ export function markLabel(category: string): string {
   return MARK_LABELS[category] || category || '事件'
 }
 
-/** True when the two marks would collide below the given pixel width. */
-export function wouldCollide(
-  a: { at: number },
-  b: { at: number },
+/**
+ * Merges marks that would overlap on a strip of `widthPx` pixels into
+ * clusters, so three days of events render as a readable scatter instead of
+ * one solid smear. Each cluster keeps its newest member's position and folds
+ * the rest into a count the tooltip reports.
+ */
+export function clusterMarks(
+  marks: EventMark[],
   from: number,
-  span: number,
+  to: number,
   widthPx: number,
-  minPx: number
-): boolean {
-  if (span <= 0 || widthPx <= 0) return false
-  const posA = ((a.at - from) / span) * widthPx
-  const posB = ((b.at - from) / span) * widthPx
-  return Math.abs(posB - posA) < minPx
+  minPx = 8
+): (EventMark & { count: number })[] {
+  if (to <= from || widthPx <= 0) return []
+  const pxPerMs = widthPx / (to - from)
+  const clusters: (EventMark & { count: number })[] = []
+  for (const mark of marks) {
+    const last = clusters[clusters.length - 1]
+    if (
+      last &&
+      ((mark.at - last.at) * pxPerMs < minPx ||
+        last.at === mark.at)
+    ) {
+      last.count++
+      if (mark.score > last.score) {
+        last.score = mark.score
+        last.category = mark.category
+      }
+      last.end = Math.max(last.end, mark.end)
+    } else {
+      clusters.push({ ...mark, count: 1 })
+    }
+  }
+  return clusters
 }
 
 /**
- * The densest useful window for the event query. The timeline span can be a
- * month but the events endpoint is built for recent activity; the page asks
- * for the view window clamped to a day so the track stays honest about what a
- * bounded query returns.
+ * The event query window: the timeline's own view window, clamped to now and
+ * to the events index' 90-day retention. The track then covers whatever the
+ * operator is actually looking at, not just the newest day.
  */
 export function eventWindowSize(
   viewStart: number,
   viewEnd: number
 ): { start: number; end: number } {
-  const DAY = 86_400_000
+  const RETENTION = 90 * 86_400_000
   const now = Date.now()
   const end = Math.min(viewEnd, now)
-  const start = Math.max(viewStart, end - DAY)
+  const start = Math.max(viewStart, end - RETENTION)
   return { start, end }
 }
 

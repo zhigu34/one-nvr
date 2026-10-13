@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from 'react'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
@@ -35,11 +35,12 @@ import {
   formatDuration,
   buildTicks,
   sliceView,
+  snapToPlayable,
   zoomView,
   type Entry,
   type Timeline,
 } from './timeline'
-import { eventMarks, eventWindowSize, markLabel } from './event-marks'
+import { clusterMarks, eventMarks, eventWindowSize, markLabel } from './event-marks'
 import {
   formatClock,
   parseWallClock,
@@ -252,6 +253,12 @@ function Workspace({
     () => sliceView(timeline, viewBounds.start, viewBounds.end),
     [timeline, viewBounds]
   )
+  // Minimap coverage over the whole search range, merged and bucketed coarsely
+  // (the rail is ~120 buckets regardless of zoom).
+  const fullDensity = useMemo(
+    () => coverageDensity(timeline, 120),
+    [timeline]
+  )
   function zoomIn() {
     // Zoom around the playhead when it is inside the view, else around the
     // view center. Computed lazily: the playhead lives in state declared below.
@@ -272,6 +279,48 @@ function Workspace({
     const start = Math.max(range.start, viewBounds.start + shift)
     const end = Math.min(range.end, viewBounds.end + shift)
     setView({ start, end })
+  }
+  // Wheel zoom anchored at the pointer: the millisecond under the cursor
+  // stays under it, the way every map and NVR timeline zooms.
+  function zoomAt(anchor: number, factor: number) {
+    const span = (viewBounds.end - viewBounds.start) * factor
+    const minSpan = 60_000
+    if (span < minSpan) {
+      const center = anchor
+      setView({
+        start: Math.max(range.start, center - minSpan / 2),
+        end: Math.min(range.end, center + minSpan / 2),
+      })
+      return
+    }
+    const ratio = (anchor - viewBounds.start) / (viewBounds.end - viewBounds.start)
+    let start = anchor - ratio * span
+    let end = start + span
+    if (start < range.start) {
+      end += range.start - start
+      start = range.start
+    }
+    if (end > range.end) {
+      start = Math.max(range.start, start - (end - range.end))
+      end = range.end
+    }
+    setView(start <= range.start && end >= range.end ? null : { start, end })
+  }
+  // The minimap viewport slides across the whole range; dragging it pans the
+  // detailed strip without touching the playhead.
+  function moveViewTo(center: number) {
+    const span = viewBounds.end - viewBounds.start
+    let start = center - span / 2
+    let end = center + span / 2
+    if (start < range.start) {
+      end += range.start - start
+      start = range.start
+    }
+    if (end > range.end) {
+      start = Math.max(range.start, start - (end - range.end))
+      end = range.end
+    }
+    setView(start <= range.start && end >= range.end ? null : { start, end })
   }
   const video = useRef<HTMLVideoElement>(null)
   const frame = useRef<HTMLDivElement>(null)
@@ -519,9 +568,11 @@ function Workspace({
               )}
             >
               <Button
-                size='sm'
+                size='icon'
                 variant='ghost'
-                className='text-white hover:bg-white/15 hover:text-white'
+                className='size-8 text-white hover:bg-white/15 hover:text-white'
+                aria-label={state.phase === 'playing' ? '暂停' : '播放'}
+                title={state.phase === 'playing' ? '暂停' : '播放'}
                 onClick={() =>
                   state.phase === 'playing'
                     ? controller.current?.pause()
@@ -534,39 +585,43 @@ function Workspace({
                 ) : (
                   <Play size={16} />
                 )}
-                {state.phase === 'playing' ? '暂停' : '播放'}
               </Button>
               <Button
-                size='sm'
+                size='icon'
                 variant='ghost'
-                className='text-white hover:bg-white/15 hover:text-white'
+                className='size-8 text-white hover:bg-white/15 hover:text-white'
+                aria-label='-10 秒'
+                title='-10 秒'
                 onClick={() => controller.current?.shift(-10)}
               >
                 <RotateCcw size={16} />
-                -10 秒
               </Button>
               <Button
-                size='sm'
+                size='icon'
                 variant='ghost'
-                className='text-white hover:bg-white/15 hover:text-white'
+                className='size-8 text-white hover:bg-white/15 hover:text-white'
+                aria-label='+10 秒'
+                title='+10 秒'
                 onClick={() => controller.current?.shift(10)}
               >
                 <RotateCcw size={16} className='scale-x-[-1]' />
-                +10 秒
               </Button>
               <Button
-                size='sm'
+                size='icon'
                 variant='ghost'
-                className='text-white hover:bg-white/15 hover:text-white'
+                className='size-8 text-white hover:bg-white/15 hover:text-white'
+                aria-label='下一可用片段'
+                title='下一可用片段'
                 onClick={() => controller.current?.jumpToNext()}
               >
                 <SkipForward size={16} />
-                下一可用片段
               </Button>
               <Button
-                size='sm'
+                size='icon'
                 variant='ghost'
-                className='text-white hover:bg-white/15 hover:text-white'
+                className='size-8 text-white hover:bg-white/15 hover:text-white'
+                aria-label='停止'
+                title='停止'
                 onClick={() => {
                   // Release the playback lease before the controller drops the
                   // segment, so cleanup never waits on a stopped viewer.
@@ -578,21 +633,20 @@ function Workspace({
                 }}
               >
                 <Square size={16} />
-                停止
               </Button>
               <Button
-                size='sm'
+                size='icon'
                 variant='ghost'
-                className='text-white hover:bg-white/15 hover:text-white'
+                className='size-8 text-white hover:bg-white/15 hover:text-white'
+                aria-label='放大'
+                title='放大'
                 onClick={() =>
                   void frame.current?.requestFullscreen().catch(() => {})
                 }
               >
                 <Maximize size={16} />
-                放大
               </Button>
-              <div className='flex items-center gap-2 text-xs text-white/90'>
-                <span>倍速</span>
+              <div className='flex items-center gap-1.5 text-xs text-white/90'>
                 <SelectField
                   ariaLabel='播放倍速'
                   size='sm'
@@ -611,17 +665,25 @@ function Workspace({
               <Button
                 size='sm'
                 variant='ghost'
-                className='ml-auto text-white hover:bg-white/15 hover:text-white'
+                className='ml-auto h-8 text-white hover:bg-white/15 hover:text-white'
+                aria-label={
+                  selected
+                    ? selected.blocked
+                      ? '从下一可用片段开始播放'
+                      : '从此片段开始播放'
+                    : '播放首个可用片段'
+                }
                 onClick={() =>
                   startTarget && controller.current?.start(startTarget.start)
                 }
                 disabled={!startTarget}
               >
+                <Play size={14} />
                 {selected
                   ? selected.blocked
-                    ? '从下一可用片段开始播放'
-                    : '从此片段开始播放'
-                  : '播放首个可用片段'}
+                    ? '下一可用'
+                    : '播放此段'
+                  : '播放'}
               </Button>
             </div>
           </div>
@@ -737,6 +799,11 @@ function Workspace({
             pickMode={pickMode}
             bracket={pickMode ? bracket : null}
             channelID={channelID}
+            fullRange={range}
+            viewBounds={viewBounds}
+            fullDensity={fullDensity}
+            onZoomAt={zoomAt}
+            onMoveView={moveViewTo}
             onPick={(at) => {
               setBracket((current) => {
                 if (!current) return { start: at, end: at }
@@ -749,7 +816,10 @@ function Workspace({
               })
             }}
             onSelect={setSelected}
-            onSeek={(at) => controller.current?.seek(at)}
+            onSeek={(at) => {
+              const snap = snapToPlayable(timeline, at)
+              controller.current?.seek(snap.at)
+            }}
             onPlay={(entry) => {
               setSelected(entry)
               controller.current?.start(entry.start)
@@ -842,6 +912,11 @@ function Timeline({
   pickMode,
   bracket,
   channelID,
+  fullRange,
+  viewBounds,
+  fullDensity,
+  onZoomAt,
+  onMoveView,
   onPick,
   onSelect,
   onSeek,
@@ -855,6 +930,11 @@ function Timeline({
   pickMode: boolean
   bracket: { start: number; end: number } | null
   channelID: string
+  fullRange: { start: number; end: number }
+  viewBounds: { start: number; end: number }
+  fullDensity: ReturnType<typeof coverageDensity>
+  onZoomAt: (anchor: number, factor: number) => void
+  onMoveView: (center: number) => void
   onPick: (at: number) => void
   onSelect: (entry: Entry) => void
   onSeek: (at: number) => void
@@ -908,6 +988,12 @@ function Timeline({
     () => eventMarks(eventsQuery.data?.items || [], timeline.from, timeline.to),
     [eventsQuery.data, timeline.from, timeline.to]
   )
+  // Pixel clustering keeps three days of events a readable scatter: marks
+  // closer than 8px fold into one dot whose tooltip reports the count.
+  const clusters = useMemo(
+    () => clusterMarks(marks, timeline.from, timeline.to, stripWidth),
+    [marks, timeline.from, timeline.to, stripWidth]
+  )
   const position = (at: number) =>
     `${Math.min(Math.max(((at - timeline.from) / span) * 100, 0), 100)}%`
   function scrubTo(clientX: number) {
@@ -950,20 +1036,79 @@ function Timeline({
       </p>
     )
   }
+  // Wheel zoom anchored under the pointer; shift+wheel pans like a map.
+  function onWheel(event: ReactWheelEvent<HTMLElement>) {
+    event.preventDefault()
+    const box = strip.current?.getBoundingClientRect()
+    if (!box || !box.width) return
+    const at = timeline.from + ((event.clientX - box.left) / box.width) * span
+    if (event.shiftKey) {
+      const direction = event.deltaY > 0 ? 1 : -1
+      onMoveView(at + direction * span * 0.25)
+    } else {
+      onZoomAt(at, event.deltaY > 0 ? 1.4 : 1 / 1.4)
+    }
+  }
+  const fullSpan = fullRange.end - fullRange.start
+  function minimapPointer(event: ReactPointerEvent<HTMLElement>) {
+    const box = event.currentTarget.getBoundingClientRect()
+    if (!box.width || fullSpan <= 0) return
+    onMoveView(fullRange.start + ((event.clientX - box.left) / box.width) * fullSpan)
+  }
   return (
     <div className='space-y-1 px-3 pb-3 pt-2'>
+      {/* Minimap: the whole search range's coverage with the current viewport
+          outlined. Drag anywhere to slide the view — the UniFi-style answer to
+          navigating a three-day window without twenty pan clicks. */}
+      <div
+        aria-hidden
+        data-testid='playback-minimap'
+        className='relative h-2.5 cursor-pointer overflow-hidden rounded bg-white/5'
+        onPointerDown={(event) => {
+          event.currentTarget.setPointerCapture(event.pointerId)
+          minimapPointer(event)
+        }}
+        onPointerMove={(event) => {
+          if (event.buttons & 1) minimapPointer(event)
+        }}
+      >
+        {fullDensity.map((bucket, index) => {
+          const ratio = bucket.to > bucket.from ? bucket.coveredMs / (bucket.to - bucket.from) : 0
+          if (ratio <= 0) return null
+          return (
+            <div
+              key={index}
+              className='absolute bottom-0 top-0 bg-emerald-500/40'
+              style={{
+                left: `${((bucket.from - fullRange.start) / fullSpan) * 100}%`,
+                width: `calc(${((bucket.to - fullRange.start) / fullSpan) * 100}% - ${((bucket.from - fullRange.start) / fullSpan) * 100}%)`,
+                minWidth: '2px',
+              }}
+            />
+          )
+        })}
+        {!viewIsFull && (
+          <div
+            className='absolute bottom-0 top-0 border-x border-primary bg-primary/20'
+            style={{
+              left: `${((viewBounds.start - fullRange.start) / fullSpan) * 100}%`,
+              width: `${((viewBounds.end - viewBounds.start) / fullSpan) * 100}%`,
+            }}
+          />
+        )}
+      </div>
       {/* Event track: a slim rail above the strip. Its markers are display
           only; seeking to an event goes through the strip below. */}
-      {marks.length > 0 && (
+      {clusters.length > 0 && (
         <div
           aria-hidden
           data-testid='playback-events-track'
           className='relative h-3 rounded-md bg-white/5'
         >
-          {marks.map((mark) => (
+          {clusters.map((mark) => (
             <span
               key={mark.id}
-              title={`${markLabel(mark.category)} · ${formatClock(mark.at, zone)} · ${Math.round(mark.score * 100)}%`}
+              title={`${markLabel(mark.category)}${mark.count > 1 ? ` ×${mark.count}` : ''} · ${formatClock(mark.at, zone)} · ${Math.round(mark.score * 100)}%`}
               className={cn(
                 'absolute top-1/2 size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full',
                 mark.handleState === 'open'
@@ -1000,6 +1145,7 @@ function Timeline({
         }}
         onPointerLeave={hideHover}
         onPointerUp={() => setScrubbing(false)}
+        onWheel={onWheel}
       >
         {/* Coverage density: one bar per bucket, height = covered fraction.
             It reads as recording intensity without one DOM node per segment. */}

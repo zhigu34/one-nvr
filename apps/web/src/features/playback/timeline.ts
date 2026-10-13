@@ -118,6 +118,38 @@ export function entryAt(timeline: Timeline, at: number): Entry | null {
   )
 }
 
+/**
+ * The playable moment a click or a released scrub lands on. A point inside a
+ * playable segment stays put; a point in a gap snaps to the nearest playable
+ * edge — left or right, whichever is closer, capped at one gap-width away.
+ * UniFi-style timelines never dump the operator into a dead hole and make
+ * them hunt for a jump button; the seek itself navigates.
+ */
+export function snapToPlayable(
+  timeline: Timeline,
+  at: number
+): { at: number; entry: Entry | null } {
+  const containing = entryAt(timeline, at)
+  if (containing) return { at, entry: containing }
+  if (!timeline.entries.length) return { at, entry: null }
+  const playable = timeline.entries.filter((entry) => !entry.blocked)
+  if (!playable.length) return { at, entry: null }
+  const before = [...playable]
+    .reverse()
+    .find((entry) => entry.end <= at)
+  const after = playable.find((entry) => entry.start >= at)
+  if (before && after) {
+    const toBefore = at - before.end
+    const toAfter = after.start - at
+    return toBefore <= toAfter
+      ? { at: before.end - 1, entry: before }
+      : { at: after.start, entry: after }
+  }
+  if (before) return { at: before.end - 1, entry: before }
+  if (after) return { at: after.start, entry: after }
+  return { at, entry: null }
+}
+
 /** The first playable segment that extends past `after`. */
 export function nextPlayableEntry(
   timeline: Timeline,
