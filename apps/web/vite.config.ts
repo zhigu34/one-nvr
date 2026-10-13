@@ -44,7 +44,13 @@ export default defineConfig({
       enabled: true,
       screenshotFailures: false,
       provider: playwright(),
-      instances: [{ browser: 'chromium' }],
+      // Default to a desktop viewport so tests asserting on the wide-layout
+      // file panel (testid='files-panel') cover the same path the operator
+      // uses; the records-workspace vitest covers the narrow path separately
+      // where needed.
+      instances: [
+        { browser: 'chromium', viewport: { width: 1440, height: 900 } },
+      ],
     },
     coverage: {
       // include: ['src/**/*.{js,jsx,ts,tsx}'], // Uncomment to expand the report to all src/**/* so untested modules appear as 0% coverage.

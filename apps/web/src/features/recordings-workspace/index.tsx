@@ -1,14 +1,38 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useSyncExternalStore } from 'react'
 import { Filter, PanelRightClose, PanelRightOpen, Search } from 'lucide-react'
 import { useNavigate } from '@tanstack/react-router'
 import type { PageData, Schema } from '@/lib/types'
 import { useAPI } from '@/features/foundation/hooks'
 import { Empty, QueryState } from '@/features/foundation/ui'
 import { Input } from '@/components/ui/input'
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet'
 import { useAuthStore } from '@/stores/auth-store'
 import { Playback } from '@/features/playback'
 import { RecordingFiles } from '@/features/recording-files'
 import { cn } from '@/lib/utils'
+
+// The 3-column workspace needs at least 192 (rail) + ~640 (player) + 320
+// (files) + a couple of gaps to be useful; below that we drop the file rail
+// and surface it through a side Sheet so the playback keeps its full width.
+const NARROW_BREAKPOINT = 1023
+const NARROW_QUERY = `(max-width: ${NARROW_BREAKPOINT}px)`
+
+function useNarrowViewport() {
+  return useSyncExternalStore(
+    (callback) => {
+      const mql = window.matchMedia(NARROW_QUERY)
+      mql.addEventListener('change', callback)
+      return () => mql.removeEventListener('change', callback)
+    },
+    () => window.matchMedia(NARROW_QUERY).matches,
+    () => false
+  )
+}
 
 /**
  * Three-column workspace that unifies playback and file management: channels
@@ -49,6 +73,12 @@ export function RecordingsWorkspace({
     ''
   const channelID = resolvedID || fallbackID
   const [rightOpen, setRightOpen] = useState(true)
+  const [sheetOpen, setSheetOpen] = useState(false)
+  const narrow = useNarrowViewport()
+  // Resizing from wide → narrow leaves the rail half-collapsed; reset to
+  // expanded by default on the bigger layout, leave the Sheet closed on the
+  // smaller one. This avoids a flash of "panel showing partly" on resize.
+  const inlineFileVisible = !narrow && rightOpen
   function onChannelChange(next: string) {
     if (!next || next === channelID) return
     setResolvedID(next)
@@ -105,7 +135,10 @@ export function RecordingsWorkspace({
         segmentCount={stats.data?.segments}
         rightOpen={rightOpen}
         onToggleRight={() => setRightOpen((open) => !open)}
+        onOpenSheet={() => setSheetOpen(true)}
         showRightToggle={admin && !!activeChannel}
+        sheetTriggerLabel={narrow ? `查看文件（${stats.data?.segments ?? '…'} 段）` : undefined}
+        narrow={narrow}
       />
       {!channels.length && channelsQuery.data && (
         <Empty>没有可回放的通道，请联系管理员分配录像回放权限。</Empty>
@@ -114,9 +147,11 @@ export function RecordingsWorkspace({
         <div
           className='grid min-h-0 flex-1 gap-3 overflow-hidden'
           style={{
-            gridTemplateColumns: rightOpen
-              ? '192px minmax(0, 1fr) 320px'
-              : '192px minmax(0, 1fr) 56px',
+            gridTemplateColumns: narrow
+              ? '192px minmax(0, 1fr)'
+              : rightOpen
+                ? '192px minmax(0, 1fr) 320px'
+                : '192px minmax(0, 1fr) 56px',
             // An explicit row fraction lets each cell stretch to the grid's
             // own (flex-grown) height, not just the tallest content's. Without
             // this the central Playback column collapses to its content and
@@ -141,8 +176,8 @@ export function RecordingsWorkspace({
               active
             />
           </div>
-          {admin ? (
-            rightOpen ? (
+          {!narrow && admin ? (
+            inlineFileVisible ? (
               <div
                 data-testid='files-panel'
                 className='flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-video-border bg-video-surface-raised'
@@ -170,6 +205,33 @@ export function RecordingsWorkspace({
           ) : null}
         </div>
       )}
+      {/* On narrow viewports the file panel rides a side Sheet instead of
+          a third grid column. Mount the same panel as the wide layout uses
+          so the queries and filter state stay shared via React Query cache. */}
+      {narrow && admin && activeChannel && (
+        <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+          <SheetContent
+            side='right'
+            className='flex w-full flex-col gap-0 border-video-border bg-video-surface-raised p-0 text-video-chrome-foreground sm:max-w-sm'
+          >
+            <SheetHeader className='border-b border-video-border px-4 py-3'>
+              <SheetTitle className='text-sm font-semibold text-video-chrome-foreground'>
+                录像文件
+                {activeChannel
+                  ? ` · CH${String(activeChannel.channel_no).padStart(2, '0')} ${activeChannel.channel_name}`
+                  : ''}
+              </SheetTitle>
+            </SheetHeader>
+            <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
+              <RecordingFiles
+                controlledChannelId={channelID}
+                initialChannel={channelID}
+                active={sheetOpen}
+              />
+            </div>
+          </SheetContent>
+        </Sheet>
+      )}
     </div>
   )
 }
@@ -180,14 +242,20 @@ function WorkspaceHeader({
   segmentCount,
   rightOpen,
   onToggleRight,
+  onOpenSheet,
   showRightToggle,
+  sheetTriggerLabel,
+  narrow,
 }: {
   zone: string
   channel?: Schema<'Channel'>
   segmentCount?: number
   rightOpen: boolean
   onToggleRight: () => void
+  onOpenSheet: () => void
   showRightToggle: boolean
+  sheetTriggerLabel?: string
+  narrow: boolean
 }) {
   return (
     <header className='flex flex-wrap items-center gap-3 border-b border-video-border px-1 pb-2'>
@@ -208,16 +276,33 @@ function WorkspaceHeader({
             <Filter className='size-3' />
             文件 {segmentCount ?? '…'} 段
           </span>
-          <button
-            type='button'
-            aria-label={rightOpen ? '收起文件面板' : '展开文件面板'}
-            title={rightOpen ? '收起文件面板' : '展开文件面板'}
-            onClick={onToggleRight}
-            className='inline-flex h-8 items-center gap-1.5 rounded-md border border-video-border bg-video-surface-raised px-2 text-xs text-video-chrome-foreground hover:bg-white/10'
-          >
-            {rightOpen ? <PanelRightClose className='size-4' /> : <PanelRightOpen className='size-4' />}
-            {rightOpen ? '收起文件' : '文件'}
-          </button>
+          {narrow ? (
+            <button
+              type='button'
+              aria-label='查看文件'
+              title='查看文件'
+              onClick={onOpenSheet}
+              className='inline-flex h-8 items-center gap-1.5 rounded-md border border-video-border bg-video-surface-raised px-2 text-xs text-video-chrome-foreground hover:bg-white/10'
+            >
+              <PanelRightOpen className='size-4' />
+              {sheetTriggerLabel ?? '文件'}
+            </button>
+          ) : (
+            <button
+              type='button'
+              aria-label={rightOpen ? '收起文件面板' : '展开文件面板'}
+              title={rightOpen ? '收起文件面板' : '展开文件面板'}
+              onClick={onToggleRight}
+              className='inline-flex h-8 items-center gap-1.5 rounded-md border border-video-border bg-video-surface-raised px-2 text-xs text-video-chrome-foreground hover:bg-white/10'
+            >
+              {rightOpen ? (
+                <PanelRightClose className='size-4' />
+              ) : (
+                <PanelRightOpen className='size-4' />
+              )}
+              {rightOpen ? '收起文件' : '文件'}
+            </button>
+          )}
         </div>
       )}
     </header>
