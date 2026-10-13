@@ -1234,9 +1234,13 @@ function Timeline({
           <div
             data-testid='playback-bracket'
             aria-label='导出区间'
-            className='pointer-events-none absolute top-0 bottom-0 border-x-2 border-sky-400 bg-sky-400/25'
+            className='pointer-events-none absolute top-0 bottom-0 border-x-2 border-amber-400 bg-amber-400/20 shadow-[0_0_18px_rgba(251,191,36,0.18)]'
             style={{ left: position(bracket.start), width: `calc(${position(bracket.end)} - ${position(bracket.start)})` }}
-          />
+          >
+            <span className='absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap rounded border border-amber-400/60 bg-amber-400 px-2 py-0.5 text-[10.5px] font-semibold text-amber-950 shadow-md'>
+              选区 · {formatDuration(bracket.end - bracket.start)} · 用于导出
+            </span>
+          </div>
         )}
         {ticks.map((tick) => (
           <div
