@@ -1095,14 +1095,19 @@ function Timeline({
         {fullDensity.map((bucket, index) => {
           const ratio = bucket.to > bucket.from ? bucket.coveredMs / (bucket.to - bucket.from) : 0
           if (ratio <= 0) return null
+          // Coverage-weighted amber so a 5-minute peak reads warmer than a
+          // single second — the gradation is what tells the eye "this hour
+          // was busy" at a glance.
+          const top = `${Math.min(0.95, 0.35 + ratio * 0.6)}`
           return (
             <div
               key={index}
-              className='absolute bottom-0 top-0 bg-emerald-500/40'
+              className='absolute bottom-0 top-0'
               style={{
                 left: `${((bucket.from - fullRange.start) / fullSpan) * 100}%`,
                 width: `calc(${((bucket.to - fullRange.start) / fullSpan) * 100}% - ${((bucket.from - fullRange.start) / fullSpan) * 100}%)`,
                 minWidth: '2px',
+                background: `linear-gradient(to top, oklch(0.55 0.13 70 / 35%), oklch(0.78 0.13 75 / ${top}))`,
               }}
             />
           )
@@ -1130,10 +1135,13 @@ function Timeline({
               key={mark.id}
               title={`${markLabel(mark.category)}${mark.count > 1 ? ` ×${mark.count}` : ''} · ${formatClock(mark.at, zone)} · ${Math.round(mark.score * 100)}%`}
               className={cn(
-                'absolute top-1/2 size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full',
+                'absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full',
+                // Open events get a thicker column with a halo so the operator
+                // catches them in peripheral vision; closed events stay as a
+                // slimmer bar to avoid clutter on dense days.
                 mark.handleState === 'open'
-                  ? 'bg-amber-400'
-                  : 'bg-sky-400/70'
+                  ? 'size-[3px] bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.6)]'
+                  : 'size-[2px] bg-sky-400/80'
               )}
               style={{ left: position(mark.at) }}
             />
@@ -1173,14 +1181,16 @@ function Timeline({
           {density.map((bucket, index) => {
             const ratio = bucket.to > bucket.from ? bucket.coveredMs / (bucket.to - bucket.from) : 0
             if (ratio <= 0) return null
+            const top = `${Math.min(0.92, 0.30 + ratio * 0.6)}`
             return (
               <div
                 key={index}
-                className='absolute bottom-0 bg-emerald-400/15'
+                className='absolute bottom-0'
                 style={{
                   left: position(bucket.from),
                   width: `calc(${position(bucket.to)} - ${position(bucket.from)})`,
                   height: `${Math.max(ratio * 100, 4)}%`,
+                  background: `linear-gradient(to top, oklch(0.55 0.13 70 / 35%), oklch(0.78 0.13 75 / ${top}))`,
                 }}
               />
             )
