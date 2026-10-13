@@ -1174,7 +1174,9 @@ function Timeline({
     [marks, timeline.from, timeline.to, stripWidth]
   )
   const position = (at: number) =>
-    `${Math.min(Math.max(((at - timeline.from) / span) * 100, 0), 100)}%`
+    span > 0
+      ? `${Math.min(Math.max(((at - timeline.from) / span) * 100, 0), 100)}%`
+      : '0%'
   function scrubTo(clientX: number) {
     const box = strip.current?.getBoundingClientRect()
     if (!box || !box.width) return
@@ -1204,32 +1206,6 @@ function Timeline({
     const node = bubble.current
     if (node) node.style.visibility = 'hidden'
   }
-  // An empty index is explained inside the band itself: the full-width row
-  // must still occupy its slot (the workspace grid reserves it), so the
-  // empty state renders as a slim notice inside the band, not a null.
-  // A zoomed view with no segments is different information — the full index
-  // has content, this window simply does not.
-  if (!timeline.entries.length || span <= 0) {
-    if (viewIsFull) {
-      return (
-        <div className='rounded-xl border border-dashed border-video-border p-4 text-center text-sm text-video-chrome-foreground/60'>
-          {zone ? (
-            <>
-              {formatClock(timeline.from, zone)} — {formatClock(timeline.to, zone)} ·
-              该时间范围没有已登记录像
-            </>
-          ) : (
-            '该时间范围没有已登记录像'
-          )}
-        </div>
-      )
-    }
-    return (
-      <p className='rounded-xl border border-dashed p-4 text-center text-sm text-muted-foreground'>
-        该视图范围内没有片段——用「显示完整范围」返回，或调整缩放。
-      </p>
-    )
-  }
   // Wheel zoom anchored under the pointer; shift+wheel pans like a map.
   function onWheel(event: ReactWheelEvent<HTMLElement>) {
     event.preventDefault()
@@ -1252,14 +1228,21 @@ function Timeline({
   const band = (
     <div className='flex flex-col gap-1.5 rounded-xl border border-video-border bg-video-surface px-3.5 py-2.5'>
       {/* Band 1 — axis header: density read on the left, the playhead clock on
-          the right (the sample's `tl-axis` row). */}
+          the right (the sample's `tl-axis` row). An empty window says so here
+          instead of collapsing the whole band. */}
       <div className='flex items-center justify-between gap-3 text-[11px] tabular-nums text-video-chrome-foreground/50'>
-        <span data-testid='playback-timeline-density'>
-          密度 <b className='font-medium text-video-chrome-foreground'>{timeline.entries.length}</b> 段
-          {timeline.gaps.length > 0 && (
-            <span className='ml-1.5 text-red-400'>缺口 {timeline.gaps.length}</span>
-          )}
-        </span>
+        {timeline.entries.length > 0 ? (
+          <span data-testid='playback-timeline-density'>
+            密度 <b className='font-medium text-video-chrome-foreground'>{timeline.entries.length}</b> 段
+            {timeline.gaps.length > 0 && (
+              <span className='ml-1.5 text-red-400'>缺口 {timeline.gaps.length}</span>
+            )}
+          </span>
+        ) : (
+          <span className='text-video-chrome-foreground/60'>
+            该时间范围没有已登记录像
+          </span>
+        )}
         <span data-testid='playback-timeline-window' className='text-video-chrome-foreground/60'>
           {formatClock(timeline.from, zone)} — {formatClock(timeline.to, zone)}
         </span>
@@ -1293,15 +1276,15 @@ function Timeline({
               key={index}
               className='absolute bottom-0 top-0 border-r border-black/30'
               style={{
-                left: `${((bucket.from - fullRange.start) / fullSpan) * 100}%`,
-                width: `calc(${((bucket.to - fullRange.start) / fullSpan) * 100}% - ${((bucket.from - fullRange.start) / fullSpan) * 100}%)`,
+                left: `${fullSpan > 0 ? ((bucket.from - fullRange.start) / fullSpan) * 100 : 0}%`,
+                width: `calc(${fullSpan > 0 ? ((bucket.to - fullRange.start) / fullSpan) * 100 : 0}% - ${fullSpan > 0 ? ((bucket.from - fullRange.start) / fullSpan) * 100 : 0}%)`,
                 minWidth: '2px',
                 background: `linear-gradient(to top, oklch(0.55 0.13 70 / 80%), oklch(0.75 0.13 70 / ${alpha}))`,
               }}
             />
           )
         })}
-        {!viewIsFull && (
+        {!viewIsFull && fullSpan > 0 && (
           <div
             className='absolute bottom-0 top-0 border-x-2 border-amber-400 bg-amber-400/10'
             style={{
@@ -1457,36 +1440,35 @@ function Timeline({
           </div>
         )}
       </div>
-      {/* Band 5 — the ruler: amber tick labels under the strip, edge labels
-          flip inward instead of half-vanishing. */}
-      {ticks.length > 0 && (
-        <div aria-hidden className='relative h-4 select-none text-[10px] leading-4'>
-          {ticks.map((tick, index) => {
-            const first = index === 0
-            const last = index === ticks.length - 1
-            return (
-              <span
-                key={tick.at}
-                className={`absolute whitespace-nowrap tabular-nums ${
-                  tick.major
-                    ? 'font-medium text-video-chrome-foreground'
-                    : 'text-video-chrome-foreground/50'
-                }`}
-                style={{
-                  left: position(tick.at),
-                  transform: first
-                    ? 'none'
-                    : last
-                      ? 'translateX(-100%)'
-                      : 'translateX(-50%)',
-                }}
-              >
-                {tick.label}
-              </span>
-            )
-          })}
-        </div>
-      )}
+      {/* Band 5 — the ruler: tick labels under the strip, always present —
+          the sample's clock grid is drawn on the axis, not on the segments.
+          Edge labels flip inward instead of half-vanishing. */}
+      <div aria-hidden className='relative h-4 select-none text-[10px] leading-4'>
+        {ticks.map((tick, index) => {
+          const first = index === 0
+          const last = index === ticks.length - 1
+          return (
+            <span
+              key={tick.at}
+              className={`absolute whitespace-nowrap tabular-nums ${
+                tick.major
+                  ? 'font-medium text-video-chrome-foreground'
+                  : 'text-video-chrome-foreground/50'
+              }`}
+              style={{
+                left: position(tick.at),
+                transform: first
+                  ? 'none'
+                  : last
+                    ? 'translateX(-100%)'
+                    : 'translateX(-50%)',
+              }}
+            >
+              {tick.label}
+            </span>
+          )
+        })}
+      </div>
       {/* Band 6 — legend + keyboard cheatsheet, the sample's `tl-foot`. */}
       <div className='flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[11px] text-video-chrome-foreground/50'>
         <span className='inline-flex items-center gap-1.5'>
