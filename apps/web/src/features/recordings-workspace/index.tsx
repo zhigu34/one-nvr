@@ -117,6 +117,12 @@ export function RecordingsWorkspace({
             gridTemplateColumns: rightOpen
               ? '192px minmax(0, 1fr) 320px'
               : '192px minmax(0, 1fr) 56px',
+            // An explicit row fraction lets each cell stretch to the grid's
+            // own (flex-grown) height, not just the tallest content's. Without
+            // this the central Playback column collapses to its content and
+            // its OSD overlay ends up stacked above the status strip instead
+            // of floating at the bottom of the video.
+            gridTemplateRows: 'minmax(0, 1fr)',
           }}
         >
           <ChannelsRail

@@ -570,13 +570,28 @@ return (
               </p>
             )}
           </form>
-          <div ref={frame} className='group/frame relative min-h-0 flex-1 bg-black'>
+          <div
+            ref={frame}
+            className='group/frame relative flex min-h-[260px] flex-1 items-center justify-center overflow-hidden bg-black'
+          >
             <video
               ref={video}
               data-testid='playback-video'
               playsInline
               className='absolute inset-0 h-full w-full bg-black object-contain'
             />
+            {/* Idle placeholder: a clear "waiting for the operator" cue lives
+                inside the same frame as the video, so the OSD bar below it
+                always reads as a control bar over a real picture rather than
+                floating above empty black. */}
+            {state.phase === 'idle' && !state.entry && (
+              <div className='pointer-events-none relative z-10 flex flex-col items-center gap-2 text-center text-video-chrome-foreground/70'>
+                <div className='size-12 rounded-full border border-video-chrome-foreground/30' />
+                <p className='text-sm'>
+                  点击下方时间轴的片段开始回放，或按下方「播放」选第一条
+                </p>
+              </div>
+            )}
             {/* Floating control bar: hovers over the picture, auto-hides while
                 playing, always visible when paused/idle. Buttons keep their
                 accessible names — e2e and keyboard users navigate by them. */}
