@@ -333,7 +333,6 @@ jobs:
           record "config_ownership=$ownership"
           dir_ownership=$(docker run --rm --network none --user 0:0 --mount "type=bind,source=$root/data,target=/data" --entrypoint stat one-nvr/app:m1a -c "%u:%g" /data/frigate 2>&1) || true
           record "dir_ownership=$dir_ownership"
-          echo "::error title=Frigate seed ownership measurements::${report}"
 
           fail=0
           # init-runtime must succeed, otherwise there is no seed to judge and
@@ -344,7 +343,16 @@ jobs:
           [ "$ownership" = "10001:10001 600" ] || { echo "config.yml seed ownership is $ownership, expected 10001:10001 600" >&2; fail=1; }
           # And the directory it lives in must stay writable by that user.
           [ "$dir_ownership" = "10001:10001" ] || { echo "frigate dir ownership is $dir_ownership, expected 10001:10001" >&2; fail=1; }
-          if [ "$fail" = "1" ]; then exit 1; fi
+          if [ "$fail" = "1" ]; then
+            # Emitted only on failure: an unconditional ::error makes the step
+            # fail on its own, which is what kept this check red for rounds
+            # while every measurement it printed was correct.
+            echo "::error title=Frigate seed ownership failure::${report}"
+            exit 1
+          fi
+          # A warning carries the measurements into the UI without failing the
+          # step; job logs need authentication, this annotation does not.
+          echo "::warning title=Frigate seed ownership measurements::${report}"
           printf 'Frigate config seed ownership PASS\n'
 
   hardware-cpu-runtime:
