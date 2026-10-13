@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
@@ -104,6 +105,7 @@ export function Playback({
   controlledChannelId = '',
   onChannelChange,
   hideChannelList = false,
+  timelineHostId = '',
 }: {
   initialChannel?: string
   initialAt?: string
@@ -114,6 +116,11 @@ export function Playback({
   controlledChannelId?: string
   onChannelChange?: (id: string) => void
   hideChannelList?: boolean
+  // DOM id of the element the timeline band portals into. The workspace
+  // shell owns a full-width row under the three columns; when the id is
+  // present (and the element exists), the Timeline mounts there instead of
+  // inside the console column, matching the sample's bottom band.
+  timelineHostId?: string
 }) {
   const channelsQuery = useAPI<PageData<Schema<'Channel'>>>(
     '/api/v1/channels?limit=100',
@@ -164,6 +171,7 @@ export function Playback({
           controlledChannelId={controlledChannelId}
           onChannelChange={onChannelChange}
           hideChannelList={hideChannelList}
+          timelineHostId={timelineHostId}
         />
       )}
     </div>
@@ -179,6 +187,7 @@ function Workspace({
   controlledChannelId = '',
   onChannelChange,
   hideChannelList = false,
+  timelineHostId = '',
 }: {
   channels: Schema<'Channel'>[]
   zone: string
@@ -188,12 +197,21 @@ function Workspace({
   controlledChannelId?: string
   onChannelChange?: (id: string) => void
   hideChannelList?: boolean
+  timelineHostId?: string
 }) {
   const [internalChannelID, setInternalChannelID] = useState(
     () =>
       channels.find((channel) => channel.id === initialChannel)?.id ||
       channels[0].id
   )
+  // The portal target for the timeline band. Looked up during render (a
+  // getElementById read, no external-system subscription needed); the shell
+  // row renders in the same commit as the console, so by the time Playback's
+  // second render happens the host exists. If it is not there yet (standalone
+  // renders, tests), the band falls back to inline.
+  const timelineHost = timelineHostId
+    ? document.getElementById(timelineHostId)
+    : null
   // A controlled id from the workspace shell overrides the local store; the
   // shell owns the URL state and we never write to it on our own.
   const controlledMatches = channels.some(
@@ -920,6 +938,7 @@ return (
             fullRange={range}
             viewBounds={viewBounds}
             fullDensity={fullDensity}
+            portalHost={timelineHost}
             onZoomAt={zoomAt}
             onMoveView={moveViewTo}
             onPick={(at) => {
@@ -1033,6 +1052,7 @@ function Timeline({
   fullRange,
   viewBounds,
   fullDensity,
+  portalHost,
   onZoomAt,
   onMoveView,
   onPick,
@@ -1051,6 +1071,9 @@ function Timeline({
   fullRange: { start: number; end: number }
   viewBounds: { start: number; end: number }
   fullDensity: ReturnType<typeof coverageDensity>
+  /** When set, the band renders into this element (the shell's full-width
+      row) instead of inline in the console column. */
+  portalHost: HTMLElement | null
   onZoomAt: (anchor: number, factor: number) => void
   onMoveView: (center: number) => void
   onPick: (at: number) => void
@@ -1173,15 +1196,33 @@ function Timeline({
     if (!box.width || fullSpan <= 0) return
     onMoveView(fullRange.start + ((event.clientX - box.left) / box.width) * fullSpan)
   }
-  return (
-    <div className='space-y-1 px-3 pb-3 pt-2'>
-      {/* Minimap: the whole search range's coverage with the current viewport
-          outlined. Drag anywhere to slide the view — the UniFi-style answer to
-          navigating a three-day window without twenty pan clicks. */}
+  const band = (
+    <div className='flex flex-col gap-1.5 rounded-xl border border-video-border bg-video-surface px-3.5 py-2.5'>
+      {/* Band 1 — axis header: density read on the left, the playhead clock on
+          the right (the sample's `tl-axis` row). */}
+      <div className='flex items-center justify-between gap-3 text-[11px] tabular-nums text-video-chrome-foreground/50'>
+        <span data-testid='playback-timeline-density'>
+          密度 <b className='font-medium text-video-chrome-foreground'>{timeline.entries.length}</b> 段
+          {timeline.gaps.length > 0 && (
+            <span className='ml-1.5 text-red-400'>缺口 {timeline.gaps.length}</span>
+          )}
+        </span>
+        <span data-testid='playback-timeline-window' className='text-video-chrome-foreground/60'>
+          {formatClock(timeline.from, zone)} — {formatClock(timeline.to, zone)}
+        </span>
+        <span>
+          当前{' '}
+          <b data-testid='playback-timeline-clock' className='font-medium text-red-400'>
+            {clock > 0 ? formatClock(clock, zone) : '—'}
+          </b>
+        </span>
+      </div>
+      {/* Band 2 — density strip. The whole search range's coverage (minimap
+          style) with the zoom viewport outlined; dragging slides the view. */}
       <div
         aria-hidden
         data-testid='playback-minimap'
-        className='relative h-2.5 cursor-pointer overflow-hidden rounded bg-white/5'
+        className='relative h-6 cursor-pointer overflow-hidden rounded-md bg-white/[0.04] shadow-[inset_0_0_0_1px_var(--video-border,var(--border))]'
         onPointerDown={(event) => {
           event.currentTarget.setPointerCapture(event.pointerId)
           minimapPointer(event)
@@ -1193,26 +1234,23 @@ function Timeline({
         {fullDensity.map((bucket, index) => {
           const ratio = bucket.to > bucket.from ? bucket.coveredMs / (bucket.to - bucket.from) : 0
           if (ratio <= 0) return null
-          // Coverage-weighted amber so a 5-minute peak reads warmer than a
-          // single second — the gradation is what tells the eye "this hour
-          // was busy" at a glance.
-          const top = `${Math.min(0.95, 0.35 + ratio * 0.6)}`
+          const alpha = `${Math.min(0.95, 0.5 + ratio * 0.45)}`
           return (
             <div
               key={index}
-              className='absolute bottom-0 top-0'
+              className='absolute bottom-0 top-0 border-r border-black/30'
               style={{
                 left: `${((bucket.from - fullRange.start) / fullSpan) * 100}%`,
                 width: `calc(${((bucket.to - fullRange.start) / fullSpan) * 100}% - ${((bucket.from - fullRange.start) / fullSpan) * 100}%)`,
                 minWidth: '2px',
-                background: `linear-gradient(to top, oklch(0.55 0.13 70 / 35%), oklch(0.78 0.13 75 / ${top}))`,
+                background: `linear-gradient(to top, oklch(0.55 0.13 70 / 80%), oklch(0.75 0.13 70 / ${alpha}))`,
               }}
             />
           )
         })}
         {!viewIsFull && (
           <div
-            className='absolute bottom-0 top-0 border-x border-primary bg-primary/20'
+            className='absolute bottom-0 top-0 border-x-2 border-amber-400 bg-amber-400/10'
             style={{
               left: `${((viewBounds.start - fullRange.start) / fullSpan) * 100}%`,
               width: `${((viewBounds.end - viewBounds.start) / fullSpan) * 100}%`,
@@ -1220,37 +1258,34 @@ function Timeline({
           />
         )}
       </div>
-      {/* Event track: a slim rail above the strip. Its markers are display
-          only; seeking to an event goes through the strip below. */}
-      {clusters.length > 0 && (
-        <div
-          aria-hidden
-          data-testid='playback-events-track'
-          className='relative h-3 rounded-md bg-white/5'
-        >
-          {clusters.map((mark) => (
-            <span
-              key={mark.id}
-              title={`${markLabel(mark.category)}${mark.count > 1 ? ` ×${mark.count}` : ''} · ${formatClock(mark.at, zone)} · ${Math.round(mark.score * 100)}%`}
-              className={cn(
-                'absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full',
-                // Open events get a thicker column with a halo so the operator
-                // catches them in peripheral vision; closed events stay as a
-                // slimmer bar to avoid clutter on dense days.
-                mark.handleState === 'open'
-                  ? 'size-[3px] bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.6)]'
-                  : 'size-[2px] bg-sky-400/80'
-              )}
-              style={{ left: position(mark.at) }}
-            />
-          ))}
-        </div>
-      )}
+      {/* Band 3 — event rail. Slim 8px track; open events carry a halo. */}
+      <div
+        aria-hidden
+        data-testid='playback-events-track'
+        className='relative h-2'
+      >
+        {clusters.map((mark) => (
+          <span
+            key={mark.id}
+            title={`${markLabel(mark.category)}${mark.count > 1 ? ` ×${mark.count}` : ''} · ${formatClock(mark.at, zone)} · ${Math.round(mark.score * 100)}%`}
+            className={cn(
+              'absolute top-1/2 w-[2px] -translate-x-1/2 -translate-y-1/2 rounded-full',
+              mark.handleState === 'open'
+                ? 'h-full bg-amber-400 shadow-[0_0_5px_rgba(251,191,36,0.6)]'
+                : 'h-1/2 bg-sky-400/80'
+            )}
+            style={{ left: position(mark.at) }}
+          />
+        ))}
+      </div>
+      {/* Band 4 — the interactive strip: segments, bracket, ticks and the
+          playhead. Same behaviours as before (click select, double-click
+          play, drag scrub, wheel zoom), now at full width. */}
       <div
         ref={strip}
         data-testid='playback-timeline'
         aria-label='录像时间轴'
-        className={`relative h-12 touch-none rounded-lg border border-video-border bg-white/5 ${
+        className={`relative h-10 touch-none rounded-md bg-white/[0.04] shadow-[inset_0_0_0_1px_var(--video-border,var(--border))] ${
           scrubbing ? 'cursor-grabbing' : 'cursor-crosshair'
         }`}
         onPointerDown={(event) => {
@@ -1264,8 +1299,6 @@ function Timeline({
           beginScrub(event)
         }}
         onPointerMove={(event) => {
-          // While scrubbing, pointer capture redirects events to the strip and
-          // the pointer is down — the bubble only tracks a free-moving pointer.
           if (pickMode || scrubbing) return
           trackHover(event)
         }}
@@ -1273,8 +1306,6 @@ function Timeline({
         onPointerUp={() => setScrubbing(false)}
         onWheel={onWheel}
       >
-        {/* Coverage density: one bar per bucket, height = covered fraction.
-            It reads as recording intensity without one DOM node per segment. */}
         <div aria-hidden className='pointer-events-none absolute inset-x-0 bottom-0 top-0'>
           {density.map((bucket, index) => {
             const ratio = bucket.to > bucket.from ? bucket.coveredMs / (bucket.to - bucket.from) : 0
@@ -1294,7 +1325,6 @@ function Timeline({
             )
           })}
         </div>
-        {/* Scrub preview: the target clock follows the pointer. */}
         <div
           ref={bubble}
           aria-hidden
@@ -1312,7 +1342,7 @@ function Timeline({
             onClick={() => onSelect(entry)}
             onDoubleClick={() => onPlay(entry)}
             className={cn(
-              'absolute top-1 h-10 rounded p-0 transition-colors duration-150',
+              'absolute top-1 h-8 rounded p-0 transition-colors duration-150',
               entry.blocked
                 ? 'bg-amber-500/40 hover:bg-amber-500/60'
                 : entry.id === selected?.id
@@ -1322,8 +1352,6 @@ function Timeline({
             style={{
               left: position(entry.start),
               width: position(entry.end),
-              // A short segment inside a long range rounds to nothing; keep it
-              // visible and selectable instead of collapsing to a sliver.
               minWidth: '3px',
             }}
           />
@@ -1332,11 +1360,6 @@ function Timeline({
           <div
             data-testid='playback-bracket'
             aria-label='导出区间'
-            // The bracket marks "this is the export window" without hiding
-            // the underlying segments — operators still need to read the
-            // coverage inside the window. A solid amber wash drowned the
-            // segments beneath it; a faint tinted stripe with crisp
-            // borders keeps the data primary.
             className='pointer-events-none absolute top-0 bottom-0 border-x-2 border-amber-400'
             style={{
               left: position(bracket.start),
@@ -1362,8 +1385,6 @@ function Timeline({
             style={{ left: position(tick.at) }}
           />
         ))}
-        {/* No playhead before the first playback: an epoch-zero position would
-            clamp to the window start and read as a real position. */}
         {clock > 0 && (
           <div
             data-testid='playback-playhead'
@@ -1373,9 +1394,7 @@ function Timeline({
             onPointerMove={(event) => scrubbing && scrubTo(event.clientX)}
             onPointerUp={() => setScrubbing(false)}
           >
-            <div className='relative mx-auto h-full w-0.5 bg-red-500 shadow-[0_0_4px_rgba(239,68,68,0.6)]'>
-              {/* The grab handle: a small triangle crowning the line so the
-                  draggable affordance is visible, not just the hit area. */}
+            <div className='relative mx-auto h-full w-0.5 bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.7)]'>
               <div
                 aria-hidden
                 className='absolute -top-0.5 left-1/2 h-2.5 w-2.5 -translate-x-1/2 rounded-sm bg-red-500'
@@ -1385,20 +1404,20 @@ function Timeline({
           </div>
         )}
       </div>
+      {/* Band 5 — the ruler: amber tick labels under the strip, edge labels
+          flip inward instead of half-vanishing. */}
       {ticks.length > 0 && (
-        <div aria-hidden className='relative h-4 select-none text-[10px] leading-4 text-amber-300/85'>
+        <div aria-hidden className='relative h-4 select-none text-[10px] leading-4'>
           {ticks.map((tick, index) => {
             const first = index === 0
             const last = index === ticks.length - 1
-            // Edge labels flip their alignment instead of half-vanishing
-            // outside the strip.
             return (
               <span
                 key={tick.at}
                 className={`absolute whitespace-nowrap tabular-nums ${
                   tick.major
-                    ? 'font-semibold text-amber-400'
-                    : 'text-amber-300/70'
+                    ? 'font-medium text-video-chrome-foreground'
+                    : 'text-video-chrome-foreground/50'
                 }`}
                 style={{
                   left: position(tick.at),
@@ -1413,38 +1432,39 @@ function Timeline({
               </span>
             )
           })}
-          {/* Floating right-edge wall-clock: parallel to the red playhead.
-              Hidden in idle so the timestamps don't disagree with no
-              selection. */}
-          {clock > 0 && (
-            <span
-              data-testid='playback-timeline-clock'
-              className='absolute right-0 top-0 -translate-y-3 rounded bg-red-500/15 px-1.5 text-[10px] tabular-nums text-red-400 shadow-sm'
-            >
-              {formatClock(clock, zone)}
-            </span>
-          )}
         </div>
       )}
-      <p className='flex flex-wrap items-center gap-x-2 gap-y-0.5 px-1 text-[11px]'>
-        <span
-          data-testid='playback-timeline-density'
-          className='rounded bg-black/30 px-1.5 py-0.5 tabular-nums text-amber-300'
-        >
-          密度 {timeline.entries.length} 段
-          {timeline.gaps.length > 0 && (
-            <span className='ml-1 text-red-400'>· 缺口 {timeline.gaps.length}</span>
-          )}
+      {/* Band 6 — legend + keyboard cheatsheet, the sample's `tl-foot`. */}
+      <div className='flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[11px] text-video-chrome-foreground/50'>
+        <span className='inline-flex items-center gap-1.5'>
+          <span className='size-2 rounded-sm bg-emerald-600' />
+          可用片段
         </span>
-        <span className='text-video-chrome-foreground/40'>·</span>
-        <span className='text-video-chrome-foreground/60 tabular-nums'>
-          {formatClock(timeline.from, zone)} — {formatClock(timeline.to, zone)}
+        <span className='inline-flex items-center gap-1.5'>
+          <span className='size-2 rounded-sm bg-amber-500/60' />
+          受阻片段
         </span>
-        <span className='text-video-chrome-foreground/40'>·</span>
-        <span className='text-video-chrome-foreground/60'>
-          单击片段选中，双击播放，拖动时间轴定位；空格播放/暂停，← → 快进快退 10 秒
+        <span className='inline-flex items-center gap-1.5'>
+          <span className='size-2 rounded-sm bg-amber-400' />
+          事件（琥珀=待处理）
         </span>
-      </p>
+        <span className='inline-flex items-center gap-1.5'>
+          <span className='size-2 rounded-sm bg-red-500' />
+          播放位置
+        </span>
+        <div className='ml-auto flex flex-wrap items-center gap-2.5'>
+          <span><kbd className='rounded border border-video-border bg-white/10 px-1 py-px text-[10px] text-video-chrome-foreground/80'>Space</kbd> 播放/暂停</span>
+          <span><kbd className='rounded border border-video-border bg-white/10 px-1 py-px text-[10px] text-video-chrome-foreground/80'>←</kbd>/<kbd className='rounded border border-video-border bg-white/10 px-1 py-px text-[10px] text-video-chrome-foreground/80'>→</kbd> 跳 10 秒</span>
+          <span><kbd className='rounded border border-video-border bg-white/10 px-1 py-px text-[10px] text-video-chrome-foreground/80'>滚轮</kbd> 缩放</span>
+          <span><kbd className='rounded border border-video-border bg-white/10 px-1 py-px text-[10px] text-video-chrome-foreground/80'>双击</kbd> 播放</span>
+        </div>
+      </div>
     </div>
   )
+  // The workspace shell owns a full-width row under the three columns; the
+  // band portals there so the timeline reads as one band across the whole
+  // workspace, exactly like the sample layout. Falls back to inline when no
+  // host id was given (standalone /playback-style renders, tests).
+  if (portalHost) return createPortal(band, portalHost)
+  return band
 }

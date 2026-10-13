@@ -152,12 +152,11 @@ export function RecordingsWorkspace({
               : rightOpen
                 ? '192px minmax(0, 1fr) 320px'
                 : '192px minmax(0, 1fr) 56px',
-            // An explicit row fraction lets each cell stretch to the grid's
-            // own (flex-grown) height, not just the tallest content's. Without
-            // this the central Playback column collapses to its content and
-            // its OSD overlay ends up stacked above the status strip instead
-            // of floating at the bottom of the video.
-            gridTemplateRows: 'minmax(0, 1fr)',
+            // Row 1 is the three columns (rail / player / files); row 2 is
+            // the timeline, which spans every column like the sample does —
+            // a full-width band under the workspace. The 1fr keeps the top
+            // row filling all height left over by the fixed timeline row.
+            gridTemplateRows: 'minmax(0, 1fr) auto',
           }}
         >
           <ChannelsRail
@@ -174,6 +173,7 @@ export function RecordingsWorkspace({
               initialChannel={channelID}
               initialAt={initialAt}
               active
+              timelineHostId='recordings-timeline-host'
             />
           </div>
           {!narrow && admin ? (
@@ -203,6 +203,15 @@ export function RecordingsWorkspace({
               </button>
             )
           ) : null}
+          {/* Row 2: the timeline band spans every column, exactly like the
+              sample — one band under the whole workspace instead of a strip
+              trapped inside the player column. Playback portals its Timeline
+              into this host. */}
+          <div
+            id='recordings-timeline-host'
+            className='min-h-0'
+            style={{ gridColumn: narrow ? 'span 2' : 'span 3' }}
+          />
         </div>
       )}
       {/* On narrow viewports the file panel rides a side Sheet instead of
