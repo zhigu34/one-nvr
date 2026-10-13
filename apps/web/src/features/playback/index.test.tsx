@@ -373,3 +373,70 @@ test('the timeline picks an export bracket and zooms the view', async () => {
   await view.getByRole('button', { name: '显示完整范围' }).click()
   await expect.element(view.getByText(/2026-10-05 08:00:00 — 2026-10-05 08:05:00/)).toBeVisible()
 })
+
+// Frame top-OSD metadata strip (ca17f75): the channel pill rides along in
+// idle state, but resolution / fps / codec / "直通" only appear once an
+// entry with media facts has been loaded by the controller.
+test('frame OSD lists media facts only after an entry has loaded', async () => {
+  const rich = segment(A, 0, 120, {
+    media: {
+      codec: 'h265',
+      width: 2560,
+      height: 1440,
+      fps: 25,
+      duration_ms: 120_000,
+    },
+  })
+  const { view } = await fixture([rich])
+  // Idle: only the channel identity is on screen; the media facts must not
+  // appear because there is no entry yet. Scope to the OSD strip so the
+  // unrelated "当前通道 CH01 大门" paragraph and the channel button do
+  // not get matched.
+  const osd = view.getByTestId('playback-frame-osd')
+  await expect.element(osd).toBeVisible()
+  await expect.element(osd.getByText('CH01 大门', { exact: true })).toBeVisible()
+  // Width is zero in the default fixture and non-zero in this one — same
+  // helper, so the gate is real: idle must skip the resolution pill.
+  await expect.element(osd.getByText('2560×1440')).not.toBeInTheDocument()
+  // Load the segment; the controller flips state.entry on success and the
+  // OSD pills populate.
+  await view
+    .getByRole('button', { name: '片段 2026-10-05 08:00:00' })
+    .dblClick()
+  await playing(A)
+  await expect.element(osd.getByText('2560×1440')).toBeVisible()
+  await expect.element(osd.getByText('25fps')).toBeVisible()
+  await expect.element(osd.getByText('H265')).toBeVisible()
+  await expect.element(osd.getByText('直通')).toBeVisible()
+})
+
+// State badge (e693351): the badge itself only mounts for non-idle
+// phases (loading/playing/paused). Idle keeps the slot absent so the
+// placeholder stays uncluttered.
+test('frame OSD state badge mounts when playback leaves idle', async () => {
+  const { view } = await fixture([segment(A, 0, 120)])
+  // Idle: no badge testid at all.
+  expect(view.getByTestId('playback-state-badge').query()).toBeNull()
+  // Kick off playback. The controller publishes 'loading' on seek; even if
+  // the headless runner skips straight to ready, we still dispatched the
+  // 'playing' event the controller binds to.
+  const bar = view.getByRole('button', { name: '片段 2026-10-05 08:00:00' })
+  await bar.dblClick()
+  await playing(A)
+  const video = document.querySelector('video') as HTMLVideoElement | null
+  video?.dispatchEvent(new Event('playing'))
+  await expect.element(view.getByTestId('playback-state-badge')).toBeVisible()
+  // Exactly one of the three phase strings surfaces; the controller's own
+  // reactive path chose the text. The DOM contract is "one of these
+  // three labels is on screen":
+  await vi.waitFor(() =>
+    expect(
+      ['REC', '加载中', '已暂停'].some((label) =>
+        view
+          .getByTestId('playback-state-badge')
+          .element()
+          .textContent?.includes(label)
+      )
+    ).toBe(true)
+  )
+})
