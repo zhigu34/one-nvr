@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -51,6 +52,10 @@ type Event struct {
 	Version          int64          `json:"version"`
 	ExpiresAt        *time.Time     `json:"expires_at"`
 	Handling         []HandleRecord `json:"handling"`
+	// Hits are the rules this event tripped (AI-06), carried on the detail view
+	// so the operator sees why it was flagged without a second request. The
+	// list view stays lean.
+	Hits []RuleHit `json:"hits,omitempty"`
 }
 
 type HandleRecord struct {
@@ -68,6 +73,10 @@ type Service struct {
 	Frigate string // base URL of the Frigate HTTP API, empty when disabled
 	siteID  id.ID
 	now     func() time.Time
+	// zone caches the site location for rule arming windows: ingestion
+	// evaluates rules for every event, and the zone changes at most once in a
+	// deployment's life.
+	zone atomic.Value
 }
 
 func New(db *database.DB, accounts *auth.Service, frigateURL string, siteID id.ID) *Service {
@@ -190,7 +199,17 @@ func (s *Service) Ingest(ctx context.Context, payload []byte) error {
 				updated_at=clock_timestamp()
 			WHERE events.ended_at IS NULL OR EXCLUDED.ended_at IS NULL OR EXCLUDED.ended_at>=events.ended_at`,
 			eventID, channelID, revision, after.ID, after.Label, score, zonesJSON, started, endTime, snapshotState, expires, raw)
-		return err
+		if err != nil {
+			return err
+		}
+		// Rules are evaluated in the same transaction: an event and the fact
+		// that it tripped a rule commit together, so a crash cannot leave a
+		// flagged event without its hit or the reverse.
+		stored, err := scanEvent(tx.QueryRow(ctx, `SELECT `+eventColumns+` FROM events e WHERE e.source=$1 AND e.source_id=$2`, "frigate", after.ID))
+		if err != nil {
+			return err
+		}
+		return s.evaluateRules(ctx, tx, stored)
 	})
 }
 
@@ -327,7 +346,26 @@ func (s *Service) Get(ctx context.Context, p auth.Principal, eventID id.ID) (Eve
 			}
 			out.Handling = append(out.Handling, record)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		rows.Close()
+		// Rule hits ride with the detail view: they are the reason the event is
+		// interesting, so one request answers "what happened and why".
+		hitRows, err := tx.Query(ctx, `SELECT h.id,h.event_id,h.rule_id,r.name,r.severity,h.zone_name,h.reason,h.notified_at,h.false_positive,h.false_positive_note,h.created_at
+			FROM event_rule_hits h JOIN detection_rules r ON r.id=h.rule_id WHERE h.event_id=$1 ORDER BY h.created_at`, eventID)
+		if err != nil {
+			return err
+		}
+		defer hitRows.Close()
+		for hitRows.Next() {
+			var hit RuleHit
+			if err := hitRows.Scan(&hit.ID, &hit.EventID, &hit.RuleID, &hit.RuleName, &hit.Severity, &hit.ZoneName, &hit.Reason, &hit.NotifiedAt, &hit.FalsePositive, &hit.Note, &hit.CreatedAt); err != nil {
+				return err
+			}
+			out.Hits = append(out.Hits, hit)
+		}
+		return hitRows.Err()
 	})
 	return out, err
 }

@@ -49,6 +49,34 @@ const CATEGORY_LABELS: Record<string, string> = {
   cat: '猫',
 }
 
+const SEVERITY_LABELS: Record<string, string> = {
+  low: '低',
+  medium: '中',
+  high: '高',
+}
+
+const KIND_LABELS: Record<string, string> = {
+  appear: '目标出现',
+  enter: '区域进入',
+  dwell: '区域停留',
+}
+
+/**
+ * hitReasonText renders the facts frozen at match time. They explain the
+ * decision even after the rule was later edited, which is why the reason is
+ * shown instead of being recomputed from the current rule.
+ */
+function hitReasonText(hit: Schema<'RuleHit'>) {
+  const reason = hit.reason || {}
+  const parts = [
+    KIND_LABELS[reason.kind ?? ''] || reason.kind,
+    reason.category ? CATEGORY_LABELS[reason.category] || reason.category : '',
+    typeof reason.score === 'number' ? `置信 ${Math.round(reason.score * 100)}%` : '',
+    hit.zone_name ? `区域 ${hit.zone_name}` : '',
+  ]
+  return parts.filter(Boolean).join(' · ')
+}
+
 /**
  * M3 batch 1: the event center (EVT-01/02/03). List + snapshot cards, a
  * detail drawer with the handling trail, and a jump into playback for the
@@ -285,7 +313,26 @@ function EventDetail({
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
   const [pendingAction, setPendingAction] = useState('')
+  const [feedbackPending, setFeedbackPending] = useState('')
   const item = event.data
+
+  // Rule-hit feedback is operational: it records the operator's judgement and
+  // keeps the original reason. It never edits the rule or retrains anything.
+  async function markHit(hitID: string, falsePositive: boolean, hitNote: string) {
+    setFeedbackPending(hitID)
+    setError('')
+    try {
+      await apiRequest(
+        `/api/v1/event-hits/${hitID}`,
+        jsonRequest('PATCH', { false_positive: falsePositive, note: hitNote })
+      )
+      await client.invalidateQueries()
+    } catch (cause) {
+      setError(apiErrorText(cause))
+    } finally {
+      setFeedbackPending('')
+    }
+  }
 
   async function transition(state: string) {
     if (!item) return
@@ -364,6 +411,62 @@ function EventDetail({
                   查看事件录像
                 </Link>
               </Button>
+            </div>
+            <div className='space-y-2 rounded-lg border p-3'>
+              <p className='font-medium'>命中规则</p>
+              {!item.hits?.length && (
+                <p className='text-xs text-muted-foreground'>
+                  没有规则命中这个事件。
+                </p>
+              )}
+              {(item.hits || []).map((hit) => (
+                <div
+                  key={hit.id}
+                  data-testid='event-hit'
+                  className='space-y-1 rounded-md border bg-muted/30 p-2'
+                >
+                  <div className='flex flex-wrap items-center gap-2'>
+                    <span className='font-medium'>{hit.rule_name}</span>
+                    <StatusBadge
+                      tone={
+                        hit.severity === 'high'
+                          ? 'destructive'
+                          : hit.severity === 'medium'
+                            ? 'info'
+                            : 'neutral'
+                      }
+                    >
+                      {SEVERITY_LABELS[hit.severity ?? ''] || hit.severity}
+                    </StatusBadge>
+                    {hit.false_positive && <StatusBadge tone='warning'>已标误报</StatusBadge>}
+                  </div>
+                  {/* The reason is frozen at match time, so it explains the
+                      decision even after the rule was edited. */}
+                  <p className='text-xs text-muted-foreground'>
+                    {hitReasonText(hit)}
+                  </p>
+                  {hit.false_positive_note && (
+                    <p className='text-xs text-muted-foreground'>备注：{hit.false_positive_note}</p>
+                  )}
+                  <div className='flex items-center gap-2'>
+                    <Button
+                      size='sm'
+                      variant='ghost'
+                      aria-label={`标记规则命中${hit.false_positive ? '非误报' : '为误报'} ${hit.rule_name}`}
+                      disabled={feedbackPending === hit.id}
+                      onClick={() =>
+                        void markHit(
+                          hit.id ?? '',
+                          !hit.false_positive,
+                          hit.false_positive ? '' : '误报'
+                        )
+                      }
+                    >
+                      {hit.false_positive ? '取消误报' : '标记误报'}
+                    </Button>
+                  </div>
+                </div>
+              ))}
             </div>
             <div className='space-y-2 rounded-lg border p-3'>
               <p className='font-medium'>处理</p>

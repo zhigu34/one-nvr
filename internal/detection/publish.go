@@ -115,6 +115,10 @@ func (s *Service) cameraConfigs(ctx context.Context) (map[string]CameraConfig, m
 		if err != nil {
 			return nil, nil, err
 		}
+		zones, err := s.loadZoneRenders(ctx, nil, channelID)
+		if err != nil {
+			return nil, nil, err
+		}
 		cameras[CameraName(channelNo)] = CameraConfig{
 			Enabled:  enabled,
 			InputURL: input,
@@ -122,6 +126,7 @@ func (s *Service) cameraConfigs(ctx context.Context) (map[string]CameraConfig, m
 			Width:    640,
 			Height:   360,
 			Labels:   labelList,
+			Zones:    zones,
 		}
 	}
 	if err := rows.Err(); err != nil {

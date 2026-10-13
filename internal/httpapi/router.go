@@ -6,11 +6,11 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"github.com/zhigu34/one-nvr/internal/archive"
-	"github.com/zhigu34/one-nvr/internal/detection"
-	"github.com/zhigu34/one-nvr/internal/events"
 	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/capability"
 	"github.com/zhigu34/one-nvr/internal/channel"
+	"github.com/zhigu34/one-nvr/internal/detection"
+	"github.com/zhigu34/one-nvr/internal/events"
 	"github.com/zhigu34/one-nvr/internal/fault"
 	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/live"
@@ -160,6 +160,14 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("DELETE /api/v1/archive-targets/{id}", r.protected(r.deleteArchiveTarget))
 	r.mux.HandleFunc("POST /api/v1/archive-targets/test", r.protected(r.testArchiveTarget))
 	r.mux.HandleFunc("POST /api/v1/recordings/archive", r.protected(r.requestArchiveUploads))
+	r.mux.HandleFunc("GET /api/v1/detection/zones", r.protected(r.listChannelZones))
+	r.mux.HandleFunc("POST /api/v1/detection/zones", r.protected(r.saveChannelZone))
+	r.mux.HandleFunc("DELETE /api/v1/detection/zones/{id}", r.protected(r.deleteChannelZone))
+	r.mux.HandleFunc("GET /api/v1/detection/frame", r.protected(r.detectionFrame))
+	r.mux.HandleFunc("GET /api/v1/detection/rules", r.protected(r.listChannelRules))
+	r.mux.HandleFunc("POST /api/v1/detection/rules", r.protected(r.saveChannelRule))
+	r.mux.HandleFunc("DELETE /api/v1/detection/rules/{id}", r.protected(r.deleteChannelRule))
+	r.mux.HandleFunc("PATCH /api/v1/event-hits/{id}", r.protected(r.markRuleHitFalsePositive))
 	r.mux.HandleFunc("GET /api/v1/detection/configs", r.protected(r.detectionConfigs))
 	r.mux.HandleFunc("PUT /api/v1/detection/configs/{id}", r.protected(r.updateDetectionConfig))
 	r.mux.HandleFunc("POST /api/v1/detection/publish", r.protected(r.publishDetection))

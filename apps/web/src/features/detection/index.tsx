@@ -16,6 +16,8 @@ import { apiErrorText } from '@/features/foundation/api-errors'
 import { LoadingButton } from '@/features/foundation/loading-button'
 import { StatusBadge } from '@/features/foundation/status-badge'
 import { Empty, Notices, QueryState, SelectField } from '@/features/foundation/ui'
+import { ZonePanel } from './zones'
+import { RulePanel } from './rules'
 
 type Config = Schema<'DetectionConfig'>
 type Runtime = Schema<'DetectionRuntime'>
@@ -222,93 +224,147 @@ function DetectionRow({
   }
 
   return (
-    <div
-      className='flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border bg-card p-3 text-sm'
-      data-testid='detection-row'
-    >
-      <span className='w-40 shrink-0 truncate font-medium'>{label}</span>
-      <label className='flex items-center gap-2'>
-        <Checkbox
-          checked={enabled}
-          onCheckedChange={(next) => setEnabled(next === true)}
-          aria-label={`${label} 启用检测`}
-        />
-        启用检测
-      </label>
-      {/* Labels live in the row header via ariaLabel only: repeating the
-          channel name on every control is what pushed these to two lines. */}
-      <div className='flex items-center gap-2'>
-        <span className='text-xs text-muted-foreground'>码流</span>
-        <SelectField
-          ariaLabel={`${label} 检测码流`}
-          value={stream}
-          onValueChange={(next) => setStream((next ?? 'sub') as 'main' | 'sub')}
-          options={[
-            { value: 'sub', label: '子码流' },
-            { value: 'main', label: '主码流' },
-          ]}
-          className='w-24'
-        />
+    <div className='space-y-2 rounded-xl border bg-card p-3 text-sm'>
+      <div className='flex flex-wrap items-center gap-x-4 gap-y-2' data-testid='detection-row'>
+        <span className='w-40 shrink-0 truncate font-medium'>{label}</span>
+        <label className='flex items-center gap-2'>
+          <Checkbox
+            checked={enabled}
+            onCheckedChange={(next) => setEnabled(next === true)}
+            aria-label={`${label} 启用检测`}
+          />
+          启用检测
+        </label>
+        {/* Labels live in the row header via ariaLabel only: repeating the
+            channel name on every control is what pushed these to two lines. */}
+        <div className='flex items-center gap-2'>
+          <span className='text-xs text-muted-foreground'>码流</span>
+          <SelectField
+            ariaLabel={`${label} 检测码流`}
+            value={stream}
+            onValueChange={(next) => setStream((next ?? 'sub') as 'main' | 'sub')}
+            options={[
+              { value: 'sub', label: '子码流' },
+              { value: 'main', label: '主码流' },
+            ]}
+            className='w-24'
+          />
+        </div>
+        <div className='flex items-center gap-2'>
+          <span className='text-xs text-muted-foreground'>帧率</span>
+          <SelectField
+            ariaLabel={`${label} 检测帧率`}
+            value={String(fps)}
+            onValueChange={(next) => setFps(Number(next ?? 5))}
+            options={[2, 5, 10, 15].map((value) => ({ value: String(value), label: `${value} fps` }))}
+            className='w-20'
+          />
+        </div>
+        <div className='flex items-center gap-2'>
+          <span className='text-xs text-muted-foreground'>目标</span>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant='outline' size='sm' aria-label={`${label} 目标类别`}>
+                {summary}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align='start' className='w-44'>
+              <DropdownMenuLabel>常用目标</DropdownMenuLabel>
+              {COMMON_LABELS.map((value) => (
+                <DropdownMenuCheckboxItem
+                  key={value}
+                  checked={selected.includes(value)}
+                  onSelect={(event) => event.preventDefault()}
+                  onCheckedChange={(next) => toggle(value, next === true)}
+                >
+                  {LABEL_TEXT[value] || value}
+                </DropdownMenuCheckboxItem>
+              ))}
+              <DropdownMenuLabel>其他</DropdownMenuLabel>
+              {MORE_LABELS.map((value) => (
+                <DropdownMenuCheckboxItem
+                  key={value}
+                  checked={selected.includes(value)}
+                  onSelect={(event) => event.preventDefault()}
+                  onCheckedChange={(next) => toggle(value, next === true)}
+                >
+                  {LABEL_TEXT[value] || value}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          {extra.length > 0 && (
+            <span className='text-xs text-muted-foreground'>+{extra.length} 类</span>
+          )}
+        </div>
+        <Button
+          size='sm'
+          variant='outline'
+          className='ml-auto'
+          disabled={pending || !selected.length}
+          onClick={() => onSave({ enabled, stream, fps, labels: selected })}
+        >
+          保存
+        </Button>
+        {draft && <StatusBadge tone='warning'>未保存</StatusBadge>}
       </div>
-      <div className='flex items-center gap-2'>
-        <span className='text-xs text-muted-foreground'>帧率</span>
-        <SelectField
-          ariaLabel={`${label} 检测帧率`}
-          value={String(fps)}
-          onValueChange={(next) => setFps(Number(next ?? 5))}
-          options={[2, 5, 10, 15].map((value) => ({ value: String(value), label: `${value} fps` }))}
-          className='w-20'
-        />
-      </div>
-      <div className='flex items-center gap-2'>
-        <span className='text-xs text-muted-foreground'>目标</span>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant='outline' size='sm' aria-label={`${label} 目标类别`}>
-              {summary}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align='start' className='w-44'>
-            <DropdownMenuLabel>常用目标</DropdownMenuLabel>
-            {COMMON_LABELS.map((value) => (
-              <DropdownMenuCheckboxItem
-                key={value}
-                checked={selected.includes(value)}
-                onSelect={(event) => event.preventDefault()}
-                onCheckedChange={(next) => toggle(value, next === true)}
-              >
-                {LABEL_TEXT[value] || value}
-              </DropdownMenuCheckboxItem>
-            ))}
-            <DropdownMenuLabel>其他</DropdownMenuLabel>
-            {MORE_LABELS.map((value) => (
-              <DropdownMenuCheckboxItem
-                key={value}
-                checked={selected.includes(value)}
-                onSelect={(event) => event.preventDefault()}
-                onCheckedChange={(next) => toggle(value, next === true)}
-              >
-                {LABEL_TEXT[value] || value}
-              </DropdownMenuCheckboxItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-        {extra.length > 0 && (
-          <span className='text-xs text-muted-foreground'>
-            +{extra.length} 类
-          </span>
-        )}
-      </div>
+      <RuleRow label={label} channelID={channel.id ?? ''} enabled={enabled} />
+    </div>
+  )
+}
+
+/**
+ * The per-channel zones and rules, behind a disclosure. They belong to the
+ * channel's detection, but drawing zones is not part of setting up detection
+ * for 32 channels, so the row stays one line until asked. The section is only
+ * meaningful on an enabled channel: without detection there is no frame to
+ * draw on and no events to match.
+ */
+function RuleRow({
+  label,
+  channelID,
+  enabled,
+}: {
+  label: string
+  channelID: string
+  enabled: boolean
+}) {
+  const client = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const refresh = () => void client.invalidateQueries()
+  return (
+    <div className='w-full basis-full'>
       <Button
+        type='button'
         size='sm'
-        variant='outline'
-        className='ml-auto'
-        disabled={pending || !selected.length}
-        onClick={() => onSave({ enabled, stream, fps, labels: selected })}
+        variant='ghost'
+        aria-expanded={open}
+        aria-label={`${label} 区域与规则`}
+        disabled={!channelID}
+        onClick={() => setOpen(!open)}
       >
-        保存
+        {open ? '收起区域与规则' : '区域与规则'}
       </Button>
-      {draft && <StatusBadge tone='warning'>未保存</StatusBadge>}
+      {open && (
+        <div className='mt-2 space-y-4 border-t pt-3'>
+          {!enabled && (
+            <p role='status' className='text-xs text-amber-600'>
+              这个通道未启用检测：区域无法校准，规则也不会有事件可匹配。先启用并发布。
+            </p>
+          )}
+          <section className='space-y-2'>
+            <h4 className='text-sm font-medium'>区域</h4>
+            <p className='text-xs text-muted-foreground'>
+              区域只存储在 one-nvr 并交给检测服务，判定由检测服务完成；删除区域会一并删除引用它的规则。
+            </p>
+            <ZonePanel channelID={channelID} onChanged={refresh} />
+          </section>
+          <section className='space-y-2 border-t pt-3'>
+            <h4 className='text-sm font-medium'>规则</h4>
+            <RulePanel channelID={channelID} onChanged={refresh} />
+          </section>
+        </div>
+      )}
     </div>
   )
 }

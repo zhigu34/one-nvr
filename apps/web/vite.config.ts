@@ -14,6 +14,10 @@ export default defineConfig({
       '@tanstack/react-query',
       '@radix-ui/react-tabs',
       '@radix-ui/react-collapsible',
+      // Pre-bundling keeps these on the same React instance as the test
+      // renderer; an un-optimized Radix package pulls in its own copy and the
+      // hooks dispatcher is null.
+      '@radix-ui/react-dropdown-menu',
     ],
   },
   server: {

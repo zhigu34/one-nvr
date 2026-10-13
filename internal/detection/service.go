@@ -394,7 +394,7 @@ func Render(base map[string]any, cameras map[string]CameraConfig) ([]byte, error
 			"objects": map[string]any{
 				"track": camera.Labels,
 			},
-			"zones": map[string]any{},
+			"zones": renderZones(camera.Zones),
 		}
 	}
 	config["cameras"] = cameraConfig
@@ -409,6 +409,9 @@ type CameraConfig struct {
 	Width    int
 	Height   int
 	Labels   []string
+	// Zones are the operator's drawings for this channel. The detector performs
+	// the zone semantics; they are handed over, never evaluated here.
+	Zones []zoneRender
 }
 
 // CameraName is the stable Frigate key of a channel: never derived from the
@@ -443,4 +446,27 @@ func writeFileAtomic(path string, data []byte) error {
 		return err
 	}
 	return os.Rename(temp, path)
+}
+
+// renderZones converts the stored drawings into the detector's configuration
+// form. An empty set stays an empty object so a channel without zones renders
+// exactly as before.
+//
+// A zone's dwell threshold rides along as the detector's own loitering time.
+// That is the only honest way to express "stop there for N seconds": the
+// detector counts the object's frames inside the zone, and it is the side that
+// can. Without this a dwell rule would silently behave like a plain entry.
+func renderZones(zones []zoneRender) map[string]any {
+	out := map[string]any{}
+	for _, zone := range zones {
+		entry := map[string]any{"coordinates": zone.Coordinates}
+		if len(zone.Objects) > 0 {
+			entry["objects"] = zone.Objects
+		}
+		if zone.Loitering > 0 {
+			entry["loitering_time"] = zone.Loitering
+		}
+		out[zone.Name] = entry
+	}
+	return out
 }

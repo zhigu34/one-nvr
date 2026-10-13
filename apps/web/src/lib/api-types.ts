@@ -1052,6 +1052,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/detection/zones": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["detectionZones"];
+        put?: never;
+        post: operations["detectionZoneSave"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/detection/zones/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["detectionZoneDelete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/detection/frame": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["detectionFrame"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/detection/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["detectionRules"];
+        put?: never;
+        post: operations["detectionRuleSave"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/detection/rules/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["detectionRuleDelete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/event-hits/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["ruleHitMark"];
+        trace?: never;
+    };
     "/api/v1/detection/configs": {
         parameters: {
             query?: never;
@@ -1946,6 +2042,78 @@ export interface components {
         ArchivePolicyPage: {
             items?: components["schemas"]["ArchivePolicy"][];
         };
+        ZonePoint: {
+            x: number;
+            y: number;
+        };
+        DetectionZone: {
+            id?: components["schemas"]["UUID"];
+            channel_id?: components["schemas"]["UUID"];
+            name?: string;
+            coordinates?: components["schemas"]["ZonePoint"][];
+            objects?: string[];
+            /** @description Geometry of the analyzed stream when the drawing was saved, as read from the channel's source test. Zero when it was unknown then. */
+            reference_width?: number;
+            reference_height?: number;
+            version?: number;
+            /** @description The analyzed stream's aspect ratio no longer matches the one this drawing was made against, so the same coordinates describe a different part of the view. */
+            needs_calibration?: boolean;
+        };
+        DetectionZonePage: {
+            items?: components["schemas"]["DetectionZone"][];
+        };
+        DetectionRule: {
+            id?: components["schemas"]["UUID"];
+            channel_id?: components["schemas"]["UUID"];
+            name?: string;
+            /**
+             * @description appear: any detection; enter: the detector reports the zone; dwell: enter plus a minimum stay (loitering).
+             * @enum {string}
+             */
+            kind?: "appear" | "enter" | "dwell";
+            /** Format: uuid */
+            zone_id?: string | null;
+            categories?: string[];
+            min_score?: number;
+            /** @description HH:MM site-local; empty means always armed. */
+            arm_from?: string;
+            /** @description HH:MM site-local; an end before the start crosses midnight. */
+            arm_to?: string;
+            dwell_seconds?: number | null;
+            /** @enum {string} */
+            severity?: "low" | "medium" | "high";
+            /** @description Notification cooldown; it never suppresses the event record. */
+            cooldown_seconds?: number;
+            enabled?: boolean;
+            version?: number;
+        };
+        DetectionRulePage: {
+            items?: components["schemas"]["DetectionRule"][];
+        };
+        RuleHit: {
+            id?: components["schemas"]["UUID"];
+            event_id?: components["schemas"]["UUID"];
+            rule_id?: components["schemas"]["UUID"];
+            rule_name?: string;
+            severity?: string;
+            zone_name?: string;
+            /** @description Facts captured at match time: category, score, zone, reported zones. */
+            reason?: {
+                /** @enum {string} */
+                kind?: "appear" | "enter" | "dwell";
+                category?: string;
+                score?: number;
+                zone?: string;
+                zones_reported?: string[];
+                severity?: string;
+            };
+            /** Format: date-time */
+            notified_at?: string | null;
+            false_positive?: boolean;
+            false_positive_note?: string;
+            /** Format: date-time */
+            created_at?: string;
+        };
         DetectionConfig: {
             channel_id?: components["schemas"]["UUID"];
             enabled?: boolean;
@@ -2005,6 +2173,8 @@ export interface components {
             /** Format: date-time */
             expires_at?: string | null;
             handling?: components["schemas"]["EventHandlingRecord"][];
+            /** @description The rules this event tripped, on the detail response. Absent from list rows. */
+            hits?: components["schemas"]["RuleHit"][];
         };
         EventHandlingRecord: {
             id?: components["schemas"]["UUID"];
@@ -6070,6 +6240,227 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ArchivePolicy"];
                 };
+            };
+        };
+    };
+    detectionZones: {
+        parameters: {
+            query: {
+                channel_id: components["schemas"]["UUID"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The channel's zones, each marked when the frame changed under it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DetectionZonePage"];
+                };
+            };
+        };
+    };
+    detectionZoneSave: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Omit to create; supply to replace, keeping rule bindings. */
+                    id?: components["schemas"]["UUID"];
+                    channel_id: components["schemas"]["UUID"];
+                    name: string;
+                    coordinates: components["schemas"]["ZonePoint"][];
+                    /** @description Categories this zone cares about; empty means every tracked category. */
+                    objects?: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description The stored zone; the reference geometry is read from the channel's source test, never taken from the request. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DetectionZone"];
+                };
+            };
+            /** @description The polygon is unusable (fewer than three vertices, self-intersecting, or outside the frame) or the name is taken. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    detectionZoneDelete: {
+        parameters: {
+            query: {
+                channel_id: components["schemas"]["UUID"];
+            };
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted, together with the rules that depended on it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    detectionFrame: {
+        parameters: {
+            query: {
+                channel_id: components["schemas"]["UUID"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One still of the frame the detector analyzes, at the detector's own size. The zone canvas draws on exactly this image, so a polygon is relative to the pixels the detector classifies. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                };
+            };
+            /** @description The channel has no frame yet: detection is not enabled, or nothing has been published for it. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The detector is not reachable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    detectionRules: {
+        parameters: {
+            query: {
+                channel_id: components["schemas"]["UUID"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The channel's rules. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DetectionRulePage"];
+                };
+            };
+        };
+    };
+    detectionRuleSave: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DetectionRule"];
+            };
+        };
+        responses: {
+            /** @description The stored rule. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DetectionRule"];
+                };
+            };
+            /** @description The rule could never fire as written (missing zone, missing dwell threshold, half an arming window, unknown severity), or it contradicts the detector's per-zone dwell model: rule_enter_on_dwell_zone when entry and dwell would share a zone, rule_dwell_conflict when a zone would need two thresholds. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    detectionRuleDelete: {
+        parameters: {
+            query: {
+                channel_id: components["schemas"]["UUID"];
+            };
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    ruleHitMark: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    false_positive: boolean;
+                    note?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Recorded as operational feedback; the hit keeps its original reason. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

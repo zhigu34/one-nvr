@@ -3760,6 +3760,152 @@
         }
       }
     },
+    "/api/v1/detection/zones": {
+      "get": {
+        "operationId": "detectionZones",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "channel_id", "in": "query", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+        ],
+        "responses": {
+          "200": { "description": "The channel's zones, each marked when the frame changed under it.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DetectionZonePage" } } } }
+        }
+      },
+      "post": {
+        "operationId": "detectionZoneSave",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [{ "sessionCookie": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["channel_id", "name", "coordinates"],
+                "properties": {
+                  "id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID", "description": "Omit to create; supply to replace, keeping rule bindings." },
+                  "channel_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+                  "name": { "type": "string", "maxLength": 32 },
+                  "coordinates": { "type": "array", "items": { "$ref": "#/components/schemas/ZonePoint" } },
+                  "objects": { "type": "array", "items": { "type": "string" }, "description": "Categories this zone cares about; empty means every tracked category." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "The stored zone; the reference geometry is read from the channel's source test, never taken from the request.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DetectionZone" } } } },
+          "422": { "description": "The polygon is unusable (fewer than three vertices, self-intersecting, or outside the frame) or the name is taken." }
+        }
+      }
+    },
+    "/api/v1/detection/zones/{id}": {
+      "delete": {
+        "operationId": "detectionZoneDelete",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
+          { "name": "channel_id", "in": "query", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+        ],
+        "responses": {
+          "200": { "description": "Deleted, together with the rules that depended on it." }
+        }
+      }
+    },
+    "/api/v1/detection/frame": {
+      "get": {
+        "operationId": "detectionFrame",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "channel_id", "in": "query", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "One still of the frame the detector analyzes, at the detector's own size. The zone canvas draws on exactly this image, so a polygon is relative to the pixels the detector classifies.",
+            "content": {
+              "image/jpeg": { "schema": { "type": "string", "format": "binary" } }
+            }
+          },
+          "409": { "description": "The channel has no frame yet: detection is not enabled, or nothing has been published for it." },
+          "503": { "description": "The detector is not reachable." }
+        }
+      }
+    },
+    "/api/v1/detection/rules": {
+      "get": {
+        "operationId": "detectionRules",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "playback",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "channel_id", "in": "query", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+        ],
+        "responses": {
+          "200": { "description": "The channel's rules.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DetectionRulePage" } } } }
+        }
+      },
+      "post": {
+        "operationId": "detectionRuleSave",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [{ "sessionCookie": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DetectionRule" } } }
+        },
+        "responses": {
+          "200": { "description": "The stored rule.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DetectionRule" } } } },
+          "422": { "description": "The rule could never fire as written (missing zone, missing dwell threshold, half an arming window, unknown severity), or it contradicts the detector's per-zone dwell model: rule_enter_on_dwell_zone when entry and dwell would share a zone, rule_dwell_conflict when a zone would need two thresholds." }
+        }
+      }
+    },
+    "/api/v1/detection/rules/{id}": {
+      "delete": {
+        "operationId": "detectionRuleDelete",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
+          { "name": "channel_id", "in": "query", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+        ],
+        "responses": { "200": { "description": "Deleted." } }
+      }
+    },
+    "/api/v1/event-hits/{id}": {
+      "patch": {
+        "operationId": "ruleHitMark",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "playback",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["false_positive"],
+                "properties": {
+                  "false_positive": { "type": "boolean" },
+                  "note": { "type": "string", "maxLength": 500 }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Recorded as operational feedback; the hit keeps its original reason." } }
+      }
+    },
     "/api/v1/detection/configs": {
       "get": {
         "operationId": "detectionConfigs",
@@ -6666,6 +6812,89 @@
           }
         }
       },
+      "ZonePoint": {
+        "type": "object",
+        "required": ["x", "y"],
+        "properties": {
+          "x": { "type": "number", "minimum": 0, "maximum": 1 },
+          "y": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      },
+      "DetectionZone": {
+        "type": "object",
+        "properties": {
+          "id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+          "channel_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+          "name": { "type": "string" },
+          "coordinates": { "type": "array", "items": { "$ref": "#/components/schemas/ZonePoint" } },
+          "objects": { "type": "array", "items": { "type": "string" } },
+          "reference_width": { "type": "integer", "description": "Geometry of the analyzed stream when the drawing was saved, as read from the channel's source test. Zero when it was unknown then." },
+          "reference_height": { "type": "integer" },
+          "version": { "type": "integer" },
+          "needs_calibration": {
+            "type": "boolean",
+            "description": "The analyzed stream's aspect ratio no longer matches the one this drawing was made against, so the same coordinates describe a different part of the view."
+          }
+        }
+      },
+      "DetectionZonePage": {
+        "type": "object",
+        "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/DetectionZone" } } }
+      },
+      "DetectionRule": {
+        "type": "object",
+        "properties": {
+          "id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+          "channel_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+          "name": { "type": "string" },
+          "kind": {
+            "type": "string",
+            "enum": ["appear", "enter", "dwell"],
+            "description": "appear: any detection; enter: the detector reports the zone; dwell: enter plus a minimum stay (loitering)."
+          },
+          "zone_id": { "type": "string", "format": "uuid", "nullable": true },
+          "categories": { "type": "array", "items": { "type": "string" } },
+          "min_score": { "type": "number" },
+          "arm_from": { "type": "string", "description": "HH:MM site-local; empty means always armed." },
+          "arm_to": { "type": "string", "description": "HH:MM site-local; an end before the start crosses midnight." },
+          "dwell_seconds": { "type": "integer", "nullable": true },
+          "severity": { "type": "string", "enum": ["low", "medium", "high"] },
+          "cooldown_seconds": { "type": "integer", "description": "Notification cooldown; it never suppresses the event record." },
+          "enabled": { "type": "boolean" },
+          "version": { "type": "integer" }
+        }
+      },
+      "DetectionRulePage": {
+        "type": "object",
+        "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/DetectionRule" } } }
+      },
+      "RuleHit": {
+        "type": "object",
+        "properties": {
+          "id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+          "event_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+          "rule_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+          "rule_name": { "type": "string" },
+          "severity": { "type": "string" },
+          "zone_name": { "type": "string" },
+          "reason": {
+            "type": "object",
+            "description": "Facts captured at match time: category, score, zone, reported zones.",
+            "properties": {
+              "kind": { "type": "string", "enum": ["appear", "enter", "dwell"] },
+              "category": { "type": "string" },
+              "score": { "type": "number" },
+              "zone": { "type": "string" },
+              "zones_reported": { "type": "array", "items": { "type": "string" } },
+              "severity": { "type": "string" }
+            }
+          },
+          "notified_at": { "type": "string", "format": "date-time", "nullable": true },
+          "false_positive": { "type": "boolean" },
+          "false_positive_note": { "type": "string" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
       "DetectionConfig": {
         "type": "object",
         "properties": {
@@ -6732,6 +6961,11 @@
           "handling": {
             "type": "array",
             "items": { "$ref": "#/components/schemas/EventHandlingRecord" }
+          },
+          "hits": {
+            "type": "array",
+            "description": "The rules this event tripped, on the detail response. Absent from list rows.",
+            "items": { "$ref": "#/components/schemas/RuleHit" }
           }
         }
       },
