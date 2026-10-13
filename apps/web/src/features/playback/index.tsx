@@ -1332,8 +1332,18 @@ function Timeline({
           <div
             data-testid='playback-bracket'
             aria-label='导出区间'
-            className='pointer-events-none absolute top-0 bottom-0 border-x-2 border-amber-400 bg-amber-400/20 shadow-[0_0_18px_rgba(251,191,36,0.18)]'
-            style={{ left: position(bracket.start), width: `calc(${position(bracket.end)} - ${position(bracket.start)})` }}
+            // The bracket marks "this is the export window" without hiding
+            // the underlying segments — operators still need to read the
+            // coverage inside the window. A solid amber wash drowned the
+            // segments beneath it; a faint tinted stripe with crisp
+            // borders keeps the data primary.
+            className='pointer-events-none absolute top-0 bottom-0 border-x-2 border-amber-400'
+            style={{
+              left: position(bracket.start),
+              width: `calc(${position(bracket.end)} - ${position(bracket.start)})`,
+              background:
+                'repeating-linear-gradient(45deg, oklch(0.78 0.13 75 / 18%) 0 6px, transparent 6px 12px)',
+            }}
           >
             <span className='absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap rounded border border-amber-400/60 bg-amber-400 px-2 py-0.5 text-[10.5px] font-semibold text-amber-950 shadow-md'>
               选区 · {formatDuration(bracket.end - bracket.start)} · 用于导出
