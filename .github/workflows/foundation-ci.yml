@@ -309,7 +309,14 @@ jobs:
           # actionable, and this step stayed opaque for several rounds precisely
           # because it published nothing.
           root=$(mktemp -d /tmp/one-nvr-frigate-owner.XXXXXX)
-          trap 'rm -rf "$root"' EXIT
+          # The seed is chowned to the application user (10001) at mode 0700,
+          # which is exactly what this check asserts — and also what the runner
+          # user cannot delete. A plain `trap 'rm -rf "$root"' EXIT` therefore
+          # fails after a fully successful check and reports the step red: the
+          # failure looks identical to a real assertion failure while every
+          # measurement is correct. Cleanup is best-effort and must never decide
+          # the step's verdict; the runner tears the machine down anyway.
+          trap 'docker run --rm --network none --user 0:0 --mount "type=bind,source=$root,target=/fixture" --entrypoint sh one-nvr/app:m1a -ec "rm -rf /fixture/data /fixture/storage" >/dev/null 2>&1 || rm -rf "$root" 2>/dev/null || true' EXIT
           mkdir "$root/storage"
           chmod 755 "$root" "$root/storage"
           mkdir -p "$root/data"
