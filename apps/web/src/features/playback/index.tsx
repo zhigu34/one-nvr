@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
+  ArrowLeft,
   Camera,
   ChevronLeft,
   ChevronRight,
@@ -111,6 +112,9 @@ export function Playback({
   hideChannelList = false,
   layout,
   onRangeChange,
+  onActiveEntryChange,
+  playSignal,
+  toolbar,
 }: {
   initialChannel?: string
   initialAt?: string
@@ -136,6 +140,20 @@ export function Playback({
   // Reports the search range upward so the workspace can drive the file
   // panel's window from the same source of truth (the single time filter).
   onRangeChange?: (range: { start: number; end: number }) => void
+  // Reports the segment the player currently sits on (parked or playing).
+  onActiveEntryChange?: (segmentId: string) => void
+  // A play request from the file list; seq disambiguates repeats.
+  playSignal?: { id: string; seq: number } | null
+  // Toolbar controls for the search row: the shell owns the file drawer and
+  // the count label; Playback just renders the buttons at the row's end.
+  toolbar?: {
+    filesOpen: boolean
+    onFilesToggle: () => void
+    onOpenFilesSheet: () => void
+    filesCount?: number
+    showFilesToggle: boolean
+    narrow: boolean
+  }
 }) {
   const channelsQuery = useAPI<PageData<Schema<'Channel'>>>(
     '/api/v1/channels?limit=100',
@@ -188,6 +206,9 @@ export function Playback({
           hideChannelList={hideChannelList}
           layout={layout}
           onRangeChange={onRangeChange}
+          onActiveEntryChange={onActiveEntryChange}
+          playSignal={playSignal}
+          toolbar={toolbar}
         />
       )}
     </div>
@@ -205,6 +226,9 @@ function Workspace({
   hideChannelList = false,
   layout,
   onRangeChange,
+  onActiveEntryChange,
+  playSignal,
+  toolbar,
 }: {
   channels: Schema<'Channel'>[]
   zone: string
@@ -222,6 +246,16 @@ function Workspace({
         files: React.ReactNode | null
       }
   onRangeChange?: (range: { start: number; end: number }) => void
+  onActiveEntryChange?: (segmentId: string) => void
+  playSignal?: { id: string; seq: number } | null
+  toolbar?: {
+    filesOpen: boolean
+    onFilesToggle: () => void
+    onOpenFilesSheet: () => void
+    filesCount?: number
+    showFilesToggle: boolean
+    narrow: boolean
+  }
 }) {
   const [internalChannelID, setInternalChannelID] = useState(
     () =>
@@ -405,6 +439,25 @@ function Workspace({
       void apiRequest(`/api/v1/recordings/${activeEntry}/lease`, { method: 'DELETE' }).catch(() => {})
     }
   }, [activeEntry])
+  // The file list highlights (and scrolls to) whatever segment the player is
+  // sitting on — parked or playing.
+  useEffect(() => {
+    onActiveEntryChange?.(activeEntry)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeEntry])
+  // A play request from the file list: find the segment in the loaded index
+  // and start playing it. The signal's seq lets repeated plays of the same
+  // segment re-fire.
+  const playSignalSeq = playSignal?.seq
+  const playSignalId = playSignal?.id
+  useEffect(() => {
+    if (!playSignalId) return
+    const entry = timeline.entries.find((candidate) => candidate.id === playSignalId)
+    if (!entry) return
+    setSelected(entry)
+    controller.current?.start(entry.start)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playSignalId, playSignalSeq])
   useEffect(() => {
     if (!video.current) return
     const instance = new PlaybackController(
@@ -873,6 +926,49 @@ return (
               <p role='alert' className='w-full shrink-0 text-sm text-red-400'>
                 {rangeError}
               </p>
+            )}
+            {/* Row-end controls migrated from the deleted page header: the
+                live preview link and the file drawer toggle. */}
+            {toolbar && (
+              <div className='ml-auto flex shrink-0 items-center gap-2'>
+                <Link
+                  to='/live'
+                  aria-label='返回实时预览'
+                  title='返回实时预览'
+                  className='inline-flex h-8 items-center gap-1 rounded-md border border-video-border bg-video-surface-raised px-2 text-xs text-video-chrome-foreground/80 hover:bg-white/10 hover:text-video-chrome-foreground'
+                >
+                  <ArrowLeft className='size-3.5' />
+                  实时预览
+                </Link>
+                {toolbar.showFilesToggle &&
+                  (toolbar.narrow ? (
+                    <button
+                      type='button'
+                      aria-label='查看文件'
+                      title='查看文件'
+                      onClick={toolbar.onOpenFilesSheet}
+                      className='inline-flex h-8 items-center gap-1.5 rounded-md border border-video-border bg-video-surface-raised px-2 text-xs text-video-chrome-foreground hover:bg-white/10'
+                    >
+                      文件 ({toolbar.filesCount ?? '…'}段)
+                    </button>
+                  ) : (
+                    <button
+                      type='button'
+                      aria-pressed={toolbar.filesOpen}
+                      aria-label={toolbar.filesOpen ? '收起文件面板' : '展开文件面板'}
+                      title={toolbar.filesOpen ? '收起文件面板' : '展开文件面板'}
+                      onClick={toolbar.onFilesToggle}
+                      className={cn(
+                        'inline-flex h-8 items-center gap-1.5 rounded-md border px-2 text-xs transition-colors',
+                        toolbar.filesOpen
+                          ? 'border-zinc-600 bg-zinc-800 text-white'
+                          : 'border-video-border bg-video-surface-raised text-video-chrome-foreground hover:bg-white/10'
+                      )}
+                    >
+                      文件 ({toolbar.filesCount ?? '…'}段)
+                    </button>
+                  ))}
+              </div>
             )}
           </form>
           <div

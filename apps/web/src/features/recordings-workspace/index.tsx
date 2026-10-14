@@ -1,6 +1,6 @@
 import { useMemo, useState, useSyncExternalStore } from 'react'
-import { ArrowLeft, PanelRightClose, PanelRightOpen, Search } from 'lucide-react'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { Search } from 'lucide-react'
+import { useNavigate } from '@tanstack/react-router'
 import type { PageData, Schema } from '@/lib/types'
 import { useAPI } from '@/features/foundation/hooks'
 import { Empty, QueryState } from '@/features/foundation/ui'
@@ -86,6 +86,16 @@ export function RecordingsWorkspace({
   const [activeRange, setActiveRange] = useState<{ start: number; end: number } | null>(
     null
   )
+  // The segment the player currently sits on (parked or playing), reported
+  // up so the file list can highlight the row and scroll it into view.
+  const [activeSegmentId, setActiveSegmentId] = useState('')
+  // A play request from the file list: {id, seq} — the seq makes repeated
+  // plays of the same segment re-trigger the effect downstream.
+  const [playSignal, setPlaySignal] = useState<{ id: string; seq: number } | null>(
+    null
+  )
+  const onPlaySegment = (segmentId: string) =>
+    setPlaySignal({ id: segmentId, seq: (playSignal?.seq ?? 0) + 1 })
   function onChannelChange(next: string) {
     if (!next || next === channelID) return
     setResolvedID(next)
@@ -104,7 +114,6 @@ export function RecordingsWorkspace({
     () => channels.find((channel) => channel.id === channelID),
     [channels, channelID]
   )
-  const zone = site.data?.timezone || ''
   // The header chip and the collapsed-rail badge read the active channel's
   // segment count over the playback search window — the same window the
   // file panel lists.
@@ -144,7 +153,7 @@ export function RecordingsWorkspace({
       // The only chrome above this div is the h-16 header, so an explicit
       // calc is the precise, stable value; overflow-hidden keeps the page
       // at exactly one viewport.
-      className='flex h-[calc(100dvh-4rem)] min-h-0 flex-col gap-3 overflow-hidden bg-video-surface text-video-chrome-foreground'
+      className='flex h-[calc(100vh-3.5rem)] max-h-[calc(100vh-3.5rem)] min-h-0 flex-col overflow-hidden bg-video-surface text-video-chrome-foreground'
     >
       <QueryState
         pending={channelsQuery.isPending || site.isPending}
@@ -153,16 +162,6 @@ export function RecordingsWorkspace({
           void channelsQuery.refetch()
           void site.refetch()
         }}
-      />
-      <WorkspaceHeader
-        zone={zone}
-        channel={activeChannel}
-        segmentCount={stats.data?.segments}
-        rightOpen={rightOpen}
-        onToggleRight={() => setRightOpen((open) => !open)}
-        onOpenSheet={() => setSheetOpen(true)}
-        showRightToggle={admin && !!activeChannel}
-        narrow={narrow}
       />
       {!channels.length && channelsQuery.data && (
         <Empty>没有可回放的通道，请联系管理员分配录像回放权限。</Empty>
@@ -176,6 +175,16 @@ export function RecordingsWorkspace({
           initialAt={initialAt}
           active
           onRangeChange={setActiveRange}
+          onActiveEntryChange={setActiveSegmentId}
+          playSignal={playSignal}
+          toolbar={{
+            filesOpen: rightOpen,
+            onFilesToggle: () => setRightOpen((open) => !open),
+            onOpenFilesSheet: () => setSheetOpen(true),
+            filesCount: stats.data?.segments,
+            showFilesToggle: admin && !!activeChannel,
+            narrow,
+          }}
           // The workspace layout (rail / player / files + full-width timeline
           // row) is rendered by Playback itself now — the shell hands over
           // the file panel as a slot so it lands in the third column, and
@@ -198,8 +207,8 @@ export function RecordingsWorkspace({
                   files:
                     // Collapsed: render NOTHING in column 3 — no placeholder,
                     // no strip, no border. The grid drops to two columns and
-                    // the console stretches to the right edge; the header's
-                    // 文件 button is the only way to open the drawer.
+                    // the console stretches to the right edge; the search
+                    // toolbar's 文件 button is the only way to open the drawer.
                     admin && inlineFileVisible ? (
                       <div
                         data-testid='files-panel'
@@ -210,6 +219,9 @@ export function RecordingsWorkspace({
                           initialChannel={channelID}
                           active
                           controlledRange={activeRange ?? undefined}
+                          activeSegmentId={activeSegmentId}
+                          onClose={() => setRightOpen(false)}
+                          onPlaySegment={onPlaySegment}
                         />
                       </div>
                     ) : null,
@@ -240,97 +252,15 @@ export function RecordingsWorkspace({
                 initialChannel={channelID}
                 active={sheetOpen}
                 controlledRange={activeRange ?? undefined}
+                activeSegmentId={activeSegmentId}
+                onClose={() => setSheetOpen(false)}
+                onPlaySegment={onPlaySegment}
               />
             </div>
           </SheetContent>
         </Sheet>
       )}
     </div>
-  )
-}
-
-function WorkspaceHeader({
-  zone,
-  channel,
-  segmentCount,
-  rightOpen,
-  onToggleRight,
-  onOpenSheet,
-  showRightToggle,
-  narrow,
-}: {
-  zone: string
-  channel?: Schema<'Channel'>
-  segmentCount?: number
-  rightOpen: boolean
-  onToggleRight: () => void
-  onOpenSheet: () => void
-  showRightToggle: boolean
-  narrow: boolean
-}) {
-  return (
-    <header className='flex flex-wrap items-center gap-3 border-b border-video-border px-1 pb-2'>
-      <Link
-        to='/live'
-        aria-label='返回实时预览'
-        title='返回实时预览'
-        className='inline-flex h-7 items-center gap-1 rounded-md border border-video-border bg-video-surface-raised px-2 text-xs text-video-chrome-foreground/80 hover:bg-white/10 hover:text-video-chrome-foreground'
-      >
-        <ArrowLeft className='size-3.5' />
-        实时
-      </Link>
-      <h1 className='text-lg font-semibold tracking-tight'>录像</h1>
-      <span className='text-video-chrome-foreground/40'>·</span>
-      <span className='text-sm text-video-chrome-foreground/70'>
-        {channel
-          ? `CH${String(channel.channel_no).padStart(2, '0')} ${channel.channel_name}`
-          : '选择通道'}
-      </span>
-      <span className='text-video-chrome-foreground/30'>·</span>
-      <span className='text-xs text-video-chrome-foreground/60'>
-        {zone || '站点时区…'}
-      </span>
-      {showRightToggle && (
-        <div className='ml-auto flex items-center gap-2'>
-          {/* ONE toggle button: label carries the count, the border lights up
-              while the drawer is open. The old standalone count chip was a
-              duplicate of this button's job. */}
-          {narrow ? (
-            <button
-              type='button'
-              aria-label='查看文件'
-              title='查看文件'
-              onClick={onOpenSheet}
-              className='inline-flex h-8 items-center gap-1.5 rounded-md border border-video-border bg-video-surface-raised px-2 text-xs text-video-chrome-foreground hover:bg-white/10'
-            >
-              <PanelRightOpen className='size-4' />
-              文件 ({segmentCount ?? '…'}段)
-            </button>
-          ) : (
-            <button
-              type='button'
-              aria-pressed={rightOpen}
-              aria-label={rightOpen ? '收起文件面板' : '展开文件面板'}
-              title={rightOpen ? '收起文件面板' : '展开文件面板'}
-              onClick={onToggleRight}
-              className={cn(
-                'inline-flex h-8 items-center gap-1.5 rounded-md border px-2 text-xs transition-colors',
-                rightOpen
-                  ? 'border-amber-400/60 bg-amber-400/10 text-amber-300 hover:bg-amber-400/20'
-                  : 'border-video-border bg-video-surface-raised text-video-chrome-foreground hover:bg-white/10'
-              )}
-            >
-              {rightOpen ? (
-                <PanelRightClose className='size-4' />
-              ) : (
-                <PanelRightOpen className='size-4' />
-              )}
-              文件 ({segmentCount ?? '…'}段)
-            </button>
-          )}
-        </div>
-      )}
-    </header>
   )
 }
 

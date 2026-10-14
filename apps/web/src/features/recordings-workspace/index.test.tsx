@@ -107,7 +107,9 @@ test('the recordings workspace renders channels, playback and the file panel sid
     history: createMemoryHistory({ initialEntries: ['/'] }),
   })
   const view = await render(<RouterProvider router={router} />)
-  await expect.element(view.getByRole('heading', { name: '录像' })).toBeVisible()
+  // The page header row is gone; the live link and the file toggle now live
+  // at the end of the playback search toolbar.
+  await expect.element(view.getByRole('link', { name: '返回实时预览' })).toBeVisible()
   await expect.element(view.getByTestId('channels-rail')).toBeVisible()
   await expect.element(view.getByRole('button', { name: 'CH01 大门' })).toBeVisible()
   await expect.element(view.getByTestId('playback-console')).toBeVisible()

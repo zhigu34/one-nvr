@@ -162,7 +162,8 @@ test('lists recordings with media facts and states, and marks deleted rows unsel
   const view = await render(setup.view)
   await expect.element(view.getByTestId('recording-row')).toHaveLength(3)
   const first = view.getByTestId('recording-row').nth(0)
-  await expect.element(first).toHaveTextContent('1920×1080 · h264')
+  // The card renders the media line with the codec upper-cased.
+  await expect.element(first).toHaveTextContent('1920×1080 · H264')
   await expect.element(first).toHaveTextContent('可用')
   // A file that vanished outside one-nvr reads as missing, never as deleted.
   await expect

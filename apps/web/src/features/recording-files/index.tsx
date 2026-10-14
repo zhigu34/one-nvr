@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, Download, Shield, ShieldOff, Trash2 } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
+import { ChevronDown, Download, Play, Shield, ShieldOff, Trash2, X } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth-store'
 import { apiRequest, jsonRequest, newRequestKey } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
@@ -20,7 +20,7 @@ import {
   SelectField,
 } from '@/features/foundation/ui'
 import { cn } from '@/lib/utils'
-import { formatMinute } from '@/features/playback/zone'
+import { formatClock } from '@/features/playback/zone'
 import { ExportsDrawer } from '@/features/recording-exports/exports-drawer'
 
 type Target = Schema<'ArchiveTarget'>
@@ -81,11 +81,22 @@ export function RecordingFiles({
   // there is no second time picker here to disagree with the toolbar. Falls
   // back to the last 7 days when the shell has not reported yet.
   controlledRange,
+  // The segment the player currently sits on: drives the row highlight and
+  // the auto-expand of its hour group.
+  activeSegmentId = '',
+  // Closes the panel (the ✕ in the panel header).
+  onClose,
+  onPlaySegment,
 }: {
   initialChannel?: string
   active?: boolean
   controlledChannelId?: string
   controlledRange?: { start: number; end: number }
+  activeSegmentId?: string
+  onClose?: () => void
+  // Starts playback of one of the panel's segments (the shell owns the
+  // player; this is the ▶ button's up-call).
+  onPlaySegment?: (segmentId: string) => void
 }) {
   const admin = useAuthStore((state) => state.user?.role === 'admin')
   const client = useQueryClient()
@@ -136,10 +147,28 @@ export function RecordingFiles({
     return params.toString()
   }, [activeChannel, window, revision, pool, health, protection])
 
-  const list = useAPI<{ items: Segment[]; next_cursor: string | null }>(
-    `/api/v1/recordings?${filters}`,
-    active && !!activeChannel
-  )
+  // The list follows the cursor to exhaustion (capped) so the panel carries
+  // the filter window's FULL set — no 100-segment hard cut. A hard cap stops
+  // the chain so one window can never fetch forever.
+  const MAX_PANEL_SEGMENTS = 5000
+  const list = useInfiniteQuery({
+    queryKey: ['recording-files', filters],
+    queryFn: ({ pageParam, signal }) =>
+      apiRequest<{ items: Segment[]; next_cursor: string | null }>(
+        `/api/v1/recordings?${pageParam ? `${filters}&cursor=${pageParam}` : filters}`,
+        { signal }
+      ),
+    initialPageParam: '',
+    getNextPageParam: (page) => page.next_cursor || undefined,
+    retry: false,
+    enabled: active && !!activeChannel,
+  })
+  useEffect(() => {
+    if (list.error || !list.hasNextPage || list.isFetching) return
+    if ((list.data?.pages ?? []).reduce((sum, page) => sum + page.items.length, 0) >= MAX_PANEL_SEGMENTS) return
+    void list.fetchNextPage()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [list.error, list.hasNextPage, list.isFetching, list.data])
   const stats = useAPI<Stats>(
     `/api/v1/recordings/stats?${filters}`,
     active && !!activeChannel
@@ -151,6 +180,72 @@ export function RecordingFiles({
     active && !!activeChannel
   )
 
+  const items = useMemo(
+    () =>
+      (list.data?.pages ?? [])
+        .flatMap((page) => page.items)
+        .sort((a, b) => Date.parse(b.start) - Date.parse(a.start)),
+    [list.data]
+  )
+  // Hourly groups: key = the site-zone `YYYY-MM-DD HH:00` of each slice's
+  // start, newest hour first. The zone formats through the same helper the
+  // playback page uses so both sides always agree on which hour a slice
+  // belongs to.
+  const hourGroups = useMemo(() => {
+    type Group = { key: string; label: string; segments: Segment[]; bytes: number }
+    const groups: Group[] = []
+    const byKey = new Map<string, Group>()
+    for (const item of items) {
+      const wall = zone
+        ? formatClock(Date.parse(item.start), zone)
+        : item.start.slice(0, 13)
+      const key = wall.slice(0, 13) // `YYYY-MM-DD HH` in the site zone
+      let group = byKey.get(key)
+      if (!group) {
+        group = {
+          key,
+          label: `${key.slice(0, 10)} ${key.slice(11, 13)}:00 — ${key.slice(11, 13)}:59`,
+          segments: [],
+          bytes: 0,
+        }
+        byKey.set(key, group)
+        groups.push(group)
+      }
+      group.segments.push(item)
+      group.bytes += item.bytes
+    }
+    return groups
+  }, [items, zone])
+  // Effective expansion is DERIVED, never stored: the newest hour is open by
+  // default, the hour holding the currently playing segment is forced open,
+  // and `collapsedHours` only remembers where the operator explicitly closed
+  // something. No setState-in-effect, no cascade on data refresh.
+  const [collapsedHours, setCollapsedHours] = useState<Set<string>>(new Set())
+  const expandedHours = useMemo(() => {
+    const open = new Set(hourGroups.map((group) => group.key))
+    for (const key of collapsedHours) open.delete(key)
+    const currentHour = hourGroups.find((candidate) =>
+      candidate.segments.some((segment) => segment.id === activeSegmentId)
+    )?.key
+    if (currentHour) open.add(currentHour)
+    return open
+  }, [hourGroups, collapsedHours, activeSegmentId])
+  const toggleHour = (key: string) =>
+    setCollapsedHours((previous) => {
+      const next = new Set(previous)
+      // Only meaningful while a default source keeps it open.
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  const listRef = useRef<HTMLDivElement>(null)
+  // When the active segment's row mounts (its hour just expanded), scroll it
+  // into the middle of the list.
+  const activeRowRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    activeRowRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [activeSegmentId, expandedHours])
+
   if (!permitted.length && channels.data)
     return <Empty>没有可管理的通道，请联系管理员分配录像回放权限。</Empty>
   if (!admin)
@@ -160,13 +255,7 @@ export function RecordingFiles({
       </Empty>
     )
 
-  const items = list.data?.items || []
-  const selectable = items.filter(
-    (item) => item.state === 'ready' || item.state === 'deleted'
-  )
   const chosen = items.filter((item) => selected.has(item.id))
-  const allChecked =
-    selectable.length > 0 && selectable.every((item) => selected.has(item.id))
   const willDelete = chosen.filter((item) => item.state === 'ready')
   const protectedChosen = chosen.filter((item) => item.protected)
   const expectedBytes = willDelete
@@ -261,8 +350,28 @@ export function RecordingFiles({
       />
       {!!permitted.length && (
         <>
+          {/* Panel header: count + the ✕ that closes the drawer. */}
+          <div className='flex items-center justify-between gap-2 px-1'>
+            <h3 className='text-sm font-semibold'>
+              录像文件{' '}
+              <span className='font-normal tabular-nums text-video-chrome-foreground/60'>
+                (共 {items.length} 段)
+              </span>
+            </h3>
+            {onClose && (
+              <button
+                type='button'
+                aria-label='收起文件面板'
+                title='收起'
+                onClick={onClose}
+                className='grid size-6 place-items-center rounded border border-video-border bg-video-surface-raised text-video-chrome-foreground/70 hover:text-video-chrome-foreground'
+              >
+                <X className='size-3.5' />
+              </button>
+            )}
+          </div>
           <form
-            className='grid grid-cols-2 gap-2 rounded-lg border border-video-border bg-video-surface-raised p-2.5'
+            className='grid grid-cols-2 gap-2 shrink-0 rounded-lg border border-video-border bg-video-surface-raised p-2.5'
             onSubmit={(event) => event.preventDefault()}
           >
             <SelectField
@@ -304,7 +413,7 @@ export function RecordingFiles({
             />
             <SelectField
               ariaLabel='文件健康'
-              className='col-span-2'
+              className='w-full min-w-0'
               value={health}
               onValueChange={(next) => setHealth(next)}
               options={[
@@ -322,8 +431,8 @@ export function RecordingFiles({
               numbers. */}
           <div className='flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-video-chrome-foreground/70'>
             <span>
-              {items.length} 段{selected.size > 0 ? ` · 已选 ${selected.size} 段` : ''}
-              {stats.data ? ` · 筛选范围内共 ${stats.data.segments} 段` : ''}
+              共 {items.length} 段
+              {selected.size > 0 ? ` · 已选 ${selected.size} 段` : ''}
               {!!stats.data?.cloud_only && ` · 仅云端 ${stats.data.cloud_only} 段`}
             </span>
             {exportable && (
@@ -391,37 +500,115 @@ export function RecordingFiles({
           {list.data && (
             <div
               data-testid='files-rows'
+              ref={listRef}
               className='flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto rounded-lg border border-video-border bg-video-surface-raised/40 p-2'
             >
-              {selectable.length > 0 && (
-                <div className='flex items-center gap-2 px-1 pb-1'>
-                  <Checkbox
-                    aria-label='选择当前结果'
-                    checked={allChecked}
-                    onCheckedChange={(state) =>
-                      setSelected(
-                        state === true
-                          ? new Set(selectable.map((item) => item.id))
-                          : new Set()
-                      )
-                    }
-                  />
-                  <span className='text-[11px] text-video-chrome-foreground/60'>
-                    全选当前页（{selectable.length} 段可选）
-                  </span>
-                </div>
-              )}
-              {items.map((item) => (
-                <RecordingRow
-                  key={item.id}
-                  item={item}
-                  zone={zone}
-                  actionPending={action.pending}
-                  selected={selected.has(item.id)}
-                  onToggle={(next) => toggle(item.id, next)}
-                  onProtect={() => void setProtection(item, !item.protected)}
-                />
-              ))}
+              {/* Hourly accordion: unexpanded hours cost one header row each,
+                  so a multi-thousand-segment window renders only the open
+                  hour's cards. */}
+              <div className='flex items-center gap-2 px-1 pb-1'>
+                <button
+                  type='button'
+                  className='text-[11px] text-video-chrome-foreground/60 hover:text-video-chrome-foreground'
+                  onClick={() => setCollapsedHours(new Set())}
+                >
+                  全部展开
+                </button>
+                <span className='text-video-chrome-foreground/30'>/</span>
+                <button
+                  type='button'
+                  className='text-[11px] text-video-chrome-foreground/60 hover:text-video-chrome-foreground'
+                  onClick={() =>
+                    setCollapsedHours(new Set(hourGroups.map((group) => group.key)))
+                  }
+                >
+                  全部折叠
+                </button>
+              </div>
+              {hourGroups.map((group) => {
+                const expanded = expandedHours.has(group.key)
+                const groupSelectable = group.segments.filter(
+                  (item) => item.state === 'ready' || item.state === 'deleted'
+                )
+                const groupChecked = groupSelectable.filter((item) =>
+                  selected.has(item.id)
+                ).length
+                const playingHere = group.segments.some(
+                  (item) => item.id === activeSegmentId
+                )
+                return (
+                  <div key={group.key} className='flex flex-col gap-1'>
+                    <div
+                      role='button'
+                      tabIndex={0}
+                      onClick={() => toggleHour(group.key)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault()
+                          toggleHour(group.key)
+                        }
+                      }}
+                      className='flex cursor-pointer items-center gap-2 rounded-md border border-video-border bg-video-surface px-2.5 py-1.5 text-xs hover:bg-white/5'
+                    >
+                      <Checkbox
+                        aria-label={`选择 ${group.key} 整点`}
+                        checked={
+                          groupSelectable.length > 0 &&
+                          groupChecked === groupSelectable.length
+                        }
+                        onCheckedChange={(state) => {
+                          const ids = groupSelectable.map((item) => item.id)
+                          setSelected((previous) => {
+                            const next = new Set(previous)
+                            if (state === true) ids.forEach((id) => next.add(id))
+                            else ids.forEach((id) => next.delete(id))
+                            return next
+                          })
+                        }}
+                        onClick={(event) => event.stopPropagation()}
+                        className='shrink-0'
+                      />
+                      <ChevronDown
+                        className={cn(
+                          'size-3.5 shrink-0 text-video-chrome-foreground/50 transition-transform',
+                          expanded && 'rotate-180'
+                        )}
+                      />
+                      <span className='font-medium tabular-nums'>{group.label}</span>
+                      <span className='ml-auto flex items-center gap-2 text-[10px] tabular-nums text-video-chrome-foreground/60'>
+                        {playingHere && (
+                          <span className='inline-flex items-center gap-1 text-emerald-400'>
+                            <span className='inline-block size-1.5 rounded-full bg-emerald-400' />
+                            播放中
+                          </span>
+                        )}
+                        {group.segments.length} 段 · {bytes(group.bytes)}
+                      </span>
+                    </div>
+                    {expanded &&
+                      group.segments.map((item) => (
+                        <RecordingRow
+                          key={item.id}
+                          item={item}
+                          zone={zone}
+                          actionPending={action.pending}
+                          selected={selected.has(item.id)}
+                          isCurrent={item.id === activeSegmentId}
+                          onToggle={(next) => toggle(item.id, next)}
+                          onProtect={() => void setProtection(item, !item.protected)}
+                          onPlay={() => onPlaySegment?.(item.id)}
+                          rowRef={
+                            item.id === activeSegmentId
+                              ? (node: HTMLDivElement | null) => {
+                                  activeRowRef.current = node
+                                }
+                              : undefined
+                          }
+                        />
+                      ))}
+                  </div>
+                )
+              })}
               {!items.length && (
                 <div className='p-8 text-center text-sm text-video-chrome-foreground/60'>
                   该范围内没有录像
@@ -525,44 +712,60 @@ function RecordingRow({
   zone,
   actionPending,
   selected,
+  isCurrent,
   onToggle,
   onProtect,
+  onPlay,
+  rowRef,
 }: {
   item: Segment
   zone: string
   actionPending: boolean
   selected: boolean
+  isCurrent: boolean
   onToggle: (next: boolean) => void
   onProtect: () => void
+  onPlay: () => void
+  rowRef?: (node: HTMLDivElement | null) => void
 }) {
-  const time = zone ? formatMinute(Date.parse(item.start), zone) : '—'
+  const startClock = zone ? formatClock(Date.parse(item.start), zone) : '—'
+  const endClock = zone ? formatClock(Date.parse(item.end), zone) : '—'
   const span = duration(Date.parse(item.end) - Date.parse(item.start))
   const media = item.media.codec
-    ? `${item.media.width}×${item.media.height} · ${item.media.codec}`
+    ? `${item.media.width}×${item.media.height} · ${item.media.codec.toUpperCase()}`
     : '—'
   const stateLabel = STATE_LABELS[item.state] || item.state
   const fillable = item.state === 'ready'
   return (
     <div
+      ref={rowRef}
       data-testid='recording-row'
       className={cn(
-        'group/row relative grid grid-cols-[16px_1fr_auto] gap-2 rounded border px-2.5 py-2 text-xs',
-        selected
-          ? 'border-amber-400/60 bg-amber-400/10'
-          : item.state === 'missing' || item.state === 'damaged' || item.state === 'conflict'
-            ? 'border-red-500/30 bg-red-500/5 opacity-90'
-            : 'border-video-border bg-video-surface hover:border-video-chrome-foreground/30'
+        'group/row flex h-[68px] items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs transition-colors',
+        isCurrent
+          ? 'border-emerald-500/80 bg-emerald-950/25'
+          : selected
+            ? 'border-amber-400/60 bg-amber-400/10'
+            : item.state === 'missing' ||
+                item.state === 'damaged' ||
+                item.state === 'conflict'
+              ? 'border-red-500/30 bg-red-500/5 opacity-90'
+              : 'border-video-border bg-video-surface hover:border-video-chrome-foreground/30'
       )}
     >
       <Checkbox
         aria-label={`选择 ${item.id}`}
         checked={selected}
         disabled={!fillable}
+        onClick={(event) => event.stopPropagation()}
         onCheckedChange={(state) => onToggle(state === true)}
+        className='shrink-0'
       />
-      <div className='min-w-0 space-y-1'>
+      <div className='min-w-0 flex-1 space-y-0.5'>
         <div className='flex flex-wrap items-center gap-x-2 gap-y-0.5'>
-          <span className='font-mono text-[12px] text-video-chrome-foreground'>{time}</span>
+          <span className='font-mono text-[12px] tabular-nums text-video-chrome-foreground'>
+            {startClock} — {endClock}
+          </span>
           {item.protected && (
             <span className='rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] text-amber-400'>
               已保护
@@ -586,44 +789,64 @@ function RecordingRow({
             {stateLabel}
           </span>
         </div>
-        <div className='flex flex-wrap items-center gap-x-2 text-[10.5px] text-video-chrome-foreground/60'>
-          <span className='tabular-nums'>{span}</span>
+        <div className='flex flex-wrap items-center gap-x-2 truncate text-[11px] text-video-chrome-foreground/50'>
+          <span className='tabular-nums'>时长 {span}</span>
           <span className='text-video-chrome-foreground/30'>·</span>
           <span className='tabular-nums'>{bytes(item.bytes)}</span>
           <span className='text-video-chrome-foreground/30'>·</span>
           <span>{media}</span>
         </div>
       </div>
-      <div className='flex items-center gap-1 opacity-0 transition-opacity group-hover/row:opacity-100'>
-        {item.state === 'ready' && (
-          <a
-            href={`/api/v1/recordings/${item.id}/content`}
-            aria-label={`下载 ${item.id}`}
-            className='grid size-6 place-items-center rounded border border-video-border bg-video-surface-raised text-video-chrome-foreground/70 hover:text-video-chrome-foreground'
-            title='下载'
+      <div className='flex shrink-0 items-center gap-1'>
+        <Button
+          type='button'
+          size='sm'
+          className={cn(
+            'h-6 gap-1 px-2 text-[10px]',
+            isCurrent
+              ? 'bg-emerald-500/90 text-white hover:bg-emerald-500'
+              : ''
+          )}
+          variant={isCurrent ? 'default' : 'outline'}
+          disabled={!fillable}
+          onClick={onPlay}
+          title={isCurrent ? '播放中' : '播放此段'}
+          aria-label={`播放 ${item.id}`}
+        >
+          {isCurrent ? <Play className='size-3 fill-current' /> : <Play className='size-3' />}
+          {isCurrent ? '当前' : '播放'}
+        </Button>
+        <div className='flex items-center gap-1 opacity-0 transition-opacity group-hover/row:opacity-100'>
+          {item.state === 'ready' && (
+            <a
+              href={`/api/v1/recordings/${item.id}/content`}
+              aria-label={`下载 ${item.id}`}
+              className='grid size-6 place-items-center rounded border border-video-border bg-video-surface-raised text-video-chrome-foreground/70 hover:text-video-chrome-foreground'
+              title='下载'
+            >
+              <Download className='size-3.5' />
+            </a>
+          )}
+          <button
+            type='button'
+            aria-label={`${item.protected ? '解除保护' : '保护'} ${startClock}`}
+            disabled={actionPending || item.state === 'deleted'}
+            onClick={onProtect}
+            className='grid size-6 place-items-center rounded border border-video-border bg-video-surface-raised text-video-chrome-foreground/70 hover:text-amber-400 disabled:opacity-30'
+            title={item.protected ? '解除保护' : '保护'}
           >
-            <Download className='size-3.5' />
-          </a>
-        )}
-        <button
-          type='button'
-          aria-label={`${item.protected ? '解除保护' : '保护'} ${time}`}
-          disabled={actionPending || item.state === 'deleted'}
-          onClick={onProtect}
-          className='grid size-6 place-items-center rounded border border-video-border bg-video-surface-raised text-video-chrome-foreground/70 hover:text-amber-400 disabled:opacity-30'
-          title={item.protected ? '解除保护' : '保护'}
-        >
-          {item.protected ? <ShieldOff className='size-3.5' /> : <Shield className='size-3.5' />}
-        </button>
-        <button
-          type='button'
-          aria-label={`删除本地副本 ${time}`}
-          disabled={actionPending || !fillable}
-          className='grid size-6 place-items-center rounded border border-video-border bg-video-surface-raised text-video-chrome-foreground/70 hover:text-red-400 disabled:opacity-30'
-          title='删除本地副本'
-        >
-          <Trash2 className='size-3.5' />
-        </button>
+            {item.protected ? <ShieldOff className='size-3.5' /> : <Shield className='size-3.5' />}
+          </button>
+          <button
+            type='button'
+            aria-label={`删除本地副本 ${startClock}`}
+            disabled={actionPending || !fillable}
+            className='grid size-6 place-items-center rounded border border-video-border bg-video-surface-raised text-video-chrome-foreground/70 hover:text-red-400 disabled:opacity-30'
+            title='删除本地副本'
+          >
+            <Trash2 className='size-3.5' />
+          </button>
+        </div>
       </div>
     </div>
   )
