@@ -481,13 +481,11 @@ function Workspace({
       .sort((a, b) => b.end - a.end)[0]
     if (!newest) return
     autoParkRef.current = true
-    // Park the playhead on the newest segment by selecting it: the canvas
-    // draws the cursor, the selection card names the file — the operator
-    // lands on a real position instead of a black idle ring. The media
-    // itself does NOT autoplay here (PLAY-09: an entry point never starts
-    // media on its own, and a parked lease would bill for nobody); one
-    // press of 播放 starts from this position.
+    // Load the newest segment's first frame and stop there: the picture is
+    // on screen (paused, no lease running), the playhead sits on the strip,
+    // and 播放 starts motion from this position. No black idle ring.
     setSelected(newest)
+    controller.current?.park(newest.start)
   }, [noData, timeline.entries])
   // Event marks for the canvas. The window is the view clamped to the
   // events' 90-day retention — a bounded, honest query (was inside the old
@@ -667,7 +665,12 @@ function Workspace({
           })
         }}
         onSetBracket={setBracket}
-        onSelect={setSelected}
+        onSelect={(entry) => {
+          // Selecting a segment parks the player on its first frame — the
+          // picture replaces the idle ring immediately; 播放 starts motion.
+          setSelected(entry)
+          controller.current?.park(entry.start)
+        }}
         onSeek={(at) => {
           const snap = snapToPlayable(timeline, at)
           controller.current?.seek(snap.at)
@@ -721,7 +724,13 @@ return (
               // Fixed rail/files widths so long content can never stretch
               // the columns; only the console flexes. Row 1 takes all the
               // height the timeline band leaves; the band is content-sized.
-              gridTemplateColumns: '200px minmax(0, 1fr) 340px',
+              // A null files slot (drawer collapsed / viewer role) drops the
+              // third track entirely — no empty column, the console stretches
+              // to the right edge.
+              gridTemplateColumns:
+                layout.files != null
+                  ? '200px minmax(0, 1fr) 340px'
+                  : '200px minmax(0, 1fr)',
               gridTemplateRows: 'minmax(0, 1fr) auto',
             }
           : undefined
@@ -849,6 +858,10 @@ return (
               ref={video}
               data-testid='playback-video'
               playsInline
+              // Motion only ever starts from the controller; parking shows the
+              // first frame via the loaded resource.
+              autoPlay={false}
+              preload='metadata'
               className='absolute inset-0 h-full w-full bg-black object-contain'
             />
             {/* Top-OSD metadata strip: channel + media facts the operator reads
@@ -864,22 +877,26 @@ return (
                   CH{String(active.channel_no).padStart(2, '0')} {active.channel_name}
                 </span>
               )}
-              {state.entry?.media && state.entry.media.width > 0 && (
+              {/* Media pills describe the SELECTED segment (index facts), not
+                  the live stream's health — so they stay put while the
+                  byte-range request is in flight or a load error is being
+                  explained. */}
+              {selected?.media && selected.media.width > 0 && (
                 <span className='rounded-md border border-white/15 bg-black/55 px-2 py-0.5 text-[11px] tabular-nums text-white/85 shadow-sm backdrop-blur'>
-                  {state.entry.media.width}×{state.entry.media.height}
+                  {selected.media.width}×{selected.media.height}
                 </span>
               )}
-              {state.entry?.media?.fps ? (
+              {selected?.media?.fps ? (
                 <span className='rounded-md border border-white/15 bg-black/55 px-2 py-0.5 text-[11px] tabular-nums text-white/85 shadow-sm backdrop-blur'>
-                  {Math.round(state.entry.media.fps)}fps
+                  {Math.round(selected.media.fps)}fps
                 </span>
               ) : null}
-              {state.entry?.media?.codec ? (
+              {selected?.media?.codec ? (
                 <span className='rounded-md border border-white/15 bg-black/55 px-2 py-0.5 text-[11px] uppercase text-white/85 shadow-sm backdrop-blur'>
-                  {state.entry.media.codec}
+                  {selected.media.codec}
                 </span>
               ) : null}
-              {state.entry && (
+              {selected && (
                 <span
                   title='本回放不经转码'
                   className='rounded-md border border-emerald-400/40 bg-emerald-400/15 px-2 py-0.5 text-[11px] text-emerald-300 shadow-sm backdrop-blur'
@@ -1102,46 +1119,41 @@ return (
               </div>
             </div>
           </div>
-          {/* Status strip: one quiet line between the picture and the
-              timeline — phase, position, and any warning, no card walls. */}
-          <div className='flex flex-wrap items-center gap-x-4 gap-y-0.5 border-t border-video-border px-3 py-1.5 text-[11px] text-video-chrome-foreground/70'>
-            <p role='status'>
-              {state.message}
-              <span className='mx-2 text-video-chrome-foreground/30'>·</span>
-              当前位置{' '}
-              {state.clock > 0
-                ? formatClock(state.clock, zone)
-                : '—'}
-              {state.entry ? ` · 片段 ${state.entry.id.slice(0, 8)}` : ''}
-            </p>
-            {state.skipped && (
-              <p role='alert' className='text-amber-400'>
-                已自动跳过缺口 {formatClock(state.skipped.start, zone)} —{' '}
-                {formatClock(state.skipped.end, zone)}（
-                {formatDuration(state.skipped.end - state.skipped.start)}，
-                {state.skipped.reason}）
-              </p>
-            )}
-            {state.gap && (
-              <p role='alert' className='flex items-center gap-2 text-amber-400'>
-                该时间没有可播放录像：{formatClock(state.gap.start, zone)} —{' '}
-                {formatClock(state.gap.end, zone)}（{state.gap.reason}）
-                <Button
-                  size='sm'
-                  variant='outline'
-                  className='h-6 border-white/20 px-2 text-xs text-white hover:bg-white/10'
-                  onClick={() => controller.current?.jumpToNext()}
-                >
-                  跳到下一可用片段
-                </Button>
-              </p>
-            )}
-            {state.phase === 'error' && (
-              <p role='alert' className='text-red-400'>
-                {state.message}
-              </p>
-            )}
-          </div>
+          {/* Warning strip: only rendered when there is an actual warning
+              (skipped gap, dead hole, error) — the routine phase/position
+              read lives in the band's axis header and the selection card, so
+              this row costs zero height in the common case. */}
+          {(state.skipped || state.gap || state.phase === 'error') && (
+            <div className='flex flex-wrap items-center gap-x-4 gap-y-0.5 border-t border-video-border px-3 py-1.5 text-[11px] text-video-chrome-foreground/70'>
+              {state.skipped && (
+                <p role='alert' className='text-amber-400'>
+                  已自动跳过缺口 {formatClock(state.skipped.start, zone)} —{' '}
+                  {formatClock(state.skipped.end, zone)}（
+                  {formatDuration(state.skipped.end - state.skipped.start)}，
+                  {state.skipped.reason}）
+                </p>
+              )}
+              {state.gap && (
+                <p role='alert' className='flex items-center gap-2 text-amber-400'>
+                  该时间没有可播放录像：{formatClock(state.gap.start, zone)} —{' '}
+                  {formatClock(state.gap.end, zone)}（{state.gap.reason}）
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    className='h-6 border-white/20 px-2 text-xs text-white hover:bg-white/10'
+                    onClick={() => controller.current?.jumpToNext()}
+                  >
+                    跳到下一可用片段
+                  </Button>
+                </p>
+              )}
+              {state.phase === 'error' && (
+                <p role='alert' className='text-red-400'>
+                  {state.message}
+                </p>
+              )}
+            </div>
+          )}
           {/* Workspace mode renders the band in the full-width row below the
               grid; plain (standalone) keeps it inside the console. */}
           {layout?.kind !== 'workspace' && timelineBand}

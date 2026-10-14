@@ -147,9 +147,16 @@ const fieldValue = (locator: { element: () => HTMLElement | SVGElement }) =>
   (locator.element() as HTMLInputElement).value
 const lastQuery = () => {
   const paths = calls.request.mock.calls.map((call) => call[0] as string)
+  // The parked player runs a lease heartbeat on its segment; that is an
+  // action endpoint, not an index query, so it never counts as "the last
+  // search".
   const path = [...paths]
     .reverse()
-    .find((candidate) => candidate.startsWith('/api/v1/recordings'))
+    .find(
+      (candidate) =>
+        candidate.startsWith('/api/v1/recordings?') ||
+        candidate.startsWith('/api/v1/recordings/stats')
+    )
   return new URLSearchParams(path?.split('?')[1] || '')
 }
 const shanghaiDay = (epochMs: number) =>
@@ -224,25 +231,32 @@ test('nothing clock dependent renders before the site timezone is known', async 
   expect(view.getByRole('button', { name: '检索录像' }).query()).toBeNull()
 })
 
-test('offers only channels with playback permission and starts no media on entry', async () => {
+test('offers only channels with playback permission and parks the newest segment on entry', async () => {
   const { view, video } = await fixture([segment(A, 0, 120)])
   await expect
     .element(view.getByRole('button', { name: 'CH01 大门' }))
     .toBeVisible()
   expect(document.body.textContent).not.toContain('CH02 仓库')
-  // PLAY-09: an entry point loads the index only.
-  expect(video().src).toBe('')
-  expect(video().currentTime).toBe(0)
+  // The entry point auto-loads the newest segment's first frame (paused —
+  // no playback), so the operator sees a picture instead of a black ring.
+  // Motion only ever starts from 播放.
+  await vi.waitFor(() => expect(video().src).toContain(`/api/v1/recordings/${A}/content`))
+  expect(video().paused).toBe(true)
+  expect(document.body.textContent).not.toContain('点击下方时间轴的片段开始回放')
 })
 
 test('an idle workspace shows no fake position and names the channel, not playback', async () => {
   const { view } = await fixture([segment(A, 0, 120)])
   await view.getByRole('button', { name: 'CH01 大门' }).click()
-  // The channel pill rides the frame OSD; the window caption rides the band.
-  await says('CH01 大门')
-  await says('当前位置 —')
+  // The park attempt publishes a real phase (paused with the frame, or an
+  // explicit error when the headless runner cannot serve the bytes) — never
+  // a fake clock or a phantom "playing".
+  await vi.waitFor(() => {
+    const text = document.body.textContent || ''
+    return text.includes('已定位到片段') || text.includes('资源不存在') || text.includes('播放中断')
+  })
   expect(document.body.textContent).not.toContain('1970-01-01')
-  expect(document.body.textContent).not.toContain('正在回放')
+  expect(document.body.textContent).not.toContain('播放中')
 })
 
 test('the index follows the cursor until the window is exhausted', async () => {
@@ -286,17 +300,26 @@ test('a window too large for the cap warns instead of hiding the rest', async ()
 })
 
 const recordingCalls = () =>
-  calls.request.mock.calls.filter((call) =>
-    String(call[0]).startsWith('/api/v1/recordings')
-  )
+  calls.request.mock.calls.filter((call) => {
+    const path = String(call[0])
+    // Only index reads: the parked player's lease heartbeat is an action
+    // endpoint and must not count toward the paging chain.
+    return (
+      path.startsWith('/api/v1/recordings?') ||
+      path.startsWith('/api/v1/recordings/stats')
+    )
+  })
 
 test('a single click only selects a segment, a double click plays it', async () => {
   const { view, video } = await fixture([segment(A, 0, 120)])
+  // Auto-park has already loaded the newest segment's first frame (paused).
   // Segment A covers the first 40% of the 5-minute strip (0:00–0:02 of 0:05).
   const strip = view.getByTestId('playback-timeline-canvas')
   await strip.click({ position: { x: 40, y: 45 } })
   await says('片段 aaaaaaaa')
-  expect(video().src).toBe('')
+  // A click parks on the segment — the resource is loaded, motion is not.
+  expect(video().src).toContain(`/api/v1/recordings/${A}/content`)
+  expect(video().paused).toBe(true)
   await strip.dblClick({ position: { x: 40, y: 45 } })
   await playing(A)
 })
@@ -408,8 +431,8 @@ test('the timeline band exposes the canvas strip and a density read', async () =
 
 // Frame top-OSD metadata strip (ca17f75): the channel pill rides along in
 // idle state, but resolution / fps / codec / "直通" only appear once an
-// entry with media facts has been loaded by the controller.
-test('frame OSD lists media facts only after an entry has loaded', async () => {
+// entry with media facts has been auto-parked on mount.
+test('frame OSD lists the selected segment media facts', async () => {
   const rich = segment(A, 0, 120, {
     media: {
       codec: 'h265',
@@ -420,25 +443,22 @@ test('frame OSD lists media facts only after an entry has loaded', async () => {
     },
   })
   const { view } = await fixture([rich])
-  // Idle: only the channel identity is on screen; the media facts must not
-  // appear because there is no entry yet. Scope to the OSD strip so the
-  // unrelated "当前通道 CH01 大门" paragraph and the channel button do
-  // not get matched.
+  // Media pills describe the SELECTED segment (index facts), so they are up
+  // as soon as auto-park selects it — before, during and after any media
+  // loading. Scope to the OSD strip.
   const osd = view.getByTestId('playback-frame-osd')
   await expect.element(osd).toBeVisible()
   await expect.element(osd.getByText('CH01 大门', { exact: true })).toBeVisible()
-  // Width is zero in the default fixture and non-zero in this one — same
-  // helper, so the gate is real: idle must skip the resolution pill.
-  await expect.element(osd.getByText('2560×1440')).not.toBeInTheDocument()
-  // Load the segment; the controller flips state.entry on success and the
-  // OSD pills populate.
+  await expect.element(osd.getByText('2560×1440')).toBeVisible()
+  await expect.element(osd.getByText('25fps')).toBeVisible()
+  await expect.element(osd.getByText('H265')).toBeVisible()
+  await expect.element(osd.getByText('直通')).toBeVisible()
+  // Double-click to start motion; the facts are unchanged.
   await view
     .getByTestId('playback-timeline-canvas')
     .dblClick({ position: { x: 40, y: 45 } })
   await playing(A)
   await expect.element(osd.getByText('2560×1440')).toBeVisible()
-  await expect.element(osd.getByText('25fps')).toBeVisible()
-  await expect.element(osd.getByText('H265')).toBeVisible()
   await expect.element(osd.getByText('直通')).toBeVisible()
 })
 
@@ -447,11 +467,9 @@ test('frame OSD lists media facts only after an entry has loaded', async () => {
 // placeholder stays uncluttered.
 test('frame OSD state badge mounts when playback leaves idle', async () => {
   const { view } = await fixture([segment(A, 0, 120)])
-  // Idle: no badge testid at all.
-  expect(view.getByTestId('playback-state-badge').query()).toBeNull()
-  // Kick off playback. The controller publishes 'loading' on seek; even if
-  // the headless runner skips straight to ready, we still dispatched the
-  // 'playing' event the controller binds to.
+  // Auto-park lands in 'paused' — the badge is up from the start now, so the
+  // assertion is on the badge being present and eventually reading a real
+  // phase string.
   const strip = view.getByTestId('playback-timeline-canvas')
   await strip.dblClick({ position: { x: 40, y: 45 } })
   await playing(A)

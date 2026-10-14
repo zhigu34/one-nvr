@@ -197,6 +197,10 @@ export function RecordingsWorkspace({
                     />
                   ),
                   files:
+                    // Collapsed: render NOTHING in column 3 — no placeholder,
+                    // no strip, no border. The grid drops to two columns and
+                    // the console stretches to the right edge; the header's
+                    // 文件 button is the only way to open the drawer.
                     admin && inlineFileVisible ? (
                       <div
                         data-testid='files-panel'
@@ -209,19 +213,6 @@ export function RecordingsWorkspace({
                           controlledRange={activeRange ?? undefined}
                         />
                       </div>
-                    ) : admin ? (
-                      <button
-                        type='button'
-                        aria-label='展开文件面板'
-                        title='展开文件面板'
-                        onClick={() => setRightOpen(true)}
-                        className='flex w-full flex-col items-center justify-center gap-2 rounded-xl border border-video-border bg-video-surface-raised text-video-chrome-foreground/70 hover:text-video-chrome-foreground'
-                      >
-                        <PanelRightOpen className='size-5' />
-                        <span className='writing-mode-vertical text-xs'>
-                          文件 {stats.data?.segments ?? '…'} 段
-                        </span>
-                      </button>
                     ) : null,
                 }
           }

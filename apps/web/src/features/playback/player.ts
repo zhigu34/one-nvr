@@ -64,6 +64,9 @@ export class PlaybackController {
   private rate = 1
   private playing = false
   private stopped = true
+  /** A parked controller has loaded the segment's first frame but never
+      called play() — `resume()` is what starts motion. */
+  private parked = false
   private generation = 0
   private pendingOffset = 0
   private skipped: Gap | null = null
@@ -113,6 +116,19 @@ export class PlaybackController {
     this.seekTo(at)
   }
 
+  /**
+   * Loads the segment containing `at` and stops on its first frame — the
+   * picture is on screen, nothing is playing, no lease accrues. The operator
+   * lands on a real position with one keypress (播放) away from motion.
+   * Starting playback from a parked state goes through `resume()`.
+   */
+  park(at: number) {
+    this.stopped = false
+    this.skipped = null
+    this.parked = true
+    this.seekTo(at)
+  }
+
   seek(at: number) {
     if (this.stopped) return this.start(at)
     this.skipped = null
@@ -133,6 +149,7 @@ export class PlaybackController {
   resume() {
     if (!this.entry) return this.start(this.state.clock)
     this.stopped = false
+    this.parked = false
     void this.play()
   }
 
@@ -165,6 +182,7 @@ export class PlaybackController {
 
   stop() {
     this.stopped = true
+    this.parked = false
     this.entry = null
     this.playing = false
     this.skipped = null
@@ -256,6 +274,12 @@ export class PlaybackController {
     // Loading a new resource resets the element's rate to defaultPlaybackRate
     // (1), so the chosen rate can only stick once the segment is open.
     this.media.playbackRate = this.rate
+    // A parked controller stops here: the first frame is on screen, the
+    // element paused, no lease running. resume() takes it from here.
+    if (this.parked) {
+      this.publish('paused', '已定位到片段，按播放开始')
+      return
+    }
     void this.play()
   }
 
