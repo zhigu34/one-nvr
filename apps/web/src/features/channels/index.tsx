@@ -553,32 +553,33 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                         <TableCell className='font-mono text-xs'>
                           {numberLabel(channel)}
                         </TableCell>
-                        <TableCell className='pr-0'>
-                          <ThumbnailSlot
-                            online={normal}
-                            disabled={!channel.enabled}
-                            unconfigured={unconfigured}
-                            label={`${numberLabel(channel)} ${channel.channel_name}`}
-                          />
-                        </TableCell>
-                        <TableCell className='font-medium'>
-                          <span
-                            className={
-                              unconfigured ? 'text-zinc-500' : undefined
-                            }
-                          >
-                            {channel.channel_name}
-                          </span>
-                          {!channel.enabled && (
-                            <span className='ml-2 rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground'>
-                              已停用
+                        <TableCell>
+                          <div className='flex items-center gap-3'>
+                            <ThumbnailSlot
+                              online={normal}
+                              disabled={!channel.enabled}
+                              unconfigured={unconfigured}
+                              label={`${numberLabel(channel)} ${channel.channel_name}`}
+                            />
+                            <span
+                              className={cn(
+                                'font-medium',
+                                unconfigured && 'text-zinc-500'
+                              )}
+                            >
+                              {channel.channel_name}
                             </span>
-                          )}
-                          {unconfigured && (
-                            <span className='ml-2 rounded-md bg-zinc-800/80 px-1.5 py-0.5 text-xs text-zinc-500'>
-                              未配置
-                            </span>
-                          )}
+                            {!channel.enabled && (
+                              <span className='rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground'>
+                                已停用
+                              </span>
+                            )}
+                            {unconfigured && (
+                              <span className='rounded-md bg-zinc-800/80 px-1.5 py-0.5 text-xs text-zinc-500'>
+                                未配置
+                              </span>
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell className='text-sm text-muted-foreground'>
                           {channel.channel_group || '—'}

@@ -199,6 +199,23 @@ test('the list is drawn from a single summary request', async () => {
     .toHaveTextContent('4.1 Mbps')
   setup.client.clear()
 })
+// The row packs the 16:9 thumbnail into the name cell; if a future cell is
+// added to the body without a matching header (or the reverse), every label
+// from "名称" rightward shifts by one and silently mislabels the columns.
+test('every header stays over its own column', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  await expect.element(view.getByTestId('channel-row')).toHaveLength(4)
+  const head = document.querySelectorAll('thead th').length
+  const cells = document.querySelectorAll('tbody tr:first-child td').length
+  expect(head).toBeGreaterThan(0)
+  expect(head).toBe(cells)
+  // The name cell carries the thumbnail and the name together.
+  const nameCell = document.querySelector('tbody tr:first-child td:nth-child(3)')
+  expect(nameCell?.querySelector('[data-testid="channel-thumbnail"]')).toBeTruthy()
+  expect(nameCell?.textContent).toContain('大门')
+  setup.client.clear()
+})
 test('status filter pills count and narrow the table', async () => {
   const setup = fixture()
   const view = await render(setup.view)
