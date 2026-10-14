@@ -65,7 +65,13 @@ function NavBadge({ children }: { children: ReactNode }) {
 function SidebarMenuLink({ item, href }: { item: NavLink; href: string }) {
   const { setOpenMobile } = useSidebar()
   return (
-    <SidebarMenuItem>
+    <SidebarMenuItem className='group/menu-link'>
+      {/* The 3px active rail: drawn on the item itself, lit only while the
+          SidebarMenuButton below reports data-active. */}
+      <span
+        aria-hidden
+        className='absolute inset-y-1 left-0 w-[3px] rounded-full bg-emerald-500 opacity-0 shadow-[0_0_6px_rgba(16,185,129,0.5)] transition-opacity group-has-data-[active=true]/menu-link:opacity-100'
+      />
       <SidebarMenuButton
         asChild
         isActive={checkIsActive(href, item)}

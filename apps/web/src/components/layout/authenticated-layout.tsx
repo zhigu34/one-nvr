@@ -17,6 +17,7 @@ import { useAPI } from '@/features/foundation/hooks'
 import { AppSidebar } from './app-sidebar'
 import { Header } from './header'
 import { Main } from './main'
+import { NavBreadcrumb } from './nav-breadcrumb'
 
 export function AuthenticatedLayout() {
   const session = useAPI<Schema<'Session'>>('/api/v1/auth/me', true, 5000)
@@ -42,9 +43,7 @@ export function AuthenticatedLayout() {
           <SidebarInset>
             <NavigationProgress />
             <Header fixed>
-              <span className='text-sm text-muted-foreground'>
-                本地视频管理
-              </span>
+              <NavBreadcrumb />
               <div className='ms-auto flex items-center gap-2'>
                 <Search />
                 <ThemeSwitch />

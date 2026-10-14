@@ -1,13 +1,11 @@
 import { Link } from '@tanstack/react-router'
-import { Menu, X } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { Video } from 'lucide-react'
 import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
   useSidebar,
 } from '@/components/ui/sidebar'
-import { Button } from '../ui/button'
 
 export function AppTitle() {
   const { setOpenMobile } = useSidebar()
@@ -20,6 +18,14 @@ export function AppTitle() {
           asChild
         >
           <div>
+            {/* Brand mark: a faint emerald camera glyph. The one fold control
+                lives in the topbar, so the header carries none. */}
+            <span
+              aria-hidden
+              className='me-2 grid size-8 shrink-0 place-items-center rounded-lg border border-emerald-500/20 bg-emerald-500/10 text-emerald-400'
+            >
+              <Video className='size-4' />
+            </span>
             <Link
               to='/'
               onClick={() => setOpenMobile(false)}
@@ -28,37 +34,9 @@ export function AppTitle() {
               <span className='truncate font-bold'>one-nvr</span>
               <span className='truncate text-xs'>单站点 · 固定通道</span>
             </Link>
-            <ToggleSidebar />
           </div>
         </SidebarMenuButton>
       </SidebarMenuItem>
     </SidebarMenu>
-  )
-}
-
-function ToggleSidebar({
-  className,
-  onClick,
-  ...props
-}: React.ComponentProps<typeof Button>) {
-  const { toggleSidebar } = useSidebar()
-
-  return (
-    <Button
-      data-sidebar='trigger'
-      data-slot='sidebar-trigger'
-      variant='ghost'
-      size='icon'
-      className={cn('aspect-square size-8 max-md:scale-125', className)}
-      onClick={(event) => {
-        onClick?.(event)
-        toggleSidebar()
-      }}
-      {...props}
-    >
-      <X className='md:hidden' />
-      <Menu className='max-md:hidden' />
-      <span className='sr-only'>切换侧栏</span>
-    </Button>
   )
 }
