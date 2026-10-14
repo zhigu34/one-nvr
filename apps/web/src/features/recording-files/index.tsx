@@ -216,28 +216,43 @@ export function RecordingFiles({
     }
     return groups
   }, [items, zone])
-  // Effective expansion is DERIVED, never stored: the newest hour is open by
-  // default, the hour holding the currently playing segment is forced open,
-  // and `collapsedHours` only remembers where the operator explicitly closed
-  // something. No setState-in-effect, no cascade on data refresh.
+  // Effective expansion is DERIVED, never stored wholesale: the newest hour
+  // is open by default and the hour holding the currently playing segment is
+  // auto-opened — until the operator explicitly toggles it, which wins over
+  // every default (a "collapse all" must stay collapsed). `collapsedHours`
+  // remembers explicit closes, `pinnedOpenHours` explicit opens; both beat
+  // the defaults. No setState-in-effect, no cascade on data refresh.
   const [collapsedHours, setCollapsedHours] = useState<Set<string>>(new Set())
+  const [pinnedOpenHours, setPinnedOpenHours] = useState<Set<string>>(new Set())
   const expandedHours = useMemo(() => {
     const open = new Set(hourGroups.map((group) => group.key))
     for (const key of collapsedHours) open.delete(key)
-    const currentHour = hourGroups.find((candidate) =>
-      candidate.segments.some((segment) => segment.id === activeSegmentId)
-    )?.key
-    if (currentHour) open.add(currentHour)
+    for (const key of pinnedOpenHours) open.add(key)
+    if (pinnedOpenHours.size === 0) {
+      // Defaults only apply while the operator has not pinned anything.
+      const currentHour = hourGroups.find((candidate) =>
+        candidate.segments.some((segment) => segment.id === activeSegmentId)
+      )?.key
+      if (currentHour && !collapsedHours.has(currentHour)) open.add(currentHour)
+    }
     return open
-  }, [hourGroups, collapsedHours, activeSegmentId])
-  const toggleHour = (key: string) =>
+  }, [hourGroups, collapsedHours, pinnedOpenHours, activeSegmentId])
+  // Two-way toggle: record the operator's intent in whichever set matches
+  // the resulting state, so it wins over the defaults.
+  const toggleHour = (key: string, isOpen: boolean) => {
     setCollapsedHours((previous) => {
       const next = new Set(previous)
-      // Only meaningful while a default source keeps it open.
-      if (next.has(key)) next.delete(key)
+      if (isOpen) next.delete(key)
       else next.add(key)
       return next
     })
+    setPinnedOpenHours((previous) => {
+      const next = new Set(previous)
+      if (isOpen) next.add(key)
+      else next.delete(key)
+      return next
+    })
+  }
   const listRef = useRef<HTMLDivElement>(null)
   // When the active segment's row mounts (its hour just expanded), scroll it
   // into the middle of the list.
@@ -510,7 +525,12 @@ export function RecordingFiles({
                 <button
                   type='button'
                   className='text-[11px] text-video-chrome-foreground/60 hover:text-video-chrome-foreground'
-                  onClick={() => setCollapsedHours(new Set())}
+                  onClick={() => {
+                    setCollapsedHours(new Set())
+                    setPinnedOpenHours(
+                      new Set(hourGroups.map((group) => group.key))
+                    )
+                  }}
                 >
                   全部展开
                 </button>
@@ -518,9 +538,12 @@ export function RecordingFiles({
                 <button
                   type='button'
                   className='text-[11px] text-video-chrome-foreground/60 hover:text-video-chrome-foreground'
-                  onClick={() =>
-                    setCollapsedHours(new Set(hourGroups.map((group) => group.key)))
-                  }
+                  onClick={() => {
+                    setCollapsedHours(
+                      new Set(hourGroups.map((group) => group.key))
+                    )
+                    setPinnedOpenHours(new Set())
+                  }}
                 >
                   全部折叠
                 </button>
@@ -541,11 +564,11 @@ export function RecordingFiles({
                     <div
                       role='button'
                       tabIndex={0}
-                      onClick={() => toggleHour(group.key)}
+                      onClick={() => toggleHour(group.key, expanded)}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter' || event.key === ' ') {
                           event.preventDefault()
-                          toggleHour(group.key)
+                          toggleHour(group.key, expanded)
                         }
                       }}
                       className='flex cursor-pointer items-center gap-2 rounded-md border border-video-border bg-video-surface px-2.5 py-1.5 text-xs hover:bg-white/5'
