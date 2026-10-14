@@ -468,6 +468,27 @@ function Workspace({
   // No data in the searched window: the whole transport and the export
   // picker disable — there is nothing to play, scrub or bracket.
   const noData = timeline.entries.length === 0
+
+  // When footage arrives and nothing is playing yet, park the playhead on the
+  // newest segment and load its first frame (paused). The operator sees the
+  // picture immediately instead of a black idle ring, and pressing play
+  // starts from a real position.
+  const autoParkRef = useRef(false)
+  useEffect(() => {
+    if (noData || autoParkRef.current) return
+    const newest = [...timeline.entries]
+      .filter((entry) => !entry.blocked)
+      .sort((a, b) => b.end - a.end)[0]
+    if (!newest) return
+    autoParkRef.current = true
+    // Park the playhead on the newest segment by selecting it: the canvas
+    // draws the cursor, the selection card names the file — the operator
+    // lands on a real position instead of a black idle ring. The media
+    // itself does NOT autoplay here (PLAY-09: an entry point never starts
+    // media on its own, and a parked lease would bill for nobody); one
+    // press of 播放 starts from this position.
+    setSelected(newest)
+  }, [noData, timeline.entries])
   // Event marks for the canvas. The window is the view clamped to the
   // events' 90-day retention — a bounded, honest query (was inside the old
   // Timeline component; hoisted so the canvas owns one draw input).
@@ -509,6 +530,9 @@ function Workspace({
       start: wallClockInput(next.start, zone),
       end: wallClockInput(next.end, zone),
     })
+    // A new search re-arms the auto-park: when its index arrives, the
+    // playhead lands on that window's newest segment again.
+    autoParkRef.current = false
     // The single time filter also drives the file panel's window.
     onRangeChange?.(next)
   }
@@ -1192,11 +1216,16 @@ return (
         )}
       </section>
       {/* Workspace mode extras: the files slot rides column 3 of row 1, and
-          the timeline band spans the full width as row 2. */}
+          the timeline band spans the full width as row 2. The band keeps its
+          full intrinsic height (shrink-0): the flex-1 row above absorbs the
+          squeeze, so the legend row at the band's bottom never clips against
+          the viewport edge. */}
       {layout?.kind === 'workspace' && (
         <>
           {layout.files}
-          <div style={{ gridColumn: '1 / -1' }}>{timelineBand}</div>
+          <div className='shrink-0 pb-1' style={{ gridColumn: '1 / -1' }}>
+            {timelineBand}
+          </div>
         </>
       )}
     </div>

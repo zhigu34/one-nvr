@@ -388,16 +388,24 @@ function ChannelsRail({
           const label = `CH${String(channel.channel_no).padStart(2, '0')} ${channel.channel_name}`
           const active = channel.id === activeID
           // Status light, from real state: disabled → grey, source error →
-          // red, otherwise the source is live → green. `enabled` alone was
-          // misleading: an enabled-but-erroring camera glowed green.
+          // red, configured + healthy → green. A channel with no applied
+          // source revision (`current_revision_id` null — the default
+          // placeholder channels) has no stream to be "online", so it stays
+          // grey even though its enabled flag is true.
           const summary = summaries.get(channel.id)
           const disabled = channel.enabled === false
           const hasError = !!summary?.last_error
+          const unconfigured = !summary?.current_revision_id
           const dot = disabled
             ? { cls: 'bg-zinc-600', title: '已停用' }
             : hasError
               ? { cls: 'bg-red-500', title: `源异常：${summary?.last_error}` }
-              : { cls: 'bg-emerald-400 shadow-[0_0_5px_rgba(52,211,153,0.7)]', title: '源在线' }
+              : unconfigured
+                ? { cls: 'bg-zinc-600', title: '未配置源' }
+                : {
+                    cls: 'bg-emerald-400 shadow-[0_0_5px_rgba(52,211,153,0.7)]',
+                    title: '源在线',
+                  }
           return (
             <ChannelRow
               key={channel.id}

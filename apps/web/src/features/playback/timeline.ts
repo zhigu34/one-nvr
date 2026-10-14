@@ -88,6 +88,16 @@ export function buildTimeline(
   return { entries, gaps: complement(entries, from, to), from, to }
 }
 
+/**
+ * The largest interval between adjacent segments that still reads as a
+ * continuous recording. Slice hand-off jitter is milliseconds to a couple of
+ * seconds (63 s segments regularly touch within ~1 s), so anything at or
+ * under this tolerance is not a dropout — counting it as one reported 267
+ * "gaps" across 1225 continuous segments. Only a silence STRICTLY LONGER
+ * than this is a real gap, on the canvas and in the stats.
+ */
+export const GAP_TOLERANCE_MS = 5000
+
 function complement(entries: Entry[], from: number, to: number): Gap[] {
   if (!(to > from)) return []
   const spans = entries
@@ -100,7 +110,9 @@ function complement(entries: Entry[], from: number, to: number): Gap[] {
   const gaps: Gap[] = []
   let cursor = from
   for (const [start, end] of spans) {
-    if (start > cursor)
+    // A sliver of jitter between segments is not a dropout: absorb it into
+    // the covered span instead of reporting a hairline gap.
+    if (start - cursor > GAP_TOLERANCE_MS)
       gaps.push({
         start: cursor,
         end: start,
@@ -108,7 +120,7 @@ function complement(entries: Entry[], from: number, to: number): Gap[] {
       })
     cursor = Math.max(cursor, end)
   }
-  if (cursor < to)
+  if (to - cursor > GAP_TOLERANCE_MS)
     gaps.push({ start: cursor, end: to, reason: '该时间段没有已完成的录像' })
   return gaps
 }
@@ -138,13 +150,14 @@ export function entryAtAny(timeline: Timeline, at: number): Entry | null {
 /**
  * Merges entries whose interval gaps are ≤ `toleranceMs` into continuous
  * spans, separately for playable and blocked segments. The canvas strip draws
- * from this: adjacent one-minute segments drawn as individual rects produce
- * sub-pixel seams that read as fake dropouts, while a true gap — anything over
- * the tolerance — stays untouched, so 断录缺口 still shows as empty canvas.
+ * from this: adjacent segments drawn as individual rects produce sub-pixel
+ * seams that read as fake dropouts, while a true gap — anything over the
+ * tolerance — stays untouched, so 断录缺口 still shows as empty canvas.
+ * The default mirrors `GAP_TOLERANCE_MS`: hand-off jitter is not a dropout.
  */
 export function mergeEntries(
   entries: Entry[],
-  toleranceMs = 1500
+  toleranceMs = GAP_TOLERANCE_MS
 ): { playable: { start: number; end: number }[]; blocked: { start: number; end: number }[] } {
   const playable: { start: number; end: number }[] = []
   const blocked: { start: number; end: number }[] = []

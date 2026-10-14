@@ -35,11 +35,13 @@ const TICKS_H = 12
 const SEGMENTS_H = 30
 const EVENTS_H = 12
 // Ticks sit between the density bar and the segment bar; 1px of headroom on
-// both sides keeps the density inset from the rounded frame.
+// both sides keeps the density inset from the rounded frame. The event track
+// keeps a 4px bottom inset so amber marks never touch the canvas edge.
 const DENSITY_TOP = 1
 const TICKS_TOP = DENSITY_TOP + DENSITY_H
 const SEGMENTS_TOP = TICKS_TOP + TICKS_H
 const EVENTS_TOP = SEGMENTS_TOP + SEGMENTS_H
+const EVENT_BOTTOM_INSET = 4
 
 const PLAYABLE = '#10b981'
 const BLOCKED = '#ef4444'
@@ -233,19 +235,31 @@ export function TimelineCanvas({
       ctx.strokeRect(x + 1, SEGMENTS_TOP + 1, w - 2, SEGMENTS_H - 2)
     }
 
-    // --- Event band: one rounded tick per mark; open events brighter.
+    // --- Event band: one rounded tick per mark; open events brighter. The
+    // 4px bottom inset keeps marks off the canvas edge.
     for (const mark of marks) {
       const x = xFor(mark.at, from, span, width)
       const w = Math.max(xFor(mark.end, from, span, width) - x, 2)
       ctx.fillStyle = mark.handleState === 'open' ? EVENT_OPEN : EVENT
-      roundRect(ctx, x, EVENTS_TOP + 2, w, EVENTS_H - 4, 2)
+      roundRect(
+        ctx,
+        x,
+        EVENTS_TOP + 2,
+        w,
+        Math.max(EVENTS_H - 2 - EVENT_BOTTOM_INSET, 2),
+        2
+      )
       ctx.fill()
     }
   }, [width, merged, marks, timeline.from, timeline.to, from, span, selected, viewIsFull, zone])
 
   // Playhead position: derived, so the DOM cursor moves without a canvas
-  // repaint and without layout thrash (transform only).
-  const playheadX = clock > 0 && span > 0 ? xFor(clock, from, span, width) : null
+  // repaint and without layout thrash (transform only). Before the first
+  // playback the cursor parks at the selected segment's start — the operator
+  // always sees where 播放 would begin.
+  const playheadAt = clock > 0 ? clock : selected?.start
+  const playheadX =
+    playheadAt != null && span > 0 ? xFor(playheadAt, from, span, width) : null
 
   const pointerAt = (event: { clientX: number }) => {
     const box = wrapRef.current?.getBoundingClientRect()

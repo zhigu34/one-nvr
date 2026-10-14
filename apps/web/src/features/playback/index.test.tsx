@@ -303,6 +303,11 @@ test('a single click only selects a segment, a double click plays it', async () 
 
 test('a hole is reported with its bounds and can be crossed only on request', async () => {
   const { view } = await fixture([segment(A, 0, 10), segment(B, 120, 130)])
+  // Auto-park lands on the newest segment (B); select A explicitly, then the
+  // smart play button starts from it.
+  const strip = view.getByTestId('playback-timeline-canvas')
+  await strip.click({ position: { x: 2, y: 45 } })
+  await says('片段 aaaaaaaa')
   await view.getByRole('button', { name: '播放', exact: true }).click()
   await playing(A)
   // Ten seconds past a ten second segment lands in the hole, not on a frame.
