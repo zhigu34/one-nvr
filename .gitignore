@@ -23,6 +23,10 @@ __pycache__/
 /.pnpm-store/
 media-test-results/
 
+# Tool caches that appear at the root when a test runner is invoked from there
+/node_modules/
+/apps/web/node_modules/
+
 /.local/
 
 # Local agent session state and work logs

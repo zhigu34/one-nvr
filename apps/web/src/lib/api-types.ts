@@ -478,7 +478,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description M1-A 仅实现管理员权限和模块门禁；未启用返回 409，启用后业务尚未实现返回 501。 */
+        /** @description M1-A 占位端点：仅保留管理员权限与模块门禁。未启用返回 409 feature_disabled；启用后返回 501 endpoint_not_available 并指向真实端点（云归档为 /api/v1/recordings/archive 与 /api/v1/archive-targets）。 */
         post: operations["requestArchiveTask"];
         delete?: never;
         options?: never;
@@ -495,7 +495,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description M1-A 仅实现管理员权限和模块门禁；未启用返回 409，启用后业务尚未实现返回 501。 */
+        /** @description M1-A 占位端点：仅保留管理员权限与模块门禁。未启用返回 409 feature_disabled；启用后返回 501 endpoint_not_available 并指向真实端点（检测规则为 /api/v1/detection/rules）。 */
         post: operations["createDetectionRule"];
         delete?: never;
         options?: never;
@@ -1493,10 +1493,16 @@ export interface components {
             channel_id: components["schemas"]["UUID"];
             actions: ("live" | "playback" | "export" | "configure" | "archive")[];
         };
+        /** @description One optional module as this build and this deployment actually stand. enabled is the operator's switch, implemented is the release's scope, state is what the deployment can do right now, reason says why. A module whose dependency is down reads unavailable (not implemented): 功能未启用 / 引导配置 / 运行异常 / 版本尚未提供. */
         Capability: {
+            /** @description The deployment switch. Off means the module is not running here, whatever the build contains. */
             enabled: boolean;
+            /** @description Whether this build carries the module's business logic. A release property, never a health signal. */
             implemented: boolean;
-            /** @enum {string} */
+            /**
+             * @description disabled: switch off. not_configured: switched on with nothing set up yet. healthy: configured and its dependencies answered. unavailable: configured but a dependency did not answer. not_available: this build does not carry it.
+             * @enum {string}
+             */
             state: "disabled" | "not_configured" | "healthy" | "unavailable" | "not_available";
             reason: string;
         };

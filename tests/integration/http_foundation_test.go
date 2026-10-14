@@ -62,11 +62,15 @@ func TestFutureModuleDirectHTTPGates(t *testing.T) {
 			r.Header.Set("X-CSRF-Token", accounts.CSRF(admin.RawSession))
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, r)
-			want := 409
+			// Disabled is a module switch, which the caller may fix. Enabled
+			// means the module runs, but this M1-A placeholder address is not
+			// where its business lives — that is a different refusal with a
+			// different code, and it must not claim the feature does not exist.
+			wantCode, wantStatus := "feature_disabled", 409
 			if enabled {
-				want = 501
+				wantCode, wantStatus = "endpoint_not_available", 501
 			}
-			if w.Code != want {
+			if w.Code != wantStatus {
 				t.Fatalf("%s enabled=%v: %d %s", path, enabled, w.Code, w.Body.String())
 			}
 			var envelope struct {
@@ -74,8 +78,8 @@ func TestFutureModuleDirectHTTPGates(t *testing.T) {
 					Code string `json:"code"`
 				} `json:"error"`
 			}
-			if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil || envelope.Error.Code == "" {
-				t.Fatal("module error missing code", err)
+			if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil || envelope.Error.Code != wantCode {
+				t.Fatalf("module error must carry %s: %s", wantCode, w.Body.String())
 			}
 		}
 	}

@@ -1,10 +1,12 @@
 package httpapi
 
 import (
+	"net/http"
+
 	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/channel"
+	"github.com/zhigu34/one-nvr/internal/fault"
 	"github.com/zhigu34/one-nvr/internal/site"
-	"net/http"
 )
 
 func (r *router) currentSite(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
@@ -145,17 +147,32 @@ func (r *router) auditLogs(w http.ResponseWriter, q *http.Request, p auth.Princi
 	}
 	respond(w, q, 200, out)
 }
+
+// futureArchive guards the M1-A placeholder path. The module's business is
+// delivered, but not at this address: cloud archive is reached through the
+// target and upload endpoints. A caller arriving here is told where to go
+// instead of being told the feature does not exist.
 func (r *router) futureArchive(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
 	if err := r.d.Auth.RequireAdmin(q.Context(), p); err != nil {
 		fail(w, q, err)
 		return
 	}
-	fail(w, q, r.d.Capabilities.Require("archive"))
+	if err := r.d.Capabilities.Require("archive"); err != nil {
+		fail(w, q, err)
+		return
+	}
+	fail(w, q, fault.New(501, "endpoint_not_available", "该占位端点未实现：云归档请使用 /api/v1/recordings/archive 与 /api/v1/archive-targets"))
 }
+
+// futureIntelligence guards the M1-A placeholder path for the same reason.
 func (r *router) futureIntelligence(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
 	if err := r.d.Auth.RequireAdmin(q.Context(), p); err != nil {
 		fail(w, q, err)
 		return
 	}
-	fail(w, q, r.d.Capabilities.Require("intelligence"))
+	if err := r.d.Capabilities.Require("intelligence"); err != nil {
+		fail(w, q, err)
+		return
+	}
+	fail(w, q, fault.New(501, "endpoint_not_available", "该占位端点未实现：检测规则请使用 /api/v1/detection/rules"))
 }

@@ -75,13 +75,28 @@ test('viewerCannotConfigureChannel', async ({ page }) => {
   expect(result).toBe(403)
 })
 
-test('disabledAndNotImplementedModulesAreDistinct', async ({ page }) => {
+test('moduleSwitchConfigurationAndHealthAreDistinct', async ({ page }) => {
   await login(page)
   await page.goto('/settings')
   const enabled = process.env.ONE_NVR_E2E_MODULES === 'yes'
-  await expect(page.getByTestId('intelligence-status')).toContainText(enabled ? '尚未实现' : '功能未启用')
-  await expect(page.getByTestId('cloud-status')).toContainText(enabled ? '尚未实现' : '功能未启用')
-  expect(await page.evaluate(async () => {const me=await fetch('/api/v1/auth/me').then(r=>r.json()).then(r=>r.data);return (await fetch('/api/v1/detection-rules',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':me.csrf_token},body:'{}'})).status})).toBe(enabled ? 501 : 409)
+  // Enabled with nothing configured yet is "待配置", not "尚未实现": the module
+  // ships in this build and only needs configuring. Reporting it as missing
+  // would be exactly the conflation this test exists to catch.
+  await expect(page.getByTestId('intelligence-status')).toContainText(enabled ? '待配置' : '功能未启用')
+  await expect(page.getByTestId('cloud-status')).toContainText(enabled ? '待配置' : '功能未启用')
+  // The M1-A placeholder address keeps its admin + module gate, and when the
+  // module is on it refuses with the "wrong address" code rather than claiming
+  // the feature does not exist.
+  const refusal = await page.evaluate(async () => {
+    const me = await fetch('/api/v1/auth/me').then((r) => r.json()).then((r) => r.data)
+    const response = await fetch('/api/v1/detection-rules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token },
+      body: '{}',
+    })
+    return { status: response.status, code: (await response.json()).error?.code }
+  })
+  expect(refusal).toEqual(enabled ? { status: 501, code: 'endpoint_not_available' } : { status: 409, code: 'feature_disabled' })
 })
 
 test('tlsPendingIsNotActive', async ({ page }) => {

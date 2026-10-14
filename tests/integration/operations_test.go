@@ -9,43 +9,138 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhigu34/one-nvr/internal/archive"
 	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/capability"
 	"github.com/zhigu34/one-nvr/internal/operations"
+	"github.com/zhigu34/one-nvr/internal/storage"
 )
 
-func TestCapabilitiesSeparateIntentFromImplementation(t *testing.T) {
-	db, accounts, _, _ := authFixture(t)
+// A module's switch, its release scope, how far it is configured and whether
+// its dependencies answer are four different facts. Conflating them is what let
+// a shipped module read as "尚未实现" (and, before that, let an enabled module
+// read as available just because an env var said yes). Each transition is
+// pinned here.
+func TestCapabilitiesReportIntentConfigurationAndHealth(t *testing.T) {
+	db, accounts, sites, admin := authFixture(t)
 	ctx := context.Background()
-	for _, enabled := range []bool{false, true} {
-		ops := operations.New(db, accounts, enabled, enabled)
-		if enabled {
-			for _, n := range []string{"frigate", "mqtt", "openlist"} {
-				if err := ops.Observe(ctx, operations.Observation{Name: n, State: "healthy", Reason: "probe_succeeded", ObservedAt: time.Now()}); err != nil {
-					t.Fatal(err)
-				}
-			}
-		}
-		caps := capability.Service{Operations: ops, FrigateEnabled: enabled, OpenListEnabled: enabled}
-		snapshot, err := caps.Snapshot(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, c := range []capability.Capability{snapshot.Intelligence, snapshot.Archive} {
-			if c.Enabled != enabled || c.Implemented {
-				t.Fatalf("invented implementation: %v", c)
-			}
-			if enabled && c.State != "not_available" {
-				t.Fatal("healthy container invented feature", c)
-			}
-			if !enabled && c.State != "disabled" {
-				t.Fatal("disabled deployment mislabeled", c)
-			}
-		}
-		if err := caps.Require("intelligence"); err == nil {
-			t.Fatal("future action allowed")
+
+	// Switch off: nothing is claimed, and the module's actions stay gated.
+	off := capability.Service{Operations: operations.New(db, accounts, false, false)}
+	snapshot, err := off.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []capability.Capability{snapshot.Intelligence, snapshot.Archive} {
+		if c.Enabled || !c.Implemented || c.State != capability.StateDisabled || c.Reason != "feature_disabled" {
+			t.Fatalf("a disabled module must read disabled and implemented: %+v", c)
 		}
 	}
+	if err := off.Require("intelligence"); err == nil {
+		t.Fatal("a disabled module must refuse its actions")
+	}
+
+	// Switch on but nothing configured: the operator is asked to configure it,
+	// not told the feature does not exist.
+	ops := operations.New(db, accounts, true, true)
+	caps := capability.Service{Operations: ops, FrigateEnabled: true, OpenListEnabled: true}
+	snapshot, err = caps.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := snapshot.Intelligence; !c.Enabled || !c.Implemented || c.State != capability.StateNotConfigured || c.Reason != "detection_not_configured" {
+		t.Fatalf("detection without a configured channel must ask for configuration: %+v", c)
+	}
+	if c := snapshot.Archive; !c.Enabled || !c.Implemented || c.State != capability.StateNotConfigured || c.Reason != "archive_target_missing" {
+		t.Fatalf("archive without a target must ask for configuration: %+v", c)
+	}
+	if err := caps.Require("intelligence"); err != nil {
+		t.Fatal("an enabled module must allow its actions", err)
+	}
+
+	// Configured, with healthy dependencies: the module is genuinely working.
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO detection_configs(channel_id,enabled) SELECT id,true FROM channels LIMIT 1`); err != nil {
+		t.Fatal(err)
+	}
+	// A real registration seals its credential; writing ciphertext by hand would
+	// test the fixture rather than the module.
+	targets := archive.New(db, accounts, sites.Secrets, storage.New(db, accounts, []string{t.TempDir()}))
+	first, err := targets.RegisterTarget(ctx, admin.Principal, archive.TargetInput{
+		Name: "cloud", BaseURL: "https://dav.example.com", RemoteRoot: "/archive",
+		Username: "u", Password: "isolated-test-only", CloudRetentionDays: 365, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool.Exec(ctx, `UPDATE archive_targets SET last_check=jsonb_build_object('state','healthy','observed_at',now()) WHERE id=$1`, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"frigate", "mqtt"} {
+		if err := ops.Observe(ctx, operations.Observation{Name: name, State: "healthy", Reason: "probe_succeeded", ObservedAt: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err = caps.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intelligence, archiveState := snapshot.Intelligence, snapshot.Archive
+	if intelligence.State != capability.StateHealthy || archiveState.State != capability.StateHealthy {
+		t.Fatalf("configured modules with answering dependencies are healthy: %+v %+v", intelligence, archiveState)
+	}
+
+	// A dependency going down must surface as running-abnormally, never as
+	// "not implemented" and never as healthy.
+	if err := ops.Observe(ctx, operations.Observation{Name: "mqtt", State: "unavailable", Reason: "probe_failed", ObservedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = caps.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := snapshot.Intelligence; c.State != capability.StateUnavailable || c.Reason != "probe_failed" || !c.Implemented {
+		t.Fatalf("a dead dependency must read unavailable while staying implemented: %+v", c)
+	}
+
+	// One unreachable target must not take the archive module down: other
+	// WebDAV endpoints still work, which is exactly what the PRD requires.
+	if _, err := db.Pool.Exec(ctx, `UPDATE archive_targets SET last_check=jsonb_build_object('state','unavailable','observed_at',now())`); err != nil {
+		t.Fatal(err)
+	}
+	if c := mustSnapshot(t, caps).Archive; c.State != capability.StateUnavailable || c.Reason != "archive_target_unreachable" {
+		t.Fatalf("the only target being unreachable is a module fault: %+v", c)
+	}
+	second, err := targets.RegisterTarget(ctx, admin.Principal, archive.TargetInput{
+		Name: "second", BaseURL: "https://dav2.example.com", RemoteRoot: "/archive",
+		Username: "u", Password: "isolated-test-only", CloudRetentionDays: 365, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool.Exec(ctx, `UPDATE archive_targets SET last_check=jsonb_build_object('state','healthy','observed_at',now()) WHERE id=$1`, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if c := mustSnapshot(t, caps).Archive; c.State != capability.StateHealthy {
+		t.Fatalf("one working target keeps the module healthy: %+v", c)
+	}
+
+	// An unobserved dependency is not a working one: absence of evidence must
+	// not be reported as availability.
+	if _, err := db.Pool.Exec(ctx, `DELETE FROM component_observations WHERE name IN ('frigate','mqtt')`); err != nil {
+		t.Fatal(err)
+	}
+	if c := mustSnapshot(t, caps).Intelligence; c.State != capability.StateUnavailable || c.Reason != "not_observed" {
+		t.Fatalf("an unobserved dependency must not read healthy: %+v", c)
+	}
+}
+
+func mustSnapshot(t *testing.T, caps capability.Service) capability.Snapshot {
+	t.Helper()
+	snapshot, err := caps.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
 }
 
 func TestObservationExpiresAndOptionalDoesNotFailCore(t *testing.T) {

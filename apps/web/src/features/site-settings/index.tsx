@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from '@tanstack/react-router'
 import { useAuthStore } from '@/stores/auth-store'
 import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { Schema, Capabilities } from '@/lib/types'
@@ -14,6 +15,7 @@ import {
   Notices,
   Forbidden,
 } from '@/features/foundation/ui'
+import { StatusBadge, type StatusTone } from '@/features/foundation/status-badge'
 import { TLSSettings } from '@/features/tls-settings'
 
 type Timezone = { id: string; label: string; current_time: string }
@@ -242,6 +244,48 @@ function SiteClock({ zone }: { zone: string }) {
     </p>
   )
 }
+// The PRD's four operator-facing states, plus what a disabled module says. The
+// vocabulary matters: "运行异常" must never be worded as "尚未实现" — one is a
+// broken dependency the operator can look at, the other claims the product
+// lacks the feature. Each state also says where to go next, because "已启用未
+// 配置" is only useful if it points at the page that configures it.
+const MODULE_STATES: Record<
+  string,
+  { label: string; tone: StatusTone; hint: string }
+> = {
+  disabled: {
+    label: '功能未启用',
+    tone: 'neutral',
+    hint: '该模块未随本次部署启用（.env 中的开关为 no）。',
+  },
+  not_configured: {
+    label: '待配置',
+    tone: 'warning',
+    hint: '模块已启用，但还没有可用的配置。',
+  },
+  healthy: {
+    label: '运行中',
+    tone: 'success',
+    hint: '已配置，且依赖组件响应正常。',
+  },
+  unavailable: {
+    label: '运行异常',
+    tone: 'destructive',
+    hint: '已配置，但依赖组件没有响应，请到运维与审计页查看组件状态。',
+  },
+  not_available: {
+    label: '版本尚未提供',
+    tone: 'info',
+    hint: '当前版本不包含该模块。',
+  },
+}
+
+/** Where a module is configured, so a pending state is actionable. */
+const MODULE_LINKS: Record<string, { to: string; label: string }> = {
+  '智能检测': { to: '/detection', label: '去配置检测' },
+  '云归档': { to: '/archive-targets', label: '去配置归档目标' },
+}
+
 function ModuleStatus({
   name,
   value,
@@ -251,17 +295,24 @@ function ModuleStatus({
   value: Schema<'Capability'>
   testId: string
 }) {
+  const state = MODULE_STATES[value.state ?? ''] || MODULE_STATES.unavailable
+  const link = MODULE_LINKS[name]
   return (
     <div data-testid={testId} className='rounded-lg border p-4'>
-      <h3 className='font-medium'>{name}</h3>
-      <p className='mt-2 text-sm'>
-        {!value.enabled
-          ? '功能未启用'
-          : !value.implemented
-            ? '尚未实现'
-            : '已实现'}
-      </p>
-      <p className='mt-2 text-xs text-muted-foreground'>{value.reason}</p>
+      <div className='flex items-center justify-between gap-2'>
+        <h3 className='font-medium'>{name}</h3>
+        <StatusBadge tone={state.tone}>{state.label}</StatusBadge>
+      </div>
+      <p className='mt-2 text-xs text-muted-foreground'>{state.hint}</p>
+      {value.state === 'not_configured' && link && (
+        <Button asChild size='sm' variant='outline' className='mt-2'>
+          <Link to={link.to}>{link.label}</Link>
+        </Button>
+      )}
+      {/* The raw reason code is a support handle, not an explanation: the hint
+          above carries the meaning, and an operator who needs to check the
+          exact code against the logs still can. */}
+      <p className='mt-2 text-xs text-muted-foreground/70'>{value.reason}</p>
     </div>
   )
 }
