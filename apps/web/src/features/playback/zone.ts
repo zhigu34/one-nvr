@@ -150,7 +150,7 @@ export function formatMinute(epochMs: number, timeZone: string): string {
   return `${pad(parts.year, 4)}-${pad(parts.month)}-${pad(parts.day)} ${pad(parts.hour)}:${pad(parts.minute)}`
 }
 
-export type QuickRangeKind = 'hour' | 'day' | 'today' | 'yesterday'
+export type QuickRangeKind = 'hour' | 'day' | 'today' | 'yesterday' | 'week'
 
 const HOUR = 3600_000
 
@@ -167,6 +167,7 @@ export function quickRange(
 ): { start: number; end: number } {
   if (kind === 'hour') return { start: now - HOUR, end: now }
   if (kind === 'day') return { start: now - 24 * HOUR, end: now }
+  if (kind === 'week') return { start: now - 7 * 24 * HOUR, end: now }
   const today = startOfZoneDay(now, timeZone)
   if (!Number.isFinite(today)) return { start: now - 24 * HOUR, end: now }
   if (kind === 'today') return { start: today, end: now }

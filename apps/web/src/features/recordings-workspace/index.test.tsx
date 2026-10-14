@@ -111,6 +111,10 @@ test('the recordings workspace renders channels, playback and the file panel sid
   await expect.element(view.getByTestId('channels-rail')).toBeVisible()
   await expect.element(view.getByRole('button', { name: 'CH01 大门' })).toBeVisible()
   await expect.element(view.getByTestId('playback-console')).toBeVisible()
+  // The file rail starts collapsed; the header toggle expands it. Two
+  // controls share the label (header chip + collapsed rail strip) — the
+  // header one is the first.
+  await userEvent.click(view.getByRole('button', { name: '展开文件面板' }).first())
   await expect.element(view.getByTestId('files-panel')).toBeVisible()
   // No tab role is rendered any more; the previous entry split is gone.
   expect(view.getByRole('tab').query()).toBeNull()
@@ -140,6 +144,7 @@ test('a legacy ?tab=files deep link still mounts the workspace', async () => {
     history: createMemoryHistory({ initialEntries: ['/?tab=files'] }),
   })
   const view = await render(<RouterProvider router={router} />)
+  await userEvent.click(view.getByRole('button', { name: '展开文件面板' }).first())
   await expect.element(view.getByTestId('files-panel')).toBeVisible()
 })
 

@@ -72,13 +72,20 @@ export function RecordingsWorkspace({
     channels[0]?.id ||
     ''
   const channelID = resolvedID || fallbackID
-  const [rightOpen, setRightOpen] = useState(true)
+  // The file rail starts collapsed: the player and timeline own the screen
+  // until the operator explicitly opens the list.
+  const [rightOpen, setRightOpen] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
   const narrow = useNarrowViewport()
   // Resizing from wide → narrow leaves the rail half-collapsed; reset to
   // expanded by default on the bigger layout, leave the Sheet closed on the
   // smaller one. This avoids a flash of "panel showing partly" on resize.
   const inlineFileVisible = !narrow && rightOpen
+  // The playback console reports its search range up; that one window is
+  // the single time source for the file panel and the per-channel counts.
+  const [activeRange, setActiveRange] = useState<{ start: number; end: number } | null>(
+    null
+  )
   function onChannelChange(next: string) {
     if (!next || next === channelID) return
     setResolvedID(next)
@@ -98,24 +105,34 @@ export function RecordingsWorkspace({
     [channels, channelID]
   )
   const zone = site.data?.timezone || ''
-  // Capture the timestamp once per mount; the stats window is "last 7 days"
-  // from page load, and the path stays stable across re-renders inside the
-  // same mount.
-  const [statsNow] = useState(() => Date.now())
+  // The header chip and the collapsed-rail badge read the active channel's
+  // segment count over the playback search window — the same window the
+  // file panel lists.
   const statsPath = useMemo(() => {
-    if (!activeChannel) return ''
+    if (!activeChannel || !activeRange) return ''
     return `/api/v1/recordings/stats?${new URLSearchParams({
       channel_id: activeChannel.id,
-      start: new Date(statsNow - 7 * 24 * 3600_000).toISOString(),
-      end: new Date(statsNow).toISOString(),
+      start: new Date(activeRange.start).toISOString(),
+      end: new Date(activeRange.end).toISOString(),
       limit: '100',
     })}`
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeChannel?.id])
+  }, [activeChannel, activeRange])
   const stats = useAPI<Schema<'RecordingStats'>>(
     statsPath,
-    rightOpen && admin && !!activeChannel
+    admin && !!activeChannel && !!activeRange
   )
+  // Channel summaries give the rail a real status light (source errors) and
+  // a per-channel has-footage count for the active window.
+  const summariesQuery = useAPI<{ items: Schema<'ChannelSummary'>[] }>(
+    '/api/v1/channels/summary'
+  )
+  const summaries = useMemo(() => {
+    const map = new Map<string, Schema<'ChannelSummary'>>()
+    for (const item of summariesQuery.data?.items || []) {
+      map.set(item.channel_id, item)
+    }
+    return map
+  }, [summariesQuery.data])
   return (
     <div
       data-testid='recordings-workspace'
@@ -159,6 +176,7 @@ export function RecordingsWorkspace({
           initialChannel={channelID}
           initialAt={initialAt}
           active
+          onRangeChange={setActiveRange}
           // The workspace layout (rail / player / files + full-width timeline
           // row) is rendered by Playback itself now — the shell hands over
           // the file panel as a slot so it lands in the third column, and
@@ -174,6 +192,8 @@ export function RecordingsWorkspace({
                       channels={channels}
                       activeID={channelID}
                       onSelect={onChannelChange}
+                      summaries={summaries}
+                      range={activeRange}
                     />
                   ),
                   files:
@@ -186,6 +206,7 @@ export function RecordingsWorkspace({
                           controlledChannelId={channelID}
                           initialChannel={channelID}
                           active
+                          controlledRange={activeRange ?? undefined}
                         />
                       </div>
                     ) : admin ? (
@@ -228,6 +249,7 @@ export function RecordingsWorkspace({
                 controlledChannelId={channelID}
                 initialChannel={channelID}
                 active={sheetOpen}
+                controlledRange={activeRange ?? undefined}
               />
             </div>
           </SheetContent>
@@ -323,10 +345,14 @@ function ChannelsRail({
   channels,
   activeID,
   onSelect,
+  summaries,
+  range,
 }: {
   channels: Schema<'Channel'>[]
   activeID: string
   onSelect: (id: string) => void
+  summaries: Map<string, Schema<'ChannelSummary'>>
+  range: { start: number; end: number } | null
 }) {
   const [search, setSearch] = useState('')
   const filtered = useMemo(() => {
@@ -361,45 +387,107 @@ function ChannelsRail({
         {filtered.map((channel) => {
           const label = `CH${String(channel.channel_no).padStart(2, '0')} ${channel.channel_name}`
           const active = channel.id === activeID
-          const online = channel.enabled !== false
+          // Status light, from real state: disabled → grey, source error →
+          // red, otherwise the source is live → green. `enabled` alone was
+          // misleading: an enabled-but-erroring camera glowed green.
+          const summary = summaries.get(channel.id)
+          const disabled = channel.enabled === false
+          const hasError = !!summary?.last_error
+          const dot = disabled
+            ? { cls: 'bg-zinc-600', title: '已停用' }
+            : hasError
+              ? { cls: 'bg-red-500', title: `源异常：${summary?.last_error}` }
+              : { cls: 'bg-emerald-400 shadow-[0_0_5px_rgba(52,211,153,0.7)]', title: '源在线' }
           return (
-            <button
+            <ChannelRow
               key={channel.id}
-              type='button'
-              onClick={() => onSelect(channel.id)}
-              aria-pressed={active}
-              aria-label={label}
-              className={cn(
-                'flex h-8 items-center gap-2 truncate rounded px-2 text-left text-sm text-video-chrome-foreground hover:bg-white/10',
-                active && 'bg-white/15 font-medium text-video-chrome-foreground'
-              )}
-            >
-              <span
-                aria-hidden
-                title={online ? '已启用' : '已停用'}
-                className={cn(
-                  'inline-block size-1.5 rounded-full',
-                  online
-                    ? 'bg-emerald-400 shadow-[0_0_5px_rgba(52,211,153,0.7)]'
-                    : 'bg-video-chrome-foreground/30'
-                )}
-              />
-              <span className='inline-grid min-w-6 place-items-center rounded bg-white/10 px-1 py-0.5 text-[10px] font-semibold tabular-nums'>
-                {String(channel.channel_no).padStart(2, '0')}
-              </span>
-              <span className='flex-1 truncate'>{channel.channel_name}</span>
-              {channel.channel_group && (
-                <span
-                  title={`分组 · ${channel.channel_group}`}
-                  className='rounded bg-white/10 px-1 py-0.5 text-[10px] text-video-chrome-foreground/60'
-                >
-                  {channel.channel_group}
-                </span>
-              )}
-            </button>
+              label={label}
+              name={channel.channel_name}
+              group={channel.channel_group}
+              active={active}
+              dot={dot}
+              onSelect={() => onSelect(channel.id)}
+              channelId={channel.id}
+              range={range}
+            />
           )
         })}
       </div>
     </aside>
+  )
+}
+
+// One channel row. The per-channel segment count is its own query (the
+// playback search window), so a channel with footage in this window shows a
+// count badge and channels without any fade — the fastest scan for "which
+// cameras have footage here".
+function ChannelRow({
+  label,
+  name,
+  group,
+  active,
+  dot,
+  onSelect,
+  channelId,
+  range,
+}: {
+  label: string
+  name: string
+  group: string
+  active: boolean
+  dot: { cls: string; title: string }
+  onSelect: () => void
+  channelId: string
+  range: { start: number; end: number } | null
+}) {
+  const path = useMemo(() => {
+    if (!range) return ''
+    return `/api/v1/recordings/stats?${new URLSearchParams({
+      channel_id: channelId,
+      start: new Date(range.start).toISOString(),
+      end: new Date(range.end).toISOString(),
+      limit: '1',
+    })}`
+  }, [channelId, range])
+  const stats = useAPI<Schema<'RecordingStats'>>(path, !!path)
+  const segments = stats.data?.segments
+  return (
+    <button
+      type='button'
+      onClick={onSelect}
+      aria-pressed={active}
+      aria-label={label}
+      className={cn(
+        'flex h-8 items-center gap-2 truncate rounded px-2 text-left text-sm text-video-chrome-foreground hover:bg-white/10',
+        active && 'bg-white/15 font-medium text-video-chrome-foreground',
+        segments === 0 && 'text-video-chrome-foreground/50'
+      )}
+    >
+      <span
+        aria-hidden
+        title={dot.title}
+        className={cn('inline-block size-1.5 shrink-0 rounded-full', dot.cls)}
+      />
+      <span className='inline-grid min-w-6 place-items-center rounded bg-white/10 px-1 py-0.5 text-[10px] font-semibold tabular-nums'>
+        {label.slice(2, 4)}
+      </span>
+      <span className='flex-1 truncate'>{name}</span>
+      {typeof segments === 'number' && segments > 0 && (
+        <span
+          title={`当前时段 ${segments} 段录像`}
+          className='rounded bg-emerald-400/15 px-1 py-0.5 text-[10px] tabular-nums text-emerald-300'
+        >
+          {segments > 999 ? '999+' : segments}
+        </span>
+      )}
+      {group && (
+        <span
+          title={`分组 · ${group}`}
+          className='rounded bg-white/10 px-1 py-0.5 text-[10px] text-video-chrome-foreground/60'
+        >
+          {group}
+        </span>
+      )}
+    </button>
   )
 }

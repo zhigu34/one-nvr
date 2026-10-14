@@ -238,7 +238,8 @@ test('offers only channels with playback permission and starts no media on entry
 test('an idle workspace shows no fake position and names the channel, not playback', async () => {
   const { view } = await fixture([segment(A, 0, 120)])
   await view.getByRole('button', { name: 'CH01 大门' }).click()
-  await says('当前通道 CH01 大门')
+  // The channel pill rides the frame OSD; the window caption rides the band.
+  await says('CH01 大门')
   await says('当前位置 —')
   expect(document.body.textContent).not.toContain('1970-01-01')
   expect(document.body.textContent).not.toContain('正在回放')
@@ -249,10 +250,12 @@ test('the index follows the cursor until the window is exhausted', async () => {
     { items: [segment(A, 0, 120)], next_cursor: 'cursor-1' },
     { items: [segment(B, 120, 240)], next_cursor: null },
   ])
-  // The second page's segment reaches the timeline.
+  // The second page's segment reaches the timeline: the canvas strip is up
+  // and the band's density read counts both pages' segments.
   await expect
-    .element(view.getByRole('button', { name: '片段 2026-10-05 08:02:00' }))
+    .element(view.getByTestId('playback-timeline-canvas'))
     .toBeVisible()
+  await says('密度 2 段')
   expect(document.body.textContent).not.toContain('加载上限')
   expect(recordingCalls()).toHaveLength(2)
 })
@@ -289,17 +292,18 @@ const recordingCalls = () =>
 
 test('a single click only selects a segment, a double click plays it', async () => {
   const { view, video } = await fixture([segment(A, 0, 120)])
-  const bar = view.getByRole('button', { name: '片段 2026-10-05 08:00:00' })
-  await bar.click()
+  // Segment A covers the first 40% of the 5-minute strip (0:00–0:02 of 0:05).
+  const strip = view.getByTestId('playback-timeline-canvas')
+  await strip.click({ position: { x: 40, y: 45 } })
   await says('片段 aaaaaaaa')
   expect(video().src).toBe('')
-  await bar.dblClick()
+  await strip.dblClick({ position: { x: 40, y: 45 } })
   await playing(A)
 })
 
 test('a hole is reported with its bounds and can be crossed only on request', async () => {
   const { view } = await fixture([segment(A, 0, 10), segment(B, 120, 130)])
-  await view.getByRole('button', { name: '播放首个可用片段' }).click()
+  await view.getByRole('button', { name: '播放', exact: true }).click()
   await playing(A)
   // Ten seconds past a ten second segment lands in the hole, not on a frame.
   await view.getByRole('button', { name: '+10 秒' }).click()
@@ -314,9 +318,12 @@ test('a segment the index cannot vouch for is blocked, never offered', async () 
     segment(DAMAGED, 0, 60, { state: 'damaged' }),
     segment(READY, 60, 120),
   ])
-  await view.getByRole('button', { name: '片段 2026-10-05 08:00:00' }).click()
+  // The damaged bar covers 0..50% of the strip; clicking it selects the
+  // blocked segment and the smart play button jumps to the next playable.
+  const strip = view.getByTestId('playback-timeline-canvas')
+  await strip.click({ position: { x: 40, y: 45 } })
   await says('文件损坏，与发布记录不一致')
-  await view.getByRole('button', { name: '从下一可用片段开始播放' }).click()
+  await view.getByRole('button', { name: '播放', exact: true }).click()
   await playing(READY)
   expect(video().src).not.toContain(DAMAGED)
 })
@@ -324,8 +331,8 @@ test('a segment the index cannot vouch for is blocked, never offered', async () 
 test('an unavailable segment is explained with the reason the API returns', async () => {
   const { view } = await fixture([segment(A, 0, 120)], '资源不存在')
   await view
-    .getByRole('button', { name: '片段 2026-10-05 08:00:00' })
-    .dblClick()
+    .getByTestId('playback-timeline-canvas')
+    .dblClick({ position: { x: 40, y: 45 } })
   await says('资源不存在')
   expect(calls.probe).toHaveBeenCalled()
 })
@@ -348,12 +355,13 @@ test('speed control offers only the documented rates', async () => {
 
 test('the timeline picks an export bracket and zooms the view', async () => {
   const { view } = await fixture([segment(A, 0, 120), segment(B, 180, 300)])
-  await view.getByRole('button', { name: '片段 2026-10-05 08:00:00' }).click()
+  const strip = view.getByTestId('playback-timeline-canvas')
+  await strip.click({ position: { x: 40, y: 45 } })
+  await says('片段 aaaaaaaa')
   // Picker mode: two background clicks bracket the range, the third restarts.
   await view.getByRole('button', { name: '选择导出区间' }).click()
-  const strip = view.getByTestId('playback-timeline')
-  await strip.click({ position: { x: 40, y: 20 } })
-  await strip.click({ position: { x: 120, y: 20 } })
+  await strip.click({ position: { x: 40, y: 45 } })
+  await strip.click({ position: { x: 120, y: 45 } })
   await vi.waitFor(() => expect(document.querySelector('[data-testid="playback-bracket"]')).toBeTruthy())
   // Width via calc() keeps the overlay out of Playwright's visibility math in
   // headless mode; presence plus the dialogue below is the real assertion.
@@ -374,16 +382,16 @@ test('the timeline picks an export bracket and zooms the view', async () => {
   await expect.element(view.getByText(/2026-10-05 08:00:00 — 2026-10-05 08:05:00/)).toBeVisible()
 })
 
-// Timeline-ruler upgrade: a 24-hour default view lands hourly ticks at
-// :00 wall-clock minutes, paints them in amber with the right thickness to
-// read against the segment blocks, and posts a density read for the
-// current window.
-test('the timeline ruler exposes amber major ticks and a density read', async () => {
+// Timeline upgrade: the ruler is canvas-drawn now (ticks are pixels, not
+// text nodes), so the DOM contract narrows to the band's density read and
+// the canvas element itself over a 24-hour window.
+test('the timeline band exposes the canvas strip and a density read', async () => {
   const { view } = await fixture([segment(A, 0, 120)])
-  await expect.element(view.getByTestId('playback-timeline')).toBeVisible()
-  // Build a 24-hour window so the ladder picks the hourly interval; the
-  // anchor landed at 5 minutes into the day, so labels for 06:00, 07:00,
-  // ... and the playhead at 00:05 are all expected to be present.
+  await expect
+    .element(view.getByTestId('playback-timeline-canvas'))
+    .toBeVisible()
+  // Build a 24-hour window so the canvas ladder picks the hourly step; the
+  // drawn grid is asserted by presence of the strip, not by text (pixels).
   await view.getByLabelText('检索开始时间').fill('2026-10-05T00:00')
   await view.getByLabelText('检索结束时间').fill('2026-10-06T00:00')
   await view.getByRole('button', { name: '检索录像' }).click()
@@ -391,13 +399,6 @@ test('the timeline ruler exposes amber major ticks and a density read', async ()
   await expect
     .element(view.getByText(/密度\s*\d+\s*段/))
     .toBeVisible()
-  // Hour labels in amber. The first major label landed should be 06:00
-  // or 07:00 depending on the start-of-zone day alignment; either is OK
-  // — the assertion is that the hourly label rail exists.
-  await vi.waitFor(() => {
-    const text = document.body.textContent || ''
-    return /\b06:00\b/.test(text) || /\b07:00\b/.test(text)
-  })
 })
 
 // Frame top-OSD metadata strip (ca17f75): the channel pill rides along in
@@ -427,8 +428,8 @@ test('frame OSD lists media facts only after an entry has loaded', async () => {
   // Load the segment; the controller flips state.entry on success and the
   // OSD pills populate.
   await view
-    .getByRole('button', { name: '片段 2026-10-05 08:00:00' })
-    .dblClick()
+    .getByTestId('playback-timeline-canvas')
+    .dblClick({ position: { x: 40, y: 45 } })
   await playing(A)
   await expect.element(osd.getByText('2560×1440')).toBeVisible()
   await expect.element(osd.getByText('25fps')).toBeVisible()
@@ -446,8 +447,8 @@ test('frame OSD state badge mounts when playback leaves idle', async () => {
   // Kick off playback. The controller publishes 'loading' on seek; even if
   // the headless runner skips straight to ready, we still dispatched the
   // 'playing' event the controller binds to.
-  const bar = view.getByRole('button', { name: '片段 2026-10-05 08:00:00' })
-  await bar.dblClick()
+  const strip = view.getByTestId('playback-timeline-canvas')
+  await strip.dblClick({ position: { x: 40, y: 45 } })
   await playing(A)
   const video = document.querySelector('video') as HTMLVideoElement | null
   video?.dispatchEvent(new Event('playing'))

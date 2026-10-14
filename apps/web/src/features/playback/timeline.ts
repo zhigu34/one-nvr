@@ -123,6 +123,51 @@ export function entryAt(timeline: Timeline, at: number): Entry | null {
 }
 
 /**
+ * The raw (possibly blocked) segment containing `at`, earliest match first.
+ * Canvas-strip hit-testing uses this: clicking an amber blocked bar must
+ * select that segment so its blocked reason is visible, not fall through.
+ */
+export function entryAtAny(timeline: Timeline, at: number): Entry | null {
+  return (
+    timeline.entries.find(
+      (entry) => at >= entry.start && at < entry.end
+    ) || null
+  )
+}
+
+/**
+ * Merges entries whose interval gaps are ≤ `toleranceMs` into continuous
+ * spans, separately for playable and blocked segments. The canvas strip draws
+ * from this: adjacent one-minute segments drawn as individual rects produce
+ * sub-pixel seams that read as fake dropouts, while a true gap — anything over
+ * the tolerance — stays untouched, so 断录缺口 still shows as empty canvas.
+ */
+export function mergeEntries(
+  entries: Entry[],
+  toleranceMs = 1500
+): { playable: { start: number; end: number }[]; blocked: { start: number; end: number }[] } {
+  const playable: { start: number; end: number }[] = []
+  const blocked: { start: number; end: number }[] = []
+  const absorb = (
+    spans: { start: number; end: number }[],
+    start: number,
+    end: number
+  ) => {
+    const last = spans[spans.length - 1]
+    if (last && start - last.end <= toleranceMs) {
+      last.end = Math.max(last.end, end)
+    } else {
+      spans.push({ start, end })
+    }
+  }
+  for (const entry of entries) {
+    if (entry.blocked) absorb(blocked, entry.start, entry.end)
+    else absorb(playable, entry.start, entry.end)
+  }
+  return { playable, blocked }
+}
+
+/**
  * The playable moment a click or a released scrub lands on. A point inside a
  * playable segment stays put; a point in a gap snaps to the nearest playable
  * edge — left or right, whichever is closer, capped at one gap-width away.
@@ -258,7 +303,12 @@ export function sliceView(timeline: Timeline, viewStart: number, viewEnd: number
 
 /** The next smaller view window around an anchor, clamped to the full range. */
 export function zoomView(from: number, to: number, anchor: number, full: { start: number; end: number }): { start: number; end: number } {
-  const span = Math.max((to - from) / 2, 60_000)
+  // The zoom floor is five minutes (a minute view is useless when segments
+  // are ≥ 1 minute) and the ceiling seven days — the widest range the search
+  // form itself allows to stay useful on one screen.
+  const MIN_SPAN = 5 * 60_000
+  const MAX_SPAN = 7 * 86_400_000
+  const span = Math.min(Math.max((to - from) / 2, MIN_SPAN), MAX_SPAN)
   let start = anchor - span / 2
   let end = anchor + span / 2
   if (start < full.start) {

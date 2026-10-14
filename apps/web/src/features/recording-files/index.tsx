@@ -77,10 +77,15 @@ export function RecordingFiles({
   // The workspace shell owns the active channel; the panel no longer asks for
   // it, so the channel button shows the same channel as the playback above.
   controlledChannelId = '',
+  // The shell's playback search range is the panel's single time source —
+  // there is no second time picker here to disagree with the toolbar. Falls
+  // back to the last 7 days when the shell has not reported yet.
+  controlledRange,
 }: {
   initialChannel?: string
   active?: boolean
   controlledChannelId?: string
+  controlledRange?: { start: number; end: number }
 }) {
   const admin = useAuthStore((state) => state.user?.role === 'admin')
   const client = useQueryClient()
@@ -88,7 +93,6 @@ export function RecordingFiles({
   const site = useAPI<Schema<'Site'>>('/api/v1/site')
   const pools = useAPI<PageData<Schema<'Pool'>>>('/api/v1/storage-pools?limit=100', admin)
   const archiveTargets = useAPI<PageData<Target>>('/api/v1/archive-targets', admin)
-  const [days, setDays] = useState('7')
   const [revision, setRevision] = useState('')
   const [pool, setPool] = useState('')
   const [health, setHealth] = useState('all')
@@ -107,7 +111,7 @@ export function RecordingFiles({
   const exportable = permitted.find(
     (entry) => entry.id === activeChannel && entry.permissions.includes('export')
   )
-  const window = rangeFor(Number(days))
+  const window = controlledRange ?? rangeFor(7)
   const zone = site.data?.timezone || ''
 
   // One request for the page: the list and its totals describe exactly the same
@@ -130,9 +134,7 @@ export function RecordingFiles({
     if (health === 'deleted') params.append('state', 'deleted')
     if (protection !== 'all') params.set('protected', protection === 'yes' ? 'true' : 'false')
     return params.toString()
-    // window.start/end are derived from the day count, so days is the real input.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeChannel, days, revision, pool, health, protection])
+  }, [activeChannel, window, revision, pool, health, protection])
 
   const list = useAPI<{ items: Segment[]; next_cursor: string | null }>(
     `/api/v1/recordings?${filters}`,
@@ -263,20 +265,6 @@ export function RecordingFiles({
             className='grid grid-cols-2 gap-2 rounded-lg border border-video-border bg-video-surface-raised p-2.5'
             onSubmit={(event) => event.preventDefault()}
           >
-            <SelectField
-              ariaLabel='时间范围'
-              value={days}
-              onValueChange={(next) => {
-                setDays(next)
-                setSelected(new Set())
-              }}
-              options={[
-                { value: '1', label: '最近 24 小时' },
-                { value: '7', label: '最近 7 天' },
-                { value: '30', label: '最近 30 天' },
-                { value: '90', label: '最近 90 天' },
-              ]}
-            />
             <SelectField
               ariaLabel='保护状态'
               value={protection}

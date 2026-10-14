@@ -1,16 +1,18 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
+  Camera,
   ChevronLeft,
   ChevronRight,
-  Maximize,
   Maximize2,
+  Maximize,
   Pause,
   Play,
   RotateCcw,
   SkipForward,
   Square,
+  VideoOff,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
@@ -23,6 +25,7 @@ import { useAPI } from '@/features/foundation/hooks'
 import { Empty, QueryState, SelectField } from '@/features/foundation/ui'
 import { ExportDialog } from '@/features/recording-exports/export-dialog'
 import { probeSegment } from './api'
+import { TimelineCanvas } from './timeline-canvas'
 import {
   RATES,
   PlaybackController,
@@ -31,16 +34,13 @@ import {
 } from './player'
 import {
   buildTimeline,
-  coverageDensity,
   formatDuration,
-  buildTicks,
   sliceView,
   snapToPlayable,
   zoomView,
   type Entry,
-  type Timeline,
 } from './timeline'
-import { clusterMarks, eventMarks, eventWindowSize, markLabel } from './event-marks'
+import { eventMarks, eventWindowSize } from './event-marks'
 import {
   formatClock,
   parseWallClock,
@@ -92,7 +92,12 @@ const QUICK_RANGES: { kind: QuickRangeKind; label: string }[] = [
   { kind: 'day', label: '最近 24 小时' },
   { kind: 'today', label: '今天' },
   { kind: 'yesterday', label: '昨天' },
+  { kind: 'week', label: '最近 7 天' },
 ]
+
+/** Tooltip copy for the timeline's "?" icon: how the axis behaves. */
+const TIMELINE_HELP =
+  '单击片段选中，双击播放，拖动平移，滚轮缩放；空格播放/暂停，← → 跳 10 秒。缺口不会静默跳过——拖动越过缺口时会明确提示。'
 
 export function Playback({
   initialChannel = '',
@@ -105,6 +110,7 @@ export function Playback({
   onChannelChange,
   hideChannelList = false,
   layout,
+  onRangeChange,
 }: {
   initialChannel?: string
   initialAt?: string
@@ -127,6 +133,9 @@ export function Playback({
         rail: React.ReactNode
         files: React.ReactNode | null
       }
+  // Reports the search range upward so the workspace can drive the file
+  // panel's window from the same source of truth (the single time filter).
+  onRangeChange?: (range: { start: number; end: number }) => void
 }) {
   const channelsQuery = useAPI<PageData<Schema<'Channel'>>>(
     '/api/v1/channels?limit=100',
@@ -178,6 +187,7 @@ export function Playback({
           onChannelChange={onChannelChange}
           hideChannelList={hideChannelList}
           layout={layout}
+          onRangeChange={onRangeChange}
         />
       )}
     </div>
@@ -194,6 +204,7 @@ function Workspace({
   onChannelChange,
   hideChannelList = false,
   layout,
+  onRangeChange,
 }: {
   channels: Schema<'Channel'>[]
   zone: string
@@ -210,6 +221,7 @@ function Workspace({
         rail: React.ReactNode
         files: React.ReactNode | null
       }
+  onRangeChange?: (range: { start: number; end: number }) => void
 }) {
   const [internalChannelID, setInternalChannelID] = useState(
     () =>
@@ -298,12 +310,6 @@ function Workspace({
   const viewTimeline = useMemo(
     () => sliceView(timeline, viewBounds.start, viewBounds.end),
     [timeline, viewBounds]
-  )
-  // Minimap coverage over the whole search range, merged and bucketed coarsely
-  // (the rail is ~120 buckets regardless of zoom).
-  const fullDensity = useMemo(
-    () => coverageDensity(timeline, 120),
-    [timeline]
   )
   function zoomIn() {
     // Zoom around the playhead when it is inside the view, else around the
@@ -459,6 +465,29 @@ function Workspace({
   )
   const active =
     channels.find((channel) => channel.id === channelID) || channels[0]
+  // No data in the searched window: the whole transport and the export
+  // picker disable — there is nothing to play, scrub or bracket.
+  const noData = timeline.entries.length === 0
+  // Event marks for the canvas. The window is the view clamped to the
+  // events' 90-day retention — a bounded, honest query (was inside the old
+  // Timeline component; hoisted so the canvas owns one draw input).
+  const eventWindow = useMemo(
+    () => eventWindowSize(viewBounds.start, viewBounds.end),
+    [viewBounds.start, viewBounds.end]
+  )
+  const eventsQuery = useAPI<Schema<'EventPage'>>(
+    `/api/v1/events?${new URLSearchParams({
+      channel_id: channelID,
+      start: String(eventWindow.start),
+      end: String(eventWindow.end),
+      limit: '200',
+    })}`,
+    !!channelID
+  )
+  const marksForCanvas = useMemo(
+    () => eventMarks(eventsQuery.data?.items || [], viewBounds.start, viewBounds.end),
+    [eventsQuery.data, viewBounds.start, viewBounds.end]
+  )
   // A blocked selection is never a play target: fall forward to the next
   // segment the index does vouch for, without pretending it starts here.
   const startTarget = useMemo(() => {
@@ -480,46 +509,179 @@ function Workspace({
       start: wallClockInput(next.start, zone),
       end: wallClockInput(next.end, zone),
     })
+    // The single time filter also drives the file panel's window.
+    onRangeChange?.(next)
   }
-  // The timeline band element. Built once per render; the placement below
-  // decides whether it lives inside the console (plain mode) or spans the
-  // full workspace width as row 2 (workspace mode).
+  // First mount reports the default window too, so the file panel and the
+  // channel rail's per-channel counts share it from the start.
+  useEffect(() => {
+    onRangeChange?.(range)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  // The timeline band element: the canvas strip plus the DOM toolbar row
+  // (export picker + zoom controls) that lives above it. Built once per
+  // render; the placement below decides whether it lives inside the console
+  // (plain mode) or spans the full workspace width as row 2 (workspace mode).
   const timelineBand = (
-    <Timeline
-      timeline={viewTimeline}
-      zone={zone}
-      clock={state.clock}
-      selected={selected}
-      viewIsFull={!view}
-      pickMode={pickMode}
-      bracket={pickMode ? bracket : null}
-      channelID={channelID}
-      fullRange={range}
-      viewBounds={viewBounds}
-      fullDensity={fullDensity}
-      onZoomAt={zoomAt}
-      onMoveView={moveViewTo}
-      onPick={(at) => {
-        setBracket((current) => {
-          if (!current) return { start: at, end: at }
-          if (current.end === current.start) {
-            const start = Math.min(current.start, at)
-            const end = Math.max(current.start, at)
-            return end - start >= 1000 ? { start, end } : { start: at, end: at }
-          }
-          return { start: at, end: at }
-        })
-      }}
-      onSelect={setSelected}
-      onSeek={(at) => {
-        const snap = snapToPlayable(timeline, at)
-        controller.current?.seek(snap.at)
-      }}
-      onPlay={(entry) => {
-        setSelected(entry)
-        controller.current?.start(entry.start)
-      }}
-    />
+    <div className='flex flex-col gap-1.5 rounded-xl bg-video-surface px-3.5 py-2.5'>
+      {/* Toolbar row: export picker on the left, zoom controls on the right.
+          Migrated out of the console card so the timeline owns its controls,
+          and the player keeps the freed vertical space. */}
+      <div className='flex flex-wrap items-center gap-2'>
+        <Button
+          size='sm'
+          variant={pickMode ? 'secondary' : 'ghost'}
+          className='h-7 px-2 text-xs text-video-chrome-foreground hover:bg-white/10'
+          aria-pressed={pickMode}
+          disabled={noData}
+          onClick={() => {
+            setPickMode(!pickMode)
+            setBracket(null)
+          }}
+        >
+          选择导出区间
+        </Button>
+        {pickMode && bracket && bracket.end > bracket.start && (
+          <>
+            <Button
+              size='sm'
+              className='h-7 px-2 text-xs'
+              onClick={() => setExportRange({ ...bracket })}
+            >
+              导出所选区间
+            </Button>
+            <Button
+              size='sm'
+              variant='ghost'
+              className='h-7 px-2 text-xs text-video-chrome-foreground hover:bg-white/10'
+              onClick={() => setBracket(null)}
+            >
+              清除区间
+            </Button>
+          </>
+        )}
+        {pickMode && !bracket && (
+          <span className='text-xs text-video-chrome-foreground/60'>
+            在时间轴上点两次：第一次定起点，第二次定终点；拖动左右手柄微调。
+          </span>
+        )}
+        <div className='ml-auto flex items-center gap-0.5'>
+          <Button size='sm' variant='ghost' aria-label='时间轴左移' disabled={!view || noData} onClick={() => pan(-1)}
+            className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-white/10 hover:text-video-chrome-foreground'>
+            <ChevronLeft size={14} />
+          </Button>
+          <Button size='sm' variant='ghost' aria-label='时间轴放大' disabled={viewBounds.end - viewBounds.start <= 60_000 || noData} onClick={zoomIn}
+            className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-white/10 hover:text-video-chrome-foreground'>
+            <ZoomIn size={14} />
+          </Button>
+          <Button size='sm' variant='ghost' aria-label='时间轴缩小' disabled={!view || noData} onClick={zoomOut}
+            className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-white/10 hover:text-video-chrome-foreground'>
+            <ZoomOut size={14} />
+          </Button>
+          <Button size='sm' variant='ghost' aria-label='时间轴右移' disabled={!view || noData} onClick={() => pan(1)}
+            className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-white/10 hover:text-video-chrome-foreground'>
+            <ChevronRight size={14} />
+          </Button>
+          <Button size='sm' variant='ghost' aria-label='显示完整范围' disabled={!view || noData} onClick={() => setView(null)}
+            className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-white/10 hover:text-video-chrome-foreground'>
+            <Maximize2 size={14} />
+          </Button>
+          <span
+            role='note'
+            aria-label='时间轴使用说明'
+            title={TIMELINE_HELP}
+            className='ml-1 grid size-5 cursor-help place-items-center rounded-full border border-video-border text-[10px] text-video-chrome-foreground/60'
+          >
+            ?
+          </span>
+        </div>
+      </div>
+      {/* Axis header: density on the left, window + current clock on the
+          right. Empty windows say so here instead of collapsing the band. */}
+      <div className='flex items-center justify-between gap-3 text-[11px] tabular-nums text-video-chrome-foreground/50'>
+        {timeline.entries.length > 0 ? (
+          <span data-testid='playback-timeline-density'>
+            密度 <b className='font-medium text-video-chrome-foreground'>{timeline.entries.length}</b> 段
+            {timeline.gaps.length > 0 && (
+              <span className='ml-1.5 text-red-400'>缺口 {timeline.gaps.length}</span>
+            )}
+          </span>
+        ) : (
+          <span className='text-video-chrome-foreground/60'>
+            该时间范围没有已登记录像
+          </span>
+        )}
+        <span data-testid='playback-timeline-window' className='text-video-chrome-foreground/60'>
+          {formatClock(timeline.from, zone)} — {formatClock(timeline.to, zone)}
+        </span>
+        <span>
+          当前{' '}
+          <b data-testid='playback-timeline-clock' className='font-medium text-red-400'>
+            {state.clock > 0 ? formatClock(state.clock, zone) : '—'}
+          </b>
+        </span>
+      </div>
+      <TimelineCanvas
+        timeline={viewTimeline}
+        zone={zone}
+        clock={state.clock}
+        selected={selected}
+        disabled={noData}
+        marks={marksForCanvas}
+        bracket={pickMode ? bracket : null}
+        pickMode={pickMode}
+        viewIsFull={!view}
+        onPick={(at) => {
+          setBracket((current) => {
+            if (!current) return { start: at, end: at }
+            if (current.end === current.start) {
+              const start = Math.min(current.start, at)
+              const end = Math.max(current.start, at)
+              return end - start >= 1000 ? { start, end } : { start: at, end: at }
+            }
+            return { start: at, end: at }
+          })
+        }}
+        onSetBracket={setBracket}
+        onSelect={setSelected}
+        onSeek={(at) => {
+          const snap = snapToPlayable(timeline, at)
+          controller.current?.seek(snap.at)
+        }}
+        onPlay={(entry) => {
+          setSelected(entry)
+          controller.current?.start(entry.start)
+        }}
+        onZoomAt={zoomAt}
+        onMoveView={moveViewTo}
+      />
+      {/* Legend + keyboard cheatsheet (the sample's tl-foot row). */}
+      <div className='flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[11px] text-video-chrome-foreground/50'>
+        <span className='inline-flex items-center gap-1.5'>
+          <span className='size-2 rounded-sm bg-emerald-600' />
+          可用片段
+        </span>
+        <span className='inline-flex items-center gap-1.5'>
+          <span className='size-2 rounded-sm bg-red-500' />
+          受阻片段
+        </span>
+        <span className='inline-flex items-center gap-1.5'>
+          <span className='size-2 rounded-sm bg-amber-400' />
+          事件（琥珀=待处理）
+        </span>
+        <span className='inline-flex items-center gap-1.5'>
+          <span className='size-2 rounded-sm bg-red-500 ring-1 ring-red-300/60' />
+          播放位置
+        </span>
+        <div className='ml-auto flex flex-wrap items-center gap-2.5'>
+          <span><kbd className='rounded border border-video-border bg-white/10 px-1 py-px text-[10px] text-video-chrome-foreground/80'>Space</kbd> 播放/暂停</span>
+          <span><kbd className='rounded border border-video-border bg-white/10 px-1 py-px text-[10px] text-video-chrome-foreground/80'>←</kbd>/<kbd className='rounded border border-video-border bg-white/10 px-1 py-px text-[10px] text-video-chrome-foreground/80'>→</kbd> 跳 10 秒</span>
+          <span><kbd className='rounded border border-video-border bg-white/10 px-1 py-px text-[10px] text-video-chrome-foreground/80'>滚轮</kbd> 缩放</span>
+          <span><kbd className='rounded border border-video-border bg-white/10 px-1 py-px text-[10px] text-video-chrome-foreground/80'>拖动</kbd> 平移</span>
+          <span><kbd className='rounded border border-video-border bg-white/10 px-1 py-px text-[10px] text-video-chrome-foreground/80'>双击</kbd> 播放</span>
+        </div>
+      </div>
+    </div>
   )
 return (
     // The page IS the player: one dark surface spanning the viewport, channel
@@ -748,11 +910,17 @@ return (
                 )}
               </div>
             )}
-            {/* Idle placeholder: a clear "waiting for the operator" cue lives
-                inside the same frame as the video, so the OSD bar below it
-                always reads as a control bar over a real picture rather than
-                floating above empty black. */}
-            {state.phase === 'idle' && !state.entry && (
+            {/* Empty-window placeholder: a static, non-clickable cue. The
+                transport disables entirely when the window has no footage. */}
+            {noData && (
+              <div className='pointer-events-none relative z-10 flex flex-col items-center gap-3 text-center text-video-chrome-foreground/70'>
+                <VideoOff className='size-10 opacity-60' />
+                <p className='text-sm'>
+                  当前时段没有已登记录像，请切换上方时间范围或检查录像计划
+                </p>
+              </div>
+            )}
+            {!noData && state.phase === 'idle' && !state.entry && (
               <div className='pointer-events-none relative z-10 flex flex-col items-center gap-2 text-center text-video-chrome-foreground/70'>
                 <div className='size-12 rounded-full border border-video-chrome-foreground/30' />
                 <p className='text-sm'>
@@ -777,12 +945,17 @@ return (
                 className='size-8 text-white hover:bg-white/15 hover:text-white'
                 aria-label={state.phase === 'playing' ? '暂停' : '播放'}
                 title={state.phase === 'playing' ? '暂停' : '播放'}
-                onClick={() =>
-                  state.phase === 'playing'
-                    ? controller.current?.pause()
-                    : controller.current?.resume()
-                }
-                disabled={!timeline.entries.length}
+                onClick={() => {
+                  if (state.phase === 'playing' || state.phase === 'paused' || state.phase === 'loading') {
+                    if (state.phase === 'playing') controller.current?.pause()
+                    else controller.current?.resume()
+                    return
+                  }
+                  // Idle/gap/error: the button starts the first available
+                  // segment — one smart transport button, no duplicate.
+                  if (startTarget) controller.current?.start(startTarget.start)
+                }}
+                disabled={noData}
               >
                 {state.phase === 'playing' ? (
                   <Pause size={16} />
@@ -796,6 +969,7 @@ return (
                 className='size-8 text-white hover:bg-white/15 hover:text-white'
                 aria-label='-10 秒'
                 title='-10 秒'
+                disabled={noData}
                 onClick={() => controller.current?.shift(-10)}
               >
                 <RotateCcw size={16} />
@@ -806,6 +980,7 @@ return (
                 className='size-8 text-white hover:bg-white/15 hover:text-white'
                 aria-label='+10 秒'
                 title='+10 秒'
+                disabled={noData}
                 onClick={() => controller.current?.shift(10)}
               >
                 <RotateCcw size={16} className='scale-x-[-1]' />
@@ -816,6 +991,7 @@ return (
                 className='size-8 text-white hover:bg-white/15 hover:text-white'
                 aria-label='下一可用片段'
                 title='下一可用片段'
+                disabled={noData}
                 onClick={() => controller.current?.jumpToNext()}
               >
                 <SkipForward size={16} />
@@ -826,6 +1002,7 @@ return (
                 className='size-8 text-white hover:bg-white/15 hover:text-white'
                 aria-label='停止'
                 title='停止'
+                disabled={noData}
                 onClick={() => {
                   // Release the playback lease before the controller drops the
                   // segment, so cleanup never waits on a stopped viewer.
@@ -842,8 +1019,40 @@ return (
                 size='icon'
                 variant='ghost'
                 className='size-8 text-white hover:bg-white/15 hover:text-white'
+                aria-label='截图'
+                title='截图（保存当前画面为 PNG）'
+                disabled={!state.entry}
+                onClick={() => {
+                  const media = video.current
+                  if (!media || !state.entry) return
+                  const canvas = document.createElement('canvas')
+                  canvas.width = media.videoWidth || 1280
+                  canvas.height = media.videoHeight || 720
+                  const ctx = canvas.getContext('2d')
+                  if (!ctx) return
+                  ctx.drawImage(media, 0, 0, canvas.width, canvas.height)
+                  canvas.toBlob((blob) => {
+                    if (!blob) return
+                    const url = URL.createObjectURL(blob)
+                    const anchor = document.createElement('a')
+                    anchor.href = url
+                    anchor.download = `${label(active).replace(/\s+/g, '-')}-${formatClock(
+                      state.clock || state.entry!.start,
+                      zone || 'UTC'
+                    ).replace(/[:\s]/g, '-')}.png`
+                    anchor.click()
+                    URL.revokeObjectURL(url)
+                  }, 'image/png')
+                }}
+              >
+                <Camera size={16} />
+              </Button>
+              <Button
+                size='icon'
+                variant='ghost'
+                className='size-8 text-white hover:bg-white/15 hover:text-white'
                 aria-label='放大'
-                title='放大'
+                title='全屏'
                 onClick={() =>
                   void frame.current?.requestFullscreen().catch(() => {})
                 }
@@ -860,35 +1069,13 @@ return (
                   onValueChange={(next) =>
                     controller.current?.setRate(Number(next))
                   }
+                  disabled={noData}
                   options={RATES.map((rate) => ({
                     value: String(rate),
                     label: `${rate}x`,
                   }))}
                 />
               </div>
-              <Button
-                size='sm'
-                variant='ghost'
-                className='ml-auto h-8 text-white hover:bg-white/15 hover:text-white'
-                aria-label={
-                  selected
-                    ? selected.blocked
-                      ? '从下一可用片段开始播放'
-                      : '从此片段开始播放'
-                    : '播放首个可用片段'
-                }
-                onClick={() =>
-                  startTarget && controller.current?.start(startTarget.start)
-                }
-                disabled={!startTarget}
-              >
-                <Play size={14} />
-                {selected
-                  ? selected.blocked
-                    ? '下一可用'
-                    : '播放此段'
-                  : '播放'}
-              </Button>
             </div>
           </div>
           {/* Status strip: one quiet line between the picture and the
@@ -931,68 +1118,6 @@ return (
               </p>
             )}
           </div>
-          {/* Export bracket + zoom controls ride the console, right above the
-              timeline they act on. */}
-          <div className='flex flex-wrap items-center gap-2 border-t border-video-border px-3 py-1.5'>
-            <Button
-              size='sm'
-              variant={pickMode ? 'secondary' : 'ghost'}
-              className='h-7 px-2 text-xs text-video-chrome-foreground hover:bg-white/10'
-              aria-pressed={pickMode}
-              onClick={() => {
-                setPickMode(!pickMode)
-                setBracket(null)
-              }}
-            >
-              选择导出区间
-            </Button>
-            {pickMode && bracket && bracket.end > bracket.start && (
-              <>
-                <Button
-                  size='sm'
-                  className='h-7 px-2 text-xs'
-                  onClick={() => setExportRange({ ...bracket })}
-                >
-                  导出所选区间
-                </Button>
-                <Button
-                  size='sm'
-                  variant='ghost'
-                  className='h-7 px-2 text-xs text-video-chrome-foreground hover:bg-white/10'
-                  onClick={() => setBracket(null)}
-                >
-                  清除区间
-                </Button>
-              </>
-            )}
-            {pickMode && !bracket && (
-              <span className='text-xs text-video-chrome-foreground/60'>
-                在时间轴空白处点两次：第一次定起点，第二次定终点。
-              </span>
-            )}
-            <div className='ml-auto flex items-center gap-0.5'>
-              <Button size='sm' variant='ghost' aria-label='时间轴左移' disabled={!view} onClick={() => pan(-1)}
-                className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-white/10 hover:text-video-chrome-foreground'>
-                <ChevronLeft size={14} />
-              </Button>
-              <Button size='sm' variant='ghost' aria-label='时间轴放大' disabled={viewBounds.end - viewBounds.start <= 60_000} onClick={zoomIn}
-                className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-white/10 hover:text-video-chrome-foreground'>
-                <ZoomIn size={14} />
-              </Button>
-              <Button size='sm' variant='ghost' aria-label='时间轴缩小' disabled={!view} onClick={zoomOut}
-                className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-white/10 hover:text-video-chrome-foreground'>
-                <ZoomOut size={14} />
-              </Button>
-              <Button size='sm' variant='ghost' aria-label='时间轴右移' disabled={!view} onClick={() => pan(1)}
-                className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-white/10 hover:text-video-chrome-foreground'>
-                <ChevronRight size={14} />
-              </Button>
-              <Button size='sm' variant='ghost' aria-label='显示完整范围' disabled={!view} onClick={() => setView(null)}
-                className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-white/10 hover:text-video-chrome-foreground'>
-                <Maximize2 size={14} />
-              </Button>
-            </div>
-          </div>
           {/* Workspace mode renders the band in the full-width row below the
               grid; plain (standalone) keeps it inside the console. */}
           {layout?.kind !== 'workspace' && timelineBand}
@@ -1018,9 +1143,6 @@ return (
           <p role='status' className='text-sm text-muted-foreground'>
             正在加载更早的录像…
           </p>
-        )}
-        {data && !timeline.entries.length && (
-          <Empty>该时间范围没有已登记录像</Empty>
         )}
         {truncated && (
           <p
@@ -1068,12 +1190,6 @@ return (
             onOpenChange={setExportOpen}
           />
         )}
-        {!selected && (
-          <p className='px-1 text-[11px] text-video-chrome-foreground/50'>
-            当前通道 {label(active)}
-            。缺口不会静默跳过；暂停、拖动、±10 秒与倍速都在同一条时间轴上生效。
-          </p>
-        )}
       </section>
       {/* Workspace mode extras: the files slot rides column 3 of row 1, and
           the timeline band spans the full width as row 2. */}
@@ -1085,387 +1201,4 @@ return (
       )}
     </div>
   )
-}
-
-function Timeline({
-  timeline,
-  zone,
-  clock,
-  selected,
-  viewIsFull,
-  pickMode,
-  bracket,
-  channelID,
-  fullRange,
-  viewBounds,
-  fullDensity,
-  onZoomAt,
-  onMoveView,
-  onPick,
-  onSelect,
-  onSeek,
-  onPlay,
-}: {
-  timeline: Timeline
-  zone: string
-  clock: number
-  selected: Entry | null
-  viewIsFull: boolean
-  pickMode: boolean
-  bracket: { start: number; end: number } | null
-  channelID: string
-  fullRange: { start: number; end: number }
-  viewBounds: { start: number; end: number }
-  fullDensity: ReturnType<typeof coverageDensity>
-  onZoomAt: (anchor: number, factor: number) => void
-  onMoveView: (center: number) => void
-  onPick: (at: number) => void
-  onSelect: (entry: Entry) => void
-  onSeek: (at: number) => void
-  onPlay: (entry: Entry) => void
-}) {
-  const strip = useRef<HTMLDivElement>(null)
-  const bubble = useRef<HTMLDivElement>(null)
-  const [scrubbing, setScrubbing] = useState(false)
-  const [stripWidth, setStripWidth] = useState(0)
-  const span = timeline.to - timeline.from
-  // The ruler adapts to the strip's real width, so the same view reads
-  // differently on a laptop and a fullscreen monitor.
-  useEffect(() => {
-    const element = strip.current
-    if (!element) return
-    const update = () => setStripWidth(element.getBoundingClientRect().width)
-    update()
-    window.addEventListener('resize', update)
-    return () => window.removeEventListener('resize', update)
-  }, [])
-  const ticks = useMemo(
-    () => buildTicks(timeline.from, timeline.to, stripWidth, zone),
-    [timeline.from, timeline.to, stripWidth, zone]
-  )
-  // The event track shows the events the API vouches for: the view window
-  // clamped to the newest day. It is a bounded, honest query, not a full set.
-  const eventWindow = useMemo(
-    () => eventWindowSize(timeline.from, timeline.to),
-    [timeline.from, timeline.to]
-  )
-  const eventsQuery = useAPI<Schema<'EventPage'>>(
-    `/api/v1/events?${new URLSearchParams({
-      channel_id: channelID,
-      start: String(eventWindow.start),
-      end: String(eventWindow.end),
-      limit: '200',
-    })}`,
-    !!channelID
-  )
-  const marks = useMemo(
-    () => eventMarks(eventsQuery.data?.items || [], timeline.from, timeline.to),
-    [eventsQuery.data, timeline.from, timeline.to]
-  )
-  // Pixel clustering keeps three days of events a readable scatter: marks
-  // closer than 8px fold into one dot whose tooltip reports the count.
-  const clusters = useMemo(
-    () => clusterMarks(marks, timeline.from, timeline.to, stripWidth),
-    [marks, timeline.from, timeline.to, stripWidth]
-  )
-  const position = (at: number) =>
-    span > 0
-      ? `${Math.min(Math.max(((at - timeline.from) / span) * 100, 0), 100)}%`
-      : '0%'
-  function scrubTo(clientX: number) {
-    const box = strip.current?.getBoundingClientRect()
-    if (!box || !box.width) return
-    onSeek(timeline.from + ((clientX - box.left) / box.width) * span)
-  }
-  function beginScrub(event: ReactPointerEvent<HTMLElement>) {
-    event.currentTarget.setPointerCapture(event.pointerId)
-    setScrubbing(true)
-    scrubTo(event.clientX)
-  }
-  // The scrub preview is written straight to a DOM node, not through state:
-  // a React re-render from pointermove combined with the strip's pointer
-  // capture reliably drops the second click of a double click (the browser
-  // retargets mid-sequence), which would break double-click-to-play.
-  function trackHover(event: ReactPointerEvent<HTMLElement>) {
-    const node = bubble.current
-    const box = strip.current?.getBoundingClientRect()
-    if (!node || !box || !box.width) return
-    node.style.visibility = 'visible'
-    node.style.left = `${Math.min(Math.max(event.clientX - box.left, 0), box.width)}px`
-    node.textContent = formatClock(
-      timeline.from + ((event.clientX - box.left) / box.width) * span,
-      zone
-    )
-  }
-  function hideHover() {
-    const node = bubble.current
-    if (node) node.style.visibility = 'hidden'
-  }
-  // Wheel zoom anchored under the pointer; shift+wheel pans like a map.
-  function onWheel(event: ReactWheelEvent<HTMLElement>) {
-    event.preventDefault()
-    const box = strip.current?.getBoundingClientRect()
-    if (!box || !box.width) return
-    const at = timeline.from + ((event.clientX - box.left) / box.width) * span
-    if (event.shiftKey) {
-      const direction = event.deltaY > 0 ? 1 : -1
-      onMoveView(at + direction * span * 0.25)
-    } else {
-      onZoomAt(at, event.deltaY > 0 ? 1.4 : 1 / 1.4)
-    }
-  }
-  const fullSpan = fullRange.end - fullRange.start
-  function minimapPointer(event: ReactPointerEvent<HTMLElement>) {
-    const box = event.currentTarget.getBoundingClientRect()
-    if (!box.width || fullSpan <= 0) return
-    onMoveView(fullRange.start + ((event.clientX - box.left) / box.width) * fullSpan)
-  }
-  const band = (
-    <div className='flex flex-col gap-1.5 rounded-xl border border-video-border bg-video-surface px-3.5 py-2.5'>
-      {/* Band 1 — axis header: density read on the left, the playhead clock on
-          the right (the sample's `tl-axis` row). An empty window says so here
-          instead of collapsing the whole band. */}
-      <div className='flex items-center justify-between gap-3 text-[11px] tabular-nums text-video-chrome-foreground/50'>
-        {timeline.entries.length > 0 ? (
-          <span data-testid='playback-timeline-density'>
-            密度 <b className='font-medium text-video-chrome-foreground'>{timeline.entries.length}</b> 段
-            {timeline.gaps.length > 0 && (
-              <span className='ml-1.5 text-red-400'>缺口 {timeline.gaps.length}</span>
-            )}
-          </span>
-        ) : (
-          <span className='text-video-chrome-foreground/60'>
-            该时间范围没有已登记录像
-          </span>
-        )}
-        <span data-testid='playback-timeline-window' className='text-video-chrome-foreground/60'>
-          {formatClock(timeline.from, zone)} — {formatClock(timeline.to, zone)}
-        </span>
-        <span>
-          当前{' '}
-          <b data-testid='playback-timeline-clock' className='font-medium text-red-400'>
-            {clock > 0 ? formatClock(clock, zone) : '—'}
-          </b>
-        </span>
-      </div>
-      {/* Band 2 — density strip. The whole search range's coverage (minimap
-          style) with the zoom viewport outlined; dragging slides the view. */}
-      <div
-        aria-hidden
-        data-testid='playback-minimap'
-        className='relative h-6 cursor-pointer overflow-hidden rounded-md bg-white/[0.04] shadow-[inset_0_0_0_1px_var(--video-border,var(--border))]'
-        onPointerDown={(event) => {
-          event.currentTarget.setPointerCapture(event.pointerId)
-          minimapPointer(event)
-        }}
-        onPointerMove={(event) => {
-          if (event.buttons & 1) minimapPointer(event)
-        }}
-      >
-        {fullDensity.map((bucket, index) => {
-          const ratio = bucket.to > bucket.from ? bucket.coveredMs / (bucket.to - bucket.from) : 0
-          if (ratio <= 0) return null
-          const alpha = `${Math.min(0.95, 0.5 + ratio * 0.45)}`
-          return (
-            <div
-              key={index}
-              className='absolute bottom-0 top-0 border-r border-black/30'
-              style={{
-                left: `${fullSpan > 0 ? ((bucket.from - fullRange.start) / fullSpan) * 100 : 0}%`,
-                width: `calc(${fullSpan > 0 ? ((bucket.to - fullRange.start) / fullSpan) * 100 : 0}% - ${fullSpan > 0 ? ((bucket.from - fullRange.start) / fullSpan) * 100 : 0}%)`,
-                minWidth: '2px',
-                background: `linear-gradient(to top, oklch(0.55 0.13 70 / 80%), oklch(0.75 0.13 70 / ${alpha}))`,
-              }}
-            />
-          )
-        })}
-        {!viewIsFull && fullSpan > 0 && (
-          <div
-            className='absolute bottom-0 top-0 border-x-2 border-amber-400 bg-amber-400/10'
-            style={{
-              left: `${((viewBounds.start - fullRange.start) / fullSpan) * 100}%`,
-              width: `${((viewBounds.end - viewBounds.start) / fullSpan) * 100}%`,
-            }}
-          />
-        )}
-      </div>
-      {/* Band 3 — event rail, always present (the sample draws it whether or
-          not events exist). Slim 8px track; open events carry a halo. */}
-      <div
-        aria-hidden
-        data-testid='playback-events-track'
-        className='relative h-2 rounded-sm bg-white/[0.03]'
-      >
-        {clusters.map((mark) => (
-          <span
-            key={mark.id}
-            title={`${markLabel(mark.category)}${mark.count > 1 ? ` ×${mark.count}` : ''} · ${formatClock(mark.at, zone)} · ${Math.round(mark.score * 100)}%`}
-            className={cn(
-              'absolute top-1/2 w-[2px] -translate-x-1/2 -translate-y-1/2 rounded-full',
-              mark.handleState === 'open'
-                ? 'h-full bg-amber-400 shadow-[0_0_5px_rgba(251,191,36,0.6)]'
-                : 'h-1/2 bg-sky-400/80'
-            )}
-            style={{ left: position(mark.at) }}
-          />
-        ))}
-      </div>
-      {/* Band 4 — the interactive strip: clean segment blocks over the tick
-          grid, nothing else. The sample's strip has no second gradient layer
-          pressed under the segments — density lives in band 2 alone; here a
-          segment is a segment. Same behaviours as before (click select,
-          double-click play, drag scrub, wheel zoom). */}
-      <div
-        ref={strip}
-        data-testid='playback-timeline'
-        aria-label='录像时间轴'
-        className={`relative h-8 touch-none rounded-md bg-white/[0.04] shadow-[inset_0_0_0_1px_var(--video-border,var(--border))] ${
-          scrubbing ? 'cursor-grabbing' : 'cursor-crosshair'
-        }`}
-        onPointerDown={(event) => {
-          // Only the empty background positions playback (or picks an export
-          // boundary in picker mode); a bar click selects.
-          if (event.target !== event.currentTarget) return
-          if (pickMode) {
-            onPick(timeline.from + ((event.clientX - event.currentTarget.getBoundingClientRect().left) / event.currentTarget.getBoundingClientRect().width) * span)
-            return
-          }
-          beginScrub(event)
-        }}
-        onPointerMove={(event) => {
-          if (pickMode || scrubbing) return
-          trackHover(event)
-        }}
-        onPointerLeave={hideHover}
-        onPointerUp={() => setScrubbing(false)}
-        onWheel={onWheel}
-      >
-        <div
-          ref={bubble}
-          aria-hidden
-          className='pointer-events-none absolute -top-8 z-10 -translate-x-1/2 whitespace-nowrap rounded-md border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md'
-          style={{ visibility: 'hidden', left: 0 }}
-        />
-        {timeline.entries.map((entry) => (
-          <Button
-            key={entry.id}
-            variant='ghost'
-            title={`${formatClock(entry.start, zone)} — ${formatClock(entry.end, zone)}${
-              entry.blocked ? ` · ${entry.blocked}` : ''
-            }`}
-            aria-label={`片段 ${formatClock(entry.start, zone)}`}
-            onClick={() => onSelect(entry)}
-            onDoubleClick={() => onPlay(entry)}
-            className={cn(
-              'absolute top-0 h-full rounded-sm p-0 transition-colors duration-150',
-              entry.blocked
-                ? 'bg-amber-500/40 hover:bg-amber-500/60'
-                : entry.id === selected?.id
-                  ? 'bg-primary'
-                  : 'bg-emerald-600/80 hover:bg-emerald-500/90'
-            )}
-            style={{
-              left: position(entry.start),
-              width: position(entry.end),
-              minWidth: '3px',
-            }}
-          />
-        ))}
-        {bracket && bracket.end > bracket.start && (
-          <div
-            data-testid='playback-bracket'
-            aria-label='导出区间'
-            className='pointer-events-none absolute top-0 bottom-0 border-x-2 border-amber-400'
-            style={{
-              left: position(bracket.start),
-              width: `calc(${position(bracket.end)} - ${position(bracket.start)})`,
-              background:
-                'repeating-linear-gradient(45deg, oklch(0.78 0.13 75 / 18%) 0 6px, transparent 6px 12px)',
-            }}
-          >
-            <span className='absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap rounded border border-amber-400/60 bg-amber-400 px-2 py-0.5 text-[10.5px] font-semibold text-amber-950 shadow-md'>
-              选区 · {formatDuration(bracket.end - bracket.start)} · 用于导出
-            </span>
-          </div>
-        )}
-        {clock > 0 && (
-          <div
-            data-testid='playback-playhead'
-            className='absolute top-0 bottom-0 -ml-2 w-4 cursor-grab active:cursor-grabbing'
-            style={{ left: position(clock) }}
-            onPointerDown={beginScrub}
-            onPointerMove={(event) => scrubbing && scrubTo(event.clientX)}
-            onPointerUp={() => setScrubbing(false)}
-          >
-            <div className='relative mx-auto h-full w-0.5 bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.7)]'>
-              <div
-                aria-hidden
-                className='absolute -top-0.5 left-1/2 h-2.5 w-2.5 -translate-x-1/2 rounded-sm bg-red-500'
-                style={{ clipPath: 'polygon(50% 100%, 0 0, 100% 0)' }}
-              />
-            </div>
-          </div>
-        )}
-      </div>
-      {/* Band 5 — the ruler: tick labels under the strip, always present —
-          the sample's clock grid is drawn on the axis, not on the segments.
-          Edge labels flip inward instead of half-vanishing. */}
-      <div aria-hidden className='relative h-4 select-none text-[10px] leading-4'>
-        {ticks.map((tick, index) => {
-          const first = index === 0
-          const last = index === ticks.length - 1
-          return (
-            <span
-              key={tick.at}
-              className={`absolute whitespace-nowrap tabular-nums ${
-                tick.major
-                  ? 'font-medium text-video-chrome-foreground'
-                  : 'text-video-chrome-foreground/50'
-              }`}
-              style={{
-                left: position(tick.at),
-                transform: first
-                  ? 'none'
-                  : last
-                    ? 'translateX(-100%)'
-                    : 'translateX(-50%)',
-              }}
-            >
-              {tick.label}
-            </span>
-          )
-        })}
-      </div>
-      {/* Band 6 — legend + keyboard cheatsheet, the sample's `tl-foot`. */}
-      <div className='flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[11px] text-video-chrome-foreground/50'>
-        <span className='inline-flex items-center gap-1.5'>
-          <span className='size-2 rounded-sm bg-emerald-600' />
-          可用片段
-        </span>
-        <span className='inline-flex items-center gap-1.5'>
-          <span className='size-2 rounded-sm bg-amber-500/60' />
-          受阻片段
-        </span>
-        <span className='inline-flex items-center gap-1.5'>
-          <span className='size-2 rounded-sm bg-amber-400' />
-          事件（琥珀=待处理）
-        </span>
-        <span className='inline-flex items-center gap-1.5'>
-          <span className='size-2 rounded-sm bg-red-500' />
-          播放位置
-        </span>
-        <div className='ml-auto flex flex-wrap items-center gap-2.5'>
-          <span><kbd className='rounded border border-video-border bg-white/10 px-1 py-px text-[10px] text-video-chrome-foreground/80'>Space</kbd> 播放/暂停</span>
-          <span><kbd className='rounded border border-video-border bg-white/10 px-1 py-px text-[10px] text-video-chrome-foreground/80'>←</kbd>/<kbd className='rounded border border-video-border bg-white/10 px-1 py-px text-[10px] text-video-chrome-foreground/80'>→</kbd> 跳 10 秒</span>
-          <span><kbd className='rounded border border-video-border bg-white/10 px-1 py-px text-[10px] text-video-chrome-foreground/80'>滚轮</kbd> 缩放</span>
-          <span><kbd className='rounded border border-video-border bg-white/10 px-1 py-px text-[10px] text-video-chrome-foreground/80'>双击</kbd> 播放</span>
-        </div>
-      </div>
-    </div>
-  )
-  // The workspace shell owns a full-width row under the three columns; the
-  // band portals there so the timeline reads as one band across the whole
-  // workspace, exactly like the sample layout. Falls back to inline when no
-  // host id was given (standalone /playback-style renders, tests).
-  return band
 }
