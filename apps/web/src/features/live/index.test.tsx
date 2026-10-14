@@ -108,10 +108,11 @@ test('stored forbidden channels never create a media connection', async () => {
 })
 test('a playing tile shows the decoded media facts instead of a bare status', async () => {
   const screen = await fixture()
-  // Default fill populated the grid with the first four channels; the stub's
-  // update/media handles point at the LAST constructed player (channel 4).
+  // No default fill: the click constructs the only player, so the stub's
+  // update/media handles bind to channel 1's tile.
+  await screen.getByRole('button', { name: 'CH01 通道 1', exact: true }).click()
   const tile = screen.getByRole('region', {
-    name: '预览 CH04 通道 4',
+    name: '预览 CH01 通道 1',
     exact: true,
   })
   await vi.waitFor(() => expect(calls.update).toBeTypeOf('function'))
@@ -129,14 +130,11 @@ test('a playing tile shows the decoded media facts instead of a bare status', as
   await expect
     .element(tile.getByTestId('live-media-info'))
     .toHaveTextContent('2560×1440 · 25fps · 直通 · 音 PCMA')
-  // The video box follows the decoded proportions instead of a fixed 16:9,
-  // so a 4:3 camera no longer wastes two black bars on the sides.
+  // The grid cell now governs the video box (object-contain letterboxes any
+  // stream shape), so no inline aspect-ratio is injected.
   const area = tile.getByTestId('live-video-area')
-  await vi.waitFor(() =>
-    expect((area.element() as HTMLElement).style.aspectRatio).toBe(
-      '2560 / 1440'
-    )
-  )
+  await expect.element(area).toBeVisible()
+  expect((area.element() as HTMLElement).style.aspectRatio).toBe('')
 })
 test('the fullscreen control toggles back to the small tile', async () => {
   const screen = await fixture()

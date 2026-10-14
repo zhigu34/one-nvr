@@ -144,22 +144,17 @@ function Tile({
       onClick={onSelect}
       onDoubleClick={() => channel && onZoom()}
       className={cn(
-        'group relative flex min-w-0 flex-col overflow-hidden rounded-lg border bg-black text-slate-100 transition-shadow duration-150',
+        'group relative flex h-full min-w-0 flex-col overflow-hidden rounded-lg border bg-black text-slate-100 transition-shadow duration-150',
         selected ? 'ring-2 ring-primary' : 'border-video-border',
         dropActive && 'ring-2 ring-sky-400'
       )}
     >
       <div
         data-testid='live-video-area'
-        className='relative aspect-video min-h-0 flex-1'
-        // Follow the stream's own proportions once decoded so the picture
-        // fills the column without cropping; before the first statistics
-        // arrive the 16:9 placeholder keeps the grid stable.
-        style={
-          media && media.width > 0 && media.height > 0
-            ? { aspectRatio: `${media.width} / ${media.height}` }
-            : undefined
-        }
+        // The grid cell governs the box; object-contain letterboxes any stream
+        // shape inside it. (The old aspect-ratio injection fought the fixed
+        // grid rows and produced mis-sized tiles.)
+        className='relative min-h-0 flex-1'
       >
         <video
           ref={video}
@@ -382,22 +377,6 @@ function LiveWorkspace({
     document.addEventListener('visibilitychange', changed)
     return () => document.removeEventListener('visibilitychange', changed)
   }, [])
-  // First visit (nothing remembered): fill the grid with the first enabled
-  // channels so the page does not open onto a wall of black slots.
-  useEffect(() => {
-    if (view.channels.some((id) => id)) return
-    const fillable = channels
-      .filter((c) => c.enabled !== false)
-      .slice(0, view.layout)
-      .map((c) => c.id)
-    if (!fillable.length) return
-    const next = [...view.channels]
-    fillable.forEach((id, index) => {
-      next[index] = id
-    })
-    change({ ...view, channels: next })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view.layout])
   const displayed = view.channels
     .slice(0, view.layout)
     .map((id) => channels.find((c) => c.id === id))
@@ -644,22 +623,23 @@ function LiveWorkspace({
         <div
           ref={grid}
           aria-label='预览画面网格'
-          className={`grid h-full min-h-0 gap-2 rounded-xl bg-video-surface p-2 ${
+          style={
             zoomed !== null
-              ? 'grid-cols-1 grid-rows-1'
-              : view.layout === 1
-                ? 'grid-cols-1 grid-rows-1'
-                : view.layout === 4
-                  ? 'grid-cols-2 grid-rows-2'
-                  : view.layout === 9
-                    ? 'grid-cols-3 grid-rows-3'
-                    : 'grid-cols-4 grid-rows-4'
-          }`}
+              ? {
+                  gridTemplateColumns: 'minmax(0, 1fr)',
+                  gridTemplateRows: 'minmax(0, 1fr)',
+                }
+              : {
+                  gridTemplateColumns: `repeat(${view.layout === 1 ? 1 : view.layout === 4 ? 2 : view.layout === 9 ? 3 : 4}, minmax(0, 1fr))`,
+                  gridTemplateRows: `repeat(${view.layout === 1 ? 1 : view.layout === 4 ? 2 : view.layout === 9 ? 3 : 4}, minmax(0, 1fr))`,
+                }
+          }
+          className='grid h-full min-h-0 gap-2 rounded-xl bg-video-surface p-2'
         >
           {(zoomed !== null ? [zoomed] : Array.from({ length: view.layout }, (_, i) => i)).map((index) => (
             <div
               key={index}
-              className='flex min-h-0 min-w-0 flex-col'
+              className='flex min-h-0 min-w-0 flex-col overflow-hidden'
               draggable={!!displayed[index]}
               onDragStart={() => setDrag(index)}
               onDragEnd={() => {
