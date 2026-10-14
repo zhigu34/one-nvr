@@ -634,7 +634,7 @@ function LiveWorkspace({
                   gridTemplateRows: `repeat(${view.layout === 1 ? 1 : view.layout === 4 ? 2 : view.layout === 9 ? 3 : 4}, minmax(0, 1fr))`,
                 }
           }
-          className='grid h-full min-h-0 gap-2 rounded-xl bg-video-surface p-2'
+          className='grid h-full min-h-0 flex-1 gap-2 overflow-hidden rounded-xl bg-video-surface p-2'
         >
           {(zoomed !== null ? [zoomed] : Array.from({ length: view.layout }, (_, i) => i)).map((index) => (
             <div
