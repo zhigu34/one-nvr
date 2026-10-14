@@ -1,5 +1,5 @@
 import { useMemo, useState, useSyncExternalStore } from 'react'
-import { ArrowLeft, Filter, PanelRightClose, PanelRightOpen, Search } from 'lucide-react'
+import { ArrowLeft, PanelRightClose, PanelRightOpen, Search } from 'lucide-react'
 import { Link, useNavigate } from '@tanstack/react-router'
 import type { PageData, Schema } from '@/lib/types'
 import { useAPI } from '@/features/foundation/hooks'
@@ -162,7 +162,6 @@ export function RecordingsWorkspace({
         onToggleRight={() => setRightOpen((open) => !open)}
         onOpenSheet={() => setSheetOpen(true)}
         showRightToggle={admin && !!activeChannel}
-        sheetTriggerLabel={narrow ? `查看文件（${stats.data?.segments ?? '…'} 段）` : undefined}
         narrow={narrow}
       />
       {!channels.length && channelsQuery.data && (
@@ -258,7 +257,6 @@ function WorkspaceHeader({
   onToggleRight,
   onOpenSheet,
   showRightToggle,
-  sheetTriggerLabel,
   narrow,
 }: {
   zone: string
@@ -268,7 +266,6 @@ function WorkspaceHeader({
   onToggleRight: () => void
   onOpenSheet: () => void
   showRightToggle: boolean
-  sheetTriggerLabel?: string
   narrow: boolean
 }) {
   return (
@@ -295,10 +292,9 @@ function WorkspaceHeader({
       </span>
       {showRightToggle && (
         <div className='ml-auto flex items-center gap-2'>
-          <span className='inline-flex items-center gap-1.5 rounded-md border border-video-border bg-video-surface-raised px-2 py-1 text-xs text-video-chrome-foreground/70'>
-            <Filter className='size-3' />
-            文件 {segmentCount ?? '…'} 段
-          </span>
+          {/* ONE toggle button: label carries the count, the border lights up
+              while the drawer is open. The old standalone count chip was a
+              duplicate of this button's job. */}
           {narrow ? (
             <button
               type='button'
@@ -308,22 +304,28 @@ function WorkspaceHeader({
               className='inline-flex h-8 items-center gap-1.5 rounded-md border border-video-border bg-video-surface-raised px-2 text-xs text-video-chrome-foreground hover:bg-white/10'
             >
               <PanelRightOpen className='size-4' />
-              {sheetTriggerLabel ?? '文件'}
+              文件 ({segmentCount ?? '…'}段)
             </button>
           ) : (
             <button
               type='button'
+              aria-pressed={rightOpen}
               aria-label={rightOpen ? '收起文件面板' : '展开文件面板'}
               title={rightOpen ? '收起文件面板' : '展开文件面板'}
               onClick={onToggleRight}
-              className='inline-flex h-8 items-center gap-1.5 rounded-md border border-video-border bg-video-surface-raised px-2 text-xs text-video-chrome-foreground hover:bg-white/10'
+              className={cn(
+                'inline-flex h-8 items-center gap-1.5 rounded-md border px-2 text-xs transition-colors',
+                rightOpen
+                  ? 'border-amber-400/60 bg-amber-400/10 text-amber-300 hover:bg-amber-400/20'
+                  : 'border-video-border bg-video-surface-raised text-video-chrome-foreground hover:bg-white/10'
+              )}
             >
               {rightOpen ? (
                 <PanelRightClose className='size-4' />
               ) : (
                 <PanelRightOpen className='size-4' />
               )}
-              {rightOpen ? '收起文件' : '文件'}
+              文件 ({segmentCount ?? '…'}段)
             </button>
           )}
         </div>

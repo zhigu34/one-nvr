@@ -587,6 +587,34 @@ function Workspace({
             在时间轴上点两次：第一次定起点，第二次定终点；拖动左右手柄微调。
           </span>
         )}
+        {/* Selected segment summary rides the toolbar's middle zone — the
+            card that used to squat a 44px row under the video. */}
+        {selected && (
+          <div
+            data-testid='playback-selected'
+            className='flex min-w-0 items-center gap-2 rounded-md border border-video-border bg-video-surface-raised px-2 py-0.5 text-[11px] text-video-chrome-foreground'
+          >
+            <span className='font-medium'>
+              片段 {selected.id.slice(0, 8)} · {selected.blocked || '可用'}
+            </span>
+            <span className='min-w-0 truncate tabular-nums text-video-chrome-foreground/60'>
+              {formatClock(selected.start, zone)} —{' '}
+              {formatClock(selected.end, zone)} ·{' '}
+              {formatDuration(selected.end - selected.start)} ·{' '}
+              {(selected.bytes / 1048576).toFixed(1)} MiB
+            </span>
+            {active.permissions.includes('export') && !selected.blocked && (
+              <Button
+                size='sm'
+                variant='outline'
+                className='h-5 shrink-0 px-1.5 text-[10px]'
+                onClick={() => setExportOpen(true)}
+              >
+                导出
+              </Button>
+            )}
+          </div>
+        )}
         <div className='ml-auto flex items-center gap-0.5'>
           <Button size='sm' variant='ghost' aria-label='时间轴左移' disabled={!view || noData} onClick={() => pan(-1)}
             className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-white/10 hover:text-video-chrome-foreground'>
@@ -864,13 +892,19 @@ return (
               preload='metadata'
               className='absolute inset-0 h-full w-full bg-black object-contain'
             />
-            {/* Top-OSD metadata strip: channel + media facts the operator reads
-                at a glance, the same way the live feature does. Backed by
-                the segment currently loaded for playback; shows the channel
-                pill alone when idle. */}
+            {/* Top-OSD metadata strip: channel + media facts, hovering over
+                the picture in sync with the bottom control bar — fade in on
+                hover (or while paused so facts stay readable), fade out while
+                the operator watches, so the camera's own corner watermark is
+                never covered. */}
             <div
               data-testid='playback-frame-osd'
-              className='pointer-events-none absolute inset-x-0 top-0 flex flex-wrap items-center gap-1.5 p-3'
+              className={cn(
+                'pointer-events-none absolute inset-x-0 top-0 flex flex-wrap items-center gap-1.5 p-3 transition-opacity duration-200',
+                state.phase === 'playing'
+                  ? 'opacity-0 group-hover/frame:opacity-100 focus-within:opacity-100'
+                  : 'opacity-100'
+              )}
             >
               {active && (
                 <span className='rounded-md border border-white/15 bg-black/55 px-2 py-0.5 text-[11px] text-white shadow-sm backdrop-blur'>
@@ -913,7 +947,12 @@ return (
               <div
                 data-testid='playback-state-badge'
                 className={cn(
-                  'pointer-events-none absolute right-3 top-3 flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px] tabular-nums shadow-sm backdrop-blur',
+                  'pointer-events-none absolute right-3 top-3 flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px] tabular-nums shadow-sm backdrop-blur transition-opacity duration-200',
+                  // Same hover contract as the control bar and the top-left
+                  // pills: visible while paused/loading, fade while playing.
+                  state.phase === 'playing'
+                    ? 'opacity-0 group-hover/frame:opacity-100'
+                    : 'opacity-100',
                   state.phase === 'playing' &&
                     'border-red-400/60 bg-red-500/15 text-red-300',
                   state.phase === 'paused' &&
@@ -1192,29 +1231,6 @@ return (
               : ''}
             。更早的录像请缩小时间范围后检索。
           </p>
-        )}
-        {selected && (
-          <div
-            data-testid='playback-selected'
-            className='flex flex-wrap items-center justify-between gap-2 rounded-lg border border-video-border bg-video-surface-raised px-3 py-1.5 text-xs text-video-chrome-foreground'
-          >
-            <p className='min-w-0 truncate'>
-              <span className='font-medium'>
-                片段 {selected.id.slice(0, 8)} · {selected.blocked || '可用'}
-              </span>
-              <span className='ml-2 tabular-nums text-video-chrome-foreground/60'>
-                {formatClock(selected.start, zone)} —{' '}
-                {formatClock(selected.end, zone)} ·{' '}
-                {formatDuration(selected.end - selected.start)} ·{' '}
-                {(selected.bytes / 1048576).toFixed(1)} MiB
-              </span>
-            </p>
-            {active.permissions.includes('export') && !selected.blocked && (
-              <Button size='sm' variant='outline' className='h-6 px-2 text-xs' onClick={() => setExportOpen(true)}>
-                导出
-              </Button>
-            )}
-          </div>
         )}
         {selected && exportOpen && (
           <ExportDialog
