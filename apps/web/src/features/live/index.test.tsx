@@ -142,8 +142,12 @@ test('the fullscreen control toggles back to the small tile', async () => {
   const screen = await fixture()
   // Default fill populated the grid; scope every query to the CH01 tile.
   await screen.getByRole('button', { name: 'CH01 通道 1', exact: true }).click()
-  const tile = document.querySelector('section[aria-label="预览 CH01 通道 1"]')!
-  const enter = tile.querySelector('button[aria-label="全屏画面"]')!
+  const tile = document.querySelector<HTMLElement>(
+    'section[aria-label="预览 CH01 通道 1"]'
+  )!
+  const enter = tile.querySelector<HTMLElement>(
+    'button[aria-label="全屏画面"]'
+  )!
   await expect.element(enter).toBeVisible()
 
   const exit = vi.fn().mockResolvedValue(undefined)
