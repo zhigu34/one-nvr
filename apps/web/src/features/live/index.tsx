@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import {
   Loader2,
@@ -6,6 +6,7 @@ import {
   Minimize,
   MonitorPlay,
   RefreshCw,
+  Settings,
   Square,
   Volume2,
   VolumeX,
@@ -79,20 +80,35 @@ function Tile({
   selected,
   paused,
   dropActive,
+  zoomed,
+  initialStream,
+  slotIndex,
   onSelect,
   onClose,
+  onZoom,
+  onStreamChange,
 }: {
   channel?: Schema<'Channel'>
   selected: boolean
   paused: boolean
   dropActive: boolean
+  /** The workspace's single-tile zoom mode owns the stream choice. */
+  zoomed: boolean
+  /** The slot's remembered stream choice; zoom forces main regardless. */
+  initialStream: 'main' | 'sub'
+  slotIndex: number
   onSelect: () => void
   onClose: () => void
+  onZoom: () => void
+  onStreamChange: (stream: 'main' | 'sub') => void
 }) {
   const video = useRef<HTMLVideoElement>(null)
   const container = useRef<HTMLElement>(null)
   const channelID = channel?.id
-  const [stream, setStream] = useState<'main' | 'sub'>('sub')
+  const [localStream, setLocalStream] = useState<'main' | 'sub'>(initialStream)
+  // Double-click zoom forces the main stream; the workspace hands the choice
+  // back on restore via onStreamChange.
+  const stream = zoomed ? 'main' : localStream
   const [audio, setAudio] = useState(false)
   const [retry, setRetry] = useState(0)
   const [state, setState] = useState<PlayerState>({
@@ -126,6 +142,7 @@ function Tile({
       ref={container}
       aria-label={channel ? `预览 ${label(channel)}` : '空闲画面'}
       onClick={onSelect}
+      onDoubleClick={() => channel && onZoom()}
       className={cn(
         'group relative flex min-w-0 flex-col overflow-hidden rounded-lg border bg-black text-slate-100 transition-shadow duration-150',
         selected ? 'ring-2 ring-primary' : 'border-video-border',
@@ -152,10 +169,11 @@ function Tile({
           muted={!selected || !audio}
           className='h-full w-full object-contain'
         />
-        {/* Status dot: always visible so a wall of tiles reads at a glance. */}
+        {/* LIVE pill: always visible so a wall of tiles reads at a glance. */}
         {channel && (
-          <div className='absolute left-2 top-2 flex items-center gap-1.5'>
+          <div className='absolute left-2 top-2 z-10 flex items-center gap-1.5 rounded-full border border-white/15 bg-black/55 px-2 py-0.5 text-[11px] text-white shadow-sm backdrop-blur'>
             <TileDot state={state} paused={paused} />
+            <span className='max-w-32 truncate'>{label(channel)}</span>
           </div>
         )}
         {/* Header floats over the picture and fades with the controls. */}
@@ -185,13 +203,19 @@ function Tile({
         </div>
         {(!channel || paused || state.phase !== 'playing') && (
           <div className='absolute inset-0 flex flex-col items-center justify-center gap-3 bg-video-chrome px-4 text-center text-xs text-slate-300 transition-opacity duration-200'>
-            {state.phase === 'connecting' || state.phase === 'retrying' ? (
+            {!channel ? (
+              // An empty slot is a waiting state, not a loading one: a static
+              // icon tells "pick a camera" apart from "buffering".
+              <MonitorPlay size={26} className='text-zinc-600' />
+            ) : state.phase === 'connecting' || state.phase === 'retrying' ? (
               <Loader2 size={26} className='animate-spin' />
             ) : (
               <MonitorPlay size={26} />
             )}
             <p role='status'>
-              {channel ? message : '点击左侧通道，放入选中的画面'}
+              {channel
+                ? message
+                : `空画面 #${slotIndex + 1} · 点击或拖拽左侧通道至此`}
             </p>
             {channel && !paused && state.phase === 'error' && (
               <Button
@@ -239,7 +263,11 @@ function Tile({
               size='sm'
               triggerClassName='w-fit px-2 text-xs'
               value={stream}
-              onValueChange={(next) => setStream(next as 'main' | 'sub')}
+              disabled={zoomed}
+              onValueChange={(next) => {
+                setLocalStream(next as 'main' | 'sub')
+                onStreamChange(next as 'main' | 'sub')
+              }}
               options={[
                 { value: 'sub', label: '子码流' },
                 { value: 'main', label: '主码流' },
@@ -331,12 +359,45 @@ function LiveWorkspace({
   const [paused, setPaused] = useState(document.hidden)
   const [drag, setDrag] = useState<number | null>(null)
   const [dropTarget, setDropTarget] = useState<number | null>(null)
+  // Double-click zoom: the slot index shown maximised, or null for the
+  // saved grid layout. Zoomed mode forces the main stream on that tile.
+  const [zoomed, setZoomed] = useState<number | null>(null)
+  // The operator's per-slot stream choice; survives zoom round-trips.
+  const [slotStreams, setSlotStreams] = useState<Record<number, 'main' | 'sub'>>({})
   const grid = useRef<HTMLDivElement>(null)
+  // Channel summaries power the rail's status lights (source errors /
+  // unconfigured slots), the same derivation the recordings page uses.
+  const summariesQuery = useAPI<{ items: Schema<'ChannelSummary'>[] }>(
+    '/api/v1/channels/summary'
+  )
+  const summaries = useMemo(() => {
+    const map = new Map<string, Schema<'ChannelSummary'>>()
+    for (const item of summariesQuery.data?.items || []) {
+      map.set(item.channel_id, item)
+    }
+    return map
+  }, [summariesQuery.data])
   useEffect(() => {
     const changed = () => setPaused(document.hidden)
     document.addEventListener('visibilitychange', changed)
     return () => document.removeEventListener('visibilitychange', changed)
   }, [])
+  // First visit (nothing remembered): fill the grid with the first enabled
+  // channels so the page does not open onto a wall of black slots.
+  useEffect(() => {
+    if (view.channels.some((id) => id)) return
+    const fillable = channels
+      .filter((c) => c.enabled !== false)
+      .slice(0, view.layout)
+      .map((c) => c.id)
+    if (!fillable.length) return
+    const next = [...view.channels]
+    fillable.forEach((id, index) => {
+      next[index] = id
+    })
+    change({ ...view, channels: next })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view.layout])
   const displayed = view.channels
     .slice(0, view.layout)
     .map((id) => channels.find((c) => c.id === id))
@@ -363,14 +424,20 @@ function LiveWorkspace({
     label(c).toLowerCase().includes(search.toLowerCase())
   )
   const pageCount = Math.max(1, Math.ceil(filtered.length / 16))
+  const anyPlaying = displayed.some((t) => !!t)
   return (
-    <div className='space-y-4'>
+    <div className='flex h-[calc(100svh-5rem)] min-h-0 flex-col gap-3'>
       <div className='flex flex-wrap items-center justify-between gap-3'>
-        <div>
-          <h1 className='text-2xl font-semibold tracking-tight'>实时预览</h1>
-          <p className='mt-1 text-sm text-muted-foreground'>
-            选择画面后点击通道，默认播放子码流。关闭录像仍可预览。
-          </p>
+        <div className='flex items-center gap-3'>
+          <h1 className='text-xl font-semibold tracking-tight'>实时预览</h1>
+          <span
+            role='note'
+            aria-label='预览使用说明'
+            title='选择画面后点击通道，默认播放子码流；双击画面放大并临时切主码流，再次双击恢复。关闭录像仍可预览。'
+            className='grid size-5 cursor-help place-items-center rounded-full border border-border text-[10px] text-muted-foreground'
+          >
+            ?
+          </span>
         </div>
         <div className='flex flex-wrap gap-2'>
           <div
@@ -398,10 +465,32 @@ function LiveWorkspace({
           </div>
           <Button
             variant='outline'
+            disabled={!anyPlaying}
             onClick={() => change({ ...view, channels: [] })}
           >
             <Square size={16} />
             停止全部
+          </Button>
+          <Button
+            variant='outline'
+            disabled={!channels.some((c) => c.enabled !== false)}
+            onClick={() => {
+              // Auto-fill: walk the enabled channels in order into every
+              // empty slot of the current layout.
+              const next = [...view.channels]
+              const used = new Set(next.slice(0, view.layout))
+              const queue = channels.filter(
+                (c) => c.enabled !== false && !used.has(c.id)
+              )
+              for (let slot = 0; slot < view.layout && queue.length; slot++) {
+                if (next[slot]) continue
+                next[slot] = queue.shift()!.id
+              }
+              change({ ...view, channels: next })
+            }}
+          >
+            <LayoutGlyph layout={4} />
+            自动填充
           </Button>
           <Button
             variant='outline'
@@ -414,11 +503,22 @@ function LiveWorkspace({
           </Button>
         </div>
       </div>
-      <div className='grid items-start gap-4 xl:grid-cols-[220px_minmax(0,1fr)]'>
-        <aside className='space-y-3 rounded-xl border bg-card p-3'>
+      <div className='flex min-h-0 flex-1 gap-3'>
+        <aside className='flex w-60 shrink-0 flex-col gap-3 rounded-xl border bg-card p-3'>
           <div className='flex items-center justify-between text-sm font-medium'>
             <span>通道列表</span>
-            <span className='text-muted-foreground'>{channels.length} 路</span>
+            <div className='flex items-center gap-1.5'>
+              <span className='text-muted-foreground'>{channels.length} 路</span>
+              <Link
+                to='/channels'
+                search={{ batch: '' }}
+                aria-label='通道管理'
+                title='配置通道与录像'
+                className='grid size-6 place-items-center rounded-md border border-border text-muted-foreground hover:bg-accent hover:text-foreground'
+              >
+                <Settings size={14} />
+              </Link>
+            </div>
           </div>
           <Input
             aria-label='搜索预览通道'
@@ -429,25 +529,73 @@ function LiveWorkspace({
               setPage(0)
             }}
           />
-          <div className='grid grid-cols-2 gap-1 xl:grid-cols-1'>
-            {filtered.slice(page * 16, (page + 1) * 16).map((channel) => (
-              <Button
-                key={channel.id}
-                variant='ghost'
-                draggable
-                onDragStart={(e) =>
-                  e.dataTransfer.setData('text/plain', channel.id)
-                }
-                onClick={() => choose(channel.id)}
-                className={cn(
-                  'h-auto w-full justify-start truncate px-2 py-2 text-left text-sm font-normal transition-colors',
-                  displayed[selected]?.id === channel.id &&
-                    'bg-accent font-medium'
-                )}
-              >
-                {label(channel)}
-              </Button>
-            ))}
+          <div className='grid min-h-0 flex-1 grid-cols-2 content-start gap-1 overflow-y-auto xl:grid-cols-1'>
+            {filtered.slice(page * 16, (page + 1) * 16).map((channel) => {
+              const summary = summaries.get(channel.id)
+              const disabled = channel.enabled === false
+              const hasError = !!summary?.last_error
+              const unconfigured = !summary?.current_revision_id
+              const dot = disabled
+                ? { cls: 'bg-zinc-600', title: '已停用' }
+                : hasError
+                  ? { cls: 'bg-red-500', title: `源异常：${summary?.last_error}` }
+                  : unconfigured
+                    ? { cls: 'bg-zinc-600', title: '未配置源' }
+                    : {
+                        cls: 'bg-emerald-500 shadow-[0_0_5px_rgba(16,185,129,0.7)]',
+                        title: '源在线',
+                      }
+              const slot = view.channels.indexOf(channel.id)
+              const onGrid = slot >= 0 && slot < view.layout
+              return (
+                <Button
+                  key={channel.id}
+                  variant='ghost'
+                  draggable
+                  aria-label={label(channel)}
+                  onDragStart={(e) =>
+                    e.dataTransfer.setData('text/plain', channel.id)
+                  }
+                  onClick={() => {
+                    choose(channel.id)
+                    // Clicking an on-grid channel jumps the focus to its slot.
+                    if (onGrid) setSelected(slot)
+                  }}
+                  className={cn(
+                    'h-auto w-full justify-start gap-2 truncate px-2 py-2 text-left text-sm font-normal transition-colors',
+                    displayed[selected]?.id === channel.id &&
+                      'bg-accent font-medium',
+                    unconfigured && 'text-muted-foreground/60'
+                  )}
+                >
+                  <span
+                    aria-hidden
+                    title={dot.title}
+                    className={cn(
+                      'inline-block size-1.5 shrink-0 rounded-full',
+                      dot.cls
+                    )}
+                  />
+                  <span className='inline-grid min-w-5 shrink-0 place-items-center rounded bg-black/10 px-1 text-[10px] font-semibold tabular-nums dark:bg-white/10'>
+                    {String(channel.channel_no).padStart(2, '0')}
+                  </span>
+                  <span className='flex-1 truncate'>{channel.channel_name}</span>
+                  {onGrid && (
+                    <span className='shrink-0 rounded bg-emerald-500/15 px-1 py-0.5 text-[10px] tabular-nums text-emerald-600 dark:text-emerald-400'>
+                      画面 {slot + 1}
+                    </span>
+                  )}
+                  {channel.channel_group && (
+                    <span
+                      title={`分组 · ${channel.channel_group}`}
+                      className='shrink-0 rounded bg-black/10 px-1 py-0.5 text-[10px] text-muted-foreground dark:bg-white/10'
+                    >
+                      {channel.channel_group}
+                    </span>
+                  )}
+                </Button>
+              )
+            })}
           </div>
           {!channels.length && (
             <p className='text-sm text-muted-foreground'>
@@ -477,14 +625,6 @@ function LiveWorkspace({
               </Button>
             </div>
           )}
-          <p className='text-xs text-muted-foreground'>
-            拖动通道到画面，或拖动画面调整顺序。仅选中画面可开启声音。
-          </p>
-          <Button asChild variant='link' className='h-auto p-0'>
-            <Link to='/channels' search={{ batch: '' }}>
-              配置通道与录像
-            </Link>
-          </Button>
           {displayed[selected]?.permissions.includes('playback') && (
             <Button asChild variant='link' className='h-auto p-0'>
               <Link
@@ -504,11 +644,22 @@ function LiveWorkspace({
         <div
           ref={grid}
           aria-label='预览画面网格'
-          className={`grid gap-2 rounded-xl bg-video-surface p-2 ${view.layout === 1 ? 'grid-cols-1' : view.layout === 4 ? 'grid-cols-1 sm:grid-cols-2' : view.layout === 9 ? 'grid-cols-2 lg:grid-cols-3' : 'grid-cols-2 lg:grid-cols-4'}`}
+          className={`grid h-full min-h-0 gap-2 rounded-xl bg-video-surface p-2 ${
+            zoomed !== null
+              ? 'grid-cols-1 grid-rows-1'
+              : view.layout === 1
+                ? 'grid-cols-1 grid-rows-1'
+                : view.layout === 4
+                  ? 'grid-cols-2 grid-rows-2'
+                  : view.layout === 9
+                    ? 'grid-cols-3 grid-rows-3'
+                    : 'grid-cols-4 grid-rows-4'
+          }`}
         >
-          {Array.from({ length: view.layout }, (_, index) => (
+          {(zoomed !== null ? [zoomed] : Array.from({ length: view.layout }, (_, i) => i)).map((index) => (
             <div
               key={index}
+              className='flex min-h-0 min-w-0 flex-col'
               draggable={!!displayed[index]}
               onDragStart={() => setDrag(index)}
               onDragEnd={() => {
@@ -540,16 +691,28 @@ function LiveWorkspace({
               }}
             >
               <Tile
-                key={displayed[index]?.id || 'empty'}
+                key={`${index}:${displayed[index]?.id || 'empty'}:${zoomed === index ? 'main' : slotStreams[index] ?? 'sub'}`}
                 channel={displayed[index]}
                 selected={selected === index}
                 paused={paused}
                 dropActive={dropTarget === index && drag !== null}
+                zoomed={zoomed === index}
+                initialStream={slotStreams[index] ?? 'sub'}
+                slotIndex={index}
                 onSelect={() => setSelected(index)}
                 onClose={() => {
                   const next = [...view.channels]
                   next[index] = ''
                   change({ ...view, channels: next })
+                }}
+                onZoom={() => setZoomed((current) => (current === index ? null : index))}
+                onStreamChange={(stream) => {
+                  // Remember the operator's stream choice per slot; restoring
+                  // the grid hands it back to the tile.
+                  setSlotStreams((previous) => {
+                    const next = { ...previous, [index]: stream }
+                    return next
+                  })
                 }}
               />
             </div>

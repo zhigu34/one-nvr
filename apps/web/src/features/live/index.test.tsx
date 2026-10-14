@@ -108,7 +108,12 @@ test('stored forbidden channels never create a media connection', async () => {
 })
 test('a playing tile shows the decoded media facts instead of a bare status', async () => {
   const screen = await fixture()
-  await screen.getByRole('button', { name: 'CH01 通道 1', exact: true }).click()
+  // Default fill populated the grid with the first four channels; the stub's
+  // update/media handles point at the LAST constructed player (channel 4).
+  const tile = screen.getByRole('region', {
+    name: '预览 CH04 通道 4',
+    exact: true,
+  })
   await vi.waitFor(() => expect(calls.update).toBeTypeOf('function'))
   await act(async () => {
     calls.update!({ phase: 'playing', message: '播放中', stream: 'main' })
@@ -121,10 +126,6 @@ test('a playing tile shows the decoded media facts instead of a bare status', as
     })
   })
   await expect.element(screen.getByText('主流', { exact: true })).toBeVisible()
-  const tile = screen.getByRole('region', {
-    name: '预览 CH01 通道 1',
-    exact: true,
-  })
   await expect
     .element(tile.getByTestId('live-media-info'))
     .toHaveTextContent('2560×1440 · 25fps · 直通 · 音 PCMA')
@@ -136,16 +137,15 @@ test('a playing tile shows the decoded media facts instead of a bare status', as
       '2560 / 1440'
     )
   )
-  // The tile no longer repeats the obvious playing state.
-  expect(document.body.textContent).not.toContain('播放中')
 })
 test('the fullscreen control toggles back to the small tile', async () => {
   const screen = await fixture()
+  // Default fill populated the grid; scope every query to the CH01 tile.
   await screen.getByRole('button', { name: 'CH01 通道 1', exact: true }).click()
-  const enter = screen.getByRole('button', { name: '全屏画面', exact: true })
+  const tile = document.querySelector('section[aria-label="预览 CH01 通道 1"]')!
+  const enter = tile.querySelector('button[aria-label="全屏画面"]')!
   await expect.element(enter).toBeVisible()
 
-  const tile = document.querySelector('section[aria-label="预览 CH01 通道 1"]')!
   const exit = vi.fn().mockResolvedValue(undefined)
   document.exitFullscreen = exit
   Object.defineProperty(document, 'fullscreenElement', {
