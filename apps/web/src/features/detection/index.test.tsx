@@ -34,9 +34,14 @@ function fixture(
     enabled: true,
     version: 1,
   })
+  // A PUT stores the payload: the refetched configs must echo it back, the
+  // same way the real server does, so the saved row reads as unchanged.
+  let storedEnabled = enabled
   calls.request.mockImplementation(async (path: string, init?: RequestInit) => {
-    if (init?.method === 'PUT' && path === `/api/v1/detection/configs/${channelID}`)
-      return { channel_id: channelID, enabled, stream: 'sub', fps: 5, labels: ['person'], version: 2 }
+    if (init?.method === 'PUT' && path === `/api/v1/detection/configs/${channelID}`) {
+      storedEnabled = Boolean((init.body as string | undefined) ? JSON.parse(init.body as string).enabled : enabled)
+      return { channel_id: channelID, enabled: storedEnabled, stream: 'sub', fps: 5, labels: ['person'], version: 2 }
+    }
     if (path.startsWith('/api/v1/channels?') && !path.includes('summary'))
       return {
         items: [
@@ -76,7 +81,7 @@ function fixture(
     if (path === '/api/v1/detection/configs')
       return {
         items: [
-          { channel_id: channelID, enabled, stream: 'sub', fps: 5, labels: ['person'], version: 1 },
+          { channel_id: channelID, enabled: storedEnabled, stream: 'sub', fps: 5, labels: ['person'], version: storedEnabled === enabled ? 1 : 2 },
         ],
       }
     if (path === '/api/v1/detection/runtime')
@@ -171,10 +176,10 @@ test('the filter pills narrow the rows by state', async () => {
   const group = screen.getByRole('group', { name: '通道筛选' })
   await expect.element(group).toHaveTextContent('全部1')
   await expect.element(group).toHaveTextContent('已启用检测1')
-  await userEvent.click(group.getByRole('button', { name: /有未发布修改/ }))
+  await userEvent.click(group.getByRole('button', { name: /未保存修改/ }))
   // No dirty rows yet: the empty result is fine, the pill counts come from edits.
   await expect
-    .element(screen.getByRole('button', { name: /有未发布修改/ }))
+    .element(screen.getByRole('button', { name: /未保存修改/ }))
     .toHaveAttribute('aria-pressed', 'true')
 })
 
@@ -184,8 +189,16 @@ test('editing a row marks it dirty and the sticky publish bar appears', async ()
   // dirty hint does not.
   await expect.element(screen.getByTestId('publish-bar')).toBeVisible()
   expect(screen.getByTestId('publish-bar').element().textContent).not.toContain('未保存的修改')
+  // An untouched row has nothing to save: the button sits dimmed and inert.
+  // Scoped to the row: the "未保存修改" pill also matches 保存.
+  const row = screen.getByTestId('detection-row')
+  await expect.element(row.getByRole('button', { name: '保存' })).toBeDisabled()
   const switchControl = screen.getByRole('switch', { name: 'CH05 大门 启用检测' })
   await switchControl.click()
+  // The edit lights the save button up as 保存*.
+  await expect
+    .element(row.getByRole('button', { name: '保存*' }))
+    .toBeEnabled()
   // The bar now warns about the unsaved edit and blocks publishing.
   await vi.waitFor(() =>
     expect(screen.getByTestId('publish-bar').element().textContent).toContain('未保存的修改')
@@ -208,6 +221,29 @@ test('editing a row marks it dirty and the sticky publish bar appears', async ()
   await expect
     .element(screen.getByTestId('publish-bar').getByRole('button', { name: '发布检测配置' }))
     .toBeEnabled()
+  // Saving returns the row button to its dimmed, disabled rest state.
+  await expect.element(row.getByRole('button', { name: '保存' })).toBeDisabled()
+})
+
+// The health labels differ by three characters ("在线" vs "通道已停用"); the
+// fixed-width slot keeps the switch and selects on one vertical line.
+test('the health badge sits in a fixed-width slot regardless of label length', async () => {
+  const screen = await render(
+    view(
+      fixture(true, {
+        summary: {
+          source_ip: '192.168.66.115',
+          enabled: false,
+          main: { state: 'healthy', reason: '', observed_at: null, expires_at: null },
+        },
+      })
+    )
+  )
+  const row = screen.getByTestId('detection-row')
+  await expect.element(row.getByText('通道已停用')).toBeVisible()
+  const badgeSlot = row.element().querySelector('span.w-24')
+  expect(badgeSlot).toBeTruthy()
+  expect(badgeSlot!.textContent).toContain('通道已停用')
 })
 
 test('a channel without detection says why zones cannot be calibrated', async () => {

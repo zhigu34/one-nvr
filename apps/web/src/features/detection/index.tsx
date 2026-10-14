@@ -221,7 +221,7 @@ export function Detection() {
               [
                 { value: 'all', label: '全部' },
                 { value: 'enabled', label: '已启用检测' },
-                { value: 'dirty', label: '有未发布修改' },
+                { value: 'dirty', label: '未保存修改' },
               ] as const
             ).map(({ value, label }) => {
               const active = filter === value
@@ -246,7 +246,9 @@ export function Detection() {
               )
             })}
           </div>
-          <div className='space-y-2'>
+          {/* pb-20 keeps the last row clear of the sticky publish bar when
+              scrolled to the bottom. */}
+          <div className='space-y-2 pb-20'>
             {visibleRows.map((row) => (
               <DetectionRow
                 key={row.channel.id}
@@ -393,9 +395,13 @@ function DetectionRow({
         >
           {label}
         </span>
-        {badge && (
-          <StatusBadge tone={badge.tone}>{badge.text}</StatusBadge>
-        )}
+        {/* Fixed-width slot: the health labels differ by three characters, and
+            without a reserved box every control to the right shifts per row. */}
+        <span className='inline-flex w-24 shrink-0 justify-start'>
+          {badge ? (
+            <StatusBadge tone={badge.tone}>{badge.text}</StatusBadge>
+          ) : null}
+        </span>
         <label className='flex items-center gap-2'>
           <Switch
             checked={enabled}
@@ -483,12 +489,16 @@ function DetectionRow({
           </span>
         )}
         <div className='ml-auto flex items-center gap-2'>
+          {/* Unchanged rows have nothing to save: the dimmed button states
+              that instead of sixteen identical invites to click. Only an
+              actual edit lights it up. */}
           {unchanged ? (
             <Button
               size='sm'
               variant='outline'
-              disabled={pending || inert || !selected.length}
-              onClick={() => onSave({ enabled, stream, fps, labels: selected })}
+              className='opacity-40'
+              disabled
+              title='修改设置后可保存'
             >
               保存
             </Button>
