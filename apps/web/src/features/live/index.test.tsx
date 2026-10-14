@@ -48,7 +48,7 @@ afterEach(() => {
   vi.clearAllMocks()
   localStorage.clear()
 })
-async function fixture() {
+async function fixture(initialChannel = '') {
   calls.request.mockResolvedValue({
     items: Array.from({ length: 32 }, (_, index) => ({
       id: `channel-${index + 1}`,
@@ -65,7 +65,7 @@ async function fixture() {
   const route = createRootRoute({
     component: () => (
       <QueryClientProvider client={client}>
-        <LivePreview />
+        <LivePreview initialChannel={initialChannel} />
       </QueryClientProvider>
     ),
   })
@@ -105,6 +105,27 @@ test('stored forbidden channels never create a media connection', async () => {
   expect(calls.started).not.toHaveBeenCalledWith('channel-32')
   await screen.unmount()
   expect(calls.stopped).toHaveBeenCalled()
+})
+// The channels page preview shortcut deep-links with ?channel=; it lands the
+// channel in the first empty slot without any click.
+test('a deep-linked channel pre-fills the first empty slot', async () => {
+  const screen = await fixture('channel-2')
+  await expect
+    .element(screen.getByRole('button', { name: 'CH02 通道 2', exact: true }))
+    .toBeVisible()
+  await vi.waitFor(() =>
+    expect(calls.started).toHaveBeenCalledWith('channel-2')
+  )
+  expect(calls.started).not.toHaveBeenCalledWith('channel-1')
+  // A channel the operator cannot preview is ignored entirely.
+  await screen.unmount()
+  calls.started.mockClear()
+  const denied = await fixture('channel-32')
+  await expect
+    .element(denied.getByRole('button', { name: 'CH01 通道 1', exact: true }))
+    .toBeVisible()
+  expect(calls.started).not.toHaveBeenCalled()
+  await denied.unmount()
 })
 test('a playing tile shows the decoded media facts instead of a bare status', async () => {
   const screen = await fixture()

@@ -5,9 +5,11 @@ import { audioCodecLabel, audioPreviewable, videoParamsLabel } from './media'
 type Media = Schema<'ChannelMediaParams'>
 
 function AudioCodec({ codec }: { codec: string | null | undefined }) {
-  const label = audioCodecLabel(codec)
   if (codec == null || codec === '')
-    return <span className='text-muted-foreground'>{label}</span>
+    // "" means the probe confirmed the stream has no audio track; the two
+    // cases share one quiet label so a missing value never reads as a fault.
+    return <span className='text-zinc-600 dark:text-zinc-500'>无音频</span>
+  const label = audioCodecLabel(codec)
   if (audioPreviewable(codec)) return <span>{label}</span>
   return (
     <span

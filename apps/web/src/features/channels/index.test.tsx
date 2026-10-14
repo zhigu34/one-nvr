@@ -35,7 +35,7 @@ const summaries: Schema<'ChannelSummary'>[] = [
     channel_group: '一层',
     enabled: true,
     version: 3,
-    permissions: ['configure', 'live'],
+    permissions: ['configure', 'live', 'playback'],
     current_revision_id: '00000000-0000-4000-8000-0000000000aa',
     source_ip: '192.168.66.114',
     main_path: '/Streaming/Channels/101',
@@ -72,13 +72,16 @@ const summaries: Schema<'ChannelSummary'>[] = [
     enabled: true,
     version: 1,
     permissions: ['configure', 'live'],
-    current_revision_id: null,
-    main: observed('not_configured', 'source_not_configured'),
-    sub: observed('not_configured', 'source_not_configured'),
-    recording: observed('disabled', 'source_not_configured'),
+    current_revision_id: '00000000-0000-4000-8000-0000000000cc',
+    source_ip: '192.168.66.116',
+    main_path: '/cam2/main',
+    sub_path: '/cam2/sub',
+    main: observed('unavailable', 'source_unavailable'),
+    sub: observed('not_configured', 'sub_not_configured'),
+    recording: observed('disabled', 'recording_disabled'),
     last_error: 'source_unavailable',
     bitrate_kbps: null,
-    updated_at: null,
+    updated_at: '2026-10-08T02:32:00Z',
   },
   {
     channel_id: '00000000-0000-4000-8000-000000000003',
@@ -196,27 +199,93 @@ test('the list is drawn from a single summary request', async () => {
     .toHaveTextContent('4.1 Mbps')
   setup.client.clear()
 })
-test('channel search combines the configured filter without hiding unknown status as empty', async () => {
+test('status filter pills count and narrow the table', async () => {
   const setup = fixture()
   const view = await render(setup.view)
-  await expect.element(view.getByTestId('channel-row')).toHaveLength(4)
-  await userEvent.fill(
-    view.getByRole('searchbox', { name: '搜索通道' }),
-    'CH01'
+  // CH01 healthy main → normal; CH02 enabled with no healthy kind → abnormal;
+  // CH03 has no camera → unconfigured. None is disabled in this fixture.
+  const group = view.getByRole('group', { name: '状态筛选' })
+  await expect.element(group).toHaveTextContent('全部4')
+  await expect.element(group).toHaveTextContent('正常2')
+  await expect.element(group).toHaveTextContent('已停用0')
+  await expect.element(group).toHaveTextContent('未配置1')
+  await expect.element(group).toHaveTextContent('异常1')
+  await userEvent.click(
+    group.getByRole('button', { name: /未配置/ })
   )
   await expect.element(view.getByTestId('channel-row')).toHaveLength(1)
   await expect
     .element(view.getByTestId('channel-row'))
-    .toHaveTextContent('大门')
-  await userEvent.fill(view.getByRole('searchbox', { name: '搜索通道' }), '')
-  await userEvent.click(view.getByLabelText('配置状态'))
-  await userEvent.click(view.getByRole('option', { name: '未配置', exact: true }))
+    .toHaveTextContent('只读通道')
+  await userEvent.click(group.getByRole('button', { name: /正常/ }))
   await expect.element(view.getByTestId('channel-row')).toHaveLength(2)
-  await userEvent.fill(
-    view.getByRole('searchbox', { name: '搜索通道' }),
-    '大门'
+  setup.client.clear()
+})
+test('unconfigured rows cannot be selected and expose no enable toggle', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  const row = view.getByTestId('channel-row').nth(2)
+  await expect
+    .element(view.getByRole('checkbox', { name: '选择 CH03' }))
+    .toBeDisabled()
+  await expect.element(row).toHaveTextContent('未配置')
+  // The three observation columns and media/bitrate collapse to a dash.
+  await expect.element(row).toHaveTextContent('未配置摄像头')
+  expect((row.element() as HTMLElement).textContent).not.toContain('正常')
+  expect((row.element() as HTMLElement).textContent).not.toContain('启用')
+  // Every configured row keeps its enable/disable control.
+  await expect
+    .element(view.getByRole('button', { name: '停用 CH01' }))
+    .toBeInTheDocument()
+  setup.client.clear()
+})
+test('select-all only checks configurable, configured channels', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  await userEvent.click(
+    view.getByRole('checkbox', { name: '选择当前结果' })
   )
-  await expect.element(view.getByText('没有匹配的通道')).toBeVisible()
+  await expect
+    .element(view.getByRole('checkbox', { name: '选择 CH01' }))
+    .toBeChecked()
+  await expect
+    .element(view.getByRole('checkbox', { name: '选择 CH02' }))
+    .toBeChecked()
+  await expect
+    .element(view.getByRole('checkbox', { name: '选择 CH03' }))
+    .not.toBeChecked()
+  // CH01, CH02 and CH04 are configured and permitted; CH03 is left out.
+  await expect.element(view.getByText('已选 3 路')).toBeVisible()
+  setup.client.clear()
+})
+test('the compact batch bar enables, disables and clears groups in bulk', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  await userEvent.click(view.getByRole('checkbox', { name: '选择 CH01' }))
+  await userEvent.click(view.getByRole('checkbox', { name: '选择 CH02' }))
+  await userEvent.click(
+    view.getByRole('button', { name: '批量停用', exact: true })
+  )
+  await userEvent.click(
+    view.getByRole('button', { name: '批量停用', exact: true })
+  )
+  await expect
+    .poll(
+      () =>
+        calls.request.mock.calls.filter(([, init]) => init?.method === 'PATCH')
+          .length
+    )
+    .toBe(2)
+  const patches = calls.request.mock.calls.filter(
+    ([, init]) => init?.method === 'PATCH'
+  )
+  expect(patches.map(([, init]) => JSON.parse(init.body as string))).toEqual([
+    { enabled: false },
+    { enabled: false },
+  ])
+  expect(
+    patches.map(([, init]) => new Headers(init.headers).get('If-Match'))
+  ).toEqual(['"3"', '"1"'])
   setup.client.clear()
 })
 test('the group filter narrows by business grouping', async () => {
@@ -305,7 +374,7 @@ test('batch grouping patches every selected channel with its own version', async
   await userEvent.click(view.getByRole('checkbox', { name: '选择 CH02' }))
   await userEvent.fill(view.getByLabelText('批量分组'), '机房 A')
   await userEvent.click(
-    view.getByRole('button', { name: '应用到选中 2 路', exact: true })
+    view.getByRole('button', { name: '应用分组', exact: true })
   )
   await expect
     .poll(
@@ -327,9 +396,9 @@ test('batch grouping patches every selected channel with its own version', async
   setup.client.clear()
 })
 // The row now carries the applied source's media parameters and access
-// method; the camera column keeps only the address and moves the full path
-// into the hover title.
-test('media parameters, access method and the trimmed camera column', async () => {
+// method; the camera column keeps only the address with the access badge,
+// and a healthy row gets the preview/recording shortcuts.
+test('media parameters, access badge and healthy-row shortcuts', async () => {
   const setup = fixture()
   const view = await render(setup.view)
   const rows = view.getByTestId('channel-row')
@@ -340,9 +409,21 @@ test('media parameters, access method and the trimmed camera column', async () =
   await expect
     .element(rows.nth(0))
     .not.toHaveTextContent('/Streaming/Channels/101')
-  await expect.element(rows.nth(3)).toHaveTextContent('RTSP')
+  await expect
+    .element(
+      view.getByRole('link', { name: '预览 CH01' })
+    )
+    .toHaveAttribute(
+      'href',
+      `/live?channel=${summaries[0].channel_id}`
+    )
+  await expect
+    .element(view.getByRole('link', { name: '录像 CH01' }))
+    .toHaveAttribute(
+      'href',
+      `/recordings?channel=${summaries[0].channel_id}&at=&tab=playback`
+    )
   await expect.element(rows.nth(3)).toHaveTextContent('H.265 25fps')
   await expect.element(rows.nth(3)).toHaveTextContent('音 AAC')
-  await expect.element(rows.nth(1)).toHaveTextContent('未配置摄像头')
   setup.client.clear()
 })

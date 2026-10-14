@@ -857,7 +857,7 @@ return (
           variant='ghost'
           className='h-8 justify-start px-2 text-xs text-video-chrome-foreground/70 hover:bg-white/10 hover:text-video-chrome-foreground'
         >
-          <Link to='/live'>返回实时预览</Link>
+          <Link to='/live' search={{ channel: '' }}>返回实时预览</Link>
         </Button>
       </aside>
       )}
@@ -936,6 +936,7 @@ return (
               <div className='ml-auto flex shrink-0 items-center gap-2'>
                 <Link
                   to='/live'
+                  search={{ channel: '' }}
                   aria-label='返回实时预览'
                   title='返回实时预览'
                   className='inline-flex h-8 items-center gap-1 rounded-md border border-video-border bg-video-surface-raised px-2 text-xs text-video-chrome-foreground/80 hover:bg-white/10 hover:text-video-chrome-foreground'

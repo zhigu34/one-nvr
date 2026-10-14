@@ -303,7 +303,11 @@ function Tile({
   )
 }
 
-export function LivePreview() {
+export function LivePreview({
+  initialChannel = '',
+}: {
+  initialChannel?: string
+}) {
   const query = useAPI<PageData<Schema<'Channel'>>>(
     '/api/v1/channels?limit=100',
     true,
@@ -322,6 +326,7 @@ export function LivePreview() {
           key={user?.id}
           items={query.data.items}
           userID={user?.id || ''}
+          initialChannel={initialChannel}
         />
       )}
     </>
@@ -330,9 +335,11 @@ export function LivePreview() {
 function LiveWorkspace({
   items,
   userID,
+  initialChannel = '',
 }: {
   items: Schema<'Channel'>[]
   userID: string
+  initialChannel?: string
 }) {
   const channels = items.filter((c) => c.permissions.includes('live'))
   const storageKey = `one-nvr:live-view:${userID}`
@@ -343,10 +350,27 @@ function LiveWorkspace({
     } catch {
       /* private mode */
     }
-    return restoreView(
+    const restored = restoreView(
       raw,
       channels.map((c) => c.id)
     )
+    // A deep link (?channel=) pre-fills the first empty slot with that
+    // channel at mount, before any stream is negotiated; it never starts
+    // media beyond what the normal empty-slot flow already does. Already
+    // visible or unpermitted channels are ignored.
+    if (
+      initialChannel &&
+      !restored.channels.slice(0, restored.layout).includes(initialChannel) &&
+      channels.some((c) => c.id === initialChannel)
+    ) {
+      const next = [...restored.channels]
+      const slot = next
+        .slice(0, restored.layout)
+        .findIndex((id) => !id)
+      next[slot === -1 ? 0 : slot] = initialChannel
+      return { ...restored, channels: next }
+    }
+    return restored
   })
   const [selected, setSelected] = useState(0)
   const [search, setSearch] = useState('')
