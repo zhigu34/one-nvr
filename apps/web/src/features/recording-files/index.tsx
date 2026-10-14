@@ -760,7 +760,7 @@ function RecordingRow({
         onCheckedChange={(state) => onToggle(state === true)}
         className='shrink-0'
       />
-      <div className='min-w-0 flex-1 space-y-0.5'>
+      <div className='min-w-0 flex-1 overflow-hidden space-y-0.5'>
         <div className='flex items-center gap-x-1.5 whitespace-nowrap'>
           <span className='font-mono text-[12px] tabular-nums text-video-chrome-foreground'>
             {startClock.slice(11)}
@@ -788,7 +788,7 @@ function RecordingRow({
             {stateLabel}
           </span>
         </div>
-        <div className='flex items-center gap-x-1.5 whitespace-nowrap text-[10.5px] text-video-chrome-foreground/50'>
+        <div className='flex items-center gap-x-1.5 overflow-hidden text-ellipsis whitespace-nowrap text-[10.5px] text-video-chrome-foreground/50'>
           <span className='tabular-nums'>时长 {span}</span>
           <span className='text-video-chrome-foreground/30'>·</span>
           <span className='tabular-nums'>{bytes(item.bytes)}</span>
