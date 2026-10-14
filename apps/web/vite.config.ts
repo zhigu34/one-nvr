@@ -18,6 +18,7 @@ export default defineConfig({
       // renderer; an un-optimized Radix package pulls in its own copy and the
       // hooks dispatcher is null.
       '@radix-ui/react-dropdown-menu',
+      '@radix-ui/react-switch',
     ],
   },
   server: {

@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
+import { Switch } from '@/components/ui/switch'
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -16,12 +16,13 @@ import { apiErrorText } from '@/features/foundation/api-errors'
 import { LoadingButton } from '@/features/foundation/loading-button'
 import { StatusBadge } from '@/features/foundation/status-badge'
 import { Empty, Notices, QueryState, SelectField } from '@/features/foundation/ui'
-import { ZonePanel } from './zones'
-import { RulePanel } from './rules'
+import { cn } from '@/lib/utils'
+import { ZoneWorkbench } from './zones'
 
 type Config = Schema<'DetectionConfig'>
 type Runtime = Schema<'DetectionRuntime'>
 type Channel = Schema<'Channel'>
+type Summary = Schema<'ChannelSummary'>
 
 const LABEL_TEXT: Record<string, string> = {
   person: '人', bicycle: '自行车', car: '轿车', motorcycle: '摩托车', bus: '巴士',
@@ -40,24 +41,81 @@ const ERROR_CODES: Record<string, string> = {
 
 const errorText = (error: unknown) => apiErrorText(error, ERROR_CODES)
 
+const HELP_TEXT =
+  '检测从媒体服务器内部取流，只做检测与抓拍，不接管录像。' +
+  '检测源指向通道当前取流的会话：重新取流、换源或服务重启后，系统会自动重新发布到检测服务，无需手动操作；' +
+  '只有修改设置后才需要手动发布，未发布前检测服务保持原样。' +
+  '发布失败时自动保留上一份配置。区域坐标按比例存储，与摄像头分辨率无关。'
+
+// Row health, derived from the same summary data the channels page uses. A
+// channel with no camera cannot run detection, so its whole row is inert.
+function rowHealth(channel: Summary) {
+  if (!channel.source_ip && !channel.current_revision_id) return 'unconfigured'
+  if (!channel.enabled) return 'disabled'
+  if (channel.main.state === 'healthy') return 'online'
+  return 'offline'
+}
+
+const HEALTH_BADGES: Record<RowHealth, { tone: 'success' | 'warning' | 'neutral' | 'destructive'; text: string }> = {
+  online: { tone: 'success', text: '在线' },
+  offline: { tone: 'warning', text: '离线' },
+  disabled: { tone: 'neutral', text: '通道已停用' },
+  unconfigured: { tone: 'neutral', text: '未配置源' },
+  unknown: { tone: 'neutral', text: '未知' },
+}
+
+type RowFilter = 'all' | 'enabled' | 'dirty'
+type RowHealth = 'online' | 'offline' | 'disabled' | 'unconfigured' | 'unknown'
+
 /**
  * M3 batch 2 (AI-01/AI-07): per-channel detection settings and the capability
  * card. Publication is an explicit action: editing a row only saves it, and
- * the button at the top renders and reloads Frigate's config. Recording is
- * never touched by any of this.
+ * the sticky bar renders and reloads Frigate's config. Recording is never
+ * touched by any of this.
  */
 export function Detection() {
   const client = useQueryClient()
   const channels = useAPI<PageData<Channel>>('/api/v1/channels?limit=100')
+  const summaries = useAPI<{ items: Summary[] }>('/api/v1/channels/summary')
   const configs = useAPI<{ items: Config[] }>('/api/v1/detection/configs')
   const runtime = useAPI<Runtime>('/api/v1/detection/runtime')
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
+  // Rows the operator edited but has not saved yet; the sticky publish bar
+  // counts them so "保存再发布" never happens out of order.
+  const [dirty, setDirty] = useState<Set<string>>(new Set())
+  const [filter, setFilter] = useState<RowFilter>('all')
+  const summaryOf = new Map(
+    (summaries.data?.items || []).map((item) => [item.channel_id, item])
+  )
   const permitted = (channels.data?.items || []).filter((channel) =>
     channel.permissions.includes('configure')
   )
   const configOf = new Map((configs.data?.items || []).map((config) => [config.channel_id ?? '', config]))
+  const rows = permitted.map((channel) => {
+    const summary = summaryOf.get(channel.id ?? '')
+    const config = configOf.get(channel.id ?? '')
+    const health: RowHealth = summary ? rowHealth(summary) : 'unknown'
+    return {
+      channel,
+      config,
+      health,
+      enabled: config?.enabled ?? false,
+    }
+  })
+  const counts = {
+    all: rows.length,
+    enabled: rows.filter((row) => row.enabled).length,
+    dirty: dirty.size,
+  }
+  const visibleRows = rows.filter((row) => {
+    if (filter === 'enabled') return row.enabled
+    if (filter === 'dirty') return dirty.has(row.channel.id ?? '')
+    return true
+  })
+  const pendingPublish = runtime.data?.revision?.pending ?? false
+  const hasUnsaved = counts.dirty > 0
 
   async function run(action: () => Promise<void>, message: string) {
     setPending(true)
@@ -74,15 +132,28 @@ export function Detection() {
     }
   }
 
+  const publish = () =>
+    void run(async () => {
+      await apiRequest('/api/v1/detection/publish', { method: 'POST' })
+      setDirty(new Set())
+    }, '检测配置已发布')
+
   return (
     <div className='space-y-4'>
       <div>
-        <h1 className='text-2xl font-semibold tracking-tight'>检测配置</h1>
+        <div className='flex items-center gap-2'>
+          <h1 className='text-2xl font-semibold tracking-tight'>检测配置</h1>
+          <span
+            role='note'
+            aria-label='检测配置使用说明'
+            title={HELP_TEXT}
+            className='grid size-5 cursor-help place-items-center rounded-full border border-border text-[10px] text-muted-foreground'
+          >
+            ?
+          </span>
+        </div>
         <p className='mt-1 text-sm text-muted-foreground'>
-          按通道启停智能检测并选择码流、帧率与目标类别。检测从媒体服务器内部取流，只做检测与抓拍，不接管录像。
-        </p>
-        <p className='mt-1 text-xs text-muted-foreground'>
-          发布把当前设置写入检测服务并使其重载，失败时保留上一份配置。检测源指向通道当前取流的会话，<b>会话变化（重新取流、换源、服务重启）会由系统自动重新发布，无需手动操作</b>；只有你修改设置后需要手动发布，未发布前保持原样。
+          按通道启停智能检测并选择码流、帧率与目标类别；发布后检测服务重载一次，失败时保留上一份配置。
         </p>
       </div>
       <QueryState
@@ -141,57 +212,118 @@ export function Detection() {
         <Empty>没有可配置检测的通道，请联系管理员分配通道配置权限。</Empty>
       ) : (
         <>
-          <div className='flex items-center gap-2'>
-            <LoadingButton
-              pending={pending}
-              pendingText='发布中…'
-              onClick={() =>
-                void run(async () => {
-                  await apiRequest('/api/v1/detection/publish', { method: 'POST' })
-                }, '检测配置已发布')
-              }
-            >
-              发布检测配置
-            </LoadingButton>
-            <span className='text-xs text-muted-foreground'>
-              发布后检测服务会重载一次；失败时保留上一份配置。
-            </span>
-          </div>
-          <div className='space-y-2'>
-            {permitted.map((channel) => {
-              const config = configOf.get(channel.id ?? '')
+          <div
+            role='group'
+            aria-label='通道筛选'
+            className='flex flex-wrap items-center gap-1'
+          >
+            {(
+              [
+                { value: 'all', label: '全部' },
+                { value: 'enabled', label: '已启用检测' },
+                { value: 'dirty', label: '有未发布修改' },
+              ] as const
+            ).map(({ value, label }) => {
+              const active = filter === value
               return (
-                <DetectionRow
-                  key={channel.id}
-                  channel={channel}
-                  config={config}
-                  pending={pending}
-                  onSave={(next) =>
-                    void run(async () => {
-                      await apiRequest(
-                        `/api/v1/detection/configs/${channel.id}`,
-                        jsonRequest('PUT', { ...next, version: config?.version ?? 0 })
-                      )
-                    }, '检测配置已保存，发布后生效')
-                  }
-                />
+                <button
+                  key={value}
+                  type='button'
+                  aria-pressed={active}
+                  onClick={() => setFilter(value)}
+                  className={cn(
+                    'inline-flex h-7 items-center gap-1 rounded-full border px-2.5 text-xs transition-colors',
+                    active
+                      ? 'border-primary bg-primary/10 font-medium text-primary'
+                      : 'border-zinc-700/60 text-muted-foreground hover:bg-accent hover:text-foreground'
+                  )}
+                >
+                  {label}
+                  <span className={cn('tabular-nums', active ? '' : 'opacity-70')}>
+                    {counts[value]}
+                  </span>
+                </button>
               )
             })}
           </div>
+          <div className='space-y-2'>
+            {visibleRows.map((row) => (
+              <DetectionRow
+                key={row.channel.id}
+                channel={row.channel}
+                config={row.config}
+                health={row.health}
+                dirty={dirty.has(row.channel.id ?? '')}
+                onDirty={(value) =>
+                  setDirty((current) => {
+                    const next = new Set(current)
+                    if (value) next.add(row.channel.id ?? '')
+                    else next.delete(row.channel.id ?? '')
+                    return next
+                  })
+                }
+                pending={pending}
+                onSave={(next) =>
+                  void run(async () => {
+                    await apiRequest(
+                      `/api/v1/detection/configs/${row.channel.id}`,
+                      jsonRequest('PUT', { ...next, version: row.config?.version ?? 0 })
+                    )
+                    onDirty(row.channel.id ?? '', false)
+                  }, '检测配置已保存，发布后生效')
+                }
+              />
+            ))}
+          </div>
         </>
+      )}
+      {(pendingPublish || hasUnsaved) && permitted.length > 0 && (
+        <div
+          data-testid='publish-bar'
+          className='sticky bottom-0 z-20 -mx-4 flex flex-wrap items-center justify-between gap-3 border-t border-amber-600/40 bg-card/95 px-4 py-2.5 backdrop-blur'
+        >
+          <span className='text-sm text-amber-600'>
+            {hasUnsaved
+              ? `${counts.dirty} 路有未保存的修改，发布前请先保存`
+              : '有设置尚未发布，检测服务仍在使用上一份配置'}
+          </span>
+          <LoadingButton
+            pending={pending}
+            disabled={hasUnsaved}
+            pendingText='发布中…'
+            onClick={publish}
+          >
+            发布检测配置
+          </LoadingButton>
+        </div>
       )}
     </div>
   )
+
+  function onDirty(id: string, value: boolean) {
+    setDirty((current) => {
+      const next = new Set(current)
+      if (value) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }
 }
 
 function DetectionRow({
   channel,
   config,
+  health,
+  dirty,
+  onDirty,
   pending,
   onSave,
 }: {
   channel: Channel
   config?: Config
+  health: RowHealth
+  dirty: boolean
+  onDirty: (value: boolean) => void
   pending: boolean
   onSave: (next: { enabled: boolean; stream: string; fps: number; labels: string[] }) => void
 }) {
@@ -200,37 +332,75 @@ function DetectionRow({
   // these component instances once it does, so state seeded from an initially
   // undefined config would silently show defaults for every channel.
   const [draft, setDraft] = useState<{ enabled: boolean; stream: string; fps: number; labels: string[] } | null>(null)
+  const [workbenchOpen, setWorkbenchOpen] = useState(false)
   const enabled = draft?.enabled ?? config?.enabled ?? false
   const stream = draft?.stream ?? config?.stream ?? 'sub'
   const fps = draft?.fps ?? config?.fps ?? 5
   const selected = draft?.labels ?? config?.labels ?? ['person']
-  const setEnabled = (next: boolean) => setDraft({ enabled: next, stream, fps, labels: selected })
-  const setStream = (next: string) => setDraft({ enabled, stream: next, fps, labels: selected })
-  const setFps = (next: number) => setDraft({ enabled, stream, fps: next, labels: selected })
-  const setSelected = (update: (current: string[]) => string[]) => setDraft({ enabled, stream, fps, labels: update(selected) })
   const label = `CH${String(channel.channel_no ?? 0).padStart(2, '0')} ${channel.channel_name}`
   const extra = selected.filter((value) => !COMMON_LABELS.includes(value))
-  const summary =
+  const summaryText =
     selected.length === 0
       ? '未选择'
       : selected.length <= 3
         ? selected.map((value) => LABEL_TEXT[value] || value).join('、')
         : `${selected.length} 类`
+  // A channel without a camera cannot stream into the detector: nothing on
+  // this row is actionable and the workbench has no frame to draw on.
+  const inert = health === 'unconfigured' || health === 'unknown'
+  const badge = health === 'unknown' ? null : HEALTH_BADGES[health]
+  const savedEnabled = config?.enabled ?? false
+  const savedStream = config?.stream ?? 'sub'
+  const savedFps = config?.fps ?? 5
+  const savedLabels = config?.labels ?? ['person']
+  const unchanged =
+    !draft ||
+    (enabled === savedEnabled &&
+      stream === savedStream &&
+      fps === savedFps &&
+      selected.length === savedLabels.length &&
+      selected.every((value) => savedLabels.includes(value)))
+
+  function mutate(patch: Partial<{ enabled: boolean; stream: string; fps: number; labels: string[] }>) {
+    setDraft({ enabled, stream, fps, labels: selected, ...patch })
+    onDirty(true)
+  }
 
   function toggle(value: string, next: boolean) {
-    setSelected((current) =>
-      next ? [...new Set([...current, value])] : current.filter((item) => item !== value)
-    )
+    mutate({
+      labels: next
+        ? [...new Set([...selected, value])]
+        : selected.filter((item) => item !== value),
+    })
   }
 
   return (
-    <div className='space-y-2 rounded-xl border bg-card p-3 text-sm'>
+    <div
+      className={cn(
+        'space-y-2 rounded-xl border bg-card p-3 text-sm',
+        // Enabled rows get a faint emerald edge so the fence glance reads at a
+        // distance; inert rows dim out entirely.
+        enabled && !inert && 'border-l-2 border-l-emerald-500/60',
+        inert && 'opacity-60'
+      )}
+    >
       <div className='flex flex-wrap items-center gap-x-4 gap-y-2' data-testid='detection-row'>
-        <span className='w-40 shrink-0 truncate font-medium'>{label}</span>
+        <span
+          className={cn(
+            'w-40 shrink-0 truncate font-medium',
+            inert && 'text-zinc-500'
+          )}
+        >
+          {label}
+        </span>
+        {badge && (
+          <StatusBadge tone={badge.tone}>{badge.text}</StatusBadge>
+        )}
         <label className='flex items-center gap-2'>
-          <Checkbox
+          <Switch
             checked={enabled}
-            onCheckedChange={(next) => setEnabled(next === true)}
+            disabled={pending || inert}
+            onCheckedChange={(next) => mutate({ enabled: next })}
             aria-label={`${label} 启用检测`}
           />
           启用检测
@@ -242,7 +412,8 @@ function DetectionRow({
           <SelectField
             ariaLabel={`${label} 检测码流`}
             value={stream}
-            onValueChange={(next) => setStream((next ?? 'sub') as 'main' | 'sub')}
+            disabled={inert}
+            onValueChange={(next) => setStream(next)}
             options={[
               { value: 'sub', label: '子码流' },
               { value: 'main', label: '主码流' },
@@ -255,7 +426,8 @@ function DetectionRow({
           <SelectField
             ariaLabel={`${label} 检测帧率`}
             value={String(fps)}
-            onValueChange={(next) => setFps(Number(next ?? 5))}
+            disabled={inert}
+            onValueChange={(next) => setFps(next)}
             options={[2, 5, 10, 15].map((value) => ({ value: String(value), label: `${value} fps` }))}
             className='w-20'
           />
@@ -264,8 +436,13 @@ function DetectionRow({
           <span className='text-xs text-muted-foreground'>目标</span>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant='outline' size='sm' aria-label={`${label} 目标类别`}>
-                {summary}
+              <Button
+                variant='outline'
+                size='sm'
+                disabled={inert}
+                aria-label={`${label} 目标类别`}
+              >
+                {summaryText}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align='start' className='w-44'>
@@ -297,74 +474,98 @@ function DetectionRow({
             <span className='text-xs text-muted-foreground'>+{extra.length} 类</span>
           )}
         </div>
-        <Button
-          size='sm'
-          variant='outline'
-          className='ml-auto'
-          disabled={pending || !selected.length}
-          onClick={() => onSave({ enabled, stream, fps, labels: selected })}
-        >
-          保存
-        </Button>
-        {draft && <StatusBadge tone='warning'>未保存</StatusBadge>}
-      </div>
-      <RuleRow label={label} channelID={channel.id ?? ''} enabled={enabled} />
-    </div>
-  )
-}
-
-/**
- * The per-channel zones and rules, behind a disclosure. They belong to the
- * channel's detection, but drawing zones is not part of setting up detection
- * for 32 channels, so the row stays one line until asked. The section is only
- * meaningful on an enabled channel: without detection there is no frame to
- * draw on and no events to match.
- */
-function RuleRow({
-  label,
-  channelID,
-  enabled,
-}: {
-  label: string
-  channelID: string
-  enabled: boolean
-}) {
-  const client = useQueryClient()
-  const [open, setOpen] = useState(false)
-  const refresh = () => void client.invalidateQueries()
-  return (
-    <div className='w-full basis-full'>
-      <Button
-        type='button'
-        size='sm'
-        variant='ghost'
-        aria-expanded={open}
-        aria-label={`${label} 区域与规则`}
-        disabled={!channelID}
-        onClick={() => setOpen(!open)}
-      >
-        {open ? '收起区域与规则' : '区域与规则'}
-      </Button>
-      {open && (
-        <div className='mt-2 space-y-4 border-t pt-3'>
-          {!enabled && (
-            <p role='status' className='text-xs text-amber-600'>
-              这个通道未启用检测：区域无法校准，规则也不会有事件可匹配。先启用并发布。
-            </p>
+        {inert && (
+          <span
+            className='text-xs text-muted-foreground'
+            title='请先在通道管理中接入摄像头'
+          >
+            请先在通道管理中接入摄像头
+          </span>
+        )}
+        <div className='ml-auto flex items-center gap-2'>
+          {unchanged ? (
+            <Button
+              size='sm'
+              variant='outline'
+              disabled={pending || inert || !selected.length}
+              onClick={() => onSave({ enabled, stream, fps, labels: selected })}
+            >
+              保存
+            </Button>
+          ) : (
+            <Button
+              size='sm'
+              disabled={pending || inert || !selected.length}
+              onClick={() => onSave({ enabled, stream, fps, labels: selected })}
+            >
+              保存*
+            </Button>
           )}
-          <section className='space-y-2'>
-            <h4 className='text-sm font-medium'>区域</h4>
-            <p className='text-xs text-muted-foreground'>
-              区域只存储在 one-nvr 并交给检测服务，判定由检测服务完成；删除区域会一并删除引用它的规则。
-            </p>
-            <ZonePanel channelID={channelID} onChanged={refresh} />
-          </section>
-          <section className='space-y-2 border-t pt-3'>
-            <h4 className='text-sm font-medium'>规则</h4>
-            <RulePanel channelID={channelID} onChanged={refresh} />
-          </section>
+          <WorkbenchToggle
+            open={workbenchOpen}
+            disabled={inert}
+            label={label}
+            channelID={channel.id ?? ''}
+            onToggle={() => setWorkbenchOpen(!workbenchOpen)}
+          />
         </div>
+      </div>
+      {dirty && <StatusBadge tone='warning'>未保存</StatusBadge>}
+      {workbenchOpen && (
+        <ZoneWorkbench channelID={channel.id ?? ''} detectionEnabled={enabled} />
       )}
     </div>
+  )
+
+  function setStream(next: string | undefined) {
+    mutate({ stream: (next ?? 'sub') as 'main' | 'sub' })
+  }
+  function setFps(next: string | undefined) {
+    mutate({ fps: Number(next ?? 5) })
+  }
+}
+
+/** The zones/rules count lives on the toggle so fences are visible unexpanded. */
+function WorkbenchToggle({
+  open,
+  disabled,
+  label,
+  channelID,
+  onToggle,
+}: {
+  open: boolean
+  disabled: boolean
+  label: string
+  channelID: string
+  onToggle: () => void
+}) {
+  const zones = useAPI<Schema<'DetectionZonePage'>>(
+    `/api/v1/detection/zones?channel_id=${channelID}`,
+    open || (!!channelID && !disabled)
+  )
+  const rules = useAPI<Schema<'DetectionRulePage'>>(
+    `/api/v1/detection/rules?channel_id=${channelID}`,
+    open || (!!channelID && !disabled)
+  )
+  const zoneCount = zones.data?.items?.length
+  const ruleCount = rules.data?.items?.length
+  // The counts ride on the accessible name too: an explicit aria-label would
+  // otherwise override the visible text and hide the numbers from screen
+  // readers and queries alike.
+  const text = open
+    ? '收起区域与规则'
+    : `区域与规则${zoneCount != null && ruleCount != null ? ` (${zoneCount} 区域 · ${ruleCount} 规则)` : ''}`
+  return (
+    <Button
+      type='button'
+      size='sm'
+      variant='ghost'
+      aria-expanded={open}
+      aria-label={`${label} ${text}`}
+      disabled={disabled}
+      onClick={onToggle}
+    >
+      {text}
+    </Button>
   )
 }

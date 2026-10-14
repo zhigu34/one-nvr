@@ -4,7 +4,7 @@ import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
 import { useAuthStore } from '@/stores/auth-store'
 import type { Schema } from '@/lib/types'
-import { ZonePanel } from './zones'
+import { ZoneWorkbench } from './zones'
 
 const calls = vi.hoisted(() => ({ request: vi.fn() }))
 vi.mock('@/lib/api-client', async (original) => ({
@@ -33,6 +33,8 @@ function fixture(zones: Schema<'DetectionZone'>[] = []) {
     if (method === 'DELETE') return {}
     if (path.startsWith('/api/v1/detection/zones?')) return { items: zones }
     if (path === '/api/v1/detection/zones') return { id: 'zone-new', name: '门口' }
+    if (path.startsWith('/api/v1/detection/rules?')) return { items: [] }
+    if (path.startsWith('/api/v1/channels?')) return { items: [], next_cursor: null }
     throw new Error(`unexpected path ${path}`)
   })
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -41,13 +43,13 @@ function fixture(zones: Schema<'DetectionZone'>[] = []) {
 
 function paint(
   client: QueryClient,
-  props: { channelID?: string; onChanged?: () => void } = {}
+  props: { channelID?: string; detectionEnabled?: boolean } = {}
 ) {
   return (
     <QueryClientProvider client={client}>
-      <ZonePanel
+      <ZoneWorkbench
         channelID={props.channelID ?? channelID}
-        onChanged={props.onChanged ?? (() => {})}
+        detectionEnabled={props.detectionEnabled ?? true}
       />
     </QueryClientProvider>
   )
@@ -78,10 +80,13 @@ test('drawing a polygon sends normalized coordinates', async () => {
   press(canvas.element() as HTMLElement, 0.25, 0.33)
   press(canvas.element() as HTMLElement, 0.75, 0.33)
   press(canvas.element() as HTMLElement, 0.5, 0.8)
+  // The form saves a name and a polygon together, so the button enables only
+  // once both are present.
   const save = view.getByRole('button', { name: /保存区域（3 点）/ })
-  await expect.element(save).toBeEnabled()
+  await expect.element(save).toBeDisabled()
 
   await userEvent.fill(view.getByLabelText('区域名称'), '门口')
+  await expect.element(save).toBeEnabled()
   await save.click()
 
   await vi.waitFor(() => expect(mutations.length).toBe(1))
@@ -146,6 +151,37 @@ test('saved zones render, and a stale drawing is called out', async () => {
   // A drawing made against a different aspect ratio is flagged instead of
   // being silently reinterpreted: only the operator knows where the zone now
   // belongs.
-  await expect.element(view.getByRole('alert')).toHaveTextContent(/旧画面比例/)
+  await expect.element(view.getByRole('alert').first()).toHaveTextContent(/旧画面比例/)
   expect(document.querySelectorAll('[data-testid="zone-shape"]')).toHaveLength(2)
+})
+
+// The workbench serves the frame the detector analyzes without a click when
+// the channel runs detection; without detection the canvas collapses instead
+// of showing a black void and refuses pointer input. The frame is loaded by
+// the browser straight from the API (an <img> src), so presence of the image
+// element is what the auto-load asserts on.
+test('the frame auto-loads on an enabled channel and stays collapsed otherwise', async () => {
+  const { client } = fixture()
+  const view = await render(paint(client, { detectionEnabled: true }))
+  await expect.element(view.getByTestId('zone-canvas')).toBeVisible()
+  await expect
+    .element(view.getByRole('img', { name: '检测画面' }))
+    .toHaveAttribute(
+      'src',
+      `/api/v1/detection/frame?channel_id=${channelID}&frame=1`
+    )
+  await view.unmount()
+
+  const disabled = await render(paint(client, { detectionEnabled: false }))
+  const canvas = disabled.getByTestId('zone-canvas')
+  await expect.element(canvas).toBeVisible()
+  expect(disabled.getByRole('img', { name: '检测画面' }).query()).toBeNull()
+  // The inert canvas takes no input: clicking must not accumulate vertices,
+  // and the save button stays at 0 points.
+  press(canvas.element() as HTMLElement, 0.3, 0.4)
+  await expect
+    .element(
+      disabled.getByRole('button', { name: '保存区域（0 点）' })
+    )
+    .toBeVisible()
 })
