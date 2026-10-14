@@ -153,7 +153,7 @@ export function RecordingsWorkspace({
       // The only chrome above this div is the h-16 header, so an explicit
       // calc is the precise, stable value; overflow-hidden keeps the page
       // at exactly one viewport.
-      className='flex h-[calc(100vh-3.5rem)] max-h-[calc(100vh-3.5rem)] min-h-0 flex-col overflow-hidden bg-video-surface text-video-chrome-foreground'
+      className='flex h-[calc(100vh-4rem)] max-h-[calc(100vh-4rem)] min-h-0 flex-col overflow-hidden bg-video-surface text-video-chrome-foreground'
     >
       <QueryState
         pending={channelsQuery.isPending || site.isPending}

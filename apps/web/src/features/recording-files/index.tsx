@@ -204,7 +204,7 @@ export function RecordingFiles({
       if (!group) {
         group = {
           key,
-          label: `${key.slice(0, 10)} ${key.slice(11, 13)}:00 — ${key.slice(11, 13)}:59`,
+          label: `${key.slice(5, 10)} ${key.slice(11, 13)}:00 — ${key.slice(11, 13)}:59`,
           segments: [],
           bytes: 0,
         }
@@ -729,7 +729,6 @@ function RecordingRow({
   rowRef?: (node: HTMLDivElement | null) => void
 }) {
   const startClock = zone ? formatClock(Date.parse(item.start), zone) : '—'
-  const endClock = zone ? formatClock(Date.parse(item.end), zone) : '—'
   const span = duration(Date.parse(item.end) - Date.parse(item.start))
   const media = item.media.codec
     ? `${item.media.width}×${item.media.height} · ${item.media.codec.toUpperCase()}`
@@ -741,7 +740,7 @@ function RecordingRow({
       ref={rowRef}
       data-testid='recording-row'
       className={cn(
-        'group/row flex h-[68px] items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs transition-colors',
+        'group/row flex w-full items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition-colors',
         isCurrent
           ? 'border-emerald-500/80 bg-emerald-950/25'
           : selected
@@ -762,9 +761,9 @@ function RecordingRow({
         className='shrink-0'
       />
       <div className='min-w-0 flex-1 space-y-0.5'>
-        <div className='flex flex-wrap items-center gap-x-2 gap-y-0.5'>
+        <div className='flex items-center gap-x-1.5 whitespace-nowrap'>
           <span className='font-mono text-[12px] tabular-nums text-video-chrome-foreground'>
-            {startClock} — {endClock}
+            {startClock.slice(11)}
           </span>
           {item.protected && (
             <span className='rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] text-amber-400'>
@@ -789,7 +788,7 @@ function RecordingRow({
             {stateLabel}
           </span>
         </div>
-        <div className='flex flex-wrap items-center gap-x-2 truncate text-[11px] text-video-chrome-foreground/50'>
+        <div className='flex items-center gap-x-1.5 whitespace-nowrap text-[10.5px] text-video-chrome-foreground/50'>
           <span className='tabular-nums'>时长 {span}</span>
           <span className='text-video-chrome-foreground/30'>·</span>
           <span className='tabular-nums'>{bytes(item.bytes)}</span>

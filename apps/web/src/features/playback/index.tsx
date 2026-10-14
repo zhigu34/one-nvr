@@ -526,20 +526,24 @@ function Workspace({
   // newest segment and load its first frame (paused). The operator sees the
   // picture immediately instead of a black idle ring, and pressing play
   // starts from a real position.
-  const autoParkRef = useRef(false)
+  // Auto-park keyed per channel+range: switching channels (or searching a new
+  // window) re-arms the park so the operator always lands on that view's
+  // newest footage instead of the empty idle ring.
+  const autoParkRef = useRef('')
   useEffect(() => {
-    if (noData || autoParkRef.current) return
+    const parkKey = `${channelID}|${range.start}|${range.end}`
+    if (noData || autoParkRef.current === parkKey) return
     const newest = [...timeline.entries]
       .filter((entry) => !entry.blocked)
       .sort((a, b) => b.end - a.end)[0]
     if (!newest) return
-    autoParkRef.current = true
+    autoParkRef.current = parkKey
     // Load the newest segment's first frame and stop there: the picture is
     // on screen (paused, no lease running), the playhead sits on the strip,
     // and 播放 starts motion from this position. No black idle ring.
     setSelected(newest)
     controller.current?.park(newest.start)
-  }, [noData, timeline.entries])
+  }, [noData, timeline.entries, channelID, range])
   // Event marks for the canvas. The window is the view clamped to the
   // events' 90-day retention — a bounded, honest query (was inside the old
   // Timeline component; hoisted so the canvas owns one draw input).
@@ -581,9 +585,8 @@ function Workspace({
       start: wallClockInput(next.start, zone),
       end: wallClockInput(next.end, zone),
     })
-    // A new search re-arms the auto-park: when its index arrives, the
-    // playhead lands on that window's newest segment again.
-    autoParkRef.current = false
+    // The auto-park re-arms itself: the park key includes the range, so the
+    // new window's index lands the playhead on its newest segment again.
     // The single time filter also drives the file panel's window.
     onRangeChange?.(next)
   }
