@@ -30,6 +30,7 @@ import { downloadLocal, sourceCommand } from './api'
 import { StatusLabel } from './channel-status'
 import { reasonLabel } from './status-reasons'
 import { MediaParamsCell } from './media-cell'
+import { ThumbnailSlot } from './thumbnail-slot'
 import { SourceImportControls } from './source-import-controls'
 
 type Channel = Schema<'ChannelSummary'>
@@ -505,9 +506,9 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                     <TableHead className='w-20 text-center'>主流</TableHead>
                     <TableHead className='w-20 text-center'>子流</TableHead>
                     <TableHead className='w-20 text-center'>录像</TableHead>
-                    <TableHead className='min-w-40'>媒体参数</TableHead>
+                    <TableHead className='min-w-36'>媒体参数</TableHead>
                     <TableHead className='w-20 text-right'>码率</TableHead>
-                    <TableHead className='min-w-36'>最近错误</TableHead>
+                    <TableHead className='w-24'>最近错误</TableHead>
                     <TableHead className='w-32'>更新时间</TableHead>
                     <TableHead className='w-40 text-right'>操作</TableHead>
                   </TableRow>
@@ -551,6 +552,14 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                         )}
                         <TableCell className='font-mono text-xs'>
                           {numberLabel(channel)}
+                        </TableCell>
+                        <TableCell className='pr-0'>
+                          <ThumbnailSlot
+                            online={normal}
+                            disabled={!channel.enabled}
+                            unconfigured={unconfigured}
+                            label={`${numberLabel(channel)} ${channel.channel_name}`}
+                          />
                         </TableCell>
                         <TableCell className='font-medium'>
                           <span
@@ -652,7 +661,11 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                                   预览
                                 </Link>
                               )}
-                            {normal &&
+                            {/* Disabling a channel stops streaming and
+                                recording but keeps history playable, so the
+                                recording shortcut belongs to every configured
+                                channel, not just the online ones. */}
+                            {!unconfigured &&
                               channel.permissions.includes('playback') && (
                                 <Link
                                   to='/recordings'

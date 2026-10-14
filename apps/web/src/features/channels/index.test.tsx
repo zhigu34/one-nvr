@@ -71,7 +71,7 @@ const summaries: Schema<'ChannelSummary'>[] = [
     channel_group: '外围',
     enabled: true,
     version: 1,
-    permissions: ['configure', 'live'],
+    permissions: ['configure', 'live', 'playback'],
     current_revision_id: '00000000-0000-4000-8000-0000000000cc',
     source_ip: '192.168.66.116',
     main_path: '/cam2/main',
@@ -403,8 +403,12 @@ test('media parameters, access badge and healthy-row shortcuts', async () => {
   const view = await render(setup.view)
   const rows = view.getByTestId('channel-row')
   await expect.element(rows.nth(0)).toHaveTextContent('ONVIF')
-  await expect.element(rows.nth(0)).toHaveTextContent('2560×1440 H.264 25fps')
-  await expect.element(rows.nth(0)).toHaveTextContent('音 PCMA')
+  // Main stream as one badge line (2560×1440 ≈ 3.7MP → 3MP), sub stream dimmed
+  // beneath, audio as a pill; "no audio" never prints.
+  await expect.element(rows.nth(0)).toHaveTextContent('3MP·H.264·25fps')
+  await expect.element(rows.nth(0)).toHaveTextContent('子: 704×576 · 25fps')
+  await expect.element(rows.nth(0)).toHaveTextContent('PCMA')
+  await expect.element(rows.nth(0)).not.toHaveTextContent('无音频')
   await expect.element(rows.nth(0)).toHaveTextContent('192.168.66.114')
   await expect
     .element(rows.nth(0))
@@ -423,7 +427,28 @@ test('media parameters, access badge and healthy-row shortcuts', async () => {
       'href',
       `/recordings?channel=${summaries[0].channel_id}&at=&tab=playback`
     )
-  await expect.element(rows.nth(3)).toHaveTextContent('H.265 25fps')
-  await expect.element(rows.nth(3)).toHaveTextContent('音 AAC')
+  await expect.element(rows.nth(3)).toHaveTextContent('4MP·H.265·25fps')
+  await expect.element(rows.nth(3)).toHaveTextContent('AAC')
+  setup.client.clear()
+})
+test('thumbnail slot and recording shortcut on configured channels', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  const rows = view.getByTestId('channel-row')
+  // Healthy configured rows show the glowing camera glyph; the unconfigured
+  // row shows the dashed empty slot.
+  await expect
+    .element(rows.nth(0).getByTestId('channel-thumbnail'))
+    .toHaveAttribute('data-state', 'online')
+  await expect
+    .element(rows.nth(2).getByTestId('channel-thumbnail'))
+    .toHaveAttribute('data-state', 'unconfigured')
+  // CH02 is configured but unhealthy: no preview shortcut, recording stays.
+  await expect
+    .element(view.getByRole('link', { name: '预览 CH02' }).query())
+    .toBeNull()
+  await expect
+    .element(view.getByRole('link', { name: '录像 CH02' }))
+    .toBeVisible()
   setup.client.clear()
 })
