@@ -414,7 +414,19 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   expect(exported.mp4Size).toBeGreaterThan(100)
   // The operator stops watching before managing files: 停止 releases the
   // playback lease (ARC-05), which is what lets the deletion below proceed.
+  // 960277c established this step; without it the delete is refused as
+  // lease_held. The handler is fire-and-forget, so give the release a moment to
+  // land rather than racing it under load. This wait is best-effort: if the
+  // player has already dropped its entry no request follows, and the delete
+  // assertion below is what must report the outcome either way.
+  const leaseReleased = page
+    .waitForResponse(
+      (response) => response.request().method() === 'DELETE' && response.url().endsWith('/lease'),
+      {timeout: 5000}
+    )
+    .catch(() => null)
   await page.getByRole('button', {name: '停止', exact: true}).click()
+  await leaseReleased
   await expect.poll(async () => (await recordings()).items.find(s => s.id === historical.id)?.state, {timeout: 15000}).toBe('ready')
   // M2: the lifecycle of a real published file. Protection must actually stop a
   // deletion, releasing it must allow one, the file must really disappear, and
@@ -448,15 +460,29 @@ test('real media UI keeps channel history through no-recording, recording, sourc
     const released = await protect(false)
     const removed = await post('recordings/batch-delete-local', {segment_ids: [segmentId]})
     const contentAfter = await fetch('/api/v1/recordings/' + segmentId + '/content')
+    const contentType = contentAfter.headers.get('Content-Type') || ''
     const contentBody = await contentAfter.text()
+    // The endpoint answers either a JSON error envelope or raw media bytes, and
+    // which one it is depends on whether the deletion above actually took
+    // effect. Parsing blindly crashed with a SyntaxError over the MP4 header and
+    // destroyed the very evidence needed to tell a blocked delete (lease held,
+    // protection still on) from an accepted one — so parse defensively and carry
+    // each item's reason out with the outcome.
+    let contentCode = ''
+    if (contentType.includes('json')) {
+      try { contentCode = JSON.parse(contentBody).error?.code || '' } catch { contentCode = '' }
+    }
     return {
       protectedStatus: protectedFirst.status,
       blockedState: blocked.data?.items?.[0]?.state,
+      blockedReason: blocked.data?.items?.[0]?.reason,
       releasedStatus: released.status,
       removedState: removed.data?.items?.[0]?.state,
+      removedReason: removed.data?.items?.[0]?.reason,
       releasedBytes: removed.data?.released_bytes,
       contentStatus: contentAfter.status,
-      contentCode: JSON.parse(contentBody).error?.code,
+      contentType,
+      contentCode,
       contentHasMedia: contentBody.includes('ftyp'),
     }
   }, historical.id)
@@ -465,10 +491,19 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   expect(lifecycle.blockedState).toBe('protected')
   expect(lifecycle.releasedStatus).toBe(200)
   // The real file is removed and the index says so; the response reports the
-  // bytes it reclaimed rather than claiming success without evidence.
-  expect(lifecycle.removedState).toBe('deleted')
+  // bytes it reclaimed rather than claiming success without evidence. The
+  // expected value carries the API's own reason when it refused, so a failure
+  // names the cause (lease_held, protected, pinned_by_export) instead of only
+  // reporting that the state was not "deleted".
+  expect(
+    lifecycle.removedState === 'deleted' ? 'deleted' : `${lifecycle.removedState}/${lifecycle.removedReason}`,
+    'the released recording must actually be removed'
+  ).toBe('deleted')
   expect(lifecycle.releasedBytes).toBeGreaterThan(0)
-  // Playback answers like an unknown recording and carries no media bytes.
+  // Playback answers like an unknown recording and carries no media bytes. The
+  // code is read from the body only when the endpoint answered JSON; raw media
+  // here would itself mean the deletion above did not take effect, which the
+  // assertion above has already failed on with its reason.
   expect(lifecycle.contentStatus).toBe(404)
   expect(lifecycle.contentCode).toBe('not_found')
   expect(lifecycle.contentHasMedia).toBe(false)
