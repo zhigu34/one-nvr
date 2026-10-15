@@ -5399,6 +5399,166 @@
           }
         }
       }
+    },
+    "/api/v1/notification-channels": {
+      "get": {
+        "operationId": "notificationChannels",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "security": [{ "sessionCookie": [] }],
+        "responses": {
+          "200": {
+            "description": "Configured destinations plus the channel kinds this build can deliver, read from the adapter registry so the UI never offers a kind without an adapter."
+          }
+        }
+      },
+      "post": {
+        "operationId": "notificationChannelRegister",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "security": [{ "sessionCookie": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["kind", "name"],
+                "properties": {
+                  "kind": { "type": "string", "enum": ["inapp", "webhook"] },
+                  "name": { "type": "string", "maxLength": 64 },
+                  "url": { "type": "string", "description": "Required for webhook; absent for the built-in inbox." },
+                  "secret": { "type": "string", "description": "Write-only signing secret. Required when creating a webhook." },
+                  "enabled": { "type": "boolean", "default": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Destination registered." }
+        }
+      }
+    },
+    "/api/v1/notification-channels/{id}": {
+      "patch": {
+        "operationId": "notificationChannelUpdate",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["kind", "name"],
+                "properties": {
+                  "kind": { "type": "string", "enum": ["inapp", "webhook"] },
+                  "name": { "type": "string", "maxLength": 64 },
+                  "url": { "type": "string" },
+                  "secret": { "type": "string", "description": "Empty keeps the stored secret, so renaming does not require re-entering it." },
+                  "enabled": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Destination updated under an If-Match version check." }
+        }
+      },
+      "delete": {
+        "operationId": "notificationChannelDelete",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+        ],
+        "responses": {
+          "200": { "description": "Destination removed. Refused with 409 while a rule still binds it." }
+        }
+      }
+    },
+    "/api/v1/notification-channels/{id}/test": {
+      "post": {
+        "operationId": "notificationChannelTest",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "One test delivery. The body reports what the receiver actually answered, including its HTTP status: a webhook has no read-write-delete probe to run, so this is the only capability evidence."
+          }
+        }
+      }
+    },
+    "/api/v1/events/{id}/deliveries": {
+      "get": {
+        "operationId": "eventDeliveries",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "playback",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "What was attempted for this event: channel, state in EVT-05's words, and the receiver's response. Read from the frozen message, so it agrees with the inbox after the rule or channel was later edited."
+          }
+        }
+      }
+    },
+    "/api/v1/detection/rules/{id}/channels": {
+      "get": {
+        "operationId": "ruleChannels",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "playback",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+        ],
+        "responses": {
+          "200": { "description": "Destinations this rule tells." }
+        }
+      },
+      "put": {
+        "operationId": "ruleChannelsSet",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["channel_ids"],
+                "properties": {
+                  "channel_ids": {
+                    "type": "array",
+                    "items": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+                    "description": "An empty list is legitimate: the rule still records its hits, it just tells no one."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Bindings replaced." }
+        }
+      }
     }
   },
   "components": {
