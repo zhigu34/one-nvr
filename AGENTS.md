@@ -60,7 +60,18 @@ CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真�
 
 ## 当前交接快照（2026-10-09）
 
-- **2026-10-15 CI 连续转红已修复，当前全绿（接手先看这条）**：`432fa79` 起 Foundation CI 连续失败，**红的不是产品功能，是 e2e 规格没跟上 UI 重构**——每修好一处，测试就往下推进一段、露出下一处，共 5 处。**`8168205` 已 12/12 全绿**（run 38732529387，28.0 分钟），是 `d4cb1d8` 之后第一次全通过。
+- **2026-10-16 M3 批次 4 已交付：通知（EVT-05）+ 抓拍归档（M3 已完成）**。用户裁决「不再跑 CI，本机测完直接部署验证」，所以本批的验收依据是**本机测试 + 现场部署**，不是 CI。
+  - **通知的分层是设计核心**：先把渠道无关的通知变量定死（`internal/notify/message.go`），渠道只做「把变量带出去发送」。适配器接口只有 `Kind()` + `Send(Message)`，注册表按 kind 构造；**新增渠道 = 写一个适配器并注册，不改变量层、不改事件与规则代码**（`TestANewChannelKindNeedsOnlyAnAdapter` 用虚构 kind 钉住这条）。首批 `inapp`（通知行即投递）与 `webhook`（POST 消息本体 + `X-OneNVR-Delivery`/`-Event`/`-Signature` 头，签名覆盖实际发送的字节）。
+  - **三条「不撒谎」的语义（别改回去）**：进行中的事件不伪造结束时间（正文写「进行中」）；抓拍取不到就不给链接；站点时区未知时省略本地时间只留 UTC。另外回放链用**通道 ID 而非编号**（`initialChannel` 是拿去和 `channels.items[].id` 比对的）。
+  - **冷却首次真正执行**：此前 `cooldown_seconds` 只做范围校验、全库无读取点，`notified_at` 从未写入。现在冷却在入队时判定、**只压制外部渠道**；**站内提醒不受冷却**（用户口径「只要知道有这个事件」，AI-05 也禁止丢记录）。`notified_at` 语义定死为「已通知」而非「已送达」。
+  - **一次命中只通知一次**：`UNIQUE INDEX notifications_one_per_hit (hit_id) WHERE hit_id IS NOT NULL` 是栅栏，`Raise` 用 `ON CONFLICT DO NOTHING`；命中 INSERT 改用 `RETURNING id` 拿回重复更新时的原有命中 ID。
+  - **抓拍归档**：worker 拉检测器快照写进通道绑定池 `snapshots/<通道号>/<站点本地日期>/<事件ID>.jpg`，读路径**本地优先**、上游清理后仍可看。未绑池报 `pool_unbound`；写入失败或 0 字节直接删文件并记 `snapshot_incomplete`——截断的图看着像证据却不是。到期随事件清理，先删文件后清引用。
+  - **前端**：系统设置页「通知渠道」面板（密钥 write-only，类型列表来自服务端注册表）；规则编辑器**目标类别改多选**（后端本来就是数组，此前单选导致「人+车」要建两条规则）+ **规则可绑定通知渠道**；事件页按用户口径改为**以回看为主视觉**——「查看录像」从 hover 提到常驻按钮，卡片上的处理快捷按钮移除（功能一个没少，仍在抽屉与工具栏批量操作里），抽屉新增「通知」区展示每次投递的五态与 HTTP 状态码。
+- **2026-10-16 本批修掉两个既有缺陷（都是本机集成测试发现的，不是新引入）**：
+  - **`credentialAAD` 字段白名单缺 `secret`**：`internal/secrets/credentials.go` 只允许 `username`/`password`/`import_draft`，而通知渠道用 `"secret"` 封签名密钥 → 每次注册渠道都返回 `credential_unavailable`。**这个若不修，通知功能在真实部署里根本无法配置**。已加白名单项（AAD 里字段名参与绑定，所以单独命名而非复用 `password`，避免把两种凭据变得可互换）。
+  - **Frigate 事件无区域时无法入库**：`internal/events/service.go` 的 zones 为 nil 时 `json.Marshal` 产出 `null`，而 upsert 里的 `jsonb_array_length(null)` 报 SQLSTATE 22023 ——「不在任何区域内的检测」会整个入库失败。自 `e0ab2a5`（M3 批次 1）起就存在。已改为 marshal 空数组。
+  - **`jobs.Run` 是 worker 的常驻循环**（无 job 时 `sleep 1s` 继续），测试想要有界排空必须自己驱动 `Claim`/`Execute`——用 `jobs.Run` 会挂到超时。
+- **2026-10-15 CI 连续转红已修复，当前全绿**：`432fa79` 起 Foundation CI 连续失败，**红的不是产品功能，是 e2e 规格没跟上 UI 重构**——每修好一处，测试就往下推进一段、露出下一处，共 5 处。**`8168205` 已 12/12 全绿**（run 38732529387，28.0 分钟），是 `d4cb1d8` 之后第一次全通过。**注意：此后用户决定不再依赖 CI，改为本机测试 + 现场部署验证。**
   - **① 存储池添加表单加了折叠开关**（`daf15a5` 把表单收进 toggle，提交按钮文案「添加存储池」→「确认添加」）。旧断言直接 `getByLabel('存储池名称').fill(...)` → 表单未展开、元素不存在 → 超时。两处：`m1a.spec.ts`（`directoryPoolKeepsPendingZLMStatus`）与 `m1b-media.spec.ts`。**已修**（`11b305d`）。
   - **② `live-video-area` 不再注入内联 `aspect-ratio`**（`de6f97e` 改为「格子定大小 + object-contain letterbox」；该提交同步改了 `live/index.test.tsx` 却漏了 e2e）。**已修**（`11b305d`）：断言容器可见、无内联 aspect-ratio、包围盒非零。
   - **③ 录像页标题行已删除**（`7f64173`「删录像页顶部标题行」移除了 `/recordings` 的 h1），规格仍在等 `getByRole('heading',{name:'录像'})`。**已修**（`cd2ffe3`）：改用 `playback-console` 作锚点。

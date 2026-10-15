@@ -105,13 +105,33 @@ func (s *Service) Raise(ctx context.Context, tx pgx.Tx, facts HitFacts) (Raised,
 		out.Notified = true
 		return out, nil
 	}
-	// The inbox row is itself the delivery: no channel row, no queue, nothing to
-	// retry. It is recorded as an in-app delivery so "every bound channel has a
-	// delivery" stays true without an exception in the reading code.
-	if _, err := tx.Exec(ctx, `INSERT INTO notification_deliveries(id,notification_id,channel_id,state,delivered_at)
-		SELECT $1,$2,$3,'succeeded',clock_timestamp() FROM notification_channels WHERE id=$3 AND kind='inapp'
-		ON CONFLICT(notification_id,channel_id) DO NOTHING`, mustID(), notificationID, message.ChannelID); err != nil {
-		return out, err
+	// The inbox rows are themselves the deliveries: no queue, nothing to retry.
+	// One row per bound inbox destination, so "every bound channel has a
+	// delivery" holds without an exception in the reading code.
+	//
+	// This also stamps notified_at, because at this point the hit *has* been
+	// told: an inbox notification is visible to the operator the moment it
+	// commits. A rule bound only to the inbox would otherwise read as never
+	// notified, and tying the stamp to an outbound delivery would make it depend
+	// on whether a webhook happened to be bound.
+	inbox := make([]boundChannel, 0, len(bound))
+	for _, channel := range bound {
+		if channel.Kind == "inapp" {
+			inbox = append(inbox, channel)
+		}
+	}
+	for _, channel := range inbox {
+		if _, err := tx.Exec(ctx, `INSERT INTO notification_deliveries(id,notification_id,channel_id,state,delivered_at)
+			VALUES($1,$2,$3,'succeeded',clock_timestamp())
+			ON CONFLICT(notification_id,channel_id) DO NOTHING`, mustID(), notificationID, channel.ID); err != nil {
+			return out, err
+		}
+	}
+	if len(inbox) > 0 {
+		if _, err := tx.Exec(ctx, `UPDATE event_rule_hits SET notified_at=clock_timestamp()
+			WHERE id=$1 AND notified_at IS NULL`, facts.HitID); err != nil {
+			return out, err
+		}
 	}
 	if len(external) == 0 {
 		out.Notified = true

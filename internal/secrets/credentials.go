@@ -54,7 +54,11 @@ func (s State) credentialCipher() (cipher.AEAD, string, error) {
 	return aead, hex.EncodeToString(identity.Sum(nil)), nil
 }
 func (s State) credentialAAD(siteID, channelID, revisionID id.ID, field string) ([]byte, error) {
-	if siteID != s.SiteID || (field != "username" && field != "password" && field != "import_draft") {
+	// The field is part of the AAD, so a credential sealed as one thing cannot
+	// be opened as another. "secret" is a webhook signing key: a distinct kind
+	// of credential from a source password, named separately so the two are not
+	// interchangeable even within one site.
+	if siteID != s.SiteID || (field != "username" && field != "password" && field != "import_draft" && field != "secret") {
 		return nil, ErrCredentialUnavailable
 	}
 	for _, value := range []id.ID{siteID, channelID, revisionID} {

@@ -167,6 +167,13 @@ func (s *Service) Ingest(ctx context.Context, payload []byte) error {
 	if len(zones) == 0 {
 		zones = after.Zones
 	}
+	// A detection matching no zone arrives with these arrays absent or null.
+	// Marshal an empty slice rather than nil: nil serializes to JSON null, and
+	// the upsert's jsonb_array_length() rejects a scalar — so an event outside
+	// every zone would fail to store instead of being recorded as "no zones".
+	if zones == nil {
+		zones = []string{}
+	}
 	raw, _ := json.Marshal(map[string]any{"type": message.Type, "label": after.Label, "camera": after.Camera})
 	return s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
 		var channelID id.ID

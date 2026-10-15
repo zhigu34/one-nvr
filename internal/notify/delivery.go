@@ -42,7 +42,6 @@ func (s *Service) HandleWebhook(ctx context.Context, lease jobs.Lease) (jobs.Res
 	sendErr := adapter.Send(window, *attempt.message)
 	if sendErr == nil {
 		s.markDelivery(ctx, payload, StateSucceeded, "", 0)
-		s.markHitNotified(ctx, payload.NotificationID)
 		return jobs.Result{}, nil
 	}
 	if permanent := IsPermanent(sendErr); permanent {
@@ -118,19 +117,6 @@ func (s *Service) markDelivery(ctx context.Context, payload deliveryPayload, sta
 		WHERE notification_id=$1 AND channel_id=$2`,
 		payload.NotificationID, payload.ChannelID, state, reason, status, delivered); err != nil {
 		slog.Warn("notification delivery state not recorded", "error", err, "state", state)
-	}
-}
-
-// markHitNotified stamps the hit this notification was raised for, on the first
-// successful delivery. It records that the operator was told, not that every
-// channel succeeded: a second channel failing must not claim the hit was never
-// notified, and a retry already notified must not move the time.
-func (s *Service) markHitNotified(ctx context.Context, notificationID id.ID) {
-	write, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	if _, err := s.DB.Pool.Exec(write, `UPDATE event_rule_hits SET notified_at=clock_timestamp()
-		WHERE notified_at IS NULL AND id=(SELECT hit_id FROM notifications WHERE id=$1)`, notificationID); err != nil {
-		slog.Warn("rule hit notification time not recorded", "error", err)
 	}
 }
 
