@@ -63,12 +63,30 @@ export function RecordingsWorkspace({
   )
   // The shell owns the channel choice; both panels render from this single id.
   // `resolvedID` holds the operator's pick; `fallbackID` fills in when the
-  // channels query has loaded but the operator has not chosen yet. Reading a
-  // derived value during render (rather than syncing state in an effect) keeps
-  // the panel rendering deterministic without cascading updates.
+  // operator has not chosen yet. Reading a derived value during render (rather
+  // than syncing state in an effect) keeps the panel rendering deterministic
+  // without cascading updates.
+  // Channel summaries give the rail a real status light (source errors) and
+  // a per-channel has-footage count for the active window.
+  const summariesQuery = useAPI<{ items: Schema<'ChannelSummary'>[] }>(
+    '/api/v1/channels/summary'
+  )
   const [resolvedID, setResolvedID] = useState(initialChannel)
+  // Without a deep link the page lands on a live channel, not whatever row
+  // sorts first: an empty player on CH01 while CH05 is streaming reads as
+  // broken. Summaries load with (or after) the channel list, so the fallback
+  // upgrades itself once health data arrives.
+  const summariesMap = new Map(
+    (summariesQuery.data?.items || []).map((item) => [item.channel_id, item])
+  )
   const fallbackID =
-    channels.find((channel) => channel.id === initialChannel)?.id ||
+    (initialChannel && channels.find((channel) => channel.id === initialChannel)?.id) ||
+    channels.find(
+      (channel) =>
+        channel.enabled !== false &&
+        summariesMap.get(channel.id ?? '')?.main.state === 'healthy'
+    )?.id ||
+    channels.find((channel) => channel.enabled !== false)?.id ||
     channels[0]?.id ||
     ''
   const channelID = resolvedID || fallbackID
@@ -129,11 +147,6 @@ export function RecordingsWorkspace({
   const stats = useAPI<Schema<'RecordingStats'>>(
     statsPath,
     admin && !!activeChannel && !!activeRange
-  )
-  // Channel summaries give the rail a real status light (source errors) and
-  // a per-channel has-footage count for the active window.
-  const summariesQuery = useAPI<{ items: Schema<'ChannelSummary'>[] }>(
-    '/api/v1/channels/summary'
   )
   const summaries = useMemo(() => {
     const map = new Map<string, Schema<'ChannelSummary'>>()

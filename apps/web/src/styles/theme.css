@@ -34,33 +34,36 @@
   --sidebar-ring: var(--ring);
 
   /* The video wall stays dark in both themes (the picture is the interface);
-     these tokens replace the former hard-coded slate palette on live tiles. */
-  --video-surface: oklch(0.13 0.01 260);
-  --video-surface-raised: oklch(0.2 0.015 260);
-  --video-chrome: oklch(0.13 0.01 260 / 88%);
-  --video-chrome-foreground: oklch(0.97 0.005 260);
+     these tokens are the recording workspace's carbon surfaces, hue-free. */
+  --video-surface: oklch(0.141 0 0);
+  --video-surface-raised: oklch(0.185 0 0);
+  --video-chrome: oklch(0.141 0 0 / 88%);
+  --video-chrome-foreground: oklch(0.97 0 0);
   --video-border: oklch(1 0 0 / 12%);
 }
 
+  /* Pure carbon black, chroma 0 across the board: the dark theme is the
+     zinc scale (950 #09090b, 900 #18181b, 800 #27272a) so every surface sits
+     on the same neutral as the recording workspace. No blue cast anywhere. */
 .dark {
-  --background: oklch(0.129 0.042 264.695);
-  --foreground: oklch(0.984 0.003 247.858);
-  --card: oklch(0.14 0.04 259.21);
-  --card-foreground: oklch(0.984 0.003 247.858);
-  --popover: oklch(0.208 0.042 265.755);
-  --popover-foreground: oklch(0.984 0.003 247.858);
-  --primary: oklch(0.929 0.013 255.508);
-  --primary-foreground: oklch(0.208 0.042 265.755);
-  --secondary: oklch(0.279 0.041 260.031);
-  --secondary-foreground: oklch(0.984 0.003 247.858);
-  --muted: oklch(0.279 0.041 260.031);
-  --muted-foreground: oklch(0.704 0.04 256.788);
-  --accent: oklch(0.279 0.041 260.031);
-  --accent-foreground: oklch(0.984 0.003 247.858);
+  --background: oklch(0.11 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.141 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.185 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.921 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.21 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.21 0 0);
+  --muted-foreground: oklch(0.705 0 0);
+  --accent: oklch(0.21 0 0);
+  --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.551 0.027 264.364);
+  --border: oklch(0.274 0 0 / 60%);
+  --input: oklch(0.274 0 0 / 55%);
+  --ring: oklch(0.552 0 0);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);

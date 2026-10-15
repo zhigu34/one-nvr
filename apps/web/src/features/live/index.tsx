@@ -51,7 +51,7 @@ function LayoutGlyph({ layout }: { layout: Layout }) {
 /** The one status dot per tile: green playing, amber reconnecting, red error. */
 function TileDot({ state, paused }: { state: PlayerState; paused: boolean }) {
   const tone = paused
-    ? 'bg-slate-400'
+    ? 'bg-zinc-400'
     : state.phase === 'playing'
       ? 'bg-emerald-400'
       : state.phase === 'error'
@@ -144,7 +144,7 @@ function Tile({
       onClick={onSelect}
       onDoubleClick={() => channel && onZoom()}
       className={cn(
-        'group relative flex h-full min-w-0 flex-col overflow-hidden rounded-lg border bg-black text-slate-100 transition-shadow duration-150',
+        'group relative flex h-full min-w-0 flex-col overflow-hidden rounded-lg border bg-black text-zinc-100 transition-shadow duration-150',
         selected ? 'ring-2 ring-primary' : 'border-video-border',
         dropActive && 'ring-2 ring-sky-400'
       )}
@@ -197,7 +197,7 @@ function Tile({
           )}
         </div>
         {(!channel || paused || state.phase !== 'playing') && (
-          <div className='absolute inset-0 flex flex-col items-center justify-center gap-3 bg-video-chrome px-4 text-center text-xs text-slate-300 transition-opacity duration-200'>
+          <div className='absolute inset-0 flex flex-col items-center justify-center gap-3 bg-video-chrome px-4 text-center text-xs text-zinc-300 transition-opacity duration-200'>
             {!channel ? (
               // An empty slot is a waiting state, not a loading one: a static
               // icon tells "pick a camera" apart from "buffering".
@@ -231,7 +231,7 @@ function Tile({
             <span
               className={cn(
                 'shrink-0',
-                live ? 'text-emerald-400' : 'text-slate-400'
+                live ? 'text-emerald-400' : 'text-zinc-400'
               )}
             >
               {live
@@ -245,7 +245,7 @@ function Tile({
             {live && media && (
               <span
                 data-testid='live-media-info'
-                className='truncate text-slate-300'
+                className='truncate text-zinc-300'
                 title={liveMediaTitle(media)}
               >
                 {liveMediaLabel(media)}
