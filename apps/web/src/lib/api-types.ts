@@ -2282,6 +2282,56 @@ export interface components {
             /** Format: uuid */
             next_cursor?: string | null;
         };
+        NotificationChannel: {
+            id?: components["schemas"]["UUID"];
+            /** @enum {string} */
+            kind?: "inapp" | "webhook";
+            name?: string;
+            /** @description Absent for the built-in inbox. */
+            url?: string;
+            enabled?: boolean;
+            /** @description Whether a signing secret is stored. The secret itself is write-only and never returned. */
+            has_secret?: boolean;
+            /** @description Outcome of the last explicit test delivery: {state, status?, error?, checked_at}. */
+            last_check?: Record<string, never> | null;
+            version?: number;
+            /** Format: date-time */
+            created_at?: string;
+        };
+        NotificationChannelList: {
+            items?: components["schemas"]["NotificationChannel"][];
+            /** @description The channel kinds this build can deliver, read from the adapter registry. A build that ships a new adapter reports it here, so the UI never offers a kind without one. */
+            kinds?: string[];
+        };
+        NotificationDelivery: {
+            channel_id?: components["schemas"]["UUID"];
+            channel_name?: string;
+            channel_kind?: string;
+            notification_id?: components["schemas"]["UUID"];
+            /**
+             * @description sending: queued or being attempted. failed: this attempt failed and a retry is coming. retrying: failed at least once and still within budget. succeeded: the receiver answered 2xx. exhausted: out of attempts, or permanently refused.
+             * @enum {string}
+             */
+            state?: "sending" | "failed" | "retrying" | "succeeded" | "exhausted";
+            /** @description What the receiver said, or the transport reason. Never carries the signing secret. */
+            error?: string;
+            http_status?: number | null;
+            /** Format: date-time */
+            delivered_at?: string | null;
+            /** Format: date-time */
+            updated_at?: string;
+            /** @description From the frozen message, so it agrees with the inbox after the rule or channel was later edited. */
+            title?: string;
+            /** @enum {string} */
+            severity?: "low" | "medium" | "high";
+        };
+        NotificationDeliveryPage: {
+            items?: components["schemas"]["NotificationDelivery"][];
+        };
+        RuleChannelBinding: {
+            /** @description An empty list is legitimate: the rule still records its hits, it just tells no one. */
+            channel_ids?: components["schemas"]["UUID"][];
+        };
         RecordingSegment: {
             /** @description A verified cloud copy exists in the archive index (M2.1). */
             archived?: boolean;
@@ -7578,7 +7628,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["NotificationChannelList"];
+                };
             };
         };
     };
@@ -7657,12 +7709,14 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Destination updated under an If-Match version check. */
+            /** @description Destination registered. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["NotificationChannel"];
+                };
             };
         };
     };
@@ -7697,12 +7751,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description What was attempted for this event: channel, state in EVT-05's words, and the receiver's response. Read from the frozen message, so it agrees with the inbox after the rule or channel was later edited. */
+            /** @description What was attempted for this event, read from the frozen message. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["NotificationDeliveryPage"];
+                };
             };
         };
     };
@@ -7722,7 +7778,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RuleChannelBinding"];
+                };
             };
         };
     };
@@ -7744,12 +7802,14 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Bindings replaced. */
+            /** @description Destinations this rule tells. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RuleChannelBinding"];
+                };
             };
         };
     };

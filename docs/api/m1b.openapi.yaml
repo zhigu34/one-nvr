@@ -5408,8 +5408,9 @@
         "security": [{ "sessionCookie": [] }],
         "responses": {
           "200": {
-            "description": "Configured destinations plus the channel kinds this build can deliver, read from the adapter registry so the UI never offers a kind without an adapter."
-          }
+          "description": "Configured destinations plus the channel kinds this build can deliver, read from the adapter registry so the UI never offers a kind without an adapter.",
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NotificationChannelList" } } }
+        }
         }
       },
       "post": {
@@ -5468,7 +5469,10 @@
           }
         },
         "responses": {
-          "200": { "description": "Destination updated under an If-Match version check." }
+          "200": {
+          "description": "Destination registered.",
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NotificationChannel" } } }
+        }
         }
       },
       "delete": {
@@ -5511,8 +5515,9 @@
         ],
         "responses": {
           "200": {
-            "description": "What was attempted for this event: channel, state in EVT-05's words, and the receiver's response. Read from the frozen message, so it agrees with the inbox after the rule or channel was later edited."
-          }
+          "description": "What was attempted for this event, read from the frozen message.",
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NotificationDeliveryPage" } } }
+        }
         }
       }
     },
@@ -5526,7 +5531,10 @@
           { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
         ],
         "responses": {
-          "200": { "description": "Destinations this rule tells." }
+          "200": {
+            "description": "Destinations this rule tells.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RuleChannelBinding" } } }
+          }
         }
       },
       "put": {
@@ -5556,7 +5564,10 @@
           }
         },
         "responses": {
-          "200": { "description": "Bindings replaced." }
+          "200": {
+            "description": "Destinations this rule tells.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RuleChannelBinding" } } }
+          }
         }
       }
     }
@@ -7163,6 +7174,80 @@
         "properties": {
           "items": { "type": "array", "items": { "$ref": "#/components/schemas/Event" } },
           "next_cursor": { "type": "string", "format": "uuid", "nullable": true }
+        }
+      },
+      "NotificationChannel": {
+        "type": "object",
+        "properties": {
+          "id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+          "kind": { "type": "string", "enum": ["inapp", "webhook"] },
+          "name": { "type": "string" },
+          "url": { "type": "string", "description": "Absent for the built-in inbox." },
+          "enabled": { "type": "boolean" },
+          "has_secret": {
+            "type": "boolean",
+            "description": "Whether a signing secret is stored. The secret itself is write-only and never returned."
+          },
+          "last_check": {
+            "type": "object",
+            "nullable": true,
+            "description": "Outcome of the last explicit test delivery: {state, status?, error?, checked_at}."
+          },
+          "version": { "type": "integer" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "NotificationChannelList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/NotificationChannel" }
+          },
+          "kinds": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "The channel kinds this build can deliver, read from the adapter registry. A build that ships a new adapter reports it here, so the UI never offers a kind without one."
+          }
+        }
+      },
+      "NotificationDelivery": {
+        "type": "object",
+        "properties": {
+          "channel_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+          "channel_name": { "type": "string" },
+          "channel_kind": { "type": "string" },
+          "notification_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+          "state": {
+            "type": "string",
+            "enum": ["sending", "failed", "retrying", "succeeded", "exhausted"],
+            "description": "sending: queued or being attempted. failed: this attempt failed and a retry is coming. retrying: failed at least once and still within budget. succeeded: the receiver answered 2xx. exhausted: out of attempts, or permanently refused."
+          },
+          "error": { "type": "string", "description": "What the receiver said, or the transport reason. Never carries the signing secret." },
+          "http_status": { "type": "integer", "nullable": true },
+          "delivered_at": { "type": "string", "format": "date-time", "nullable": true },
+          "updated_at": { "type": "string", "format": "date-time" },
+          "title": { "type": "string", "description": "From the frozen message, so it agrees with the inbox after the rule or channel was later edited." },
+          "severity": { "type": "string", "enum": ["low", "medium", "high"] }
+        }
+      },
+      "NotificationDeliveryPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/NotificationDelivery" }
+          }
+        }
+      },
+      "RuleChannelBinding": {
+        "type": "object",
+        "properties": {
+          "channel_ids": {
+            "type": "array",
+            "items": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+            "description": "An empty list is legitimate: the rule still records its hits, it just tells no one."
+          }
         }
       },
       "RecordingSegment": {

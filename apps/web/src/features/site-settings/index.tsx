@@ -17,6 +17,7 @@ import {
 } from '@/features/foundation/ui'
 import { StatusBadge, type StatusTone } from '@/features/foundation/status-badge'
 import { TLSSettings } from '@/features/tls-settings'
+import { NotificationChannels } from '@/features/notification-channels'
 
 type Timezone = { id: string; label: string; current_time: string }
 export function Settings() {
@@ -176,6 +177,9 @@ export function Settings() {
         </Panel>
       )}
       <TLSSettings />
+      <Panel title='通知渠道'>
+        <NotificationChannels />
+      </Panel>
     </>
   )
 }
