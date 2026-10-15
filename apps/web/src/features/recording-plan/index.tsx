@@ -346,7 +346,8 @@ export function RecordingPlan() {
                     </span>
                     <SelectField
                       ariaLabel='批量存储池'
-                      className='w-32'
+                      className='w-36'
+                      triggerClassName='min-w-0 [&>span[data-slot=select-value]]:truncate'
                       value={poolID}
                       onValueChange={setPoolID}
                       options={[
@@ -375,7 +376,8 @@ export function RecordingPlan() {
                 </span>
                 <SelectField
                   ariaLabel='批量录像方式'
-                  className='w-36'
+                  className='w-40'
+                  triggerClassName='min-w-0 [&>span[data-slot=select-value]]:truncate'
                   value={mode}
                   onValueChange={setMode}
                   options={[

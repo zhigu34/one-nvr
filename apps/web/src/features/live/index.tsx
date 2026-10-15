@@ -174,7 +174,7 @@ function Tile({
         {/* Header floats over the picture and fades with the controls. */}
         <div
           className={cn(
-            'absolute inset-x-0 top-0 flex min-h-9 items-center justify-between gap-2 bg-gradient-to-b from-video-chrome to-transparent px-2 pb-2 pt-1 text-xs transition-opacity duration-200',
+            'absolute inset-x-0 top-0 flex min-h-9 items-center justify-between gap-2 bg-gradient-to-b from-black/70 to-transparent px-2 pb-2 pt-1 text-xs transition-opacity duration-200',
             fullscreen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
           )}
         >
@@ -186,7 +186,7 @@ function Tile({
               variant='ghost'
               size='icon'
               aria-label={`关闭 ${label(channel)}`}
-              className='size-6 shrink-0 rounded p-1 text-video-chrome-foreground hover:bg-white/15 hover:text-video-chrome-foreground'
+              className='size-6 shrink-0 rounded p-1 text-white hover:bg-white/15'
               onClick={(e) => {
                 e.stopPropagation()
                 onClose()
@@ -197,7 +197,7 @@ function Tile({
           )}
         </div>
         {(!channel || paused || state.phase !== 'playing') && (
-          <div className='absolute inset-0 flex flex-col items-center justify-center gap-3 bg-video-chrome px-4 text-center text-xs text-zinc-300 transition-opacity duration-200'>
+          <div className='absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70 px-4 text-center text-xs text-zinc-300 transition-opacity duration-200'>
             {!channel ? (
               // An empty slot is a waiting state, not a loading one: a static
               // icon tells "pick a camera" apart from "buffering".
@@ -226,7 +226,7 @@ function Tile({
         )}
       </div>
       {channel && (
-        <div className='flex items-center justify-between gap-2 bg-video-chrome px-2 py-1.5 text-xs'>
+        <div className='flex items-center justify-between gap-2 bg-black/60 px-2 py-1.5 text-xs backdrop-blur-sm'>
           <div className='flex min-w-0 flex-1 items-center gap-2'>
             <span
               className={cn(
@@ -256,7 +256,7 @@ function Tile({
             <SelectField
               ariaLabel={`${label(channel)} 码流`}
               size='sm'
-              triggerClassName='w-fit px-2 text-xs'
+              triggerClassName='w-fit px-2 text-xs border-white/20 bg-white/10 text-white hover:bg-white/15'
               value={stream}
               disabled={zoomed}
               onValueChange={(next) => {
@@ -274,7 +274,7 @@ function Tile({
               aria-label='切换声音'
               disabled={!selected}
               onClick={() => setAudio((v) => !v)}
-              className='size-6 p-1 text-video-chrome-foreground hover:bg-white/15 hover:text-video-chrome-foreground disabled:opacity-30'
+              className='size-6 p-1 text-white hover:bg-white/15 disabled:opacity-30'
             >
               {audio && selected ? (
                 <Volume2 size={14} />
@@ -286,7 +286,7 @@ function Tile({
               variant='ghost'
               size='icon'
               aria-label={fullscreen ? '退出全屏' : '全屏画面'}
-              className='size-6 p-1 text-video-chrome-foreground hover:bg-white/15 hover:text-video-chrome-foreground'
+              className='size-6 p-1 text-white hover:bg-white/15'
               onClick={() => {
                 if (fullscreen)
                   void document.exitFullscreen().catch(() => {})
