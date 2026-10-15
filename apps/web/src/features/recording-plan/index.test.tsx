@@ -129,6 +129,8 @@ function fixture(
             version: 4,
             permissions: ['configure'],
             current_revision_id: 'rev',
+            storage_pool_id: options.pool ? pool.id : null,
+            recording_mode: 'none',
             source_ip: '192.168.66.114',
             main: { state: 'healthy', reason: '', observed_at: null, expires_at: null },
             sub: { state: 'unknown', reason: 'observation_missing', observed_at: null, expires_at: null },
@@ -232,8 +234,8 @@ test('binding recovers from an expired write proof by re-verifying and retrying'
       (m) => m.path.endsWith('/test') && m.init.method === 'POST'
     )
   ).toBe(true)
-  // Settlement reads as the inline ✓ badge, not a text notice.
-  await expect.element(view.getByText('✓ 已生效')).toBeVisible()
+  // Settlement reads as the inline ✓ badge; a bind shows the bound variant.
+  await expect.element(view.getByText('✓ 已绑定')).toBeVisible()
 })
 test('a batch recovers rows rejected for a stale write proof', async () => {
   const setup = fixture({ pool: true, reject: true, checks: [healthyCheck] })
@@ -370,6 +372,6 @@ test('the bound pool shows a storage-page link and the row shows its health', as
   const link = view.getByRole('link', { name: 'CH01 检查存储池' })
   await expect
     .element(link)
-    .toHaveAttribute('href', '/storage-pools')
+    .toHaveAttribute('href', '/storage-pools?batch=')
   setup.client.clear()
 })

@@ -6277,6 +6277,25 @@
             ],
             "description": "Null when the slot has no applied source. Named as in the status response so list and detail agree."
           },
+          "storage_pool_id": {
+            "oneOf": [
+              {
+                "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The bound recording pool, or null when unbound. Carried so the recording plan shows every binding from one request instead of one status call per row."
+          },
+          "recording_mode": {
+            "type": "string",
+            "enum": [
+              "none",
+              "continuous"
+            ],
+            "description": "The stored recording policy mode; 'none' until a mode was applied. Carried with storage_pool_id so the recording plan renders every row from one request."
+          },
           "source_ip": {
             "type": "string",
             "description": "Empty when no source revision is applied. Never carries credentials or a full URL."

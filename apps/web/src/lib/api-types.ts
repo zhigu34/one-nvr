@@ -1855,6 +1855,13 @@ export interface components {
             permissions: ("live" | "playback" | "export" | "configure")[];
             /** @description Null when the slot has no applied source. Named as in the status response so list and detail agree. */
             current_revision_id: components["schemas"]["UUID"] | null;
+            /** @description The bound recording pool, or null when unbound. Carried so the recording plan shows every binding from one request instead of one status call per row. */
+            storage_pool_id?: components["schemas"]["UUID"] | null;
+            /**
+             * @description The stored recording policy mode; 'none' until a mode was applied. Carried with storage_pool_id so the recording plan renders every row from one request.
+             * @enum {string}
+             */
+            recording_mode?: "none" | "continuous";
             /** @description Empty when no source revision is applied. Never carries credentials or a full URL. */
             source_ip?: string;
             main_path?: string;

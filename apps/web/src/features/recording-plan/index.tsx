@@ -59,6 +59,7 @@ export function RecordingPlan() {
   const [poolID, setPoolID] = useState('')
   const [filter, setFilter] = useState<RowFilter>('all')
   const [outcome, setOutcome] = useState('')
+  const [dirtyRows, setDirtyRows] = useState<Set<string>>(new Set())
 
   const items = channels.data?.items || []
   const summaryOf = new Map(
@@ -98,6 +99,16 @@ export function RecordingPlan() {
       : summary?.recording.state !== 'healthy'
   })
   const chosen = permitted.filter((channel) => selected.has(channel.id))
+
+  // Stable per-channel callbacks keep the row's dirty-report effect from
+  // re-running on every parent render.
+  const onDirty = (id: string) => (dirty: boolean) =>
+    setDirtyRows((current) => {
+      const next = new Set(current)
+      if (dirty) next.add(id)
+      else next.delete(id)
+      return next
+    })
 
   function toggle(id: string, checked: boolean) {
     setSelected((previous) => {
@@ -201,23 +212,22 @@ export function RecordingPlan() {
     setOutcome('')
     await batch.run(
       async () => {
-        // A picked pool binds first, so enabling recording cannot fail on a
-        // forgotten bind; the mode batch then walks the same rows.
+        // A picked pool binds first, sequentially, so enabling recording
+        // cannot fail on a forgotten bind; the mode batch then walks the rows.
         if (admin && poolID) {
-          await Promise.allSettled(
-            chosen.map(async (channel) => {
-              const status = await apiRequest<Schema<'ChannelSourceStatus'>>(
-                `/api/v1/channels/${channel.id}/source/status`
-              )
-              await sourceCommand<Schema<'SourceChange'>>(
-                `/api/v1/channels/${channel.id}/storage-pool`,
-                { pool_id: poolID },
-                status.version,
-                undefined,
-                'PUT'
-              )
-            })
-          )
+          for (const channel of chosen) {
+            const status = await apiRequest<Schema<'ChannelSourceStatus'>>(
+              `/api/v1/channels/${channel.id}/source/status`
+            )
+            if (status.storage_pool_id === poolID) continue
+            await sourceCommand<Schema<'SourceChange'>>(
+              `/api/v1/channels/${channel.id}/storage-pool`,
+              { pool_id: poolID },
+              status.version,
+              undefined,
+              'PUT'
+            )
+          }
           await client.invalidateQueries()
         }
         const first = await submitPolicies(chosen.map((channel) => channel.id))
@@ -246,16 +256,31 @@ export function RecordingPlan() {
     )
   }
 
+  // One channel at a time: parallel binds race each other's version checks
+  // and pile into the same worker queue, which is how a batch of 8 turned
+  // into a pile of conflicts. Rows already on the target pool are skipped and
+  // reported as such; every row gets its own result, never a blanket verdict.
   async function bindBatch() {
     if (chosen.length === 0 || !poolID) return
+    const poolName =
+      (pools.data?.items || []).find((entry) => entry.id === poolID)?.name ||
+      '所选存储池'
     setOutcome('')
     await batch.run(
       async () => {
-        const results = await Promise.allSettled(
-          chosen.map(async (channel) => {
+        const skipped: string[] = []
+        const ok: string[] = []
+        const failed: string[] = []
+        for (const channel of chosen) {
+          const label = `CH${String(channel.channel_no).padStart(2, '0')}`
+          try {
             const status = await apiRequest<Schema<'ChannelSourceStatus'>>(
               `/api/v1/channels/${channel.id}/source/status`
             )
+            if (status.storage_pool_id === poolID) {
+              skipped.push(label)
+              continue
+            }
             await sourceCommand<Schema<'SourceChange'>>(
               `/api/v1/channels/${channel.id}/storage-pool`,
               { pool_id: poolID },
@@ -263,19 +288,22 @@ export function RecordingPlan() {
               undefined,
               'PUT'
             )
-          })
-        )
-        const failed = results.filter(
-          (result) => result.status === 'rejected'
-        ).length
-        if (failed)
-          throw new Error(
-            `${chosen.length - failed} 路已提交绑定，${failed} 路失败（配置可能已改变），请刷新后重试`
-          )
-        setSelected(new Set())
-      },
-      `已把 ${chosen.length} 路绑定到所选存储池`
-    )
+            ok.push(label)
+          } catch (e) {
+            failed.push(
+              `${label}: ${
+                e instanceof Error && e.message ? e.message : '操作失败'
+              }`
+            )
+          }
+        }
+        const parts: string[] = []
+        if (ok.length) parts.push(`${ok.length} 路已绑定 ${poolName}`)
+        if (skipped.length) parts.push(`${skipped.length} 路已在该池，跳过`)
+        if (failed.length) parts.push(`失败：${failed.join('；')}`)
+        setOutcome(parts.join(' · ') || '没有需要绑定的通道')
+        if (failed.length === 0) setSelected(new Set())
+      }, '批量绑定已执行')
   }
 
   return (
@@ -304,6 +332,11 @@ export function RecordingPlan() {
             <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
               <span className='text-sm font-medium whitespace-nowrap'>
                 已选 {chosen.length} / {permitted.length} 路可配置通道
+                {dirtyRows.size > 0 && (
+                  <span className='ms-1 text-xs font-normal text-amber-600'>
+                    · {dirtyRows.size} 路有未保存修改
+                  </span>
+                )}
               </span>
               {admin && (
                 <>
@@ -442,8 +475,7 @@ export function RecordingPlan() {
                   <TableHead>名称</TableHead>
                   <TableHead>录像方式</TableHead>
                   <TableHead>存储池</TableHead>
-                  <TableHead className='w-36'>操作</TableHead>
-                  <TableHead className='w-28'>结果</TableHead>
+                  <TableHead className='w-32'>结果</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -451,11 +483,13 @@ export function RecordingPlan() {
                   <PolicyRow
                     key={channel.id}
                     channel={channel}
+                    summary={summaryOf.get(channel.id ?? '')}
                     admin={admin}
                     pools={pools.data?.items || []}
                     selected={selected.has(channel.id)}
                     onSelect={(checked) => toggle(channel.id, checked)}
                     onApplied={() => void client.invalidateQueries()}
+                    onDirtyChange={onDirty(channel.id ?? '')}
                   />
                 ))}
               </TableBody>

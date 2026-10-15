@@ -204,7 +204,13 @@ func (s *SourceService) requestChangeTx(tx pgx.Tx, worker bool, ctx context.Cont
 				}
 				pool = &value
 			}
-			if pool != nil && (desired == "continuous" || kind == "pool_switch") {
+			// Fresh write evidence gates starting (or keeping) continuous
+			// recording — that is when bytes actually land on the pool. A bare
+			// pool_switch only pre-configures the binding: it must not demand
+			// a live probe, or a pool whose 30-second zlm evidence lapsed could
+			// never be selected ahead of recording, which is exactly the
+			// pre-configuration flow the recording plan page sells.
+			if desired == "continuous" && pool != nil {
 				ready, err := storage.PoolHasFreshEvidence(ctx, tx, site, *pool)
 				if err != nil {
 					return err

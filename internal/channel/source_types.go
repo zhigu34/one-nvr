@@ -108,16 +108,19 @@ type ObservedStatus struct {
 	ExpiresAt  *time.Time `json:"expires_at"`
 }
 type Status struct {
-	RequiresInitialRecordingMode bool           `json:"requires_initial_recording_mode"`
-	ChannelID                    id.ID          `json:"channel_id"`
-	CurrentRevisionID            *id.ID         `json:"current_revision_id"`
-	DesiredRevisionID            *id.ID         `json:"desired_revision_id"`
-	StoragePoolID                *id.ID         `json:"storage_pool_id"`
-	Enabled                      bool           `json:"enabled"`
-	Version                      int64          `json:"version"`
-	Main                         ObservedStatus `json:"main"`
-	Sub                          ObservedStatus `json:"sub"`
-	Recording                    ObservedStatus `json:"recording"`
+	RequiresInitialRecordingMode bool  `json:"requires_initial_recording_mode"`
+	ChannelID                    id.ID `json:"channel_id"`
+	// The stored recording policy mode; the recording plan renders it straight
+	// from the summary so a 32-row page stays one request.
+	Mode              string         `json:"mode"`
+	CurrentRevisionID *id.ID         `json:"current_revision_id"`
+	DesiredRevisionID *id.ID         `json:"desired_revision_id"`
+	StoragePoolID     *id.ID         `json:"storage_pool_id"`
+	Enabled           bool           `json:"enabled"`
+	Version           int64          `json:"version"`
+	Main              ObservedStatus `json:"main"`
+	Sub               ObservedStatus `json:"sub"`
+	Recording         ObservedStatus `json:"recording"`
 }
 
 // MediaParams is what the most recent successful test of the applied revision
@@ -146,19 +149,24 @@ type SummaryItem struct {
 	Version      int64         `json:"version"`
 	Permissions  []auth.Action `json:"permissions"`
 	// Named the same as in Status so the list and the detail page describe a
-	// channel identically.
-	CurrentRevisionID *id.ID         `json:"current_revision_id"`
-	SourceIP          string         `json:"source_ip"`
-	MainPath          string         `json:"main_path"`
-	SubPath           string         `json:"sub_path"`
+	// channel identically. StoragePoolID rides along so the recording plan can
+	// show every binding from one request instead of one status call per row.
+	CurrentRevisionID *id.ID `json:"current_revision_id"`
+	StoragePoolID     *id.ID `json:"storage_pool_id"`
+	// The stored recording policy mode ('none' until first applied). Carried
+	// with the pool so the recording plan renders every row from one request.
+	RecordingMode string `json:"recording_mode"`
+	SourceIP      string `json:"source_ip"`
+	MainPath      string `json:"main_path"`
+	SubPath       string `json:"sub_path"`
 	// OnvifPort is the ONVIF management port of the applied revision. Nil
 	// means the revision was saved as RTSP-only.
-	OnvifPort *int           `json:"onvif_port,omitempty"`
-	Main      ObservedStatus `json:"main"`
-	Sub       ObservedStatus `json:"sub"`
-	Recording ObservedStatus `json:"recording"`
-	LastError string         `json:"last_error"`
-	BitrateKbps *int64       `json:"bitrate_kbps"`
+	OnvifPort   *int           `json:"onvif_port,omitempty"`
+	Main        ObservedStatus `json:"main"`
+	Sub         ObservedStatus `json:"sub"`
+	Recording   ObservedStatus `json:"recording"`
+	LastError   string         `json:"last_error"`
+	BitrateKbps *int64         `json:"bitrate_kbps"`
 	// Media parameters of the applied revision's newest successful test. The
 	// list shows them as reference information; they are never mixed with the
 	// observed connection state above.

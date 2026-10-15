@@ -36,6 +36,7 @@ func (s *SourceService) statusTx(ctx context.Context, tx pgx.Tx, ch id.ID) (Stat
 	if err := tx.QueryRow(ctx, "SELECT $2::uuid IS NULL AND NOT EXISTS(SELECT 1 FROM source_switches WHERE channel_id=$1 AND kind='apply' AND state='succeeded')", ch, out.CurrentRevisionID).Scan(&out.RequiresInitialRecordingMode); err != nil {
 		return out, err
 	}
+	out.Mode = mode
 	out.Main = ObservedStatus{State: "unknown", Reason: "observation_missing"}
 	out.Sub = out.Main
 	out.Recording = out.Main
@@ -137,6 +138,8 @@ func (s *SourceService) Summaries(ctx context.Context, p auth.Principal) (Summar
 				return err
 			}
 			out.Items[i].CurrentRevisionID = status.CurrentRevisionID
+			out.Items[i].StoragePoolID = status.StoragePoolID
+			out.Items[i].RecordingMode = status.Mode
 			out.Items[i].Main = status.Main
 			out.Items[i].Sub = status.Sub
 			out.Items[i].Recording = status.Recording
