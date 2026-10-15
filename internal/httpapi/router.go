@@ -14,6 +14,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/fault"
 	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/live"
+	"github.com/zhigu34/one-nvr/internal/notify"
 	"github.com/zhigu34/one-nvr/internal/operations"
 	"github.com/zhigu34/one-nvr/internal/recording"
 	"github.com/zhigu34/one-nvr/internal/site"
@@ -38,6 +39,7 @@ type Dependencies struct {
 	Recordings                      *recording.Service
 	Archive                         *archive.Service
 	Events                          *events.Service
+	Notify                          *notify.Service
 	Detection                       *detection.Service
 	Live                            *live.Service
 	Storage                         *storage.Service
@@ -167,6 +169,8 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("GET /api/v1/detection/rules", r.protected(r.listChannelRules))
 	r.mux.HandleFunc("POST /api/v1/detection/rules", r.protected(r.saveChannelRule))
 	r.mux.HandleFunc("DELETE /api/v1/detection/rules/{id}", r.protected(r.deleteChannelRule))
+	r.mux.HandleFunc("GET /api/v1/detection/rules/{id}/channels", r.protected(r.ruleChannels))
+	r.mux.HandleFunc("PUT /api/v1/detection/rules/{id}/channels", r.protected(r.setRuleChannels))
 	r.mux.HandleFunc("PATCH /api/v1/event-hits/{id}", r.protected(r.markRuleHitFalsePositive))
 	r.mux.HandleFunc("GET /api/v1/detection/configs", r.protected(r.detectionConfigs))
 	r.mux.HandleFunc("PUT /api/v1/detection/configs/{id}", r.protected(r.updateDetectionConfig))
@@ -176,6 +180,12 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("GET /api/v1/events/{id}", r.protected(r.getEvent))
 	r.mux.HandleFunc("PATCH /api/v1/events/{id}", r.protected(r.handleEvent))
 	r.mux.HandleFunc("GET /api/v1/events/{id}/snapshot", r.protected(r.eventSnapshot))
+	r.mux.HandleFunc("GET /api/v1/events/{id}/deliveries", r.protected(r.listEventDeliveries))
+	r.mux.HandleFunc("GET /api/v1/notification-channels", r.protected(r.listNotificationChannels))
+	r.mux.HandleFunc("POST /api/v1/notification-channels", r.protected(r.registerNotificationChannel))
+	r.mux.HandleFunc("PATCH /api/v1/notification-channels/{id}", r.protected(r.updateNotificationChannel))
+	r.mux.HandleFunc("DELETE /api/v1/notification-channels/{id}", r.protected(r.deleteNotificationChannel))
+	r.mux.HandleFunc("POST /api/v1/notification-channels/{id}/test", r.protected(r.testNotificationChannel))
 	r.mux.HandleFunc("GET /api/v1/event-mappings", r.protected(r.eventMappings))
 	r.mux.HandleFunc("PUT /api/v1/event-mappings", r.protected(r.setEventMappings))
 	r.mux.HandleFunc("GET /api/v1/archive-policies", r.protected(r.listArchivePolicies))

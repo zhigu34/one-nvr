@@ -42,12 +42,12 @@ var (
 type Service struct {
 	DB       *database.DB
 	Auth     *auth.Service
-	Secrets  *secrets.State
+	Secrets  secrets.State
 	siteID   id.ID
 	registry *Registry
 }
 
-func New(db *database.DB, accounts *auth.Service, sec *secrets.State, siteID id.ID) *Service {
+func New(db *database.DB, accounts *auth.Service, sec secrets.State, siteID id.ID) *Service {
 	return &Service{DB: db, Auth: accounts, Secrets: sec, siteID: siteID, registry: DefaultRegistry()}
 }
 

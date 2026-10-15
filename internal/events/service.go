@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/fault"
 	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/notify"
+	"github.com/zhigu34/one-nvr/internal/storage"
 )
 
 // EventIndexRetention is EVT-07's window: a finished ordinary event expires
@@ -84,6 +86,11 @@ type Service struct {
 	// PublicURL is the site's external address, used to make the links inside a
 	// notification absolute for receivers that are not this browser.
 	PublicURL string
+	// Pools resolves a channel's bound storage pool so an archived snapshot can
+	// be written into it. Optional: without it the archive sweep does nothing
+	// and the detector's own copy keeps answering, which is the pre-archive
+	// behaviour rather than a broken one.
+	Pools *storage.Service
 	// zone caches the site location for rule arming windows: ingestion
 	// evaluates rules for every event, and the zone changes at most once in a
 	// deployment's life.
@@ -452,10 +459,24 @@ func (s *Service) SweepExpiry(ctx context.Context) {
 // Snapshot proxies the upstream snapshot image. Frigate serves it over HTTP;
 // the bytes never touch one-nvr storage, and a pending snapshot is reported as
 // such instead of a broken image (EVT-02).
+//
+// The archived copy is served first when one exists, so a picture survives the
+// detector cleaning up its own short-lived directory (STO-07). The detector
+// stays the fallback rather than the source of truth.
 func (s *Service) Snapshot(ctx context.Context, p auth.Principal, eventID id.ID) ([]byte, string, error) {
 	event, err := s.Get(ctx, p, eventID)
 	if err != nil {
 		return nil, "", err
+	}
+	if local, err := s.localSnapshot(ctx, eventID); err == nil && local != nil {
+		defer local.Close()
+		data, readErr := io.ReadAll(io.LimitReader(local, 8<<20))
+		if readErr == nil && len(data) > 0 {
+			return data, "image/jpeg", nil
+		}
+		// A local copy that cannot be read falls through to the detector: the
+		// operator asked for the picture, and a failure here is not a reason to
+		// refuse it while another copy may answer.
 	}
 	if s.Frigate == "" {
 		return nil, "", ErrEventNotFound
@@ -494,6 +515,20 @@ func (s *Service) Snapshot(ctx context.Context, p auth.Principal, eventID id.ID)
 		contentType = "image/jpeg"
 	}
 	return data, contentType, nil
+}
+
+// localSnapshot opens the archived copy when the event has one. A missing or
+// unreadable copy is not an error the caller reports: it means "ask the
+// detector", which is the state every event was in before archiving existed.
+func (s *Service) localSnapshot(ctx context.Context, eventID id.ID) (*os.File, error) {
+	if s.Pools == nil {
+		return nil, nil
+	}
+	ref, err := s.snapshotRefFor(ctx, eventID)
+	if err != nil || ref.Local == "" {
+		return nil, err
+	}
+	return s.OpenLocalSnapshot(ctx, ref)
 }
 
 // SetMappings replaces the camera mapping table (admin). One Frigate camera

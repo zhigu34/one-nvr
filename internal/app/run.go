@@ -20,6 +20,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/live"
 	"github.com/zhigu34/one-nvr/internal/media/probe"
 	"github.com/zhigu34/one-nvr/internal/media/zlm"
+	"github.com/zhigu34/one-nvr/internal/notify"
 	"github.com/zhigu34/one-nvr/internal/operations"
 	"github.com/zhigu34/one-nvr/internal/recording"
 	"github.com/zhigu34/one-nvr/internal/secrets"
@@ -144,6 +145,22 @@ func Run(name string) error {
 		recordings.ProbeToken = probeKey
 		pools.MediaCheck = recordings.CheckPool
 		pools.MediaInspector = mediaProbe
+		// Notification channels and delivery are the worker's, because a rule
+		// hit raises its notification inside the ingestion transaction and the
+		// retry loop must survive an API restart.
+		notifications := notify.New(db, recordings.Sources.Auth, secret, secret.SiteID)
+		background.Add(2)
+		for n := 0; n < 2; n++ {
+			go func() {
+				defer background.Done()
+				runSourceJobs(ctx, db, notify.JobKindWebhook, notifications.HandleWebhook)
+			}()
+		}
+		// A job that exhausted its attempts is terminal in the jobs table but
+		// nothing there knows it means a notification, so the delivery row is
+		// swept to match.
+		background.Add(1)
+		go func() { defer background.Done(); runDeliveryReconciliation(ctx, notifications) }()
 		// The archive service exists before any publisher starts so the
 		// immediate-upload hook is set for the very first published segment.
 		archiveService := archive.New(db, recordings.Sources.Auth, secret, pools)
@@ -205,9 +222,18 @@ func Run(name string) error {
 			// The event index lives with the worker: same database, same
 			// grants, and the ingestion loop dies with the process.
 			eventsService := events.New(db, recordings.Sources.Auth, "http://frigate:5000", secret.SiteID)
+			eventsService.Pools = pools
+			eventsService.PublicURL = c.PublicURL
+			// A rule hit raises its notification inside the ingestion
+			// transaction, so the worker needs the notifier that owns delivery.
+			eventsService.Notify = notifications
 			background.Add(2)
 			go func() { defer background.Done(); eventsService.Run(ctx, "mqtt:1883", "one_nvr", mqttKey) }()
 			go func() { defer background.Done(); eventsService.RunExpiry(ctx) }()
+			// The detector keeps its snapshots only briefly; copying them into
+			// the channel's pool is what makes the picture outlive it (STO-07).
+			background.Add(1)
+			go func() { defer background.Done(); runSnapshotArchive(ctx, eventsService) }()
 			// Detection configuration publishes into the Frigate config bind
 			// mount and makes it take effect through the detector's restart API.
 			detectionService, err := newDetectionService(db, recordings.Sources.Auth, c.DataDir, mqttKey, probeKey)
@@ -314,6 +340,11 @@ func Run(name string) error {
 				return err
 			}
 			intelligence = events.New(db, accounts, "http://frigate:5000", secret.SiteID)
+			// The API serves the snapshot from the archived copy when one
+			// exists, so it needs the pool resolver even though ingestion and
+			// delivery live in the worker.
+			intelligence.Pools = pools
+			intelligence.PublicURL = c.PublicURL
 			// The publication endpoint is served by the API process, so the
 			// API's detection service needs the same render input and reload
 			// path as the worker's — sharing one constructor is what keeps
@@ -327,7 +358,7 @@ func Run(name string) error {
 				return fmt.Errorf("detection service wiring incomplete")
 			}
 		}
-		handler = httpapi.NewHandler(httpapi.Dependencies{Events: intelligence, Detection: detectionService, Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, Sources: sources, Live: &live.Service{DB: db, Auth: accounts, Media: media}, PublicURL: c.PublicURL, TrustedProxyToken: proxyKey, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled, Archive: archive.New(db, accounts, secret, pools)})
+		handler = httpapi.NewHandler(httpapi.Dependencies{Events: intelligence, Detection: detectionService, Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, Sources: sources, Live: &live.Service{DB: db, Auth: accounts, Media: media}, PublicURL: c.PublicURL, TrustedProxyToken: proxyKey, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled, Archive: archive.New(db, accounts, secret, pools), Notify: notify.New(db, accounts, secret, secret.SiteID)})
 	}
 	if name == "worker" {
 		prober := &operations.Prober{Checks: map[string]func(context.Context) error{"zlm": media.Health}, Operations: operations.New(db, nil, c.FrigateEnabled, c.OpenListEnabled), Client: operations.NewProbeClient(), Targets: map[string]operations.ProbeTarget{
