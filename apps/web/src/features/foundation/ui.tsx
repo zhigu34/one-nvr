@@ -178,9 +178,13 @@ export function Panel({
 }) {
   return (
     <Card className='mb-6'>
-      <CardHeader>
-        <CardTitle className='text-lg font-medium'>{title}</CardTitle>
-      </CardHeader>
+      {/* An empty title renders no header: cards that draw their own header
+          row (pool cards) ask for exactly that. */}
+      {title && (
+        <CardHeader>
+          <CardTitle className='text-lg font-medium'>{title}</CardTitle>
+        </CardHeader>
+      )}
       <CardContent>{children}</CardContent>
     </Card>
   )
