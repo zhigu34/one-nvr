@@ -25,6 +25,16 @@ type Input struct {
 	ObjectID       id.ID
 	IdempotencyKey string
 	Payload        []byte
+	// MaxAttempts overrides the table default (6). A webhook delivery is capped
+	// at five retries by the product contract, while an upload or an export may
+	// legitimately take more; the count stays in one place (job_attempts)
+	// regardless of which kind asked for it.
+	//
+	// It is deliberately outside the idempotency digest: a re-enqueue of the
+	// same work under the same key keeps the attempts the first caller asked
+	// for, instead of failing a conflict over a retry budget that does not
+	// change what the job does.
+	MaxAttempts *int
 }
 type Lease struct {
 	ID           id.ID
@@ -47,6 +57,9 @@ func Enqueue(ctx context.Context, tx pgx.Tx, in Input) (id.ID, error) {
 	if !kindPattern.MatchString(in.Kind) || len(in.IdempotencyKey) < 1 || len(in.IdempotencyKey) > 128 {
 		return "", fmt.Errorf("invalid job kind or idempotency key")
 	}
+	if in.MaxAttempts != nil && (*in.MaxAttempts < 1 || *in.MaxAttempts > 20) {
+		return "", fmt.Errorf("max attempts must be between 1 and 20")
+	}
 	payload, err := safejson.Canonical(in.Payload)
 	if err != nil {
 		return "", err
@@ -61,7 +74,17 @@ func Enqueue(ctx context.Context, tx pgx.Tx, in Input) (id.ID, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err = tx.Exec(ctx, "INSERT INTO jobs(id,kind,object_id,idempotency_key,parameter_digest,payload) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(kind,idempotency_key) DO NOTHING", i, in.Kind, nullable(in.ObjectID), in.IdempotencyKey, hash[:], payload); err != nil {
+	// max_attempts is only applied on insert: an existing row keeps the budget
+	// it was created with, for the same reason it keeps its digest.
+	insert := `INSERT INTO jobs(id,kind,object_id,idempotency_key,parameter_digest,payload)
+		VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(kind,idempotency_key) DO NOTHING`
+	args := []any{i, in.Kind, nullable(in.ObjectID), in.IdempotencyKey, hash[:], payload}
+	if in.MaxAttempts != nil {
+		insert = `INSERT INTO jobs(id,kind,object_id,idempotency_key,parameter_digest,payload,max_attempts)
+			VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(kind,idempotency_key) DO NOTHING`
+		args = append(args, *in.MaxAttempts)
+	}
+	if _, err = tx.Exec(ctx, insert, args...); err != nil {
 		return "", err
 	}
 	var existing id.ID
