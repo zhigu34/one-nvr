@@ -30,6 +30,7 @@ function fixture(
     events?: Schema<'Event'>[]
     handleStates?: Record<string, string>
     versions?: Record<string, number>
+    deliveries?: Schema<'NotificationDelivery'>[]
   } = {}
 ) {
   useAuthStore.getState().setUser({
@@ -92,6 +93,9 @@ function fixture(
     if (path.startsWith('/api/v1/events?'))
       return { items: events, next_cursor: null }
     if (path === `/api/v1/events/${eventID}`) return { ...event, hits }
+    // The drawer asks what happened to the alert; the default is "nothing was
+    // told", which is the pre-batch state for an unbound rule.
+    if (path === `/api/v1/events/${eventID}/deliveries`) return { items: options.deliveries ?? [] }
     if (path.startsWith('/api/v1/event-hits/')) return {}
     throw new Error(`unexpected path ${path}`)
   })
@@ -281,4 +285,67 @@ test('a stale ongoing event shows 已结束 and the honest snapshot state', asyn
   await expect.element(card).not.toHaveTextContent('抓拍生成中')
   await expect.element(card).toHaveTextContent('无抓拍图像')
   client.clear()
+})
+
+test('reviewing the footage is a visible action, not a hover affordance', async () => {
+  const { client } = fixture([])
+  const screen = await view(client)
+  // The card's job is "something happened here, go look": the replay link is on
+  // every card without hovering.
+  const replay = screen.getByRole('link', { name: /查看事件录像/ })
+  await expect.element(replay).toBeVisible()
+  await expect.element(replay).toHaveTextContent('查看录像')
+  // Nothing on the card triages the event any more — the operator asked to be
+  // told and to watch, and the triage buttons competed with that for the same
+  // corner. They remain in the drawer and in the toolbar's batch action.
+  const card = screen.getByTestId('event-card')
+  expect(card.getByRole('button', { name: '标为已处理' }).query()).toBeNull()
+})
+
+test('the drawer says what happened to the alert, including a refusal', async () => {
+  const { client } = fixture([], {
+    deliveries: [
+      {
+        channel_id: 'chan-1',
+        channel_name: '站内提醒',
+        channel_kind: 'inapp',
+        notification_id: 'n-1',
+        state: 'succeeded',
+        updated_at: '2026-10-13T12:00:05Z',
+        title: 'CH05 大门 人 中',
+        severity: 'medium',
+      },
+      {
+        channel_id: 'chan-2',
+        channel_name: '值班群',
+        channel_kind: 'webhook',
+        notification_id: 'n-1',
+        state: 'exhausted',
+        error: 'receiver answered 401: unauthorized',
+        http_status: 401,
+        updated_at: '2026-10-13T12:01:00Z',
+        title: 'CH05 大门 人 中',
+        severity: 'medium',
+      },
+    ],
+  })
+  const screen = await view(client)
+  await screen.getByTestId('event-card').click()
+  // Exact: the section's own help text mentions the same channel name.
+  await expect.element(screen.getByText('站内提醒', { exact: true })).toBeVisible()
+  await expect.element(screen.getByText('成功', { exact: true })).toBeVisible()
+  // A refusal must name the status, not just say a channel failed: that is the
+  // only actionable evidence a webhook produces.
+  await expect.element(screen.getByText('最终失败', { exact: true })).toBeVisible()
+  await expect.element(screen.getByText('HTTP 401')).toBeVisible()
+  await expect.element(screen.getByText(/receiver answered 401/)).toBeVisible()
+})
+
+test('an event nobody was told about says so instead of showing an empty box', async () => {
+  const { client } = fixture([])
+  const screen = await view(client)
+  await screen.getByTestId('event-card').click()
+  await expect
+    .element(screen.getByText(/没有触发通知：可能是规则未绑定渠道/))
+    .toBeVisible()
 })

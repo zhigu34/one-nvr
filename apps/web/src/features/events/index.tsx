@@ -25,6 +25,24 @@ import { cn } from '@/lib/utils'
 type Event = Schema<'Event'>
 type Channel = Schema<'Channel'>
 
+// EVT-05's five states in the operator's words. Kept beside the handling labels
+// so the two vocabularies stay visibly distinct.
+const DELIVERY_LABELS: Record<string, string> = {
+  sending: '发送中',
+  failed: '失败',
+  retrying: '已重试',
+  succeeded: '成功',
+  exhausted: '最终失败',
+}
+
+const DELIVERY_TONES: Record<string, string> = {
+  succeeded: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+  sending: 'border-border text-muted-foreground',
+  retrying: 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400',
+  failed: 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400',
+  exhausted: 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400',
+}
+
 const HANDLE_LABELS: Record<string, string> = {
   open: '未处理',
   acknowledged: '已确认',
@@ -227,18 +245,6 @@ export function Events() {
     }
   }
 
-  async function markOneHandled(item: Event) {
-    await apiRequest(
-      `/api/v1/events/${item.id}`,
-      jsonRequest('PATCH', {
-        state: 'acknowledged',
-        note: '',
-        version: item.version ?? 0,
-      })
-    )
-    await client.invalidateQueries()
-  }
-
   if (!permitted.length && channels.data)
     return <Empty>没有可查看事件的通道，请联系管理员分配录像回放权限。</Empty>
 
@@ -425,45 +431,6 @@ export function Events() {
                     >
                       {HANDLE_LABELS[handleState]}
                     </span>
-                    {/* Hover shortcuts: jump straight into playback or mark the
-                        event handled without opening the drawer. */}
-                    <div
-                      className='absolute bottom-2 right-2 flex gap-1.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100'
-                      onClick={(e) => e.stopPropagation()}
-                      onKeyDown={(e) => e.stopPropagation()}
-                    >
-                      <Link
-                        to='/recordings'
-                        search={{
-                          channel: item.channel_id ?? '',
-                          at: (() => {
-                            const at = new Date(Date.parse(item.started_at ?? '')).getTime() - 10_000
-                            return wallClockInput(at, zone)
-                          })(),
-                          tab: 'playback',
-                        }}
-                        aria-label={`查看事件录像 ${cardTimestamp(item.started_at, zone, now)}`}
-                        title='录像回放'
-                        className='grid size-7 place-items-center rounded-md border border-white/10 bg-black/60 text-zinc-200 backdrop-blur hover:bg-black/80'
-                      >
-                        <Play aria-hidden className='size-3.5' />
-                      </Link>
-                      {handleState === 'open' && (
-                        <button
-                          type='button'
-                          aria-label='标为已处理'
-                          title='标为已处理'
-                          className='grid size-7 place-items-center rounded-md border border-emerald-500/30 bg-emerald-950/70 text-emerald-300 backdrop-blur hover:bg-emerald-900/80'
-                          disabled={markAllPending}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            void markOneHandled(item).catch(() => {})
-                          }}
-                        >
-                          ✓
-                        </button>
-                      )}
-                    </div>
                   </div>
                   <div className='flex items-center justify-between gap-2 px-3 py-2.5 text-xs'>
                     <div className='flex min-w-0 items-center gap-1.5'>
@@ -491,6 +458,29 @@ export function Events() {
                         {durationText(item, now)}
                       </span>
                     </div>
+                  </div>
+                  {/* The reason this page exists: watch what happened. It is a
+                      visible action rather than a hover affordance, because the
+                      operator's job here is reviewing footage, not triage. */}
+                  <div className='border-t px-3 py-2'>
+                    <Link
+                      to='/recordings'
+                      search={{
+                        channel: item.channel_id ?? '',
+                        at: (() => {
+                          const at = new Date(Date.parse(item.started_at ?? '')).getTime() - 10_000
+                          return wallClockInput(at, zone)
+                        })(),
+                        tab: 'playback',
+                      }}
+                      aria-label={`查看事件录像 ${cardTimestamp(item.started_at, zone, now)}`}
+                      className='inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-foreground transition-colors hover:bg-accent'
+                      onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => e.stopPropagation()}
+                    >
+                      <Play aria-hidden className='size-3' />
+                      查看录像
+                    </Link>
                   </div>
                 </div>
               )
@@ -545,12 +535,19 @@ function EventDetail({
 }) {
   const client = useQueryClient()
   const event = useAPI<Event>(`/api/v1/events/${eventID}`)
+  // What happened to the alert for this event. Fetched with the detail rather
+  // than the list: only the drawer shows it.
+  const deliveries = useAPI<Schema<'NotificationDeliveryPage'>>(
+    `/api/v1/events/${eventID}/deliveries`,
+    !!eventID
+  )
   const [note, setNote] = useState('')
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
   const [pendingAction, setPendingAction] = useState('')
   const [feedbackPending, setFeedbackPending] = useState('')
   const item = event.data
+  const deliveryItems = deliveries.data?.items ?? []
   const [now] = useState(() => Date.now())
   const ongoing = isOngoing(item ?? {}, now)
 
@@ -709,6 +706,28 @@ function EventDetail({
                   </div>
                 </div>
               ))}
+            </div>
+            <div className='space-y-2 rounded-lg border p-3'>
+              <p className='font-medium'>通知</p>
+              {deliveries.isPending && <p className='text-xs text-muted-foreground'>读取中…</p>}
+              {!deliveries.isPending && !deliveryItems.length && (
+                <p className='text-xs text-muted-foreground'>
+                  这个事件没有触发通知：可能是规则未绑定渠道，或该规则未命中。
+                </p>
+              )}
+              {deliveryItems.map((item) => (
+                <div key={`${item.notification_id}-${item.channel_id}`} className='flex flex-wrap items-center gap-2 text-xs'>
+                  <span className='font-medium'>{item.channel_name}</span>
+                  <span className={`rounded-full border px-1.5 py-px ${DELIVERY_TONES[item.state ?? ''] || ''}`}>
+                    {DELIVERY_LABELS[item.state ?? ''] || item.state}
+                  </span>
+                  {item.http_status ? <span className='text-muted-foreground'>HTTP {item.http_status}</span> : null}
+                  {item.error ? <span className='text-muted-foreground'>{item.error}</span> : null}
+                </div>
+              ))}
+              <p className='text-xs text-muted-foreground'>
+                站内提醒入队即达；Webhook 最多重试 5 次。这里的「已重试」表示还在重试窗口内，「最终失败」表示重试次数已用尽或接收端拒绝。
+              </p>
             </div>
             <div className='space-y-2 rounded-lg border p-3'>
               <p className='font-medium'>处理</p>
