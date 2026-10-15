@@ -36,6 +36,19 @@
 
 ## 常用验证
 
+**本机快速反馈（首选，约 35 秒）**——本机不需要 Docker 就能跑完类型、lint 和单测：
+
+```bash
+./deploy/production/verify.sh          # API 类型漂移 + tsc + eslint + vitest + go 单测 + vet，约 18-35s
+./deploy/production/verify.sh --full   # 追加 tests/integration（本机实测约 15 分钟）
+```
+
+脚本会自己找到 PATH 外的 node（`/opt/homebrew/opt/node@*`）与 go（`~/.local/toolchain/go`），并在结尾给出逐项 PASS/FAIL 与耗时。**改代码时就跑这个**，不要为了一个类型错误等 CI 往返。
+
+CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真实浏览器），并按改动路径裁剪：纯文档推送只跑 ~1 分钟的 Compose/shell 校验；纯前端推送跑 `frontend` + 两个浏览器 job；Go/迁移/部署改动才跑完整媒体验收。详见 `.github/workflows/foundation-ci.yml` 顶部注释。发布前要一次跑全，用 `workflow_dispatch` 并置 `full_suite=true`。
+
+需要 Docker 的验收（本机无 daemon，只能走 CI）：
+
 ```bash
 ./deploy/production/dev.sh test-go -race ./internal/... ./cmd/... ./migrations
 ./deploy/production/dev.sh test-db -race ./tests/integration

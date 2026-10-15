@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Local fast-feedback runner. Everything here runs on a development machine
+# without Docker, which is what makes the edit/test loop seconds long instead
+# of waiting on a CI round trip.
+#
+#   ./deploy/production/verify.sh          # fast tier, ~35s: types, lint, unit
+#   ./deploy/production/verify.sh --full   # adds the integration suite (~15min)
+#
+# CI runs the same checks for the record; this script is the loop you actually
+# work in. Media acceptance (real ZLM, real browser decode, 60s segments) needs
+# Docker and is not covered here — see AGENTS.md "常用验证".
+set -Eeuo pipefail
+cd "$(dirname "$0")/../.."
+
+full=no
+case "${1:-}" in
+ --full) full=yes ;;
+ '') ;;
+ *) printf '%s\n' 'Usage: verify.sh [--full]' >&2; exit 2 ;;
+esac
+
+# Node and Go are installed outside the default PATH on some workstations
+# (~/.local/toolchain, Homebrew kegs). Find them rather than making every
+# invocation remember the export.
+if ! command -v node >/dev/null 2>&1; then
+ for candidate in /opt/homebrew/opt/node@*/bin /usr/local/opt/node@*/bin "$HOME/.local/toolchain/node/bin"; do
+  if [[ -x $candidate/node ]]; then PATH="$candidate:$PATH"; break; fi
+ done
+fi
+if ! command -v go >/dev/null 2>&1; then
+ for candidate in "$HOME/.local/toolchain/go/bin" /usr/local/go/bin; do
+  if [[ -x $candidate/go ]]; then PATH="$candidate:$PATH"; break; fi
+ done
+fi
+command -v node >/dev/null 2>&1 || { printf '%s\n' 'node not found. Install it or add it to PATH.' >&2; exit 2; }
+command -v pnpm >/dev/null 2>&1 || { printf '%s\n' 'pnpm not found. Run: corepack enable' >&2; exit 2; }
+command -v go >/dev/null 2>&1 || { printf '%s\n' 'go not found. Install it or add it to PATH.' >&2; exit 2; }
+
+web=apps/web
+results=()
+failed=0
+started=$SECONDS
+
+# Each check reports its own verdict and timing; the summary at the end is the
+# only thing that decides the exit code, so one failure never hides the others.
+run() {
+ local name=$1; shift
+ local begin=$SECONDS
+ printf '\n\033[1m▶ %s\033[0m\n' "$name"
+ if "$@"; then
+  local took=$((SECONDS - begin))
+  results+=("PASS  ${took}s  ${name}")
+ else
+  local took=$((SECONDS - begin))
+  results+=("FAIL  ${took}s  ${name}")
+  failed=1
+ fi
+}
+
+# 1. The generated API types must match the OpenAPI contract. CI fails the
+#    build on drift; catching it here keeps the two in step while editing.
+api_drift() {
+ pnpm --dir "$web" api:generate >/dev/null
+ if ! git diff --exit-code --quiet -- "$web/src/lib/api-types.ts"; then
+  printf '%s\n' 'api-types.ts is stale: the OpenAPI contract changed. The regenerated file is in your tree; commit it.' >&2
+  return 1
+ fi
+}
+tsc() { pnpm --dir "$web" exec tsc -b --force; }
+eslint() { pnpm --dir "$web" exec eslint src; }
+vitest() { pnpm --dir "$web" test; }
+go_unit() { go test -race ./internal/... ./cmd/... ./migrations; }
+go_vet() { go vet ./...; }
+
+# 2. The integration suite needs an isolated PostgreSQL. The env file holds a
+#    local fixture database; without it the check is reported as skipped rather
+#    than silently passing.
+integration() {
+ local env_file=$HOME/.one-nvr/test-pg.env
+ if [[ ! -f $env_file ]]; then
+  printf '%s\n' "SKIP: $env_file missing, no local PostgreSQL fixture. See AGENTS.md." >&2
+  return 0
+ fi
+ set -a; . "$env_file"; set +a
+ go test ./tests/integration -count=1 -timeout 45m
+}
+
+run 'API types drift' api_drift
+run 'TypeScript build' tsc
+run 'ESLint' eslint
+run 'Browser unit tests (vitest)' vitest
+run 'Go unit tests (-race)' go_unit
+run 'go vet' go_vet
+if [[ $full == yes ]]; then
+ run 'Integration suite (PostgreSQL)' integration
+fi
+
+printf '\n\033[1m── verify summary (%ss) ──\033[0m\n' "$((SECONDS - started))"
+for line in "${results[@]}"; do
+ if [[ $line == FAIL* ]]; then printf '\033[31m%s\033[0m\n' "$line"; else printf '\033[32m%s\033[0m\n' "$line"; fi
+done
+if [[ $full == no ]]; then
+ printf '%s\n' "Run './deploy/production/verify.sh --full' for the integration suite."
+fi
+exit "$failed"
