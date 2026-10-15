@@ -60,16 +60,19 @@ CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真�
 
 ## 当前交接快照（2026-10-09）
 
-- **2026-10-15 CI 连续转红的真因（接手先看这条）**：`432fa79` 起 Foundation CI 连续失败，**红的不是产品功能，是 e2e 规格没跟上 UI 重构**——每修好一处，测试就往下推进一段、露出下一处。共查出 **4 处陈旧断言 + 1 处未定性**：
+- **2026-10-15 CI 连续转红已修复，当前全绿（接手先看这条）**：`432fa79` 起 Foundation CI 连续失败，**红的不是产品功能，是 e2e 规格没跟上 UI 重构**——每修好一处，测试就往下推进一段、露出下一处，共 5 处。**`8168205` 已 12/12 全绿**（run 38732529387，28.0 分钟），是 `d4cb1d8` 之后第一次全通过。
   - **① 存储池添加表单加了折叠开关**（`daf15a5` 把表单收进 toggle，提交按钮文案「添加存储池」→「确认添加」）。旧断言直接 `getByLabel('存储池名称').fill(...)` → 表单未展开、元素不存在 → 超时。两处：`m1a.spec.ts`（`directoryPoolKeepsPendingZLMStatus`）与 `m1b-media.spec.ts`。**已修**（`11b305d`）。
   - **② `live-video-area` 不再注入内联 `aspect-ratio`**（`de6f97e` 改为「格子定大小 + object-contain letterbox」；该提交同步改了 `live/index.test.tsx` 却漏了 e2e）。**已修**（`11b305d`）：断言容器可见、无内联 aspect-ratio、包围盒非零。
   - **③ 录像页标题行已删除**（`7f64173`「删录像页顶部标题行」移除了 `/recordings` 的 h1），规格仍在等 `getByRole('heading',{name:'录像'})`。**已修**（`cd2ffe3`）：改用 `playback-console` 作锚点。
   - **④ `/content` 响应监听器注册太晚**——`7f1da10` 的「无 channel 参数时自动选中第一个在线通道」+ `8e6ad16` 的 auto-park `useEffect` 使得授权读取在**页面加载期间**就发生；监听器原先挂在校验之后，捕不到任何请求，`contentResponses` 恒为 0（而视频确实解码）。**已修**（`88481cc`）：监听器移到 `page.goto('/recordings')` 之前。
-  - **⑤ 未定性（当前卡点）**：`m1b-media.spec.ts` 第 423 行的删除生命周期块报 `page.evaluate: SyntaxError: Unexpected token ' ftypis... is not valid JSON`——第 459 行 `JSON.parse(contentBody)` 收到的是 **MP4 字节而非 JSON**。这**可能不是陈旧断言而是真实的语义冲突**：该块断言「保护→解除→删除 后 `/content` 返回 404」，但 `21801ba` 之后录像计划页已绑定存储池，且 `content.go` 的 `touchLease` 在**每次**打开内容时登记 90s 租约、删除路径遇活跃租约返回 `lease_held`——若规格里第 416 行的「停止」没能及时释放租约（或绑定后删除走了别的原因被跳过），删除就不会发生，`/content` 继续回媒体。**接手时先判定这是断言陈旧还是产品回归**，别默认是后者。
-  - **当前 CI 状态**：`88481cc` — `browser-runtime` **已转绿**（①② 生效），`media-browser-runtime` 与 `joint-media-runtime` 仍红在第 ⑤ 条。修复推进轨迹：139 行 → 291 行 → 313 行 → 423 行。
-  - **教训（写死在这）**：UI 重构改了控件结构或布局契约时，**同批必须改 e2e 与 vitest 两处**——`de6f97e` 改对了单测漏了 e2e，`daf15a5` 两处都没改，于是连续 16 轮 CI 全红而无人发现。改前端交互结构（按钮文案、表单折叠、被移除的内联样式、改动加载时序）时，先 `grep tests/e2e/*.spec.ts` 找同名断言。**媒体规格尤其脆**：它依赖真实容器、耗时 30–45 分钟、且只在 CI 可跑，本机无法复现——改动播放器/录像页行为时，媒体规格要当产品契约一起看。
-  - **流程教训**：这类"修一层露一层"的追查应当在**每层修完就给用户一个选择**（继续追 / 先记录 / 交回），而不是一路追到第 5 层才发现可能需要产品决策。已有 4 处修复是明确无争议的过期断言，第 ⑤ 条需要判断，适合交回。
-  - **本机验证（2026-10-15 实跑）**：`go test -race ./internal/... ./cmd/... ./migrations` 全绿；`tests/integration` **全量 887s 通过**；`vitest --browser.headless` **271/271 全过**；改动过的 e2e 规格 `tsc --noEmit --ignoreConfig --strict ...` 无错。
+  - **⑤ 删除生命周期块被 `lease_held` 拦下（真因：测试自己留下的孤儿租约）**。**已修**（`53267f0` 诊断能力 + `8168205` 根因）。两个层面：
+    - *表象*：`m1b-media.spec.ts` 报 `SyntaxError: Unexpected token ' ftypis...`——`/content` 在删除未生效时返回 MP4 字节，而规格无条件 `JSON.parse(contentBody)`，崩溃把「哪条理由拦下了删除」一起吞掉。改为按 `Content-Type` 判定再解析，并把每项的 `reason` 带进断言期望值（失败时直接显示 `in_state/reason`）。
+    - *根因*：rangeProof 用页面内 fetch 对 `/content` 发了 **4 次**请求，而 `content.go` 的 `OpenSegment` **每次成功打开都登记 90 秒播放租约**（ARC-05）。这些请求没有播放器管理——播放器只释放自己 entry 那个片段的租约——于是 `historical` 上留了一条无人释放的租约；「停止」按钮释放的是播放器所在片段（auto-park 停在**最新**片段，而 `historical` 是更早的），删不掉它。删除检查顺序又是**租约先于保护**，所以被 `lease_held` 拦下。
+    - *为什么以前绿*：`d4cb1d8` 的这段结构完全相同，是**时序侥幸**——租约 90 秒到期，而中间的导出任务（90 次 1 秒轮询等成功）恰好等过去了；`8e6ad16` 引入首段自动加载、`21801ba` 之后周边时序变化，这点余量就没了。**这不是产品回归**：活跃租约优先于删除（ARC-05）是刻意语义，且 `tests/integration/archive_lifecycle_test.go` 已覆盖。修法是测试自己别制造悬挂状态（显式释放），另在「停止」后 best-effort 等一次 `DELETE /lease` 落定。
+  - **教训（写死在这）**：UI 重构改了控件结构或布局契约时，**同批必须改 e2e 与 vitest 两处**——`de6f97e` 改对了单测漏了 e2e，`daf15a5` 两处都没改，于是连续 16 轮 CI 全红而无人发现。改前端交互结构（按钮文案、表单折叠、被移除的内联样式、改动加载时序）时，先 `grep tests/e2e/*.spec.ts` 找同名断言。**媒体规格尤其脆**：依赖真实容器、耗时 30–45 分钟、只在 CI 可跑，本机无法复现——改动播放器/录像页行为时，媒体规格要当产品契约一起看。**另外：测试直接调 `/content` 会留下租约**（每次打开都登记 90 秒），凡是在同一片段上后续要删除/清理的规格，必须显式释放。
+  - **流程教训**：这类「修一层露一层」的追查应当在**每层修完就给用户一个选择**（继续追 / 先记录 / 交回），而不是一路追到第 5 层才发现可能需要产品决策。本轮前 4 处是明确无争议的过期断言，第 ⑤ 处需要判定「是断言陈旧还是产品回归」——事后证明仍是测试问题，但当时的判断点是对的。
+  - **本机验证（2026-10-15 实跑）**：`go test -race ./internal/... ./cmd/... ./migrations` 全绿；`tests/integration` **全量 887s 通过**；`vitest --browser.headless` **271/271 全过**；`verify.sh` 6/6 PASS；改动过的 e2e 规格 `tsc --noEmit --ignoreConfig --strict ...` 无错。
+- **2026-10-15 CI 反馈提速（`fc0fc42`）**：见上文「常用验证」——新增本机 `verify.sh`（18 秒跑完类型/lint/单测），CI 按改动路径裁剪（纯文档 ~1 分钟、纯前端 ~10 分钟、Go/部署改动才跑完整 28 分钟），并新增 `validate` 前置 job 与 `full_suite` 手动开关。
 - **2026-10-15 控制台视觉与交互批次（`061ad68..1494a63`，8 个提交，纯前端除一处后端修正）**：无新迁移、无新端点，`docs/api/m1b.openapi.yaml` 只补 `ChannelSummary` 两个已有字段。
   - **后端唯一改动（`21801ba`，语义修正，别改回去）**：**纯绑定/换池（`pool_switch`）不再要求新鲜写入证据**——此前它与 `desired=continuous` 同门禁（要求 api/worker/zlm 三探针全 healthy 且未过期），于是 zlm 证据 30 秒一过，「先绑池、后开录」这个页面主推的流程必然 409 `zlm_write_evidence_unavailable`，等于逼迫通道正在推流才能预配置。现在**新鲜写入证据只门控 `desired=continuous`**（真正落盘的时刻），纯绑定只校验池存在且启用。`source_changes.go` 的判定从 `(desired == "continuous" || kind == "pool_switch")` 收窄为 `desired == "continuous"`。**`/channels/summary` 契约补 `storage_pool_id` 与 `recording_mode`**（`statusTx` 本就产出，透传即可），录像计划页因此免除每行两个状态请求。
   - **一次真正的前端性能修复**：录像计划页 32 行原先各发 2 个状态请求（N+1），`daf15a5/4796531` 之后行数据改由页级一次 `/channels/summary` 供给（写入前仍即时读 live version）；批量绑定改**逐通道顺序执行**（并发写会互踩 `If-Match` 版本，是批量失败的次因），已是目标池的行跳过并计数，逐行给出「N 路已绑定 · M 路已在该池 · 失败 CHxx: 原因」。
