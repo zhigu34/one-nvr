@@ -33,13 +33,15 @@
   --sidebar-border: var(--border);
   --sidebar-ring: var(--ring);
 
-  /* The video wall stays dark in both themes (the picture is the interface);
-     these tokens are the recording workspace's carbon surfaces, hue-free. */
-  --video-surface: oklch(0.141 0 0);
-  --video-surface-raised: oklch(0.185 0 0);
-  --video-chrome: oklch(0.141 0 0 / 88%);
-  --video-chrome-foreground: oklch(0.97 0 0);
-  --video-border: oklch(1 0 0 / 12%);
+  /* The video wall's chrome follows the theme (Protect-style: light panels
+     around a permanently black viewport); hue-free zinc values in both. */
+  --video-surface: oklch(0.985 0 0);
+  --video-surface-raised: oklch(0.967 0 0);
+  --video-chrome: oklch(0.985 0 0 / 90%);
+  --video-chrome-foreground: oklch(0.205 0 0);
+  --video-border: oklch(0.205 0 0 / 12%);
+  --video-wash: oklch(0.205 0 0 / 8%);
+  --video-input: oklch(0.967 0 0);
 }
 
   /* Pure carbon black, chroma 0 across the board: the dark theme is the
@@ -69,6 +71,14 @@
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
+  /* Carbon video chrome in the dark theme. */
+  --video-surface: oklch(0.141 0 0);
+  --video-surface-raised: oklch(0.185 0 0);
+  --video-chrome: oklch(0.141 0 0 / 88%);
+  --video-chrome-foreground: oklch(0.97 0 0);
+  --video-border: oklch(1 0 0 / 12%);
+  --video-wash: oklch(1 0 0 / 10%);
+  --video-input: oklch(1 0 0 / 5%);
 }
 
 @theme inline {
@@ -115,4 +125,6 @@
   --color-video-chrome: var(--video-chrome);
   --color-video-chrome-foreground: var(--video-chrome-foreground);
   --color-video-border: var(--video-border);
+  --color-video-wash: var(--video-wash);
+  --color-video-input: var(--video-input);
 }

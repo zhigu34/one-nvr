@@ -367,7 +367,7 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                     className={`inline-flex h-7 items-center gap-1 rounded-full border px-2.5 text-xs transition-colors ${
                       active
                         ? 'border-primary bg-primary/10 font-medium text-primary'
-                        : 'border-zinc-700/60 text-muted-foreground hover:bg-accent hover:text-foreground'
+                        : 'border-border text-muted-foreground hover:bg-accent hover:text-foreground'
                     }`}
                   >
                     {label}
@@ -382,7 +382,7 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
             </div>
           </div>
           {selected.size > 0 && (
-            <div className='mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-zinc-800 bg-zinc-900/90 px-3.5 py-2'>
+            <div className='mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card px-3.5 py-2 shadow-2xs'>
               <div className='flex flex-wrap items-center gap-1.5'>
                 <span className='text-sm font-medium whitespace-nowrap'>
                   已选 {chosen.length} 路
@@ -429,7 +429,7 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                   修改分组:
                   <input
                     aria-label='批量分组'
-                    className='h-7 w-36 rounded-md border border-zinc-700 bg-background px-2 text-xs'
+                    className='h-7 w-36 rounded-md border border-border bg-background px-2 text-xs'
                     list='existing-channel-groups'
                     placeholder='留空则清空分组'
                     maxLength={64}
@@ -575,7 +575,7 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                               </span>
                             )}
                             {unconfigured && (
-                              <span className='rounded-md bg-zinc-800/80 px-1.5 py-0.5 text-xs text-zinc-500'>
+                              <span className='rounded-md border border-border bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800/80 dark:text-zinc-400'>
                                 未配置
                               </span>
                             )}
@@ -597,11 +597,11 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                               {channel.source_ip}
                               {channel.current_revision_id != null &&
                                 (channel.onvif_port != null ? (
-                                  <span className='rounded border border-zinc-700 px-1 py-px text-[10px] leading-4 text-zinc-400'>
+                                  <span className='rounded border border-border px-1 py-px text-[10px] leading-4 text-muted-foreground'>
                                     ONVIF
                                   </span>
                                 ) : (
-                                  <span className='rounded border border-zinc-700 px-1 py-px text-[10px] leading-4 text-zinc-400'>
+                                  <span className='rounded border border-border px-1 py-px text-[10px] leading-4 text-muted-foreground'>
                                     RTSP
                                   </span>
                                 ))}

@@ -208,7 +208,7 @@ function CapacityBar({ pool }: { pool: Schema<'Pool'> }) {
       </div>
       <div
         data-testid='capacity-bar'
-        className='flex h-2.5 w-full overflow-hidden rounded-full bg-zinc-800/80'
+        className='flex h-2.5 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800/80'
       >
         {used !== null && used > 0 && (
           <div
@@ -252,7 +252,7 @@ function PoolRow({ pool }: { pool: Schema<'Pool'> }) {
         <div className='flex min-w-0 flex-wrap items-center gap-2.5'>
           <HardDrive aria-hidden className='size-5 shrink-0 text-emerald-400' />
           <span className='text-lg font-semibold'>{pool.name}</span>
-          <code className='truncate rounded bg-zinc-900 px-2 py-0.5 font-mono text-xs text-zinc-400'>
+          <code className='truncate rounded border border-border bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground'>
             {pool.path}
           </code>
           {pool.is_default && (

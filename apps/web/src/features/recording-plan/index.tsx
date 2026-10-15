@@ -328,7 +328,7 @@ export function RecordingPlan() {
       )}
       {items.length > 0 && (
         <>
-          <div className='mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-900/70 px-4 py-2.5'>
+          <div className='mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-2.5 shadow-2xs'>
             <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
               <span className='text-sm font-medium whitespace-nowrap'>
                 已选 {chosen.length} / {permitted.length} 路可配置通道
@@ -432,7 +432,7 @@ export function RecordingPlan() {
                       'inline-flex h-7 items-center gap-1 rounded-full border px-2.5 text-xs transition-colors',
                       active
                         ? 'border-primary bg-primary/10 font-medium text-primary'
-                        : 'border-zinc-700/60 text-muted-foreground hover:bg-accent hover:text-foreground'
+                        : 'border-border text-muted-foreground hover:bg-accent hover:text-foreground'
                     )}
                   >
                     {label}
@@ -473,9 +473,8 @@ export function RecordingPlan() {
                   </TableHead>
                   <TableHead>通道</TableHead>
                   <TableHead>名称</TableHead>
-                  <TableHead>录像方式</TableHead>
                   <TableHead>存储池</TableHead>
-                  <TableHead className='w-32'>结果</TableHead>
+                  <TableHead>录像方式</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

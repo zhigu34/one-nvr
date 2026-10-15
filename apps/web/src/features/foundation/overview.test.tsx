@@ -117,7 +117,17 @@ function fixture(
               enabled: true,
               is_default: true,
               version: 1,
-              checks: [],
+              checks: [
+                {
+                  service: 'api',
+                  state: 'healthy',
+                  observed_at: null,
+                  reason: 'read_write_delete_verified',
+                  total_bytes: 401.6 * 1024 * 1024 * 1024,
+                  free_bytes: 301.3 * 1024 * 1024 * 1024,
+                  filesystem_id: '',
+                },
+              ],
               state: 'ready',
               used_bytes: null,
             },
@@ -159,8 +169,10 @@ test('the four metric cards read live channel, detection and storage facts', asy
   // Detection card: the detector's own latency, not an invented rate.
   await expect.element(view.getByText('13.8ms 推理')).toBeVisible()
   await expect.element(view.getByText('cpu · 1 路检测中')).toBeVisible()
-  // Storage card: the default pool's state, never a bare "no data".
-  await expect.element(view.getByText('就绪')).toBeVisible()
+  // Storage card: capacity facts headline with the state as a side pill.
+  await expect.element(view.getByText(/301\.3 GiB/)).toBeVisible()
+  await expect.element(view.getByText(/共 401\.6 GiB/)).toBeVisible()
+  await expect.element(view.getByText('就绪').nth(0)).toBeVisible()
   // Site card aggregates enabled/healthy components.
   await expect.element(view.getByText('3/ 3 核心服务正常')).toBeVisible()
   setup.client.clear()

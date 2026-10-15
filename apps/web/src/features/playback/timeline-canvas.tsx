@@ -7,6 +7,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
 } from 'react'
+import { useTheme } from '@/context/theme-provider'
 import { formatClock } from './zone'
 import {
   entryAtAny,
@@ -47,6 +48,25 @@ const PLAYABLE = '#10b981'
 const BLOCKED = '#ef4444'
 const EVENT = '#f59e0b'
 const EVENT_OPEN = '#fbbf24'
+
+// Light mode draws on a pale track, so the density槽 and tick grid switch to
+// dark ink; the colored spans stay identical in both themes.
+const CANVAS_PALETTES = {
+  dark: {
+    densityTrack: 'rgba(255,255,255,0.05)',
+    tickDay: 'rgba(253,230,138,0.5)',
+    tick: 'rgba(253,230,138,0.25)',
+    labelDay: 'rgba(255,255,255,0.9)',
+    label: 'rgba(255,255,255,0.5)',
+  },
+  light: {
+    densityTrack: 'rgba(9,9,11,0.06)',
+    tickDay: 'rgba(9,9,11,0.35)',
+    tick: 'rgba(9,9,11,0.18)',
+    labelDay: 'rgba(9,9,11,0.85)',
+    label: 'rgba(9,9,11,0.5)',
+  },
+} as const
 
 export type TimelineCanvasProps = {
   timeline: TimelineData
@@ -113,6 +133,8 @@ export function TimelineCanvas({
   onZoomAt,
   onMoveView,
 }: TimelineCanvasProps) {
+  const { resolvedTheme } = useTheme()
+  const palette = CANVAS_PALETTES[resolvedTheme === 'light' ? 'light' : 'dark']
   const wrapRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const tooltipRef = useRef<HTMLDivElement>(null)
@@ -155,7 +177,7 @@ export function TimelineCanvas({
 
     // --- Density band: the whole searched window's coverage, merged spans
     // drawn as one continuous bar so this row reads "how much exists".
-    ctx.fillStyle = 'rgba(255,255,255,0.05)'
+    ctx.fillStyle = palette.densityTrack
     roundRect(ctx, 0, DENSITY_TOP, width, DENSITY_H, 3)
     ctx.fill()
     ctx.fillStyle = 'rgba(16,185,129,0.55)'
@@ -194,18 +216,14 @@ export function TimelineCanvas({
     for (let at = firstTick; at <= timeline.to; at += step * 1000) {
       const x = xFor(at, from, span, width)
       const isDay = new Date(at).getUTCHours() === 0
-      ctx.strokeStyle = isDay
-        ? 'rgba(253,230,138,0.5)'
-        : 'rgba(253,230,138,0.25)'
+      ctx.strokeStyle = isDay ? palette.tickDay : palette.tick
       ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(x + 0.5, TICKS_TOP)
       ctx.lineTo(x + 0.5, TICKS_TOP + TICKS_H + SEGMENTS_H + EVENTS_H)
       ctx.stroke()
       const label = formatClock(at, zone).slice(isDay ? 5 : 11)
-      ctx.fillStyle = isDay
-        ? 'rgba(255,255,255,0.9)'
-        : 'rgba(255,255,255,0.5)'
+      ctx.fillStyle = isDay ? palette.labelDay : palette.label
       const edge = x < 18 ? 'left' : x > width - 18 ? 'right' : 'center'
       ctx.textAlign = edge
       ctx.fillText(label, edge === 'left' ? 2 : edge === 'right' ? width - 2 : x, TICKS_TOP + 1)
@@ -251,7 +269,7 @@ export function TimelineCanvas({
       )
       ctx.fill()
     }
-  }, [width, merged, marks, timeline.from, timeline.to, from, span, selected, viewIsFull, zone])
+  }, [width, merged, marks, timeline.from, timeline.to, from, span, selected, viewIsFull, zone, palette])
 
   // Playhead position: derived, so the DOM cursor moves without a canvas
   // repaint and without layout thrash (transform only). Before the first

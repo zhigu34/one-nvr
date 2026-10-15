@@ -23,7 +23,7 @@ export function ThumbnailSlot({
       title={label}
       data-testid='channel-thumbnail'
       data-state={unconfigured ? 'unconfigured' : disabled ? 'disabled' : online ? 'online' : 'offline'}
-      className='flex h-8 w-14 shrink-0 items-center justify-center overflow-hidden rounded border border-zinc-800 bg-zinc-900'
+      className='flex h-8 w-14 shrink-0 items-center justify-center overflow-hidden rounded border border-zinc-200 bg-zinc-100 text-zinc-400 dark:border-zinc-800 dark:bg-zinc-900'
     >
       {src && !unconfigured ? (
         <img
@@ -37,7 +37,7 @@ export function ThumbnailSlot({
       ) : unconfigured ? (
         // The faintest possible slot: a dashed outline and a dash, so an
         // empty channel reads as "nothing here" without drawing the eye.
-        <span className='grid h-full w-full place-items-center border border-dashed border-zinc-800 text-[10px] leading-none text-zinc-700'>
+        <span className='grid h-full w-full place-items-center border border-dashed border-zinc-300 text-[10px] leading-none text-zinc-400 dark:border-zinc-800 dark:text-zinc-700'>
           —
         </span>
       ) : (

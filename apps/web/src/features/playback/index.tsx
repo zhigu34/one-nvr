@@ -609,7 +609,7 @@ function Workspace({
         <Button
           size='sm'
           variant={pickMode ? 'secondary' : 'ghost'}
-          className='h-7 px-2 text-xs text-video-chrome-foreground hover:bg-white/10'
+          className='h-7 px-2 text-xs text-video-chrome-foreground hover:bg-video-wash'
           aria-pressed={pickMode}
           disabled={noData}
           onClick={() => {
@@ -631,7 +631,7 @@ function Workspace({
             <Button
               size='sm'
               variant='ghost'
-              className='h-7 px-2 text-xs text-video-chrome-foreground hover:bg-white/10'
+              className='h-7 px-2 text-xs text-video-chrome-foreground hover:bg-video-wash'
               onClick={() => setBracket(null)}
             >
               清除区间
@@ -673,23 +673,23 @@ function Workspace({
         )}
         <div className='ml-auto flex items-center gap-0.5'>
           <Button size='sm' variant='ghost' aria-label='时间轴左移' disabled={!view || noData} onClick={() => pan(-1)}
-            className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-white/10 hover:text-video-chrome-foreground'>
+            className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-video-wash hover:text-video-chrome-foreground'>
             <ChevronLeft size={14} />
           </Button>
           <Button size='sm' variant='ghost' aria-label='时间轴放大' disabled={viewBounds.end - viewBounds.start <= 60_000 || noData} onClick={zoomIn}
-            className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-white/10 hover:text-video-chrome-foreground'>
+            className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-video-wash hover:text-video-chrome-foreground'>
             <ZoomIn size={14} />
           </Button>
           <Button size='sm' variant='ghost' aria-label='时间轴缩小' disabled={!view || noData} onClick={zoomOut}
-            className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-white/10 hover:text-video-chrome-foreground'>
+            className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-video-wash hover:text-video-chrome-foreground'>
             <ZoomOut size={14} />
           </Button>
           <Button size='sm' variant='ghost' aria-label='时间轴右移' disabled={!view || noData} onClick={() => pan(1)}
-            className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-white/10 hover:text-video-chrome-foreground'>
+            className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-video-wash hover:text-video-chrome-foreground'>
             <ChevronRight size={14} />
           </Button>
           <Button size='sm' variant='ghost' aria-label='显示完整范围' disabled={!view || noData} onClick={() => setView(null)}
-            className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-white/10 hover:text-video-chrome-foreground'>
+            className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-video-wash hover:text-video-chrome-foreground'>
             <Maximize2 size={14} />
           </Button>
           <span
@@ -785,11 +785,11 @@ function Workspace({
           播放位置
         </span>
         <div className='ml-auto flex flex-wrap items-center gap-2.5'>
-          <span><kbd className='rounded border border-video-border bg-white/10 px-1 py-px text-[10px] text-video-chrome-foreground/80'>Space</kbd> 播放/暂停</span>
-          <span><kbd className='rounded border border-video-border bg-white/10 px-1 py-px text-[10px] text-video-chrome-foreground/80'>←</kbd>/<kbd className='rounded border border-video-border bg-white/10 px-1 py-px text-[10px] text-video-chrome-foreground/80'>→</kbd> 跳 10 秒</span>
-          <span><kbd className='rounded border border-video-border bg-white/10 px-1 py-px text-[10px] text-video-chrome-foreground/80'>滚轮</kbd> 缩放</span>
-          <span><kbd className='rounded border border-video-border bg-white/10 px-1 py-px text-[10px] text-video-chrome-foreground/80'>拖动</kbd> 平移</span>
-          <span><kbd className='rounded border border-video-border bg-white/10 px-1 py-px text-[10px] text-video-chrome-foreground/80'>双击</kbd> 播放</span>
+          <span><kbd className='rounded border border-video-border bg-video-wash px-1 py-px text-[10px] text-video-chrome-foreground/80'>Space</kbd> 播放/暂停</span>
+          <span><kbd className='rounded border border-video-border bg-video-wash px-1 py-px text-[10px] text-video-chrome-foreground/80'>←</kbd>/<kbd className='rounded border border-video-border bg-video-wash px-1 py-px text-[10px] text-video-chrome-foreground/80'>→</kbd> 跳 10 秒</span>
+          <span><kbd className='rounded border border-video-border bg-video-wash px-1 py-px text-[10px] text-video-chrome-foreground/80'>滚轮</kbd> 缩放</span>
+          <span><kbd className='rounded border border-video-border bg-video-wash px-1 py-px text-[10px] text-video-chrome-foreground/80'>拖动</kbd> 平移</span>
+          <span><kbd className='rounded border border-video-border bg-video-wash px-1 py-px text-[10px] text-video-chrome-foreground/80'>双击</kbd> 播放</span>
         </div>
       </div>
     </div>
@@ -835,7 +835,7 @@ return (
           placeholder='搜索编号或名称'
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          className='h-8 border-video-border bg-white/5 text-video-chrome-foreground placeholder:text-video-chrome-foreground/40'
+          className='h-8 border-video-border bg-video-input text-video-chrome-foreground placeholder:text-video-chrome-foreground/40'
         />
         <div className='grid min-h-0 flex-1 content-start gap-0.5 overflow-y-auto max-lg:grid-flow-col max-lg:auto-cols-max max-lg:overflow-x-auto'>
           {filtered.map((channel) => (
@@ -844,8 +844,8 @@ return (
               variant='ghost'
               onClick={() => selectChannel(channel)}
               className={cn(
-                'h-8 w-full justify-start truncate px-2 text-left text-sm font-normal text-video-chrome-foreground hover:bg-white/10 hover:text-video-chrome-foreground',
-                channel.id === channelID && 'bg-white/15 font-medium'
+                'h-8 w-full justify-start truncate px-2 text-left text-sm font-normal text-video-chrome-foreground hover:bg-video-wash hover:text-video-chrome-foreground',
+                channel.id === channelID && 'bg-video-wash font-medium'
               )}
             >
               {label(channel)}
@@ -855,7 +855,7 @@ return (
         <Button
           asChild
           variant='ghost'
-          className='h-8 justify-start px-2 text-xs text-video-chrome-foreground/70 hover:bg-white/10 hover:text-video-chrome-foreground'
+          className='h-8 justify-start px-2 text-xs text-video-chrome-foreground/70 hover:bg-video-wash hover:text-video-chrome-foreground'
         >
           <Link to='/live' search={{ channel: '' }}>返回实时预览</Link>
         </Button>
@@ -895,7 +895,7 @@ return (
               onChange={(event) =>
                 setDraft({ ...draft, start: event.target.value })
               }
-              className='h-8 w-52 shrink-0 border-video-border bg-white/5 text-video-chrome-foreground [color-scheme:dark]'
+              className='h-8 w-52 shrink-0 border-video-border bg-video-input text-video-chrome-foreground [color-scheme:light] dark:[color-scheme:dark]'
               required
             />
             <span aria-hidden className='shrink-0 text-video-chrome-foreground/40'>→</span>
@@ -907,7 +907,7 @@ return (
               onChange={(event) =>
                 setDraft({ ...draft, end: event.target.value })
               }
-              className='h-8 w-52 shrink-0 border-video-border bg-white/5 text-video-chrome-foreground [color-scheme:dark]'
+              className='h-8 w-52 shrink-0 border-video-border bg-video-input text-video-chrome-foreground [color-scheme:light] dark:[color-scheme:dark]'
               required
             />
             <Button type='submit' size='sm' className='h-8 shrink-0'>检索录像</Button>
@@ -918,7 +918,7 @@ return (
                   type='button'
                   size='sm'
                   variant='ghost'
-                  className='h-8 whitespace-nowrap px-2 text-xs text-video-chrome-foreground/80 hover:bg-white/10 hover:text-video-chrome-foreground'
+                  className='h-8 whitespace-nowrap px-2 text-xs text-video-chrome-foreground/80 hover:bg-video-wash hover:text-video-chrome-foreground'
                   onClick={() => applyRange(quickRange(kind, Date.now(), zone))}
                 >
                   {name}
@@ -939,7 +939,7 @@ return (
                   search={{ channel: '' }}
                   aria-label='返回实时预览'
                   title='返回实时预览'
-                  className='inline-flex h-8 items-center gap-1 rounded-md border border-video-border bg-video-surface-raised px-2 text-xs text-video-chrome-foreground/80 hover:bg-white/10 hover:text-video-chrome-foreground'
+                  className='inline-flex h-8 items-center gap-1 rounded-md border border-video-border bg-video-surface-raised px-2 text-xs text-video-chrome-foreground/80 hover:bg-video-wash hover:text-video-chrome-foreground'
                 >
                   <ArrowLeft className='size-3.5' />
                   实时预览
@@ -951,7 +951,7 @@ return (
                       aria-label='查看文件'
                       title='查看文件'
                       onClick={toolbar.onOpenFilesSheet}
-                      className='inline-flex h-8 items-center gap-1.5 rounded-md border border-video-border bg-video-surface-raised px-2 text-xs text-video-chrome-foreground hover:bg-white/10'
+                      className='inline-flex h-8 items-center gap-1.5 rounded-md border border-video-border bg-video-surface-raised px-2 text-xs text-video-chrome-foreground hover:bg-video-wash'
                     >
                       文件 ({toolbar.filesCount ?? '…'}段)
                     </button>
@@ -966,7 +966,7 @@ return (
                         'inline-flex h-8 items-center gap-1.5 rounded-md border px-2 text-xs transition-colors',
                         toolbar.filesOpen
                           ? 'border-zinc-600 bg-zinc-800 text-white'
-                          : 'border-video-border bg-video-surface-raised text-video-chrome-foreground hover:bg-white/10'
+                          : 'border-video-border bg-video-surface-raised text-video-chrome-foreground hover:bg-video-wash'
                       )}
                     >
                       文件 ({toolbar.filesCount ?? '…'}段)
@@ -1122,7 +1122,7 @@ return (
               <Button
                 size='icon'
                 variant='ghost'
-                className='size-8 text-white hover:bg-white/15 hover:text-white'
+                className='size-8 text-white hover:bg-white/15'
                 aria-label={state.phase === 'playing' ? '暂停' : '播放'}
                 title={state.phase === 'playing' ? '暂停' : '播放'}
                 onClick={() => {
@@ -1146,7 +1146,7 @@ return (
               <Button
                 size='icon'
                 variant='ghost'
-                className='size-8 text-white hover:bg-white/15 hover:text-white'
+                className='size-8 text-white hover:bg-white/15'
                 aria-label='-10 秒'
                 title='-10 秒'
                 disabled={noData}
@@ -1157,7 +1157,7 @@ return (
               <Button
                 size='icon'
                 variant='ghost'
-                className='size-8 text-white hover:bg-white/15 hover:text-white'
+                className='size-8 text-white hover:bg-white/15'
                 aria-label='+10 秒'
                 title='+10 秒'
                 disabled={noData}
@@ -1168,7 +1168,7 @@ return (
               <Button
                 size='icon'
                 variant='ghost'
-                className='size-8 text-white hover:bg-white/15 hover:text-white'
+                className='size-8 text-white hover:bg-white/15'
                 aria-label='下一可用片段'
                 title='下一可用片段'
                 disabled={noData}
@@ -1179,7 +1179,7 @@ return (
               <Button
                 size='icon'
                 variant='ghost'
-                className='size-8 text-white hover:bg-white/15 hover:text-white'
+                className='size-8 text-white hover:bg-white/15'
                 aria-label='停止'
                 title='停止'
                 disabled={noData}
@@ -1198,7 +1198,7 @@ return (
               <Button
                 size='icon'
                 variant='ghost'
-                className='size-8 text-white hover:bg-white/15 hover:text-white'
+                className='size-8 text-white hover:bg-white/15'
                 aria-label='截图'
                 title='截图（保存当前画面为 PNG）'
                 disabled={!state.entry}
@@ -1230,7 +1230,7 @@ return (
               <Button
                 size='icon'
                 variant='ghost'
-                className='size-8 text-white hover:bg-white/15 hover:text-white'
+                className='size-8 text-white hover:bg-white/15'
                 aria-label='放大'
                 title='全屏'
                 onClick={() =>
@@ -1279,7 +1279,7 @@ return (
                   <Button
                     size='sm'
                     variant='outline'
-                    className='h-6 border-white/20 px-2 text-xs text-white hover:bg-white/10'
+                    className='h-6 border-white/20 px-2 text-xs text-white hover:bg-white/15'
                     onClick={() => controller.current?.jumpToNext()}
                   >
                     跳到下一可用片段

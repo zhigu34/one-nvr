@@ -316,7 +316,7 @@ function ChannelsRail({
           placeholder='搜索编号或名称'
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          className='h-8 border-video-border bg-white/5 pl-7 text-video-chrome-foreground placeholder:text-video-chrome-foreground/40'
+          className='h-8 border-video-border bg-video-input pl-7 text-video-chrome-foreground placeholder:text-video-chrome-foreground/40'
         />
       </div>
       <div className='flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto'>
@@ -402,8 +402,8 @@ function ChannelRow({
       aria-pressed={active}
       aria-label={label}
       className={cn(
-        'flex h-8 items-center gap-2 truncate rounded px-2 text-left text-sm text-video-chrome-foreground hover:bg-white/10',
-        active && 'bg-white/15 font-medium text-video-chrome-foreground',
+        'flex h-8 items-center gap-2 truncate rounded px-2 text-left text-sm text-video-chrome-foreground hover:bg-video-wash',
+        active && 'bg-video-wash font-medium text-video-chrome-foreground',
         segments === 0 && 'text-video-chrome-foreground/50'
       )}
     >
@@ -412,7 +412,7 @@ function ChannelRow({
         title={dot.title}
         className={cn('inline-block size-1.5 shrink-0 rounded-full', dot.cls)}
       />
-      <span className='inline-grid min-w-6 place-items-center rounded bg-white/10 px-1 py-0.5 text-[10px] font-semibold tabular-nums'>
+      <span className='inline-grid min-w-6 place-items-center rounded bg-video-wash px-1 py-0.5 text-[10px] font-semibold tabular-nums'>
         {label.slice(2, 4)}
       </span>
       <span className='flex-1 truncate'>{name}</span>
@@ -427,7 +427,7 @@ function ChannelRow({
       {group && (
         <span
           title={`分组 · ${group}`}
-          className='rounded bg-white/10 px-1 py-0.5 text-[10px] text-video-chrome-foreground/60'
+          className='rounded bg-video-wash px-1 py-0.5 text-[10px] text-video-chrome-foreground/60'
         >
           {group}
         </span>

@@ -92,7 +92,7 @@ export function ZoneWorkbench({
   }
 
   return (
-    <div className='grid grid-cols-12 gap-4 border-t border-zinc-800/80 pt-3'>
+    <div className='grid grid-cols-12 gap-4 border-t border-border pt-3'>
       <div className='col-span-12 lg:col-span-7'>
         <div className='mb-2 flex flex-wrap items-center gap-2'>
           <Button
@@ -230,7 +230,7 @@ export function ZoneCanvas({
       <div
         data-testid='zone-canvas'
         className={cn(
-          'relative w-full overflow-hidden rounded-lg border border-zinc-800 bg-black',
+          'relative w-full overflow-hidden rounded-lg border border-zinc-200 bg-black dark:border-zinc-800',
           !inert && 'cursor-crosshair',
           inert && 'pointer-events-none opacity-40'
         )}

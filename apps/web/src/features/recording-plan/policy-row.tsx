@@ -6,7 +6,7 @@ import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { TableCell, TableRow } from '@/components/ui/table'
-import { Notices, SelectField } from '@/features/foundation/ui'
+import { SelectField } from '@/features/foundation/ui'
 import { StatusBadge } from '@/features/foundation/status-badge'
 import { sourceCommand } from '@/features/channels/api'
 import { settleJob, verifyPoolWrite } from '@/features/storage-pools/pool-check'
@@ -66,6 +66,7 @@ export function PolicyRow({
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
   const [succeeded, setSucceeded] = useState('')
+  const [errorFrom, setErrorFrom] = useState<'policy' | 'pool' | ''>('')
   const controller = useRef<AbortController | null>(null)
   useEffect(() => () => controller.current?.abort(), [])
 
@@ -152,6 +153,7 @@ export function PolicyRow({
       if (abort.signal.aborted) return null
       if (!verified.ok) {
         setError(verified.message)
+        setErrorFrom(kind)
         return null
       }
       setNotice('验证通过，正在继续…')
@@ -165,6 +167,7 @@ export function PolicyRow({
     controller.current = abort
     setPending(kind)
     setError('')
+    setErrorFrom(kind)
     setNotice('')
     setSucceeded('')
     try {
@@ -216,9 +219,13 @@ export function PolicyRow({
         setSucceeded(kind)
       } else if (settled.state === 'failed') {
         setError(settled.message || '任务失败')
+        setErrorFrom(kind)
       }
     } catch (e) {
-      if (!abort.signal.aborted) setError(message(e))
+      if (!abort.signal.aborted) {
+        setError(message(e))
+        setErrorFrom(kind)
+      }
     } finally {
       if (!abort.signal.aborted) setPending('')
     }
@@ -258,47 +265,6 @@ export function PolicyRow({
             {badge && (
               <span className='inline-flex shrink-0'>
                 <StatusBadge tone={badge.tone}>{badge.text}</StatusBadge>
-              </span>
-            )}
-          </div>
-        )}
-      </TableCell>
-      <TableCell>
-        {inert ? (
-          <span className='text-xs text-zinc-600'>—</span>
-        ) : (
-          <div className='flex items-center gap-2'>
-            <SelectField
-              ariaLabel={`${label} 录像方式`}
-              className='text-sm'
-              value={mode}
-              disabled={!!pending}
-              onValueChange={setDraftMode}
-              options={[
-                { value: 'none', label: '关闭录像' },
-                { value: 'continuous', label: '手动（连续录像）' },
-                ...PLANNED_MODES.map((entry) => ({
-                  value: entry.value,
-                  label: entry.label,
-                  disabled: true,
-                })),
-              ]}
-            />
-            <Button
-              type='button'
-              size='sm'
-              className={cn(modeDirty && 'bg-emerald-500 text-zinc-950 font-medium hover:bg-emerald-400')}
-              disabled={!!pending || !modeDirty || mode === 'continuous' && !boundPool && draftPool === null}
-              onClick={() => void run('policy')}
-            >
-              应用
-            </Button>
-            {succeeded === 'policy' && (
-              <span
-                data-testid='applied-policy'
-                className='inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-400'
-              >
-                ✓ 已生效
               </span>
             )}
           </div>
@@ -358,14 +324,65 @@ export function PolicyRow({
         ) : (
           <span className='text-sm text-muted-foreground'>{poolName}</span>
         )}
+        {errorFrom === 'pool' && error && succeeded !== 'pool' && (
+          <p role='alert' className='mt-1 text-xs text-red-500'>
+            ✕ {error}
+          </p>
+        )}
+        {errorFrom === 'pool' && !error && notice && (
+          <p className='mt-1 text-xs text-muted-foreground'>{notice}</p>
+        )}
       </TableCell>
       <TableCell>
-        <Notices error={error} notice={notice} />
+        {inert ? (
+          <span className='text-xs text-zinc-600'>—</span>
+        ) : (
+          <div className='flex items-center gap-2'>
+            <SelectField
+              ariaLabel={`${label} 录像方式`}
+              className='text-sm'
+              value={mode}
+              disabled={!!pending}
+              onValueChange={setDraftMode}
+              options={[
+                { value: 'none', label: '关闭录像' },
+                { value: 'continuous', label: '手动（连续录像）' },
+                ...PLANNED_MODES.map((entry) => ({
+                  value: entry.value,
+                  label: entry.label,
+                  disabled: true,
+                })),
+              ]}
+            />
+            <Button
+              type='button'
+              size='sm'
+              className={cn(modeDirty && 'bg-emerald-500 text-zinc-950 font-medium hover:bg-emerald-400')}
+              disabled={!!pending || !modeDirty || mode === 'continuous' && !boundPool && draftPool === null}
+              onClick={() => void run('policy')}
+            >
+              应用
+            </Button>
+            {succeeded === 'policy' && (
+              <span
+                data-testid='applied-policy'
+                className='inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-400'
+              >
+                ✓ 已生效
+              </span>
+            )}
+            {errorFrom === 'policy' && error && (
+              <span className='text-xs text-red-500' role='alert'>
+                ✕ {error}
+              </span>
+            )}
+            {errorFrom === 'policy' && !error && notice && succeeded !== 'policy' && (
+              <span className='text-xs text-muted-foreground'>{notice}</span>
+            )}
         {mode === 'continuous' && !boundPool && draftPool === null && !inert && (
           <p className='text-xs text-amber-600'>请先绑定存储池</p>
         )}
-        {inert && (
-          <p className='text-xs text-muted-foreground'>请先在通道管理接入摄像头</p>
+          </div>
         )}
       </TableCell>
     </TableRow>

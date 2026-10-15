@@ -258,7 +258,7 @@ export function Events() {
       />
       {!!zone && !!permitted.length && (
         <>
-          <div className='flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-900/70 px-3.5 py-2.5'>
+          <div className='flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-3.5 py-2.5'>
             <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
               <div className='flex items-center gap-2'>
                 <span className='text-xs text-muted-foreground'>通道:</span>
@@ -312,7 +312,7 @@ export function Events() {
                         'inline-flex h-7 items-center rounded-full border px-2.5 text-xs transition-colors',
                         isActive
                           ? 'border-primary bg-primary/10 font-medium text-primary'
-                          : 'border-zinc-700/60 text-muted-foreground hover:bg-accent hover:text-foreground'
+                          : 'border-border text-muted-foreground hover:bg-accent hover:text-foreground'
                       )}
                     >
                       {label}
@@ -467,7 +467,7 @@ export function Events() {
                   </div>
                   <div className='flex items-center justify-between gap-2 px-3 py-2.5 text-xs'>
                     <div className='flex min-w-0 items-center gap-1.5'>
-                      <span className='shrink-0 rounded-md bg-zinc-800/80 px-1.5 py-0.5 font-medium text-zinc-300'>
+                      <span className='shrink-0 rounded-md bg-muted px-1.5 py-0.5 font-medium text-foreground'>
                         {channelLabel}
                       </span>
                       {item.zones?.length ? (
@@ -485,7 +485,7 @@ export function Events() {
                           'inline-flex items-center rounded-full border px-1.5 py-px tabular-nums',
                           ongoing
                             ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
-                            : 'border-zinc-700/60 text-zinc-400'
+                            : 'border-border text-muted-foreground'
                         )}
                       >
                         {durationText(item, now)}
