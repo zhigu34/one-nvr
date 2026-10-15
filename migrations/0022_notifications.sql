@@ -62,6 +62,10 @@ CREATE INDEX notifications_unread ON notifications(created_at DESC) WHERE read_a
 CREATE INDEX notifications_event ON notifications(event_id);
 -- Cooldown lookups ask "was this rule on this channel told recently?".
 CREATE INDEX notifications_cooldown ON notifications(rule_id,channel_id,created_at DESC) WHERE rule_id IS NOT NULL;
+-- AI-05 at the telling end: one logical hit is told once. A repeated MQTT
+-- update of the same event refreshes the hit's reason but must not raise a
+-- second notification, so the fence lives here rather than in a caller flag.
+CREATE UNIQUE INDEX notifications_one_per_hit ON notifications(hit_id) WHERE hit_id IS NOT NULL;
 
 CREATE TABLE notification_deliveries (
   id uuid PRIMARY KEY,

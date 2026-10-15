@@ -406,9 +406,18 @@ func (s *Service) evaluateRules(ctx context.Context, tx pgx.Tx, event Event) err
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO event_rule_hits(id,event_id,rule_id,zone_name,reason) VALUES($1,$2,$3,$4,$5)
-			ON CONFLICT (event_id,rule_id) DO UPDATE SET reason=EXCLUDED.reason,zone_name=EXCLUDED.zone_name`,
-			hitID, event.ID, rule.ID, entry.zoneName, reason); err != nil {
+		// RETURNING hands back the row that actually exists: a refreshed hit
+		// keeps its original id, which is what the notification fence keys on.
+		if err := tx.QueryRow(ctx, `INSERT INTO event_rule_hits(id,event_id,rule_id,zone_name,reason) VALUES($1,$2,$3,$4,$5)
+			ON CONFLICT (event_id,rule_id) DO UPDATE SET reason=EXCLUDED.reason,zone_name=EXCLUDED.zone_name
+			RETURNING id`,
+			hitID, event.ID, rule.ID, entry.zoneName, reason).Scan(&hitID); err != nil {
+			return err
+		}
+		// Telling the operator happens in the same transaction that records the
+		// hit, so the two cannot disagree: an event that tripped a rule and the
+		// fact that someone was told about it commit together.
+		if err := s.raiseNotification(ctx, tx, event, rule, entry.zoneName, hitID); err != nil {
 			return err
 		}
 	}

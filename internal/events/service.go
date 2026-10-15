@@ -17,6 +17,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/database"
 	"github.com/zhigu34/one-nvr/internal/fault"
 	"github.com/zhigu34/one-nvr/internal/id"
+	"github.com/zhigu34/one-nvr/internal/notify"
 )
 
 // EventIndexRetention is EVT-07's window: a finished ordinary event expires
@@ -73,6 +74,16 @@ type Service struct {
 	Frigate string // base URL of the Frigate HTTP API, empty when disabled
 	siteID  id.ID
 	now     func() time.Time
+	// Notify raises a notification for each rule hit. It is optional by design:
+	// an assembly that only records hits — and every test that exercises rule
+	// matching alone — leaves it nil, and the hit is still recorded. Telling the
+	// operator is an extension of recording, never a precondition for it.
+	Notify interface {
+		Raise(ctx context.Context, tx pgx.Tx, facts notify.HitFacts) (notify.Raised, error)
+	}
+	// PublicURL is the site's external address, used to make the links inside a
+	// notification absolute for receivers that are not this browser.
+	PublicURL string
 	// zone caches the site location for rule arming windows: ingestion
 	// evaluates rules for every event, and the zone changes at most once in a
 	// deployment's life.
