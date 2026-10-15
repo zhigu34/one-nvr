@@ -287,8 +287,8 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   // published segment, through the real gateway.
   await page.goto('/recordings')
   // One "recordings" entry holds playback and file management on the same
-  // dark surface; the playback console is the visible entry point.
-  await expect(page.getByRole('heading', {name: '录像', exact: true})).toBeVisible()
+  // dark surface; the playback console is the visible entry point. The page
+  // title row was removed, so the console (not a heading) is the anchor.
   await expect(page.getByTestId('playback-console')).toBeVisible()
   await page.getByRole('button', {name: 'CH01 通道 01', exact: true}).click()
   // The index must reach the timeline: the canvas strip mounts and the
