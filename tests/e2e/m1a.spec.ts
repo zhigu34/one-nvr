@@ -152,9 +152,11 @@ test('directoryPoolKeepsPendingZLMStatus', async ({page}) => {
   expect(process.env.ONE_NVR_E2E_POOL, 'requires isolated Docker pool fixture').toBe('yes')
   await login(page)
   await page.goto('/storage-pools')
+  // The add form is collapsed behind a toggle now; open it before filling.
+  await page.getByRole('button',{name:'添加存储池',exact:true}).click()
   await page.getByLabel('存储池名称',{exact:true}).fill('验证池')
   await page.getByLabel('挂载目录',{exact:true}).fill('/storage/pool1')
-  await page.getByRole('button',{name:'添加存储池',exact:true}).click()
+  await page.getByRole('button',{name:'确认添加',exact:true}).click()
   await expect(page.getByText('存储池已登记')).toBeVisible()
   await expect(page.getByText('等待摄像头连接测试')).toBeVisible()
   await page.reload()

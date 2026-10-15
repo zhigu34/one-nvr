@@ -136,9 +136,11 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   const status = () => get<Status>(page, `channels/${channel.id}/source/status`)
   const recordings = () => get<{items: {id: string; state: string; source_revision_id: string; pool_id: string; bytes: number; start: string; end: string}[]}>(page, 'recordings?' + new URLSearchParams({channel_id: channel.id, start: new Date(Date.now() - 3600000).toISOString(), end: new Date(Date.now() + 60000).toISOString()}))
   await page.goto('/storage-pools')
+  // The add form is collapsed behind a toggle now; open it before filling.
+  await page.getByRole('button', {name: '添加存储池', exact: true}).click()
   await page.getByLabel('存储池名称', {exact: true}).fill('真实媒体池')
   await page.getByLabel('挂载目录', {exact: true}).fill('/storage/pool1')
-  await page.getByRole('button', {name: '添加存储池', exact: true}).click()
+  await page.getByRole('button', {name: '确认添加', exact: true}).click()
   await expect(page.getByText('存储池已登记')).toBeVisible()
   const pool = (await get<{items: {id: string}[]}>(page, 'storage-pools')).items[0]
   await page.goto('/channels/configure?channel=' + channel.id)
@@ -174,9 +176,15 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   await expect(mediaInfo).toBeVisible({timeout: 20000})
   await expect(mediaInfo).toContainText(/×\d+/)
   await expect(mediaInfo).toContainText('直通')
-  // The picture box follows the decoded stream proportions (not a fixed
-  // 16:9), which is what removes the black bars for non-16:9 cameras.
-  await expect(tile.getByTestId('live-video-area')).toHaveAttribute('style', /aspect-ratio/)
+  // The grid cell governs the picture box and object-contain letterboxes any
+  // stream shape inside it, so no inline aspect-ratio is injected. Assert the
+  // current contract: the box is mounted and the video fills it.
+  const videoArea = tile.getByTestId('live-video-area')
+  await expect(videoArea).toBeVisible()
+  await expect(videoArea).not.toHaveAttribute('style', /aspect-ratio/)
+  const box = await videoArea.boundingBox()
+  expect(box?.width ?? 0).toBeGreaterThan(0)
+  expect(box?.height ?? 0).toBeGreaterThan(0)
   await expect.poll(async()=>video.evaluate((el:HTMLVideoElement)=>el.getVideoPlaybackQuality().totalVideoFrames),{timeout:10000}).toBeGreaterThan(5)
   await page.getByRole('button',{name:'4 画面',exact:true}).click()
   await expect(page.getByRole('region',{name:/预览 CH|空闲画面/})).toHaveCount(4)
