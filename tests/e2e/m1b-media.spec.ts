@@ -291,16 +291,19 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   // title row was removed, so the console (not a heading) is the anchor.
   await expect(page.getByTestId('playback-console')).toBeVisible()
   await page.getByRole('button', {name: 'CH01 通道 01', exact: true}).click()
+  // Register before the index lands: selecting a channel auto-parks on the
+  // first available segment, which is itself an authorized /content read that
+  // must be observed. Waiting for the canvas first would miss it.
+  const contentResponses: {range: string; status: number}[] = []
+  page.on('response', response => {
+    if (response.url().endsWith('/content')) contentResponses.push({range: response.request().headers()['range'] || '', status: response.status()})
+  })
   // The index must reach the timeline: the canvas strip mounts and the
   // band's density read counts the fetched segments. A short segment inside
   // a 24 hour window is only a few pixels wide, so playback is started from
   // the control instead of a click on the bar.
   await expect(page.getByTestId('playback-timeline-canvas')).toBeVisible()
   await expect.poll(async () => page.getByTestId('playback-timeline-density').textContent(), {timeout: 30000, message: 'the recording index must reach the timeline'}).toMatch(/密度\s*[1-9]/)
-  const contentResponses: {range: string; status: number}[] = []
-  page.on('response', response => {
-    if (response.url().endsWith('/content')) contentResponses.push({range: response.request().headers()['range'] || '', status: response.status()})
-  })
   await page.getByRole('button', {name: '播放', exact: true}).click()
   const playback = page.getByTestId('playback-video')
   await expect.poll(async () => playback.evaluate((el: HTMLVideoElement) => el.getVideoPlaybackQuality().totalVideoFrames), {timeout: 60000, message: 'the published recording must decode in the browser'}).toBeGreaterThan(2)
