@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
+import { CheckCheck, Play, User } from 'lucide-react'
 import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
@@ -15,10 +16,11 @@ import {
 import { useAPI } from '@/features/foundation/hooks'
 import { apiErrorText } from '@/features/foundation/api-errors'
 import { LoadingButton } from '@/features/foundation/loading-button'
-import { StatusBadge, type StatusTone } from '@/features/foundation/status-badge'
+import { StatusBadge } from '@/features/foundation/status-badge'
 import { CardsSkeleton } from '@/features/foundation/skeletons'
 import { Empty, QueryState, SelectField } from '@/features/foundation/ui'
-import { formatClock, formatMinute, wallClockInput } from '@/features/playback/zone'
+import { formatClock, formatMinute, wallClockInput, zoneParts } from '@/features/playback/zone'
+import { cn } from '@/lib/utils'
 
 type Event = Schema<'Event'>
 type Channel = Schema<'Channel'>
@@ -28,14 +30,6 @@ const HANDLE_LABELS: Record<string, string> = {
   acknowledged: '已确认',
   closed: '已关闭',
   false_positive: '误报',
-}
-
-/** The one place mapping handling state to the shared badge vocabulary. */
-const HANDLE_TONES: Record<string, StatusTone> = {
-  open: 'warning',
-  acknowledged: 'success',
-  closed: 'neutral',
-  false_positive: 'info',
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -62,6 +56,47 @@ const KIND_LABELS: Record<string, string> = {
 }
 
 /**
+ * An MQTT `end` message can be lost. An event without an end that started
+ * more than five minutes ago is closed for display purposes: showing
+ * "进行中" and "抓拍生成中" on an hour-old row tells the operator a lie about
+ * a dead stream. Five minutes is far beyond any real detection.
+ */
+const ONGOING_MAX_AGE_MS = 5 * 60_000
+
+function isOngoing(item: Event, now: number) {
+  if (item.ended_at) return false
+  const start = Date.parse(item.started_at ?? '')
+  return Number.isFinite(start) && now - start < ONGOING_MAX_AGE_MS
+}
+
+/** Duration pill text: seconds while short, m:ss beyond a minute. */
+function durationText(item: Event, now: number) {
+  if (isOngoing(item, now)) return '● 进行中'
+  const end = item.ended_at ? Date.parse(item.ended_at) : NaN
+  if (Number.isFinite(end)) {
+    const seconds = Math.max(1, Math.round((end - Date.parse(item.started_at ?? '')) / 1000))
+    return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m${pad(seconds % 60)}s`
+  }
+  return '已结束'
+}
+
+function pad(value: number) {
+  return String(value).padStart(2, '0')
+}
+
+/** Card timestamp: today's events show only the clock, earlier ones the date too. */
+function cardTimestamp(startedAt: string | undefined, zone: string, now: number) {
+  const epoch = Date.parse(startedAt ?? '')
+  if (!Number.isFinite(epoch)) return '—'
+  const parts = zoneParts(epoch, zone)
+  const today = zoneParts(now, zone)
+  const sameDay =
+    parts.year === today.year && parts.month === today.month && parts.day === today.day
+  const clock = `${pad(parts.hour)}:${pad(parts.minute)}:${pad(parts.second)}`
+  return sameDay ? clock : `${pad(parts.month)}-${pad(parts.day)} ${clock}`
+}
+
+/**
  * hitReasonText renders the facts frozen at match time. They explain the
  * decision even after the rule was later edited, which is why the reason is
  * shown instead of being recomputed from the current rule.
@@ -78,10 +113,10 @@ function hitReasonText(hit: Schema<'RuleHit'>) {
 }
 
 /**
- * M3 batch 1: the event center (EVT-01/02/03). List + snapshot cards, a
- * detail drawer with the handling trail, and a jump into playback for the
- * event window. Media states are shown separately from handling state — an
- * event without a retained snapshot is not a handled event.
+ * M3 batch 1: the event center (EVT-01/02/03). A dense card gallery with
+ * hover shortcuts, a compact one-line filter bar, and a detail drawer with
+ * the handling trail. Media states are shown separately from handling state —
+ * an event without a retained snapshot is not a handled event.
  */
 export function Events() {
   const site = useAPI<Schema<'Site'>>('/api/v1/site')
@@ -91,11 +126,22 @@ export function Events() {
   const permitted = (channels.data?.items || []).filter((channel) =>
     channel.permissions.includes('playback')
   )
+  const channelOf = new Map(
+    permitted.map((channel) => [channel.id ?? '', channel])
+  )
   const [channel, setChannel] = useState('')
   const [category, setCategory] = useState('')
   const [handleState, setHandleState] = useState('')
   const [selected, setSelected] = useState<string>('')
   const [openingEvent, setOpeningEvent] = useState<string>('')
+  // The ticking clock drives the ongoing/closed decision; one refresh a
+  // minute is plenty for a five-minute threshold.
+  const [now, setNow] = useState(() => Date.now())
+  // The minute tick retires stale "进行中" rows without a refetch.
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60_000)
+    return () => clearInterval(timer)
+  }, [])
   // Honest paging: the contract returns a cursor; "load more" appends pages
   // until the backend says the window is exhausted. Nothing is hidden. The
   // appended pages belong to one filter combination — changing any filter
@@ -152,6 +198,46 @@ export function Events() {
     if (!more.data) return
     setPages((current) => [...current, more.data!])
   }
+  const client = useQueryClient()
+  const [markAllPending, setMarkAllPending] = useState(false)
+  const [markAllError, setMarkAllError] = useState('')
+  const openCount = items.filter((item) => item.handle_state === 'open').length
+
+  // One request per open event, sequentially: a mass transition is a rare
+  // cleanup, and each row's version travels with its own PATCH.
+  async function markAllHandled() {
+    setMarkAllPending(true)
+    setMarkAllError('')
+    try {
+      for (const item of items.filter((entry) => entry.handle_state === 'open')) {
+        await apiRequest(
+          `/api/v1/events/${item.id}`,
+          jsonRequest('PATCH', {
+            state: 'acknowledged',
+            note: '',
+            version: item.version ?? 0,
+          })
+        )
+      }
+      await client.invalidateQueries()
+    } catch (cause) {
+      setMarkAllError(apiErrorText(cause))
+    } finally {
+      setMarkAllPending(false)
+    }
+  }
+
+  async function markOneHandled(item: Event) {
+    await apiRequest(
+      `/api/v1/events/${item.id}`,
+      jsonRequest('PATCH', {
+        state: 'acknowledged',
+        note: '',
+        version: item.version ?? 0,
+      })
+    )
+    await client.invalidateQueries()
+  }
 
   if (!permitted.length && channels.data)
     return <Empty>没有可查看事件的通道，请联系管理员分配录像回放权限。</Empty>
@@ -161,7 +247,7 @@ export function Events() {
       <div>
         <h1 className='text-2xl font-semibold tracking-tight'>事件</h1>
         <p className='mt-1 text-sm text-muted-foreground'>
-          智能检测事件（最近 7 天）。事件索引保留 90 天，抓拍与录像按各自的保留策略；点击事件可查看抓拍并跳到对应录像。
+          智能检测事件（最近 7 天），点击卡片查看抓拍与处理详情。
           {zone ? ` 时间按站点时区 ${zone} 显示。` : ''}
         </p>
       </div>
@@ -172,40 +258,89 @@ export function Events() {
       />
       {!!zone && !!permitted.length && (
         <>
-          <div className='flex flex-wrap items-end gap-3 rounded-xl border bg-card p-4'>
-            <SelectField
-              label='通道'
-              value={channel}
-              onValueChange={(next) => setChannel(next ?? '')}
-              options={[
-                { value: '', label: '全部通道' },
-                ...permitted.map((channel) => ({
-                  value: channel.id ?? '',
-                  label: `CH${String(channel.channel_no ?? 0).padStart(2, '0')} ${channel.channel_name}`,
-                })),
-              ]}
-              className='w-44'
-            />
-            <SelectField
-              label='类别'
-              value={category}
-              onValueChange={(next) => setCategory(next ?? '')}
-              options={[
-                { value: '', label: '全部' },
-                ...Object.entries(CATEGORY_LABELS).map(([value, label]) => ({ value, label })),
-              ]}
-              className='w-28'
-            />
-            <SelectField
-              label='处理状态'
-              value={handleState}
-              onValueChange={(next) => setHandleState(next ?? '')}
-              options={[
-                { value: '', label: '全部' },
-                ...Object.entries(HANDLE_LABELS).map(([value, label]) => ({ value, label })),
-              ]}
-              className='w-32'
-            />
+          <div className='flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-900/70 px-3.5 py-2.5'>
+            <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
+              <div className='flex items-center gap-2'>
+                <span className='text-xs text-muted-foreground'>通道:</span>
+                <SelectField
+                  ariaLabel='通道筛选'
+                  value={channel}
+                  onValueChange={(next) => setChannel(next ?? '')}
+                  options={[
+                    { value: '', label: '全部通道' },
+                    ...permitted.map((channel) => ({
+                      value: channel.id ?? '',
+                      label: `CH${String(channel.channel_no ?? 0).padStart(2, '0')} ${channel.channel_name}`,
+                    })),
+                  ]}
+                  className='w-40'
+                />
+              </div>
+              <div className='flex items-center gap-2'>
+                <span className='text-xs text-muted-foreground'>类别:</span>
+                <SelectField
+                  ariaLabel='类别筛选'
+                  value={category}
+                  onValueChange={(next) => setCategory(next ?? '')}
+                  options={[
+                    { value: '', label: '全部' },
+                    ...Object.entries(CATEGORY_LABELS).map(([value, label]) => ({ value, label })),
+                  ]}
+                  className='w-24'
+                />
+              </div>
+              <div
+                role='group'
+                aria-label='处理状态筛选'
+                className='flex items-center gap-1'
+              >
+                {(
+                  [
+                    { value: '', label: '全部' },
+                    { value: 'open', label: '未处理' },
+                    { value: 'acknowledged', label: '已处理' },
+                  ] as const
+                ).map(({ value, label }) => {
+                  const isActive = handleState === value
+                  return (
+                    <button
+                      key={value || 'all'}
+                      type='button'
+                      aria-pressed={isActive}
+                      onClick={() => setHandleState(value)}
+                      className={cn(
+                        'inline-flex h-7 items-center rounded-full border px-2.5 text-xs transition-colors',
+                        isActive
+                          ? 'border-primary bg-primary/10 font-medium text-primary'
+                          : 'border-zinc-700/60 text-muted-foreground hover:bg-accent hover:text-foreground'
+                      )}
+                    >
+                      {label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+            <div className='flex flex-wrap items-center gap-3'>
+              {markAllError && (
+                <span role='alert' className='text-xs text-destructive'>
+                  {markAllError}
+                </span>
+              )}
+              <span className='text-xs tabular-nums text-muted-foreground'>
+                已加载 {items.length} 条
+              </span>
+              <Button
+                type='button'
+                size='sm'
+                variant='outline'
+                disabled={markAllPending || openCount === 0}
+                onClick={() => void markAllHandled()}
+              >
+                <CheckCheck aria-hidden className='size-3.5' />
+                {markAllPending ? '标记中…' : `全部标为已处理${openCount ? ` (${openCount})` : ''}`}
+              </Button>
+            </div>
           </div>
           <QueryState
             pending={events.isPending}
@@ -217,48 +352,149 @@ export function Events() {
             skeleton={<CardsSkeleton />}
           />
           {events.data && !items.length && <Empty>该筛选范围内没有事件。</Empty>}
-          <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3'>
-            {items.map((item) => (
-              <button
-                key={item.id}
-                type='button'
-                data-testid='event-card'
-                className='group space-y-2 rounded-xl border bg-card p-3 text-left text-sm transition-colors hover:bg-accent hover:shadow-sm'
-                onClick={() => setSelected(item.id ?? '')}
-              >
-                <div className='flex items-center justify-between'>
-                  <span className='font-medium'>
-                    {CATEGORY_LABELS[item.category ?? ''] || item.category}
-                    <span className='ml-2 text-xs text-muted-foreground'>
-                      {Math.round((item.score ?? 0) * 100)}%
+          <div className='grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'>
+            {items.map((item) => {
+              const channelItem = channelOf.get(item.channel_id ?? '')
+              const channelLabel = channelItem
+                ? `CH${String(channelItem.channel_no ?? 0).padStart(2, '0')} ${channelItem.channel_name}`
+                : '未知通道'
+              const ongoing = isOngoing(item, now)
+              const handleState = item.handle_state ?? 'open'
+              const scorePct = Math.round((item.score ?? 0) * 100)
+              return (
+                <div
+                  key={item.id}
+                  data-testid='event-card'
+                  role='button'
+                  tabIndex={0}
+                  className='group cursor-pointer overflow-hidden rounded-xl border bg-card text-left text-sm transition-colors hover:border-zinc-600 hover:shadow-md'
+                  onClick={() => setSelected(item.id ?? '')}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      setSelected(item.id ?? '')
+                    }
+                  }}
+                >
+                  <div className='relative aspect-[4/3] overflow-hidden rounded-t-xl bg-zinc-950'>
+                    {item.snapshot_state === 'ready' ? (
+                      <img
+                        src={`/api/v1/events/${item.id}/snapshot`}
+                        alt='事件抓拍'
+                        loading='lazy'
+                        onError={() => setOpeningEvent(item.id ?? '')}
+                        className='h-full w-full object-cover'
+                      />
+                    ) : (
+                      // Pending only reads as live within the ongoing window;
+                      // an old snapshotless event shows the honest dead state.
+                      <div className='grid h-full w-full place-items-center text-zinc-600'>
+                        {item.snapshot_state === 'pending' && ongoing ? (
+                          <span className='flex flex-col items-center gap-1.5 text-xs'>
+                            <span
+                              aria-hidden
+                              className='size-2 animate-pulse rounded-full bg-amber-400'
+                            />
+                            抓拍生成中
+                          </span>
+                        ) : (
+                          <span className='flex flex-col items-center gap-1.5 text-xs'>
+                            <User aria-hidden className='size-6' />
+                            无抓拍图像
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {/* Corner overlays: category score top-left, handling top-right. */}
+                    <span
+                      className={cn(
+                        'absolute left-2 top-2 inline-flex items-center gap-1 rounded-full border border-white/10 bg-black/50 px-2 py-0.5 text-xs backdrop-blur',
+                        scorePct >= 90 ? 'text-emerald-300' : 'text-zinc-200'
+                      )}
+                    >
+                      <User aria-hidden className='size-3' />
+                      {CATEGORY_LABELS[item.category ?? ''] || item.category} {scorePct}%
                     </span>
-                  </span>
-                  <StatusBadge tone={HANDLE_TONES[item.handle_state ?? 'open'] || 'neutral'}>
-                    {HANDLE_LABELS[item.handle_state ?? 'open']}
-                  </StatusBadge>
-                </div>
-                {item.snapshot_state === 'ready' ? (
-                  <img
-                    src={`/api/v1/events/${item.id}/snapshot`}
-                    alt='事件抓拍'
-                    loading='lazy'
-                    onError={() => setOpeningEvent(item.id ?? '')}
-                    className='aspect-video w-full rounded object-cover transition-transform duration-200 group-hover:scale-[1.02]'
-                  />
-                ) : (
-                  <div className='grid aspect-video w-full place-items-center rounded bg-muted text-xs text-muted-foreground'>
-                    {item.snapshot_state === 'pending' ? '抓拍生成中' : '抓拍不可用'}
+                    <span
+                      className={cn(
+                        'absolute right-2 top-2 inline-flex items-center rounded-full border px-2 py-0.5 text-xs backdrop-blur',
+                        handleState === 'open'
+                          ? 'border-amber-500/40 bg-amber-950/60 text-amber-300'
+                          : 'border-white/10 bg-black/50 text-zinc-300'
+                      )}
+                    >
+                      {HANDLE_LABELS[handleState]}
+                    </span>
+                    {/* Hover shortcuts: jump straight into playback or mark the
+                        event handled without opening the drawer. */}
+                    <div
+                      className='absolute bottom-2 right-2 flex gap-1.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100'
+                      onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => e.stopPropagation()}
+                    >
+                      <Link
+                        to='/recordings'
+                        search={{
+                          channel: item.channel_id ?? '',
+                          at: (() => {
+                            const at = new Date(Date.parse(item.started_at ?? '')).getTime() - 10_000
+                            return wallClockInput(at, zone)
+                          })(),
+                          tab: 'playback',
+                        }}
+                        aria-label={`查看事件录像 ${cardTimestamp(item.started_at, zone, now)}`}
+                        title='录像回放'
+                        className='grid size-7 place-items-center rounded-md border border-white/10 bg-black/60 text-zinc-200 backdrop-blur hover:bg-black/80'
+                      >
+                        <Play aria-hidden className='size-3.5' />
+                      </Link>
+                      {handleState === 'open' && (
+                        <button
+                          type='button'
+                          aria-label='标为已处理'
+                          title='标为已处理'
+                          className='grid size-7 place-items-center rounded-md border border-emerald-500/30 bg-emerald-950/70 text-emerald-300 backdrop-blur hover:bg-emerald-900/80'
+                          disabled={markAllPending}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void markOneHandled(item).catch(() => {})
+                          }}
+                        >
+                          ✓
+                        </button>
+                      )}
+                    </div>
                   </div>
-                )}
-                <p className='text-xs text-muted-foreground' title={formatClock(Date.parse(item.started_at ?? ''), zone)}>
-                  {formatClock(Date.parse(item.started_at ?? ''), zone)}
-                  {item.ended_at
-                    ? ` · 持续 ${Math.max(1, Math.round((Date.parse(item.ended_at) - Date.parse(item.started_at ?? '')) / 1000))} 秒`
-                    : ' · 进行中'}
-                  {item.zones?.length ? ` · ${item.zones.join('/')}` : ''}
-                </p>
-              </button>
-            ))}
+                  <div className='flex items-center justify-between gap-2 px-3 py-2.5 text-xs'>
+                    <div className='flex min-w-0 items-center gap-1.5'>
+                      <span className='shrink-0 rounded-md bg-zinc-800/80 px-1.5 py-0.5 font-medium text-zinc-300'>
+                        {channelLabel}
+                      </span>
+                      {item.zones?.length ? (
+                        <span className='truncate rounded-md bg-muted px-1.5 py-0.5 text-muted-foreground'>
+                          {item.zones.join('/')}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className='flex shrink-0 items-center gap-2 text-muted-foreground'>
+                      <span title={formatClock(Date.parse(item.started_at ?? ''), zone)}>
+                        {cardTimestamp(item.started_at, zone, now)}
+                      </span>
+                      <span
+                        className={cn(
+                          'inline-flex items-center rounded-full border px-1.5 py-px tabular-nums',
+                          ongoing
+                            ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
+                            : 'border-zinc-700/60 text-zinc-400'
+                        )}
+                      >
+                        {durationText(item, now)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
           </div>
           {more.isPending && pages.length > 0 && (
             <p role='status' className='text-sm text-muted-foreground'>
@@ -315,6 +551,8 @@ function EventDetail({
   const [pendingAction, setPendingAction] = useState('')
   const [feedbackPending, setFeedbackPending] = useState('')
   const item = event.data
+  const [now] = useState(() => Date.now())
+  const ongoing = isOngoing(item ?? {}, now)
 
   // Rule-hit feedback is operational: it records the operator's judgement and
   // keeps the original reason. It never edits the rule or retrains anything.
@@ -376,9 +614,9 @@ function EventDetail({
               <div className='grid aspect-video w-full place-items-center rounded-lg bg-muted text-xs text-muted-foreground'>
                 {item.snapshot_state === 'ready'
                   ? '抓拍读取失败'
-                  : item.snapshot_state === 'pending'
+                  : item.snapshot_state === 'pending' && ongoing
                     ? '抓拍生成中'
-                    : '抓拍已不可用'}
+                    : '无抓拍图像'}
               </div>
             )}
             <div className='grid grid-cols-2 gap-2 rounded-lg border bg-muted/40 p-3'>
@@ -386,7 +624,11 @@ function EventDetail({
               <span>{formatClock(Date.parse(item.started_at ?? ''), zone)}</span>
               <span className='text-muted-foreground'>结束</span>
               <span>
-                {item.ended_at ? formatClock(Date.parse(item.ended_at), zone) : '进行中'}
+                {item.ended_at
+                  ? formatClock(Date.parse(item.ended_at), zone)
+                  : ongoing
+                    ? '进行中'
+                    : '已结束（结束消息未收到）'}
               </span>
               <span className='text-muted-foreground'>分数</span>
               <span>{Math.round((item.score ?? 0) * 100)}%</span>

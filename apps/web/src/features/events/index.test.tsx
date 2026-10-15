@@ -24,7 +24,14 @@ afterEach(() => {
 const channelID = '00000000-0000-4000-8000-000000000001'
 const eventID = '00000000-0000-4000-8000-0000000000e1'
 
-function fixture(hits: Schema<'RuleHit'>[]) {
+function fixture(
+  hits: Schema<'RuleHit'>[],
+  options: {
+    events?: Schema<'Event'>[]
+    handleStates?: Record<string, string>
+    versions?: Record<string, number>
+  } = {}
+) {
   useAuthStore.getState().setUser({
     id: 'admin',
     username: 'admin',
@@ -33,25 +40,38 @@ function fixture(hits: Schema<'RuleHit'>[]) {
     version: 1,
   })
   const mutations: { path: string; init: RequestInit }[] = []
-  const event: Schema<'Event'> = {
-    id: eventID,
-    channel_id: channelID,
-    source: 'frigate',
-    source_id: 'evt-1',
-    category: 'person',
-    score: 0.82,
-    zones: ['门口'],
-    started_at: '2026-10-13T12:00:00Z',
-    ended_at: '2026-10-13T12:00:12Z',
-    snapshot_state: 'gone',
-    media_state: 'linked',
-    handle_state: 'open',
-    version: 3,
-    handling: [],
-  }
+  const event: Schema<'Event'> =
+    options.events?.find((entry) => entry.id === eventID) ?? {
+      id: eventID,
+      channel_id: channelID,
+      source: 'frigate',
+      source_id: 'evt-1',
+      category: 'person',
+      score: 0.82,
+      zones: ['门口'],
+      started_at: '2026-10-13T12:00:00Z',
+      ended_at: '2026-10-13T12:00:12Z',
+      snapshot_state: 'gone',
+      media_state: 'linked',
+      handle_state: 'open',
+      version: 3,
+      handling: [],
+    }
+  const events: Schema<'Event'>[] = options.events ?? [event]
+  // A PATCH mutates the in-memory list so a follow-up render sees the new
+  // state, exactly like the server would.
   calls.request.mockImplementation(async (path: string, init?: RequestInit) => {
     const method = init?.method && init.method !== 'GET' ? init.method : 'GET'
     if (method !== 'GET') mutations.push({ path, init: init as RequestInit })
+    if (method === 'PATCH' && /^\/api\/v1\/events\//.test(path)) {
+      const body = JSON.parse(String(init?.body))
+      const target = events.find((entry) => path.endsWith(`/${entry.id}`))
+      if (target) {
+        target.handle_state = body.state
+        target.version = (target.version ?? 0) + 1
+      }
+      return { ...target, hits }
+    }
     if (path === '/api/v1/site')
       return { timezone: 'Asia/Shanghai', site_name: '测试站点' }
     if (path.startsWith('/api/v1/channels?'))
@@ -70,7 +90,7 @@ function fixture(hits: Schema<'RuleHit'>[]) {
         next_cursor: null,
       } satisfies PageData<Schema<'Channel'>>
     if (path.startsWith('/api/v1/events?'))
-      return { items: [event], next_cursor: null }
+      return { items: events, next_cursor: null }
     if (path === `/api/v1/events/${eventID}`) return { ...event, hits }
     if (path.startsWith('/api/v1/event-hits/')) return {}
     throw new Error(`unexpected path ${path}`)
@@ -111,7 +131,8 @@ test('an event shows which rules it tripped and why', async () => {
     },
   ])
   const screen = await view(client)
-  await screen.getByTestId('event-card').first().click()
+  await screen.getByTestId('event-card').first().click({ position: { x: 5, y: 5 } })
+  await new Promise((r) => setTimeout(r, 400))
   await expect.element(screen.getByText('命中规则')).toBeVisible()
   const hit = screen.getByTestId('event-hit')
   await expect.element(hit).toHaveTextContent('门口进入')
@@ -137,7 +158,7 @@ test('marking a hit as a false positive sends the judgement', async () => {
     },
   ])
   const screen = await view(client)
-  await screen.getByTestId('event-card').first().click()
+  await screen.getByTestId('event-card').first().click({ position: { x: 5, y: 5 } })
   await screen.getByRole('button', { name: '标记规则命中为误报 门口进入' }).click()
 
   await vi.waitFor(() => expect(mutations.length).toBe(1))
@@ -161,11 +182,103 @@ test('a hit already marked as a false positive can be cleared', async () => {
     },
   ])
   const screen = await view(client)
-  await screen.getByTestId('event-card').first().click()
+  await screen.getByTestId('event-card').first().click({ position: { x: 5, y: 5 } })
   const hit = screen.getByTestId('event-hit')
   await expect.element(hit).toHaveTextContent('已标误报')
   await expect.element(hit).toHaveTextContent('备注：是路灯')
   await expect
     .element(screen.getByRole('button', { name: '标记规则命中非误报 门口进入' }))
     .toBeVisible()
+})
+
+// Gallery facts: channel pill, zone badge, the compact filter bar and the
+// one-click handling shortcuts.
+test('cards show channel and zone, and the filter bar counts and batch-marks', async () => {
+  const recent = new Date(Date.now() - 60_000).toISOString()
+  const events: Schema<'Event'>[] = [
+    {
+      id: eventID,
+      channel_id: channelID,
+      source: 'frigate',
+      source_id: 'evt-1',
+      category: 'person',
+      score: 0.82,
+      zones: ['门口'],
+      started_at: recent,
+      ended_at: new Date(Date.parse(recent) + 12_000).toISOString(),
+      snapshot_state: 'gone',
+      media_state: 'linked',
+      handle_state: 'open',
+      version: 3,
+      handling: [],
+    },
+    {
+      id: '00000000-0000-4000-8000-0000000000e2',
+      channel_id: channelID,
+      source: 'frigate',
+      source_id: 'evt-2',
+      category: 'car',
+      score: 0.71,
+      zones: [],
+      // No end and older than five minutes: the honest closed state.
+      started_at: new Date(Date.now() - 3_600_000).toISOString(),
+      ended_at: null,
+      snapshot_state: 'pending',
+      media_state: 'unavailable',
+      handle_state: 'open',
+      version: 1,
+      handling: [],
+    },
+  ]
+  const { client, mutations } = fixture([], { events })
+  const screen = await view(client)
+  const cards = screen.getByTestId('event-card')
+  await expect.element(cards).toHaveLength(2)
+  // Channel identity and zone badge on every card.
+  await expect.element(cards.nth(0)).toHaveTextContent('CH05 大门')
+  await expect.element(cards.nth(0)).toHaveTextContent('门口')
+  // The ended event carries the known duration; the ongoing recent one reads
+  // 进行中.
+  await expect.element(cards.nth(0)).toHaveTextContent('12s')
+  await expect.element(cards.nth(1)).toHaveTextContent('已结束')
+  await expect.element(cards.nth(1)).toHaveTextContent('无抓拍图像')
+  // The compact bar counts what is loaded.
+  await expect.element(screen.getByText('已加载 2 条')).toBeVisible()
+  // One click retires both open events; the PATCHes carry per-row versions.
+  await screen.getByRole('button', { name: /全部标为已处理/ }).click()
+  await vi.waitFor(() => expect(mutations.length).toBe(2))
+  const bodies = mutations.map((m) => JSON.parse(String(m.init.body)))
+  expect(bodies[0]).toMatchObject({ state: 'acknowledged', version: 3 })
+  expect(bodies[1]).toMatchObject({ state: 'acknowledged', version: 1 })
+  client.clear()
+})
+
+test('a stale ongoing event shows 已结束 and the honest snapshot state', async () => {
+  const stale: Schema<'Event'> = {
+    id: eventID,
+    channel_id: channelID,
+    source: 'frigate',
+    source_id: 'evt-1',
+    category: 'person',
+    score: 0.82,
+    zones: ['门口'],
+    // No end, one hour old: the end message was lost. It must not read as
+    // 进行中 or 抓拍生成中 anymore.
+    started_at: new Date(Date.now() - 3_600_000).toISOString(),
+    ended_at: null,
+    snapshot_state: 'pending',
+    media_state: 'unavailable',
+    handle_state: 'open',
+    version: 3,
+    handling: [],
+  }
+  const { client } = fixture([], { events: [stale] })
+  const screen = await view(client)
+  const card = screen.getByTestId('event-card')
+  await expect.element(card).toBeVisible()
+  await expect.element(card).toHaveTextContent('已结束')
+  await expect.element(card).not.toHaveTextContent('进行中')
+  await expect.element(card).not.toHaveTextContent('抓拍生成中')
+  await expect.element(card).toHaveTextContent('无抓拍图像')
+  client.clear()
 })
