@@ -28,11 +28,14 @@ import {
   verifyPoolWrite,
   type PoolCheckOutcome,
 } from '@/features/storage-pools/pool-check'
+import { cn } from '@/lib/utils'
 
 const PLANNED_MODES = [
   { label: '定时录像（后续开放）', value: 'scheduled' },
   { label: '事件录像（后续开放）', value: 'event' },
 ]
+
+type RowFilter = 'all' | 'recording' | 'off' | 'unconfigured'
 
 export function RecordingPlan() {
   const admin = useAuthStore((state) => state.user?.role === 'admin')
@@ -48,14 +51,52 @@ export function RecordingPlan() {
     admin,
     10000
   )
+  const summaries = useAPI<{ items: Schema<'ChannelSummary'>[] }>(
+    '/api/v1/channels/summary'
+  )
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [mode, setMode] = useState('continuous')
+  const [poolID, setPoolID] = useState('')
+  const [filter, setFilter] = useState<RowFilter>('all')
   const [outcome, setOutcome] = useState('')
 
   const items = channels.data?.items || []
-  const permitted = items.filter((channel) =>
+  const summaryOf = new Map(
+    (summaries.data?.items || []).map((item) => [item.channel_id, item])
+  )
+  // Same rule as the channels and detection pages: no applied camera source
+  // means the row cannot record, so it stays out of every batch surface.
+  const unconfigured = (channel: Schema<'Channel'>) => {
+    const summary = summaryOf.get(channel.id ?? '')
+    return (
+      !summary?.source_ip &&
+      !summary?.current_revision_id &&
+      summary?.main.state === 'not_configured'
+    )
+  }
+  const configured = items.filter((channel) => !unconfigured(channel))
+  const permitted = configured.filter((channel) =>
     channel.permissions.includes('configure')
   )
+  const counts = {
+    all: items.length,
+    recording: configured.filter(
+      (channel) => summaryOf.get(channel.id ?? '')?.recording.state === 'healthy'
+    ).length,
+    off: configured.filter(
+      (channel) => summaryOf.get(channel.id ?? '')?.recording.state !== 'healthy'
+    ).length,
+    unconfigured: items.length - configured.length,
+  }
+  const visibleRows = items.filter((channel) => {
+    if (filter === 'all') return true
+    if (filter === 'unconfigured') return unconfigured(channel)
+    if (!unconfigured(channel)) return false
+    const summary = summaryOf.get(channel.id ?? '')
+    return filter === 'recording'
+      ? summary?.recording.state === 'healthy'
+      : summary?.recording.state !== 'healthy'
+  })
   const chosen = permitted.filter((channel) => selected.has(channel.id))
 
   function toggle(id: string, checked: boolean) {
@@ -160,6 +201,25 @@ export function RecordingPlan() {
     setOutcome('')
     await batch.run(
       async () => {
+        // A picked pool binds first, so enabling recording cannot fail on a
+        // forgotten bind; the mode batch then walks the same rows.
+        if (admin && poolID) {
+          await Promise.allSettled(
+            chosen.map(async (channel) => {
+              const status = await apiRequest<Schema<'ChannelSourceStatus'>>(
+                `/api/v1/channels/${channel.id}/source/status`
+              )
+              await sourceCommand<Schema<'SourceChange'>>(
+                `/api/v1/channels/${channel.id}/storage-pool`,
+                { pool_id: poolID },
+                status.version,
+                undefined,
+                'PUT'
+              )
+            })
+          )
+          await client.invalidateQueries()
+        }
         const first = await submitPolicies(chosen.map((channel) => channel.id))
         const { items, recovered, reasons } = await recoverRejected(first.items)
         const queued = items.filter((row) => row.state === 'queued')
@@ -186,6 +246,38 @@ export function RecordingPlan() {
     )
   }
 
+  async function bindBatch() {
+    if (chosen.length === 0 || !poolID) return
+    setOutcome('')
+    await batch.run(
+      async () => {
+        const results = await Promise.allSettled(
+          chosen.map(async (channel) => {
+            const status = await apiRequest<Schema<'ChannelSourceStatus'>>(
+              `/api/v1/channels/${channel.id}/source/status`
+            )
+            await sourceCommand<Schema<'SourceChange'>>(
+              `/api/v1/channels/${channel.id}/storage-pool`,
+              { pool_id: poolID },
+              status.version,
+              undefined,
+              'PUT'
+            )
+          })
+        )
+        const failed = results.filter(
+          (result) => result.status === 'rejected'
+        ).length
+        if (failed)
+          throw new Error(
+            `${chosen.length - failed} 路已提交绑定，${failed} 路失败（配置可能已改变），请刷新后重试`
+          )
+        setSelected(new Set())
+      },
+      `已把 ${chosen.length} 路绑定到所选存储池`
+    )
+  }
+
   return (
     <>
       <PageTitle
@@ -208,41 +300,121 @@ export function RecordingPlan() {
       )}
       {items.length > 0 && (
         <>
-          <div className='mb-4 flex flex-wrap items-end gap-3 rounded-xl border bg-card p-4'>
-            <SelectField
-              label='批量录像方式'
-              className='text-sm'
-              value={mode}
-              onValueChange={setMode}
-              options={[
-                { value: 'none', label: '关闭录像' },
-                { value: 'continuous', label: '手动（连续录像）' },
-                ...PLANNED_MODES.map((entry) => ({
-                  value: entry.value,
-                  label: entry.label,
-                  disabled: true,
-                })),
-              ]}
-            />
-            <Button
-              type='button'
-              disabled={batch.pending || chosen.length === 0}
-              onClick={() => void applyBatch()}
+          <div className='mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-900/70 px-4 py-2.5'>
+            <div className='flex flex-wrap items-center gap-x-4 gap-y-2'>
+              <span className='text-sm font-medium whitespace-nowrap'>
+                已选 {chosen.length} / {permitted.length} 路可配置通道
+              </span>
+              {admin && (
+                <>
+                  <div className='flex items-center gap-2'>
+                    <span className='text-xs text-muted-foreground'>
+                      批量存储池:
+                    </span>
+                    <SelectField
+                      ariaLabel='批量存储池'
+                      className='w-32'
+                      value={poolID}
+                      onValueChange={setPoolID}
+                      options={[
+                        { value: '', label: '选择存储池' },
+                        ...(pools.data?.items || []).map((entry) => ({
+                          value: entry.id,
+                          label: `${entry.name}${entry.enabled ? '' : ' · 已停用'}`,
+                          disabled: !entry.enabled,
+                        })),
+                      ]}
+                    />
+                    <Button
+                      type='button'
+                      size='sm'
+                      disabled={batch.pending || chosen.length === 0 || !poolID}
+                      onClick={() => void bindBatch()}
+                    >
+                      批量绑定
+                    </Button>
+                  </div>
+                </>
+              )}
+              <div className='flex items-center gap-2'>
+                <span className='text-xs text-muted-foreground'>
+                  批量录像方式:
+                </span>
+                <SelectField
+                  ariaLabel='批量录像方式'
+                  className='w-36'
+                  value={mode}
+                  onValueChange={setMode}
+                  options={[
+                    { value: 'none', label: '关闭录像' },
+                    { value: 'continuous', label: '手动（连续录像）' },
+                    ...PLANNED_MODES.map((entry) => ({
+                      value: entry.value,
+                      label: entry.label,
+                      disabled: true,
+                    })),
+                  ]}
+                />
+                <Button
+                  type='button'
+                  size='sm'
+                  disabled={batch.pending || chosen.length === 0}
+                  onClick={() => void applyBatch()}
+                >
+                  批量应用
+                </Button>
+              </div>
+              {chosen.length > 0 && (
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='sm'
+                  onClick={() => setSelected(new Set())}
+                >
+                  取消选择
+                </Button>
+              )}
+            </div>
+            <div
+              role='group'
+              aria-label='录像方式筛选'
+              className='flex flex-wrap items-center gap-1'
             >
-              应用到选中通道
-            </Button>
-            <span className='pb-2 text-xs text-muted-foreground'>
-              已选 {chosen.length} / {permitted.length} 路可配置通道
-            </span>
-            {chosen.length > 0 && (
-              <Button
-                type='button'
-                variant='ghost'
-                onClick={() => setSelected(new Set())}
-              >
-                取消选择
-              </Button>
-            )}
+              {(
+                [
+                  { value: 'all', label: '全部' },
+                  { value: 'recording', label: '🟢 已启用录像' },
+                  { value: 'off', label: '⚪ 关闭录像' },
+                  { value: 'unconfigured', label: '⚫ 未配置源' },
+                ] as const
+              ).map(({ value, label }) => {
+                const active = filter === value
+                return (
+                  <button
+                    key={value}
+                    type='button'
+                    aria-pressed={active}
+                    onClick={() => setFilter(value)}
+                    className={cn(
+                      'inline-flex h-7 items-center gap-1 rounded-full border px-2.5 text-xs transition-colors',
+                      active
+                        ? 'border-primary bg-primary/10 font-medium text-primary'
+                        : 'border-zinc-700/60 text-muted-foreground hover:bg-accent hover:text-foreground'
+                    )}
+                  >
+                    {label}
+                    <span
+                      className={cn(
+                        'tabular-nums',
+                        active ? '' : 'opacity-70'
+                      )}
+                    >
+                      {counts[value]}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
           </div>
           <div className='overflow-hidden rounded-xl border bg-card'>
             <Table>
@@ -251,6 +423,7 @@ export function RecordingPlan() {
                   <TableHead className='w-10'>
                     <Checkbox
                       aria-label='选择全部可配置通道'
+                      className='rounded border-zinc-600'
                       checked={
                         permitted.length > 0 &&
                         permitted.every((channel) => selected.has(channel.id))
@@ -269,12 +442,12 @@ export function RecordingPlan() {
                   <TableHead>名称</TableHead>
                   <TableHead>录像方式</TableHead>
                   <TableHead>存储池</TableHead>
-                  <TableHead>操作</TableHead>
-                  <TableHead>结果</TableHead>
+                  <TableHead className='w-36'>操作</TableHead>
+                  <TableHead className='w-28'>结果</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {items.map((channel) => (
+                {visibleRows.map((channel) => (
                   <PolicyRow
                     key={channel.id}
                     channel={channel}
@@ -287,6 +460,11 @@ export function RecordingPlan() {
                 ))}
               </TableBody>
             </Table>
+            {visibleRows.length === 0 && (
+              <div className='p-8 text-center text-sm text-muted-foreground'>
+                没有匹配的通道
+              </div>
+            )}
           </div>
         </>
       )}

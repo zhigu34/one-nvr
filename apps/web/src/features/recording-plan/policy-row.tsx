@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
+import { Link } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { ApiError } from '@/lib/api-client'
+import { ApiError, apiRequest } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { TableCell, TableRow } from '@/components/ui/table'
 import { Notices, SelectField } from '@/features/foundation/ui'
+import { StatusBadge } from '@/features/foundation/status-badge'
 import { useAPI } from '@/features/foundation/hooks'
 import { sourceCommand } from '@/features/channels/api'
 import { settleJob, verifyPoolWrite } from '@/features/storage-pools/pool-check'
+import { cn } from '@/lib/utils'
 
 /**
  * Only the modes the control plane implements are selectable. The rest are
@@ -64,24 +67,54 @@ export function PolicyRow({
   const [pending, setPending] = useState('')
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
+  const [succeeded, setSucceeded] = useState('')
   const controller = useRef<AbortController | null>(null)
   useEffect(() => () => controller.current?.abort(), [])
 
   const label = channelLabel(channel)
   const configured = channel.permissions.includes('configure')
+  // No applied camera means nothing to record and no pool to bind: the whole
+  // row goes inert until the channel is connected (same rule as detection).
+  const unconfigured =
+    !status.data?.current_revision_id &&
+    status.data?.main?.state === 'not_configured'
+  const inert = unconfigured || !configured
   const mode = draftMode ?? policy.data?.mode ?? 'none'
   const boundPool = status.data?.storage_pool_id || ''
   const pool = draftPool ?? boundPool
   const poolName =
     pools.find((entry) => entry.id === boundPool)?.name || '未绑定'
+  // Row health, derived from the same status payload the channels page uses.
+  const health = !status.data
+    ? 'unknown'
+    : unconfigured
+      ? 'unconfigured'
+      : !channel.enabled
+        ? 'disabled'
+        : status.data.recording?.state === 'healthy'
+          ? 'recording'
+          : status.data.main?.state === 'healthy'
+            ? 'online'
+            : 'offline'
+  const HEALTH: Record<
+    typeof health,
+    { tone: 'success' | 'neutral' | 'warning'; text: string } | null
+  > = {
+    recording: { tone: 'success', text: '录制中' },
+    online: { tone: 'success', text: '在线' },
+    offline: { tone: 'warning', text: '离线' },
+    disabled: { tone: 'neutral', text: '通道已停用' },
+    unconfigured: { tone: 'neutral', text: '未配置源' },
+    unknown: null,
+  }
+  const badge = HEALTH[health]
 
-  async function run(kind: 'policy' | 'pool', body: unknown, version: number) {
-    if (pending) return
-    const abort = new AbortController()
-    controller.current = abort
-    setPending(kind)
-    setError('')
-    setNotice('')
+  async function sendWithRecovery(
+    kind: 'policy' | 'pool',
+    body: unknown,
+    version: number,
+    abort: AbortController
+  ) {
     const endpoint = `/api/v1/channels/${channel.id}/${kind === 'policy' ? 'recording-policy' : 'storage-pool'}`
     const send = () =>
       sourceCommand<Schema<'SourceChange'>>(
@@ -92,31 +125,58 @@ export function PolicyRow({
         'PUT'
       )
     try {
-      let change: Schema<'SourceChange'> | null = null
-      try {
-        change = await send()
-      } catch (e) {
-        if (abort.signal.aborted) return
-        // The write proof is only valid for 30 seconds. Instead of asking the
-        // operator to act faster, recover by running one real pool check and
-        // retrying once; the evidence requirement itself is unchanged.
-        const target = kind === 'pool' ? draftPool : boundPool || null
-        if (
-          !(e instanceof ApiError) ||
-          e.code !== 'zlm_write_evidence_unavailable' ||
-          !target
-        )
-          throw e
-        setNotice('存储池写入检查已过期，正在自动重新验证…')
-        const verified = await verifyPoolWrite(target, abort.signal)
-        if (abort.signal.aborted) return
-        if (!verified.ok) {
-          setError(verified.message)
-          return
-        }
-        setNotice('验证通过，正在继续…')
-        change = await send()
+      return await send()
+    } catch (e) {
+      if (abort.signal.aborted) return null
+      // The write proof is only valid for 30 seconds. Instead of asking the
+      // operator to act faster, recover by running one real pool check and
+      // retrying once; the evidence requirement itself is unchanged.
+      const target = kind === 'pool' ? draftPool : boundPool || null
+      if (
+        !(e instanceof ApiError) ||
+        e.code !== 'zlm_write_evidence_unavailable' ||
+        !target
+      )
+        throw e
+      setNotice('存储池写入检查已过期，正在自动重新验证…')
+      const verified = await verifyPoolWrite(target, abort.signal)
+      if (abort.signal.aborted) return null
+      if (!verified.ok) {
+        setError(verified.message)
+        return null
       }
+      setNotice('验证通过，正在继续…')
+      return await send()
+    }
+  }
+
+  async function run(kind: 'policy' | 'pool', body: unknown, version: number) {
+    if (pending) return
+    const abort = new AbortController()
+    controller.current = abort
+    setPending(kind)
+    setError('')
+    setNotice('')
+    setSucceeded('')
+    try {
+      // Smart chaining: applying a mode on a row whose pool dropdown was also
+      // changed binds the pool first, so enabling recording cannot fail on a
+      // forgotten bind. The version still comes from the live status read.
+      if (kind === 'policy' && draftPool !== null) {
+        const fresh = await apiRequest<Schema<'ChannelSourceStatus'>>(
+          `/api/v1/channels/${channel.id}/source/status`
+        )
+        if (abort.signal.aborted) return
+        await sendWithRecovery(
+          'pool',
+          { pool_id: draftPool },
+          fresh.version,
+          abort
+        )
+        if (abort.signal.aborted) return
+        setDraftPool(null)
+      }
+      const change = await sendWithRecovery(kind, body, version, abort)
       if (abort.signal.aborted || change === null) return
       if (kind === 'policy') setDraftMode(null)
       else setDraftPool(null)
@@ -125,33 +185,10 @@ export function PolicyRow({
       await client.invalidateQueries()
       const settled = await settleJob(change.job_id, abort.signal)
       if (abort.signal.aborted) return
-      if (settled.state === 'succeeded') setNotice('已完成')
-      else if (settled.state === 'failed') setError(settled.message)
-    } catch (e) {
-      if (!abort.signal.aborted) setError(message(e))
-    } finally {
-      if (!abort.signal.aborted) setPending('')
-    }
-  }
-
-  // Pool evidence is a precondition for continuous recording, so the control
-  // that produces it lives here rather than in the camera-connect flow.
-  async function checkPool() {
-    if (pending || !boundPool) return
-    const abort = new AbortController()
-    controller.current = abort
-    setPending('check')
-    setError('')
-    setNotice('')
-    try {
-      const verified = await verifyPoolWrite(boundPool, abort.signal)
-      if (abort.signal.aborted) return
-      if (verified.ok) {
-        setNotice('存储池检查已通过，现在可以启用录像')
-        await client.invalidateQueries()
-      } else {
-        setError(verified.message)
-      }
+      if (settled.state === 'succeeded') {
+        setNotice('')
+        setSucceeded(kind)
+      } else if (settled.state === 'failed') setError(settled.message)
     } catch (e) {
       if (!abort.signal.aborted) setError(message(e))
     } finally {
@@ -160,18 +197,36 @@ export function PolicyRow({
   }
 
   const policyReady = !policy.isPending && !policy.error && !!policy.data
+  const poolDirty = admin && draftPool !== null
+  const modeDirty = draftMode !== null
   return (
-    <TableRow data-testid='policy-row'>
+    <TableRow
+      data-testid='policy-row'
+      className={cn(
+        health === 'recording' && 'bg-emerald-950/15 hover:bg-emerald-950/25',
+        inert && 'opacity-40'
+      )}
+    >
       <TableCell>
         <Checkbox
           aria-label={`选择 ${label}`}
+          className='rounded border-zinc-600'
           checked={selected}
-          disabled={!configured}
+          disabled={inert}
           onCheckedChange={(state) => onSelect(state === true)}
         />
       </TableCell>
       <TableCell className='font-mono text-xs'>{label}</TableCell>
-      <TableCell className='font-medium'>{channel.channel_name}</TableCell>
+      <TableCell>
+        <div className='flex items-center gap-2'>
+          <span className='font-medium'>{channel.channel_name}</span>
+          {badge && (
+            <span className='inline-flex shrink-0'>
+              <StatusBadge tone={badge.tone}>{badge.text}</StatusBadge>
+            </span>
+          )}
+        </div>
+      </TableCell>
       <TableCell>
         {policy.error ? (
           <span className='text-xs text-muted-foreground'>读取失败</span>
@@ -182,7 +237,7 @@ export function PolicyRow({
             ariaLabel={`${label} 录像方式`}
             className='text-sm'
             value={mode}
-            disabled={!configured || !!pending}
+            disabled={inert || !!pending}
             onValueChange={setDraftMode}
             options={[
               { value: 'none', label: '关闭录像' },
@@ -203,7 +258,7 @@ export function PolicyRow({
               ariaLabel={`${label} 存储池`}
               className='text-sm'
               value={pool}
-              disabled={!!pending}
+              disabled={inert || !!pending}
               onValueChange={setDraftPool}
               options={[
                 { value: '', label: '未绑定' },
@@ -216,8 +271,8 @@ export function PolicyRow({
             />
             <Button
               type='button'
-              variant='outline'
-              disabled={!!pending || draftPool === null || !status.data}
+              size='sm'
+              disabled={inert || !!pending || !poolDirty || !status.data}
               onClick={() =>
                 void run(
                   'pool',
@@ -229,14 +284,15 @@ export function PolicyRow({
               绑定
             </Button>
             {boundPool && (
-              <Button
-                type='button'
-                variant='ghost'
-                disabled={!!pending}
-                onClick={() => void checkPool()}
+              <Link
+                to='/storage-pools'
+                search={{}}
+                aria-label={`${label} 检查存储池`}
+                title='前往存储池页检查写入能力'
+                className='inline-flex h-7 items-center gap-0.5 rounded-full border px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground'
               >
-                {pending === 'check' ? '检查中…' : '检查存储池'}
-              </Button>
+                ↗ 存储池
+              </Link>
             )}
           </div>
         ) : (
@@ -244,26 +300,39 @@ export function PolicyRow({
         )}
       </TableCell>
       <TableCell>
-        <Button
-          type='button'
-          disabled={
-            !configured ||
-            !policyReady ||
-            !!pending ||
-            draftMode === null ||
-            (mode === 'continuous' && !boundPool)
-          }
-          onClick={() => void run('policy', { mode }, policy.data?.version || 0)}
-        >
-          应用
-        </Button>
+        <div className='flex items-center gap-2'>
+          <Button
+            type='button'
+            size='sm'
+            disabled={
+              inert ||
+              !policyReady ||
+              !!pending ||
+              !modeDirty ||
+              (mode === 'continuous' && !boundPool && draftPool === null)
+            }
+            onClick={() => void run('policy', { mode }, policy.data?.version || 0)}
+          >
+            应用
+          </Button>
+          {succeeded && (
+            <span
+              data-testid={`applied-${succeeded}`}
+              className='inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-400'
+            >
+              ✓ 已生效
+            </span>
+          )}
+        </div>
       </TableCell>
       <TableCell>
         <Notices error={error} notice={notice} />
-        {draftMode === 'continuous' && !boundPool && (
+        {mode === 'continuous' && !boundPool && draftPool === null && !inert && (
           <p className='text-xs text-amber-600'>请先绑定存储池</p>
         )}
-        {!configured && <p className='text-xs text-muted-foreground'>只读</p>}
+        {inert && (
+          <p className='text-xs text-muted-foreground'>请先在通道管理接入摄像头</p>
+        )}
       </TableCell>
     </TableRow>
   )

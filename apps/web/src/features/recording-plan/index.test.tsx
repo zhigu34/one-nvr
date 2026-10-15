@@ -1,4 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterProvider,
+} from '@tanstack/react-router'
 import { afterEach, expect, test, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
@@ -89,6 +95,8 @@ function fixture(
         items: [{ channel_id: channel.id, state: 'queued', job_id: 'job-1' }],
       }
     }
+    if (method === 'PUT' && path.endsWith('/recording-policy'))
+      return { job_id: 'job-policy', state: 'queued' }
     if (method === 'PUT' && path.endsWith('/storage-pool')) {
       attempts.bind++
       if (options.bindReject && attempts.bind === 1) {
@@ -108,6 +116,25 @@ function fixture(
         kind: 'storage.check',
         state: 'succeeded',
         attempts: 1,
+      }
+    if (method === 'GET' && path === '/api/v1/channels/summary')
+      return {
+        items: [
+          {
+            channel_id: channel.id,
+            channel_no: 1,
+            channel_name: '大门',
+            channel_group: '',
+            enabled: true,
+            version: 4,
+            permissions: ['configure'],
+            current_revision_id: 'rev',
+            source_ip: '192.168.66.114',
+            main: { state: 'healthy', reason: '', observed_at: null, expires_at: null },
+            sub: { state: 'unknown', reason: 'observation_missing', observed_at: null, expires_at: null },
+            recording: { state: 'disabled', reason: 'recording_disabled', observed_at: null, expires_at: null },
+          },
+        ],
       }
     if (method === 'GET' && path.startsWith('/api/v1/channels?'))
       return { items: [channel], next_cursor: null }
@@ -135,15 +162,22 @@ function fixture(
       return { items: [pool], next_cursor: null }
     throw new Error('Unexpected query ' + path)
   })
-  return {
-    mutations,
-    view: (
-      <QueryClientProvider
-        client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
-      >
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const route = createRootRoute({
+    component: () => (
+      <QueryClientProvider client={client}>
         <RecordingPlan />
       </QueryClientProvider>
     ),
+  })
+  const router = createRouter({
+    routeTree: route,
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+  })
+  return {
+    mutations,
+    client,
+    view: <RouterProvider router={router} />,
   }
 }
 test('unsupported recording modes are listed but cannot be chosen', async () => {
@@ -198,7 +232,8 @@ test('binding recovers from an expired write proof by re-verifying and retrying'
       (m) => m.path.endsWith('/test') && m.init.method === 'POST'
     )
   ).toBe(true)
-  await expect.element(view.getByText('已完成')).toBeVisible()
+  // Settlement reads as the inline ✓ badge, not a text notice.
+  await expect.element(view.getByText('✓ 已生效')).toBeVisible()
 })
 test('a batch recovers rows rejected for a stale write proof', async () => {
   const setup = fixture({ pool: true, reject: true, checks: [healthyCheck] })
@@ -209,7 +244,7 @@ test('a batch recovers rows rejected for a stale write proof', async () => {
     view.getByRole('option', { name: '手动（连续录像）', exact: true })
   )
   await userEvent.click(
-    view.getByRole('button', { name: '应用到选中通道', exact: true })
+    view.getByRole('button', { name: '批量应用', exact: true })
   )
   await expect
     .poll(() => setup.mutations.filter((m) => m.path.endsWith('/recording-policies')).length)
@@ -238,7 +273,7 @@ test('a batch reports the pool reason when recovery cannot verify the write', as
     view.getByRole('option', { name: '手动（连续录像）', exact: true })
   )
   await userEvent.click(
-    view.getByRole('button', { name: '应用到选中通道', exact: true })
+    view.getByRole('button', { name: '批量应用', exact: true })
   )
   await expect
     .element(view.getByText(/需要先完成一路摄像头的连接测试或启用/))
@@ -247,4 +282,94 @@ test('a batch reports the pool reason when recovery cannot verify the write', as
   expect(
     setup.mutations.filter((m) => m.path.endsWith('/recording-policies')).length
   ).toBe(1)
+})
+
+// Dirty-state gating: untouched rows carry dimmed buttons instead of thirty-two
+// standing invites; only a real edit lights the action up.
+test('untouched rows keep dimmed actions that light up on edit', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  const bind = view.getByRole('button', { name: '绑定', exact: true })
+  await expect.element(bind).toBeDisabled()
+  const apply = view.getByRole('button', { name: '应用', exact: true })
+  await expect.element(apply).toBeDisabled()
+  // No pool is bound in this fixture: continuous stays blocked by the
+  // forgotten-bind guard even after the mode edit.
+  await userEvent.click(view.getByLabelText('CH01 录像方式'))
+  await userEvent.click(
+    view.getByRole('option', { name: '手动（连续录像）', exact: true })
+  )
+  await expect.element(apply).toBeDisabled()
+  await userEvent.click(view.getByLabelText('CH01 存储池'))
+  await userEvent.click(view.getByRole('option', { name: 'disk1', exact: true }))
+  await expect.element(bind).toBeEnabled()
+  // With the pool drafted, the chain clears the guard and apply lights up.
+  await expect.element(apply).toBeEnabled()
+  setup.client.clear()
+})
+
+// Applying a mode on a row with an unsaved pool edit chains the bind first, so
+// enabling recording cannot fail on a forgotten bind.
+test('applying a mode chains the unsaved pool bind before the policy', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  await userEvent.click(view.getByLabelText('CH01 存储池'))
+  await userEvent.click(view.getByRole('option', { name: 'disk1', exact: true }))
+  await userEvent.click(view.getByLabelText('CH01 录像方式'))
+  await userEvent.click(
+    view.getByRole('option', { name: '手动（连续录像）', exact: true })
+  )
+  await userEvent.click(
+    view.getByRole('button', { name: '应用', exact: true })
+  )
+  // One click, two writes in order: the pool bind, then the policy.
+  await expect
+    .poll(
+      () =>
+        setup.mutations.filter((m) => m.path.endsWith('/storage-pool')).length
+    )
+    .toBe(1)
+  await expect
+    .poll(
+      () =>
+        setup.mutations.filter((m) => m.path.endsWith('/recording-policy'))
+          .length
+    )
+    .toBe(1)
+  const poolIndex = setup.mutations.findIndex((m) =>
+    m.path.endsWith('/storage-pool')
+  )
+  const policyIndex = setup.mutations.findIndex((m) =>
+    m.path.endsWith('/recording-policy')
+  )
+  expect(poolIndex).toBeLessThan(policyIndex)
+  expect(JSON.parse(setup.mutations[poolIndex].init.body as string)).toEqual({
+    pool_id: '00000000-0000-4000-8000-000000000020',
+  })
+  // Settlement reads as the inline ✓ badge on the action that ran last.
+  await expect
+    .poll(
+      () =>
+        (document.querySelector('[data-testid="policy-row"]')?.textContent || '').includes(
+          '已生效'
+        )
+    )
+    .toBe(true)
+  setup.client.clear()
+})
+
+// The bound pool links to the storage page instead of carrying a second
+// standing button, and the row reads the channel's live state.
+test('the bound pool shows a storage-page link and the row shows its health', async () => {
+  const setup = fixture({ pool: true })
+  const view = await render(setup.view)
+  await expect.element(view.getByText('大门')).toBeVisible()
+  // healthy main + recording disabled → 在线; the recording-disabled pill on
+  // the status payload drives it.
+  await expect.element(view.getByText('在线')).toBeVisible()
+  const link = view.getByRole('link', { name: 'CH01 检查存储池' })
+  await expect
+    .element(link)
+    .toHaveAttribute('href', '/storage-pools')
+  setup.client.clear()
 })
