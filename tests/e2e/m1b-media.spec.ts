@@ -285,19 +285,20 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   expect((await status()).channel_id).toBe(channel.id)
   // M1-C: measure the authorized byte-range read path against the real
   // published segment, through the real gateway.
+  // Register before navigating: the page picks a default channel on mount and
+  // auto-parks on the first available segment, so the authorized /content read
+  // happens during load — a listener attached later would miss every request
+  // and report zero reads even though the video decodes.
+  const contentResponses: {range: string; status: number}[] = []
+  page.on('response', response => {
+    if (response.url().endsWith('/content')) contentResponses.push({range: response.request().headers()['range'] || '', status: response.status()})
+  })
   await page.goto('/recordings')
   // One "recordings" entry holds playback and file management on the same
   // dark surface; the playback console is the visible entry point. The page
   // title row was removed, so the console (not a heading) is the anchor.
   await expect(page.getByTestId('playback-console')).toBeVisible()
   await page.getByRole('button', {name: 'CH01 通道 01', exact: true}).click()
-  // Register before the index lands: selecting a channel auto-parks on the
-  // first available segment, which is itself an authorized /content read that
-  // must be observed. Waiting for the canvas first would miss it.
-  const contentResponses: {range: string; status: number}[] = []
-  page.on('response', response => {
-    if (response.url().endsWith('/content')) contentResponses.push({range: response.request().headers()['range'] || '', status: response.status()})
-  })
   // The index must reach the timeline: the canvas strip mounts and the
   // band's density read counts the fetched segments. A short segment inside
   // a 24 hour window is only a few pixels wide, so playback is started from
