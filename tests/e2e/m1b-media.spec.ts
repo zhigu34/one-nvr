@@ -361,6 +361,22 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   expect(rangeProof.slice.digest).toBe(rangeProof.slice.expected)
   expect(rangeProof.overflow.status).toBe(416)
   expect(rangeProof.overflow.contentRange).toBe(`bytes */${rangeProof.total}`)
+  // Those direct reads went through the authorized endpoint, and every open
+  // registers a 90s playback lease (ARC-05). Unlike the player's own requests
+  // — which release the lease when the segment changes or the viewer stops —
+  // nothing here owns that lease, so it must be released explicitly. Leaving it
+  // live makes the deletion below refuse the segment as lease_held, and the
+  // operator's own file would stay pinned by a test that never watched it.
+  const orphanLease = await page.evaluate(async (segmentId: string) => {
+    const me = await fetch('/api/v1/auth/me')
+    const csrf = (await me.json()).data.csrf_token as string
+    const response = await fetch('/api/v1/recordings/' + segmentId + '/lease', {
+      method: 'DELETE',
+      headers: {'X-CSRF-Token': csrf},
+    })
+    return response.status
+  }, historical.id)
+  expect(orphanLease).toBe(200)
   // M2: range export. The published segment exports as one artifact whose ZIP
   // carries the evidence manifest; a stream-copy remux must really run and the
   // downloads must really be MP4/ZIP bytes, not status codes alone.
