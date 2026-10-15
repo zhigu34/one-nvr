@@ -71,13 +71,28 @@ export function RulePanel({ channelID, onChanged }: { channelID: string; onChang
   const permitted = (channels.data?.items || []).some(
     (channel) => channel.id === channelID && channel.permissions.includes('configure')
   )
+  // Enabled destinations only: the server skips a disabled channel at raise
+  // time, so offering it here would let an operator bind an alert path that
+  // silently tells no one.
+  const notificationChannels = useAPI<{ items: Schema<'NotificationChannel'>[] }>(
+    '/api/v1/notification-channels',
+    !!channelID && permitted
+  )
+  const channelsForBinding = (notificationChannels.data?.items || []).filter(
+    (channel) => channel.enabled !== false
+  )
   const [editing, setEditing] = useState<Rule | null>(null)
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
+  // Which notification channels the rule being edited tells. Held beside the
+  // draft because the binding is a separate resource: the rule says what to
+  // watch, the binding says who hears about it.
+  const [binding, setBinding] = useState<string[]>([])
   const items = rules.data?.items || []
   const zoneItems = zones.data?.items || []
 
   function startNew() {
+    setBinding([])
     setEditing({
       channel_id: channelID,
       name: '',
@@ -97,7 +112,14 @@ export function RulePanel({ channelID, onChanged }: { channelID: string; onChang
     setPending(true)
     setError('')
     try {
-      await apiRequest('/api/v1/detection/rules', jsonRequest('POST', rule))
+      const saved = await apiRequest<Rule>('/api/v1/detection/rules', jsonRequest('POST', rule))
+      // The binding is written second because it needs the rule's id. A failure
+      // here keeps the editor open rather than pretending the whole save
+      // succeeded: the rule itself is already stored and re-saving updates it.
+      await apiRequest(
+        `/api/v1/detection/rules/${saved?.id ?? rule.id}/channels`,
+        jsonRequest('PUT', { channel_ids: binding })
+      )
       setEditing(null)
       onChanged()
     } catch (cause) {
@@ -105,6 +127,17 @@ export function RulePanel({ channelID, onChanged }: { channelID: string; onChang
     } finally {
       setPending(false)
     }
+  }
+
+  // Opening a rule loads which channels it tells, so the editor shows the
+  // stored binding rather than an empty selection that would erase it on save.
+  function openRule(rule: Rule) {
+    setEditing(rule)
+    setBinding([])
+    if (!rule.id) return
+    void apiRequest<{ channel_ids?: string[] }>(`/api/v1/detection/rules/${rule.id}/channels`)
+      .then((result) => setBinding(result?.channel_ids ?? []))
+      .catch(() => setBinding([]))
   }
 
   async function remove(rule: Rule) {
@@ -168,7 +201,7 @@ export function RulePanel({ channelID, onChanged }: { channelID: string; onChang
                 size='sm'
                 variant='ghost'
                 aria-label={`编辑规则 ${rule.name}`}
-                onClick={() => setEditing(rule)}
+                onClick={() => openRule(rule)}
               >
                 编辑
               </Button>
@@ -189,9 +222,12 @@ export function RulePanel({ channelID, onChanged }: { channelID: string; onChang
           rule={editing}
           zones={zoneItems}
           allRules={items}
+          channels={channels.data?.items ? channelsForBinding : []}
+          binding={binding}
           pending={pending}
           onCancel={() => setEditing(null)}
           onSave={save}
+          onBinding={setBinding}
         />
       )}
     </div>
@@ -202,16 +238,22 @@ function RuleEditor({
   rule,
   zones,
   allRules,
+  channels,
+  binding,
   pending,
   onCancel,
   onSave,
+  onBinding,
 }: {
   rule: Rule
   zones: Zone[]
   allRules: Rule[]
+  channels: Schema<'NotificationChannel'>[]
+  binding: string[]
   pending: boolean
   onCancel: () => void
   onSave: (rule: Rule) => void
+  onBinding: (channelIDs: string[]) => void
 }) {
   const [draft, setDraft] = useState<Rule>(rule)
   const update = (patch: Partial<Rule>) => setDraft((current) => ({ ...current, ...patch }))
@@ -262,12 +304,31 @@ function RuleEditor({
           }
           options={Object.entries(KIND_LABELS).map(([value, label]) => ({ value, label }))}
         />
-        <SelectField
-          ariaLabel='目标类别'
-          value={draft.categories?.[0] ?? 'person'}
-          onValueChange={(next) => update({ categories: [next || 'person'] })}
-          options={Object.entries(CATEGORY_LABELS).map(([value, label]) => ({ value, label }))}
-        />
+        <fieldset className='grid gap-2 sm:col-span-2'>
+          <legend className='text-sm text-muted-foreground'>目标类别</legend>
+          <div className='flex flex-wrap gap-x-4 gap-y-2'>
+            {Object.entries(CATEGORY_LABELS).map(([value, label]) => (
+              <CheckboxField
+                key={value}
+                label={label}
+                checked={(draft.categories ?? []).includes(value)}
+                onCheckedChange={(checked) => {
+                  const current = draft.categories ?? []
+                  const next = checked
+                    ? [...current, value]
+                    : current.filter((entry) => entry !== value)
+                  // An empty selection would be refused by the server, and a
+                  // rule that matches nothing is not what unticking the last box
+                  // means. Keep the last one so the form stays valid.
+                  update({ categories: next.length ? next : current })
+                }}
+              />
+            ))}
+          </div>
+          <p className='text-xs text-muted-foreground'>
+            可多选；想覆盖全部类别时逐个勾选。
+          </p>
+        </fieldset>
         <SelectField
           ariaLabel='严重级别'
           value={draft.severity ?? 'medium'}
@@ -332,6 +393,34 @@ function RuleEditor({
           {blockedText}
         </p>
       )}
+      <fieldset className='grid gap-2'>
+        <legend className='text-sm text-muted-foreground'>通知渠道</legend>
+        {channels.length === 0 ? (
+          <p className='text-xs text-muted-foreground'>
+            尚未配置通知渠道。到「系统设置 → 通知渠道」添加后，这里即可选择；不选时规则只记录命中，不对外提醒。
+          </p>
+        ) : (
+          <div className='flex flex-wrap gap-x-4 gap-y-2'>
+            {channels.map((channel) => (
+              <CheckboxField
+                key={channel.id}
+                label={channel.name ?? ''}
+                checked={binding.includes(channel.id ?? '')}
+                onCheckedChange={(checked) =>
+                  onBinding(
+                    checked
+                      ? [...binding, channel.id ?? '']
+                      : binding.filter((entry) => entry !== channel.id)
+                  )
+                }
+              />
+            ))}
+          </div>
+        )}
+        <p className='text-xs text-muted-foreground'>
+          不勾选任何渠道时，规则命中仍会被记录，但不会外发通知；站内提醒始终记录，不受冷却限制。
+        </p>
+      </fieldset>
       <div className='flex flex-wrap items-center gap-3'>
         <CheckboxField
           label='启用'
