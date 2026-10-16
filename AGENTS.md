@@ -60,6 +60,10 @@ CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真�
 
 ## 当前交接快照（2026-10-09）
 
+- **2026-10-16 两处既有缺口已修（本机取证 → 修复，未经 CI）**：
+  - **`source_observations` 只增不删**：全库 0 处删除，而 `monitor.go` 每 10 秒对每个已配置通道写 main/sub/recording 三行（实测统计口径）：**每通道每天约 2.6 万行**，8 路每月约 600 万行、32 路每月约 2500 万行，且无任何保留策略。这些行**携带 30 秒 TTL、只服务「最新状态」查询**（唯一读者 `channel/source_status.go` 取每通道每 kind 的最新一行），历史价值为零。修法：`recording.SweepObservations` 按 `ObservationRetention`（24 小时）分批删除，挂进既有 `RunRetention` 循环；同时新增迁移 `0023` 的 `source_observations(observed_at)` 索引——**原有索引以 `channel_id` 开头，删除条件只用 `observed_at`，用不上它**，不加索引会全表扫。**删除不会改变 UI 结论**：某 kind 无行时 `statusTx` 落到显式的 unknown 分支（有集成测试钉住），不会把「没观测」读成「健康」。
+  - **`recording_gaps` 核实后判定不需要清理**（与上一条区分开）：它有去重（`NOT EXISTS ... end_at IS NULL`，同一通道同时只留一条未闭合缺口），所以是「每故障一条」而非每 tick 一条；而且它是**证据**——REL-02/05 故障归因与故障表的原料，今天只是尚无读者（全库只有 INSERT/UPDATE）。**不要在 REL 批次之前删它。**
+  - **`ONE_NVR_OPENLIST_ENABLE=no` 时云归档并未真正暂停（已修）**：PRD §14 要求「关闭时停服务并暂停所有云端动作」，此前 `internal/httpapi/archive.go` 的 **8 个 handler 全都没有 nil 守卫**，端点与三个 worker 循环（上传消费、定时扫描、云端到期）无条件运行——`OpenListEnabled` 只用于 render/egress/探针/capability，于是默认 no 的部署仍能注册目标并上传，而 capability 同时报「功能未启用」。修法：新增 `internal/app/archiveFor()` 作为**唯一判定点**（api 与 worker 共用，两侧不可能分叉），开关关时返回 nil；handler 补 nil 守卫返回 404（与检测侧 `FrigateEnabled=no` 时 `d.Detection == nil` → 404 的做法一致）；三个循环与发布钩子 `OnPublished` 一并移入开关之内。**已存目标、副本与远端对象一律不动**——这是暂停工作，不是遗忘数据。
 - **2026-10-16 快照卡住的**第三种**成因已修（用户截图复现：已结束但图仍 pending）**：前一条修的是「MQTT 丢 end → 事件永不开闭」。用户随后截图一张**已正常结束**（时长 1m00s、状态未处理）却显示「无抓拍图像」的卡片——那是**另一条路径**，上一轮没覆盖：
   - **成因**：Frigate 的 `end` 消息里 `has_snapshot` 用的是**该时刻的值**，而快照文件可能稍后才落盘；**发完 end 后 Frigate 把事件从 `events_in_process` 删除、不再发任何 update**（源码 `maintainer.py`：`del self.events_in_process[...]`）。于是 one-nvr 永久停在 `ended_at` 非空 + `snapshot_state='pending'`。
   - **为什么无人修复**：三条路径的筛选条件都把它排除——对账要 `ended_at IS NULL`、24h 兜底要 `ended_at IS NULL`、归档 sweep 要 `snapshot_state='ready'`。**「已结束 + pending」全库没有任何修复者**，且因为它有结束时间和时长、看起来"完整"，也没有别的机制会去检查它。

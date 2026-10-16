@@ -37,6 +37,11 @@ func (s *Service) RunRetention(ctx context.Context) {
 		// the site's recording retention setting, so this sweep always runs.
 		s.SweepExportArtifacts(ctx)
 		s.SweepRetention(ctx)
+		// Observation rows are not history: they carry a thirty-second TTL and
+		// only the newest one per channel and stream kind is ever read. Without
+		// this they accumulate at three rows per channel every ten seconds —
+		// millions a month — because nothing else deletes them.
+		s.SweepObservations(ctx)
 		// Archive-bound channels clean on their own shorter window, gated on a
 		// confirmed remote copy (ARC-05); the gate hook is injected by the
 		// assembly, so without it nothing happens.
@@ -268,6 +273,49 @@ func (s *Service) SweepArchiveLocal(ctx context.Context) {
 			}
 		}
 		if len(batch) < 50 {
+			return
+		}
+	}
+}
+
+// ObservationRetention is how long a source observation outlives its own TTL
+// before the sweep removes it.
+//
+// The row's expires_at (thirty seconds) is what the reader honours; this window
+// only has to be longer than that. Keeping a day means an operator debugging a
+// flapping camera still sees the rows behind the latest state, while the table
+// stays bounded at roughly one day of observations instead of growing forever.
+const ObservationRetention = 24 * time.Hour
+
+// SweepObservations deletes observation rows past their usefulness.
+//
+// These rows describe *now*: the reader takes the newest row per channel and
+// stream kind and marks it stale once expires_at passes. Nothing queries an old
+// observation, so an expired row is dead weight — and at three rows per channel
+// every ten seconds it is heavy dead weight.
+//
+// Deleting them cannot change what the UI reports: a kind with no rows at all
+// already falls back to an explicit unknown state rather than to healthy, so a
+// missing row means "not observed", never "fine".
+func (s *Service) SweepObservations(ctx context.Context) {
+	if s.DB == nil {
+		return
+	}
+	// Bounded batches, like the recording sweeps: the first run after upgrade
+	// may have months of backlog, and one enormous DELETE would hold locks and
+	// write-ahead log for an arbitrarily long time.
+	for {
+		tag, err := s.DB.Pool.Exec(ctx, `DELETE FROM source_observations
+			WHERE id IN (SELECT id FROM source_observations
+				WHERE observed_at < clock_timestamp() - $1::interval
+				LIMIT $2)`, ObservationRetention.String(), retentionBatch)
+		if err != nil {
+			if ctx.Err() == nil {
+				slog.Warn("source observation cleanup unavailable", "error", err)
+			}
+			return
+		}
+		if tag.RowsAffected() < retentionBatch || ctx.Err() != nil {
 			return
 		}
 	}

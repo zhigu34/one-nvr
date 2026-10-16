@@ -10,6 +10,10 @@ import (
 
 // listArchiveTargets handles GET /api/v1/archive-targets.
 func (r *router) listArchiveTargets(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Archive == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
 	targets, err := r.d.Archive.ListTargets(q.Context(), p)
 	if err != nil {
 		fail(w, q, err)
@@ -56,6 +60,10 @@ func decodeTargetBody(w http.ResponseWriter, q *http.Request) (archive.TargetInp
 }
 
 func (r *router) registerArchiveTarget(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Archive == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
 	in, ok := decodeTargetBody(w, q)
 	if !ok {
 		return
@@ -69,6 +77,10 @@ func (r *router) registerArchiveTarget(w http.ResponseWriter, q *http.Request, p
 }
 
 func (r *router) updateArchiveTarget(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Archive == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
 	targetID, err := pathID(q)
 	if err != nil {
 		fail(w, q, err)
@@ -87,6 +99,10 @@ func (r *router) updateArchiveTarget(w http.ResponseWriter, q *http.Request, p a
 }
 
 func (r *router) deleteArchiveTarget(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Archive == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
 	targetID, err := pathID(q)
 	if err != nil {
 		fail(w, q, err)
@@ -102,8 +118,12 @@ func (r *router) deleteArchiveTarget(w http.ResponseWriter, q *http.Request, p a
 // testArchiveTarget probes a stored target, or the submitted draft before it
 // exists. Synchronous and bounded like the ONVIF probe.
 func (r *router) testArchiveTarget(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Archive == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
 	var in struct {
-		ID    *id.ID `json:"id"`
+		ID                 *id.ID `json:"id"`
 		Name               string `json:"name"`
 		BaseURL            string `json:"base_url"`
 		RemoteRoot         string `json:"remote_root"`
@@ -144,6 +164,10 @@ func targetIDOrEmpty(value *id.ID) id.ID {
 // requestArchiveUploads handles POST /api/v1/recordings/archive: one upload
 // task per ready segment, per-row archive grant, partial success.
 func (r *router) requestArchiveUploads(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Archive == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
 	var in struct {
 		TargetID   id.ID   `json:"target_id"`
 		SegmentIDs []id.ID `json:"segment_ids"`
@@ -164,6 +188,10 @@ func (r *router) requestArchiveUploads(w http.ResponseWriter, q *http.Request, p
 
 // listArchivePolicies handles GET /api/v1/archive-policies.
 func (r *router) listArchivePolicies(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Archive == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
 	policies, err := r.d.Archive.ListPolicies(q.Context(), p)
 	if err != nil {
 		fail(w, q, err)
@@ -177,9 +205,13 @@ func (r *router) listArchivePolicies(w http.ResponseWriter, q *http.Request, p a
 // upsertArchivePolicy handles PUT /api/v1/archive-policies: one channel's
 // binding. mode manual with no target removes the binding.
 func (r *router) upsertArchivePolicy(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Archive == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
 	var in struct {
-		ChannelID id.ID `json:"channel_id"`
-		TargetID  id.ID `json:"target_id"`
+		ChannelID id.ID  `json:"channel_id"`
+		TargetID  id.ID  `json:"target_id"`
 		Mode      string `json:"mode"`
 		Schedule  string `json:"schedule"`
 	}

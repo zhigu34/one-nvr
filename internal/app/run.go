@@ -163,9 +163,20 @@ func Run(name string) error {
 		go func() { defer background.Done(); runDeliveryReconciliation(ctx, notifications) }()
 		// The archive service exists before any publisher starts so the
 		// immediate-upload hook is set for the very first published segment.
-		archiveService := archive.New(db, recordings.Sources.Auth, secret, pools)
-		recordings.OnPublished = func(ctx context.Context, tx pgx.Tx, channelID, segmentID id.ID) error {
-			return archiveService.EnqueueForPublication(ctx, tx, channelID, segmentID)
+		//
+		// With the module switched off the worker does no archive work at all:
+		// no upload consumer, no schedule sweeper, no cloud expiry, and no
+		// publish hook. PRD §14 requires the off switch to stop the service and
+		// pause every cloud action, so "the UI hides the page" is not enough —
+		// a queued job left over from an earlier deployment must not keep
+		// uploading after the operator turned the module off. The existing
+		// rows, targets and remote objects are untouched: this pauses work, it
+		// does not forget anything.
+		archiveService := archiveFor(c, db, recordings.Sources.Auth, secret, pools)
+		if archiveService != nil {
+			recordings.OnPublished = func(ctx context.Context, tx pgx.Tx, channelID, segmentID id.ID) error {
+				return archiveService.EnqueueForPublication(ctx, tx, channelID, segmentID)
+			}
 		}
 		listener, err := net.Listen("tcp", ":8083")
 		if err != nil {
@@ -200,18 +211,22 @@ func Run(name string) error {
 		}
 		background.Add(1)
 		go func() { defer background.Done(); runExportReconciliation(ctx, recordings) }()
-		background.Add(2)
-		for n := 0; n < 2; n++ {
-			go func() {
-				defer background.Done()
-				runSourceJobs(ctx, db, "recording.archive_upload", archiveService.HandleUpload)
-			}()
+		if archiveService != nil {
+			background.Add(2)
+			for n := 0; n < 2; n++ {
+				go func() {
+					defer background.Done()
+					runSourceJobs(ctx, db, "recording.archive_upload", archiveService.HandleUpload)
+				}()
+			}
+			background.Add(1)
+			go func() { defer background.Done(); runArchiveScheduleSweeper(ctx, archiveService) }()
+			// ARC-05 gate: the local cleanup confirms the remote copy is really
+			// readable through the same client the playback proxy uses. Without
+			// it, archive-bound channels make no local cleanup decision at all
+			// — the safe outcome, and the one the module being off requires.
+			recordings.ArchiveLocalGate = archiveService.ConfirmRemoteAvailable
 		}
-		background.Add(1)
-		go func() { defer background.Done(); runArchiveScheduleSweeper(ctx, archiveService) }()
-		// ARC-05 gate: the local cleanup confirms the remote copy is really
-		// readable through the same client the playback proxy uses.
-		recordings.ArchiveLocalGate = archiveService.ConfirmRemoteAvailable
 		background.Add(1)
 		go func() { defer background.Done(); runCloudExpirySweeper(ctx, archiveService) }()
 		if c.FrigateEnabled {
@@ -362,7 +377,7 @@ func Run(name string) error {
 				return fmt.Errorf("detection service wiring incomplete")
 			}
 		}
-		handler = httpapi.NewHandler(httpapi.Dependencies{Events: intelligence, Detection: detectionService, Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, Sources: sources, Live: &live.Service{DB: db, Auth: accounts, Media: media}, PublicURL: c.PublicURL, TrustedProxyToken: proxyKey, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled, Archive: archive.New(db, accounts, secret, pools), Notify: notify.New(db, accounts, secret, secret.SiteID)})
+		handler = httpapi.NewHandler(httpapi.Dependencies{Events: intelligence, Detection: detectionService, Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, Sources: sources, Live: &live.Service{DB: db, Auth: accounts, Media: media}, PublicURL: c.PublicURL, TrustedProxyToken: proxyKey, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled, Archive: archiveFor(c, db, accounts, secret, pools), Notify: notify.New(db, accounts, secret, secret.SiteID)})
 	}
 	if name == "worker" {
 		prober := &operations.Prober{Checks: map[string]func(context.Context) error{"zlm": media.Health}, Operations: operations.New(db, nil, c.FrigateEnabled, c.OpenListEnabled), Client: operations.NewProbeClient(), Targets: map[string]operations.ProbeTarget{
@@ -472,4 +487,16 @@ func ConfigureDatabasePool(c *pgxpool.Config, name string) {
 	if name == "worker" {
 		c.MaxConns = 24
 	}
+}
+
+// archiveFor builds the archive service only when the deployment enables the
+// module. The API and the worker both go through here so they cannot disagree
+// about whether cloud archive exists: a nil service makes every archive endpoint
+// answer "not found", which is what PRD §14 requires when the switch is off —
+// the pages are hidden and the API is closed, not merely the former.
+func archiveFor(c config.Config, db *database.DB, accounts *auth.Service, secret secrets.State, pools *storage.Service) *archive.Service {
+	if !c.OpenListEnabled {
+		return nil
+	}
+	return archive.New(db, accounts, secret, pools)
 }
