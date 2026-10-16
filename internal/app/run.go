@@ -285,9 +285,12 @@ func Run(name string) error {
 		// answer readiness never starts at all), and a failure to settle old
 		// history must not stop recording — reliability is an observation of the
 		// media pipeline, never a precondition for it.
-		background.Add(2)
+		// Four goroutines follow, and the count is stated once so a fifth cannot
+		// be added without the Add moving with it. (It was wrong here twice
+		// already: an Add(2) covering one goroutine hangs shutdown, an Add(1)
+		// covering two panics it with a negative counter.)
+		background.Add(4)
 		go func() { defer background.Done(); runReliabilityRetention(ctx, db) }()
-		background.Add(1)
 		go func() {
 			defer background.Done()
 			if err := reliabilityService.CloseOpenOnStart(ctx); err != nil && ctx.Err() == nil {
