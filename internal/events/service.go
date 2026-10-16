@@ -146,9 +146,11 @@ type frigateMessage struct {
 	} `json:"after"`
 }
 
-// Ingest normalizes one MQTT payload into the event index. It is idempotent on
-// the upstream id and monotonic: an update may fill in end time, score and
-// snapshot, but a late "new" for a closed event never reopens it (AI-05).
+// Ingest normalizes one MQTT payload into the event index.
+//
+// The write itself lives in eventUpsert, shared with the reconciliation read of
+// the detector's API: the stream is the fast path, and reconciliation repairs a
+// message it lost, so both must produce the same record.
 func (s *Service) Ingest(ctx context.Context, payload []byte) error {
 	var message frigateMessage
 	if err := json.Unmarshal(payload, &message); err != nil {
@@ -158,7 +160,6 @@ func (s *Service) Ingest(ctx context.Context, payload []byte) error {
 	if after.ID == "" || after.Camera == "" || after.Label == "" || after.StartTime <= 0 {
 		return errMQTTProtocol
 	}
-	started := time.Unix(int64(after.StartTime), 0).UTC()
 	score := after.Score
 	if after.TopScore > score {
 		score = after.TopScore
@@ -167,75 +168,33 @@ func (s *Service) Ingest(ctx context.Context, payload []byte) error {
 	if len(zones) == 0 {
 		zones = after.Zones
 	}
-	// A detection matching no zone arrives with these arrays absent or null.
-	// Marshal an empty slice rather than nil: nil serializes to JSON null, and
-	// the upsert's jsonb_array_length() rejects a scalar — so an event outside
-	// every zone would fail to store instead of being recorded as "no zones".
-	if zones == nil {
-		zones = []string{}
+	var endTime *time.Time
+	if after.EndTime != nil && *after.EndTime > 0 {
+		end := time.Unix(int64(*after.EndTime), 0).UTC()
+		endTime = &end
+	}
+	snapshotState := "pending"
+	if after.HasSnapshot {
+		snapshotState = "ready"
 	}
 	raw, _ := json.Marshal(map[string]any{"type": message.Type, "label": after.Label, "camera": after.Camera})
-	return s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
-		var channelID id.ID
-		var revision *id.ID
-		err := tx.QueryRow(ctx, `SELECT c.id,c.current_revision_id FROM frigate_cameras f JOIN channels c ON c.id=f.channel_id WHERE f.frigate_name=$1`, after.Camera).Scan(&channelID, &revision)
-		if errors.Is(err, pgx.ErrNoRows) {
-			// An unmapped camera is dropped with a record, not silently merged
-			// into another channel (CH-07/CH-08). It is also logged: without a
-			// line here, "events arrive but are dropped" is indistinguishable
-			// from "no events arrive" when reading the worker log.
-			slog.Warn("event dropped: camera has no channel mapping", "camera", after.Camera, "source_id", after.ID)
-			return s.recordUnmapped(ctx, tx, after.Camera, after.ID)
-		}
-		if err != nil {
-			return err
-		}
-		var endTime *time.Time
-		if after.EndTime != nil && *after.EndTime > 0 {
-			end := time.Unix(int64(*after.EndTime), 0).UTC()
-			endTime = &end
-		}
-		snapshotState := "pending"
-		if after.HasSnapshot {
-			snapshotState = "ready"
-		}
-		eventID, err := id.New()
-		if err != nil {
-			return err
-		}
-		expires := any(nil)
-		if endTime != nil {
-			expires = endTime.Add(EventIndexRetention)
-		}
-		zonesJSON, err := json.Marshal(zones)
-		if err != nil {
-			return err
-		}
-		// The insert is the "new" path; the update path only ever moves the
-		// event forward (ended_at monotonically, snapshot pending→ready).
-		_, err = tx.Exec(ctx, `INSERT INTO events(id,channel_id,source_revision_id,source,source_id,category,score,zones,started_at,ended_at,snapshot_state,expires_at,raw)
-			VALUES($1,$2,$3,'frigate',$4,$5,$6,$7,$8,$9,$10,$11,$12)
-			ON CONFLICT (source,source_id) DO UPDATE SET
-				score=GREATEST(events.score,EXCLUDED.score),
-				zones=CASE WHEN jsonb_array_length(EXCLUDED.zones)>0 THEN EXCLUDED.zones ELSE events.zones END,
-				ended_at=COALESCE(EXCLUDED.ended_at,events.ended_at),
-				snapshot_state=CASE WHEN EXCLUDED.snapshot_state='ready' THEN 'ready' ELSE events.snapshot_state END,
-				expires_at=COALESCE(EXCLUDED.expires_at,events.expires_at),
-				updated_at=clock_timestamp()
-			WHERE events.ended_at IS NULL OR EXCLUDED.ended_at IS NULL OR EXCLUDED.ended_at>=events.ended_at`,
-			eventID, channelID, revision, after.ID, after.Label, score, zonesJSON, started, endTime, snapshotState, expires, raw)
-		if err != nil {
-			return err
-		}
-		// Rules are evaluated in the same transaction: an event and the fact
-		// that it tripped a rule commit together, so a crash cannot leave a
-		// flagged event without its hit or the reverse.
-		stored, err := scanEvent(tx.QueryRow(ctx, `SELECT `+eventColumns+` FROM events e WHERE e.source=$1 AND e.source_id=$2`, "frigate", after.ID))
-		if err != nil {
-			return err
-		}
-		return s.evaluateRules(ctx, tx, stored)
+	err := s.eventUpsert(ctx, upsertInput{
+		Camera:        after.Camera,
+		SourceID:      after.ID,
+		Category:      after.Label,
+		Score:         score,
+		Zones:         zones,
+		StartedAt:     time.Unix(int64(after.StartTime), 0).UTC(),
+		EndedAt:       endTime,
+		SnapshotState: snapshotState,
+		Raw:           raw,
 	})
+	// An unmapped camera is not a protocol error: the payload was fine, the
+	// site just does not know that camera. The record was written by the upsert.
+	if errors.Is(err, errEventUnmapped) {
+		return nil
+	}
+	return err
 }
 
 func (s *Service) recordUnmapped(ctx context.Context, tx pgx.Tx, camera, sourceID string) error {

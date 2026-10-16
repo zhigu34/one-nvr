@@ -60,6 +60,13 @@ CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真�
 
 ## 当前交接快照（2026-10-09）
 
+- **2026-10-16 事件丢失结束消息的根因已修（现场实测 13/50 卡住）**：现场取证发现最近 50 条事件中 13 条 `snapshot_state=pending` 且全部 `ended_at=null`（最老的挂 2.5 小时），事件页因此出现四分之一卡片的「无抓拍图像」黑块。
+  - **根因链**：MQTT `end` 消息丢失后，upsert 再也等不到补齐 `ended_at`/`has_snapshot` 的 update；归档 sweep 只挑 `snapshot_state='ready'`，pending 事件永不被抓取；`internal/events/run.go` 只订阅 MQTT、**没有任何对 Frigate API 的补账机制**。前端 5 分钟收口（`ONGOING_MAX_AGE_MS`）本身按设计工作，只是后端数据永远补不上——**此前 2026-10-14 那次只修了显示层**（AGENTS 旧条目「修掉 MQTT end 丢失导致永挂进行中」指的仅是前端文案），数据层一直没修。
+  - **顺带查实的第二个缺陷**：`StaleOpenThreshold`（24h，注释写明「上游从未关闭的事件应在此时点后正常过期」）自加入起**声明后从未被任何代码引用**，且清理 SQL 要求 `ended_at IS NOT NULL`、`expires_at` 也只在有 end 时计算——所以无结束时间的事件**永远不会被清理，只增不删**（与 `source_observations` 同类问题）。
+  - **修法**：worker 新增对账循环（`internal/events/reconcile.go`，5 分钟一跳）：对 `ended_at IS NULL AND started_at < now()-10min` 的事件调 Frigate `GET /api/events/{id}`（已核对 0.17.2 源码，响应含 `end_time`/`has_snapshot`/`zones`/`data.score`），复用**同一个 upsert** 补齐——为此把 Ingest 的写入抽成 `internal/events/upsert.go` 的 `eventUpsert`，两条路径共用一份 SQL，不能分叉。检测器答 404 或整体不可达时，由 `ReconcileStaleOpen` 按 24h 兜底关闭（总算接上了那个死常量）。**回填不覆盖已有事实**：仍走单调 upsert，end 不后退、score 只升、ready 不降级。
+  - **前端**：区分两种「无抓拍」——`endedWithoutUpstreamClose`（有开始、无结束 → 「抓拍未到达 · 事件未正常结束」+ 琥珀警示图标，并说明系统会向检测器核对）与「无抓拍图像」（正常结束、检测器本来就没存）；时长胶囊对前者显示「结束未知」而非笼统的「已结束」。占位从满幅纯黑改为 `bg-zinc-900/40` 浅底纹 + 小图标——13 个黑块对画廊观感的伤害是现场反馈的重点。抽屉「结束」行同步改为「未收到结束消息（系统会向检测器核对）」。
+  - **未做**：Frigate 事件 API 的补账只针对 ended_at 为空的事件；`has_snapshot=false` 但已结束的事件不会被反复重试（属正常终态）。「仅看有抓拍」筛选未做——判定为先提供更清晰的语义区分，若现场仍觉嘈杂再加。
+
 - **2026-10-16 M3 批次 4 已交付：通知（EVT-05）+ 抓拍归档（M3 已完成）**。用户裁决「不再跑 CI，本机测完直接部署验证」，所以本批的验收依据是**本机测试 + 现场部署**，不是 CI。
   - **通知的分层是设计核心**：先把渠道无关的通知变量定死（`internal/notify/message.go`），渠道只做「把变量带出去发送」。适配器接口只有 `Kind()` + `Send(Message)`，注册表按 kind 构造；**新增渠道 = 写一个适配器并注册，不改变量层、不改事件与规则代码**（`TestANewChannelKindNeedsOnlyAnAdapter` 用虚构 kind 钉住这条）。首批 `inapp`（通知行即投递）与 `webhook`（POST 消息本体 + `X-OneNVR-Delivery`/`-Event`/`-Signature` 头，签名覆盖实际发送的字节）。
   - **三条「不撒谎」的语义（别改回去）**：进行中的事件不伪造结束时间（正文写「进行中」）；抓拍取不到就不给链接；站点时区未知时省略本地时间只留 UTC。另外回放链用**通道 ID 而非编号**（`initialChannel` 是拿去和 `channels.items[].id` 比对的）。

@@ -232,8 +232,12 @@ func Run(name string) error {
 			go func() { defer background.Done(); eventsService.RunExpiry(ctx) }()
 			// The detector keeps its snapshots only briefly; copying them into
 			// the channel's pool is what makes the picture outlive it (STO-07).
-			background.Add(1)
+			background.Add(2)
 			go func() { defer background.Done(); runSnapshotArchive(ctx, eventsService) }()
+			// MQTT is best-effort: this repairs the events whose closing message
+			// the stream lost, so they do not stay open forever with a snapshot
+			// that never arrives.
+			go func() { defer background.Done(); runEventReconciliation(ctx, eventsService) }()
 			// Detection configuration publishes into the Frigate config bind
 			// mount and makes it take effect through the detector's restart API.
 			detectionService, err := newDetectionService(db, recordings.Sources.Auth, c.DataDir, mqttKey, probeKey)

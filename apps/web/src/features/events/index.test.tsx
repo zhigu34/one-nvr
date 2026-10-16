@@ -244,8 +244,8 @@ test('cards show channel and zone, and the filter bar counts and batch-marks', a
   // The ended event carries the known duration; the ongoing recent one reads
   // 进行中.
   await expect.element(cards.nth(0)).toHaveTextContent('12s')
-  await expect.element(cards.nth(1)).toHaveTextContent('已结束')
-  await expect.element(cards.nth(1)).toHaveTextContent('无抓拍图像')
+  await expect.element(cards.nth(1)).toHaveTextContent('结束未知')
+  await expect.element(cards.nth(1)).toHaveTextContent('抓拍未到达')
   // The compact bar counts what is loaded.
   await expect.element(screen.getByText('已加载 2 条')).toBeVisible()
   // One click retires both open events; the PATCHes carry per-row versions.
@@ -257,7 +257,7 @@ test('cards show channel and zone, and the filter bar counts and batch-marks', a
   client.clear()
 })
 
-test('a stale ongoing event shows 已结束 and the honest snapshot state', async () => {
+test('an event with no upstream close says so instead of showing a bare dead tile', async () => {
   const stale: Schema<'Event'> = {
     id: eventID,
     channel_id: channelID,
@@ -280,10 +280,44 @@ test('a stale ongoing event shows 已结束 and the honest snapshot state', asyn
   const screen = await view(client)
   const card = screen.getByTestId('event-card')
   await expect.element(card).toBeVisible()
-  await expect.element(card).toHaveTextContent('已结束')
+  // Not "正在进行" and not a silent "已结束": the system knows it started and
+  // does not know how it finished, and the pill says that.
   await expect.element(card).not.toHaveTextContent('进行中')
   await expect.element(card).not.toHaveTextContent('抓拍生成中')
+  await expect.element(card).toHaveTextContent('结束未知')
+  // The missing picture is a fault here, not an ordinary snapshotless
+  // detection, and the card names the cause the operator can act on.
+  await expect.element(card).toHaveTextContent('抓拍未到达')
+  await expect.element(card).toHaveTextContent('事件未正常结束')
+  await expect.element(card).not.toHaveTextContent('无抓拍图像')
+  client.clear()
+})
+
+test('a closed event with no snapshot reads as an ordinary missing picture', async () => {
+  const closed: Schema<'Event'> = {
+    id: eventID,
+    channel_id: channelID,
+    source: 'frigate',
+    source_id: 'evt-closed',
+    category: 'person',
+    score: 0.5,
+    zones: [],
+    started_at: new Date(Date.now() - 3_600_000).toISOString(),
+    ended_at: new Date(Date.now() - 3_590_000).toISOString(),
+    snapshot_state: 'gone',
+    media_state: 'unavailable',
+    handle_state: 'open',
+    version: 1,
+    handling: [],
+  }
+  const { client } = fixture([], { events: [closed] })
+  const screen = await view(client)
+  const card = screen.getByTestId('event-card')
+  // This one ended normally and simply has no picture: nothing is wrong, so it
+  // must not be dressed up as a fault.
   await expect.element(card).toHaveTextContent('无抓拍图像')
+  await expect.element(card).not.toHaveTextContent('抓拍未到达')
+  await expect.element(card).not.toHaveTextContent('结束未知')
   client.clear()
 })
 

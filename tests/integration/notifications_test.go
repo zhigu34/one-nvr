@@ -417,3 +417,212 @@ func TestNotificationChannelManagementRequiresAdmin(t *testing.T) {
 		t.Fatal("a viewer must not list notification channels")
 	}
 }
+
+// mqttLostEndFixture stands up a detector whose API reports the closed event the
+// stream never delivered.
+type lostEndFixture struct {
+	notifyFixture
+	server *httptest.Server
+}
+
+// newLostEndFixture stores one event through the stream WITHOUT its end (the
+// message was lost), then points the service at a detector that knows the truth.
+func newLostEndFixture(t *testing.T, report map[string]any) lostEndFixture {
+	t.Helper()
+	f := newNotifyFixture(t)
+	f.mapCamera(t, "front-door")
+	// A detection older than the reconciliation window: it is not plausibly
+	// still running.
+	started := float64(time.Now().UTC().Add(-20 * time.Minute).Unix())
+	raw := frigatePayload("new", "evt-lost-end", "front-door", "person", started, nil, nil, false)
+	if err := f.service.Ingest(context.Background(), raw); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if report == nil {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(report)
+	}))
+	t.Cleanup(server.Close)
+	f.service.Frigate = server.URL
+	return lostEndFixture{notifyFixture: f, server: server}
+}
+
+func (f lostEndFixture) eventRow(t *testing.T) (ended *time.Time, snapshot string) {
+	t.Helper()
+	var endedAt *time.Time
+	var state string
+	if err := f.fixture.DB.Pool.QueryRow(context.Background(),
+		`SELECT ended_at,snapshot_state FROM events WHERE source_id='evt-lost-end'`).
+		Scan(&endedAt, &state); err != nil {
+		t.Fatal(err)
+	}
+	return endedAt, state
+}
+
+// The core defect: an event whose closing MQTT message was lost stays open
+// forever, and its snapshot stays pending so the archive sweep never copies it.
+// Reconciliation asks the detector and fills in what the stream lost.
+func TestReconciliationClosesAnEventWhoseEndMessageWasLost(t *testing.T) {
+	started := float64(time.Now().UTC().Add(-20 * time.Minute).Unix())
+	f := newLostEndFixture(t, map[string]any{
+		"id":           "evt-lost-end",
+		"camera":       "front-door",
+		"label":        "person",
+		"start_time":   started,
+		"end_time":     started + 12,
+		"has_snapshot": true,
+		"zones":        []string{"门口"},
+		"data":         map[string]any{"score": 0.9, "top_score": 0.95},
+	})
+
+	beforeEnd, beforeSnapshot := f.eventRow(t)
+	if beforeEnd != nil {
+		t.Fatal("the event must start out open for this test to mean anything")
+	}
+	if beforeSnapshot != "pending" {
+		t.Fatalf("the snapshot must start pending, got %q", beforeSnapshot)
+	}
+
+	f.service.ReconcileOpenEvents(context.Background())
+
+	ended, snapshot := f.eventRow(t)
+	if ended == nil {
+		t.Fatal("reconciliation must fill in the end time the stream lost")
+	}
+	if got := ended.Unix(); got != int64(started)+12 {
+		t.Fatalf("the end time must be the detector's, got %d", got)
+	}
+	// has_snapshot=true is what unblocks the archive sweep: the picture exists,
+	// so it can be copied now.
+	if snapshot != "ready" {
+		t.Fatalf("a detector that has the snapshot must mark it ready, got %q", snapshot)
+	}
+	// And the event now has a retention deadline, so it can eventually expire.
+	var expires *time.Time
+	if err := f.fixture.DB.Pool.QueryRow(context.Background(),
+		`SELECT expires_at FROM events WHERE source_id='evt-lost-end'`).Scan(&expires); err != nil {
+		t.Fatal(err)
+	}
+	if expires == nil {
+		t.Fatal("a closed event needs an expiry, or it can never be cleaned up")
+	}
+}
+
+// Reconciliation reads facts; it does not reorder them. A detector reporting an
+// earlier end than what is stored must not move the event backwards.
+func TestReconciliationNeverMovesAnEventBackwards(t *testing.T) {
+	started := float64(time.Now().UTC().Add(-20 * time.Minute).Unix())
+	f := newLostEndFixture(t, map[string]any{
+		"id":           "evt-lost-end",
+		"camera":       "front-door",
+		"label":        "person",
+		"start_time":   started,
+		"end_time":     started + 30,
+		"has_snapshot": true,
+		"data":         map[string]any{"score": 0.8},
+	})
+	f.service.ReconcileOpenEvents(context.Background())
+	first, _ := f.eventRow(t)
+	if first == nil {
+		t.Fatal("first reconciliation must close the event")
+	}
+
+	// The detector now reports an earlier end (a late correction upstream).
+	later := float64(time.Now().UTC().Add(-20 * time.Minute).Unix())
+	f.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "evt-lost-end", "camera": "front-door", "label": "person",
+			"start_time": later, "end_time": later + 5, "has_snapshot": true,
+			"data": map[string]any{"score": 0.1},
+		})
+	})
+	f.service.ReconcileOpenEvents(context.Background())
+
+	second, snapshot := f.eventRow(t)
+	if second == nil || !second.Equal(*first) {
+		t.Fatalf("an end time must not move backwards: %v → %v", first, second)
+	}
+	// Score only ever rises, and a ready snapshot is never downgraded.
+	var score float64
+	if err := f.fixture.DB.Pool.QueryRow(context.Background(),
+		`SELECT score FROM events WHERE source_id='evt-lost-end'`).Scan(&score); err != nil {
+		t.Fatal(err)
+	}
+	if score < 0.8 {
+		t.Fatalf("the score must not fall back to the detector's later report, got %v", score)
+	}
+	if snapshot != "ready" {
+		t.Fatalf("a ready snapshot must stay ready, got %q", snapshot)
+	}
+}
+
+// When the detector no longer knows the event at all, the honest outcome is a
+// closed event with no picture — not an open one forever.
+func TestReconciliationClosesAnEventTheDetectorNoLongerHas(t *testing.T) {
+	f := newLostEndFixture(t, nil) // every request answers 404
+
+	f.service.ReconcileOpenEvents(context.Background())
+
+	ended, snapshot := f.eventRow(t)
+	if ended == nil {
+		t.Fatal("an event the detector dropped must be closed, not left open")
+	}
+	// "gone" rather than "pending": the UI must stop promising a picture that
+	// nobody can produce.
+	if snapshot != "gone" {
+		t.Fatalf("a picture that cannot exist must be marked gone, got %q", snapshot)
+	}
+}
+
+// Reconciliation must not depend on the detector answering at all: a site whose
+// detector is gone would otherwise accumulate open events forever.
+func TestStaleOpenEventsAreClosedWithoutTheDetector(t *testing.T) {
+	// No server is set: the sweep alone has to close it.
+	f := newNotifyFixture(t)
+	f.mapCamera(t, "front-door")
+	old := float64(time.Now().UTC().Add(-30 * time.Hour).Unix())
+	if err := f.service.Ingest(context.Background(),
+		frigatePayload("new", "evt-ancient", "front-door", "person", old, nil, nil, false)); err != nil {
+		t.Fatal(err)
+	}
+
+	f.service.ReconcileStaleOpen(context.Background())
+
+	var ended *time.Time
+	var snapshot string
+	if err := f.fixture.DB.Pool.QueryRow(context.Background(),
+		`SELECT ended_at,snapshot_state FROM events WHERE source_id='evt-ancient'`).Scan(&ended, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if ended == nil {
+		t.Fatal("an event older than the stale threshold must be closed even with no detector")
+	}
+	if snapshot != "gone" {
+		t.Fatalf("its picture cannot be promised either, got %q", snapshot)
+	}
+}
+
+// A recent open event belongs to a running detection and must be left alone: the
+// sweep cannot be allowed to close something happening right now.
+func TestReconciliationLeavesAProbablyRunningEventOpen(t *testing.T) {
+	f := newLostEndFixture(t, nil)
+	// Replace the stored event with a fresh one, one minute old.
+	if _, err := f.fixture.DB.Pool.Exec(context.Background(),
+		`UPDATE events SET started_at=clock_timestamp() - interval '1 minute' WHERE source_id='evt-lost-end'`); err != nil {
+		t.Fatal(err)
+	}
+
+	f.service.ReconcileOpenEvents(context.Background())
+
+	ended, snapshot := f.eventRow(t)
+	if ended != nil {
+		t.Fatal("a detection that may still be running must not be closed")
+	}
+	if snapshot != "pending" {
+		t.Fatalf("its snapshot is still legitimately pending, got %q", snapshot)
+	}
+}

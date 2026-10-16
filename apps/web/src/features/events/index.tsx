@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { CheckCheck, Play, User } from 'lucide-react'
+import { AlertTriangle, CheckCheck, ImageOff, Play, User } from 'lucide-react'
 import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
@@ -74,10 +74,14 @@ const KIND_LABELS: Record<string, string> = {
 }
 
 /**
- * An MQTT `end` message can be lost. An event without an end that started
- * more than five minutes ago is closed for display purposes: showing
- * "进行中" and "抓拍生成中" on an hour-old row tells the operator a lie about
- * a dead stream. Five minutes is far beyond any real detection.
+ * An MQTT `end` message can be lost. An event without an end that started more
+ * than five minutes ago is closed for display purposes: showing "进行中" and
+ * "抓拍生成中" on an hour-old row would tell the operator a lie about a dead
+ * stream. Five minutes is far beyond any real detection.
+ *
+ * The worker reconciles those events against the detector's API a few minutes
+ * later, so a lost message is repaired rather than displayed forever — but the
+ * page must stay honest in the window before that happens.
  */
 const ONGOING_MAX_AGE_MS = 5 * 60_000
 
@@ -85,6 +89,15 @@ function isOngoing(item: Event, now: number) {
   if (item.ended_at) return false
   const start = Date.parse(item.started_at ?? '')
   return Number.isFinite(start) && now - start < ONGOING_MAX_AGE_MS
+}
+
+/**
+ * An event the upstream never closed. Distinct from "ended long ago": here the
+ * system knows the detection started and does not know how it finished, which
+ * is why its snapshot may never arrive.
+ */
+function endedWithoutUpstreamClose(item: Event, now: number) {
+  return !item.ended_at && !isOngoing(item, now)
 }
 
 /** Duration pill text: seconds while short, m:ss beyond a minute. */
@@ -95,6 +108,7 @@ function durationText(item: Event, now: number) {
     const seconds = Math.max(1, Math.round((end - Date.parse(item.started_at ?? '')) / 1000))
     return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m${pad(seconds % 60)}s`
   }
+  if (endedWithoutUpstreamClose(item, now)) return '结束未知'
   return '已结束'
 }
 
@@ -392,9 +406,14 @@ export function Events() {
                         className='h-full w-full object-cover'
                       />
                     ) : (
-                      // Pending only reads as live within the ongoing window;
-                      // an old snapshotless event shows the honest dead state.
-                      <div className='grid h-full w-full place-items-center text-zinc-600'>
+                      // Three states, three different truths. "No picture" was
+                      // one message for two causes: the detector had nothing to
+                      // save, or the event never closed so nobody knows. The
+                      // second is a fault and says so; the first is just a
+                      // detection with no snapshot. Both are drawn light — a
+                      // wall of full-bleed black tiles buries the cards that do
+                      // have a picture.
+                      <div className='grid h-full w-full place-items-center bg-zinc-900/40 text-zinc-500'>
                         {item.snapshot_state === 'pending' && ongoing ? (
                           <span className='flex flex-col items-center gap-1.5 text-xs'>
                             <span
@@ -403,9 +422,18 @@ export function Events() {
                             />
                             抓拍生成中
                           </span>
+                        ) : endedWithoutUpstreamClose(item, now) ? (
+                          <span
+                            className='flex flex-col items-center gap-1.5 px-2 text-center text-xs'
+                            title='检测器没有送出这条事件的结束消息，抓拍可能因此一直没有到达。系统会向检测器核对并补齐。'
+                          >
+                            <AlertTriangle aria-hidden className='size-4 text-amber-500' />
+                            抓拍未到达
+                            <span className='text-[10px] opacity-80'>事件未正常结束</span>
+                          </span>
                         ) : (
                           <span className='flex flex-col items-center gap-1.5 text-xs'>
-                            <User aria-hidden className='size-6' />
+                            <ImageOff aria-hidden className='size-4' />
                             无抓拍图像
                           </span>
                         )}
@@ -625,7 +653,7 @@ function EventDetail({
                   ? formatClock(Date.parse(item.ended_at), zone)
                   : ongoing
                     ? '进行中'
-                    : '已结束（结束消息未收到）'}
+                    : '未收到结束消息（系统会向检测器核对）'}
               </span>
               <span className='text-muted-foreground'>分数</span>
               <span>{Math.round((item.score ?? 0) * 100)}%</span>

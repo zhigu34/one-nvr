@@ -92,6 +92,27 @@ func runSnapshotArchive(ctx context.Context, s *events.Service) {
 	}
 }
 
+// runEventReconciliation repairs events whose closing MQTT message never
+// arrived. The stream is the fast path; this asks the detector directly and
+// fills in what the stream lost, so an event cannot stay open — and its
+// snapshot stay pending — forever. The stale-open sweep runs on the same tick:
+// it closes events old enough that the detector has stopped talking about them
+// at all, which is what keeps a site whose detector is gone from accumulating
+// open events indefinitely.
+func runEventReconciliation(ctx context.Context, s *events.Service) {
+	ticker := time.NewTicker(events.ReconcileInterval)
+	defer ticker.Stop()
+	for {
+		s.ReconcileOpenEvents(ctx)
+		s.ReconcileStaleOpen(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
 // runDeliveryReconciliation settles delivery rows whose job ended without the
 // worker recording it: the jobs table knows a job failed, but only this kind
 // knows that means a notification was never delivered.
