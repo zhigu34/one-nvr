@@ -71,6 +71,27 @@ eslint() { pnpm --dir "$web" exec eslint src; }
 vitest() { pnpm --dir "$web" test; }
 go_unit() { go test -race ./internal/... ./cmd/... ./migrations; }
 go_vet() { go vet ./...; }
+# Formatting is only half the check: gofmt reports drift, it does not prevent
+# it. The recurring accident this guards against is staging files nobody edited,
+# because formatting the whole tree sweeps pre-existing drift in with a real
+# change and buries the reviewer in whitespace. It fails only on files this
+# working tree has modified AND that are not formatted — pre-existing drift in
+# untouched files is reported, never blocking, so a legacy tree still verifies.
+gofmt_touched() {
+ local dirty
+ dirty=$(git diff --name-only HEAD -- '*.go')
+ [[ -n $dirty ]] || return 0
+ local bad
+ bad=$(printf '%s\n' "$dirty" | tr '\n' '\0' | xargs -0 gofmt -l 2>/dev/null)
+ if [[ -n $bad ]]; then
+  printf '%s\n' "These files are modified but not gofmt-clean:"
+  printf '%s\n' "$bad"
+  return 1
+ fi
+ local legacy
+ legacy=$(gofmt -l ./internal/... 2>/dev/null || true)
+ [[ -z $legacy ]] || printf '%s\n' "note: pre-existing gofmt drift in untouched files (not blocking): $(printf '%s' "$legacy" | tr '\n' ' ')" >&2
+}
 
 # 2. The integration suite needs an isolated PostgreSQL. The env file holds a
 #    local fixture database; without it the check is reported as skipped rather
@@ -91,6 +112,7 @@ run 'ESLint' eslint
 run 'Browser unit tests (vitest)' vitest
 run 'Go unit tests (-race)' go_unit
 run 'go vet' go_vet
+run 'gofmt on modified files' gofmt_touched
 if [[ $full == yes ]]; then
  run 'Integration suite (PostgreSQL)' integration
 fi
