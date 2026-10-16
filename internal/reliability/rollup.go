@@ -177,20 +177,28 @@ func (s *Service) rollupMinuteFor(ctx context.Context, tx pgx.Tx, channelID id.I
 	return err
 }
 
-// RollupSealedMinutes summarises every minute that has fully elapsed since the
-// last pass.
-func (s *Service) RollupSealedMinutes(ctx context.Context, since time.Time) error {
+// RollupMinutes summarises every sealed minute in [from, to).
+//
+// The range is explicit rather than "everything since X up to now", which was
+// the previous shape and a trap: a caller passing a timestamp far in the past
+// silently asked for a walk of every minute in between, one transaction each.
+// A production loop passing time.Time{} was fine; the first test that passed a
+// real old timestamp hung. Naming both ends makes the cost of a call visible at
+// the call site.
+//
+// Minutes at or after `to` are left alone — they have not sealed, and
+// summarising a partial minute would write a row whose value changes as the
+// minute fills.
+func (s *Service) RollupMinutes(ctx context.Context, from, to time.Time) error {
 	if s.DB == nil {
 		return nil
 	}
-	now := time.Now().UTC().Truncate(time.Minute)
-	start := since.UTC().Truncate(time.Minute)
-	if start.IsZero() || start.After(now) {
-		// Default to the immediate past: a loop that has never run must not
-		// start by walking a year of history in one pass.
-		start = now.Add(-time.Hour)
+	start := from.UTC().Truncate(time.Minute)
+	end := to.UTC().Truncate(time.Minute)
+	if start.IsZero() || start.After(end) {
+		return nil
 	}
-	for minute := start; minute.Before(now); minute = minute.Add(time.Minute) {
+	for minute := start; minute.Before(end); minute = minute.Add(time.Minute) {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -201,19 +209,76 @@ func (s *Service) RollupSealedMinutes(ctx context.Context, since time.Time) erro
 	return nil
 }
 
-// FinalizeDaily derives daily rows from minute rows for days that are old
-// enough to be complete.
+// rollupLookback bounds one pass of the background loop.
+//
+// A worker that has been down must catch up, but not in a single unbounded
+// pass: the loop runs every minute, so a backlog drains a bounded slice at a
+// time while live minutes keep being summarised. This is the same
+// bounded-batch discipline the retention sweeps use.
+const rollupLookback = 2 * time.Hour
+
+// RollupPending summarises every sealed minute that has not been summarised
+// yet, in bounded slices.
+//
+// The watermark is read from the tables rather than assumed: a fixed lookback
+// window would silently skip history whenever the gap exceeds it, which is
+// exactly the case for a site whose worker was down for a day, or a fresh
+// install whose only facts are a few hours old. The oldest unsummarised minute
+// is the newer of "the earliest fact that exists" and "the oldest minute still
+// inside the retention window" — there is no point summarising minutes that
+// have already been swept, and no way to read facts that are gone.
+func (s *Service) RollupPending(ctx context.Context, now time.Time) error {
+	if s.DB == nil {
+		return nil
+	}
+	end := now.UTC().Truncate(time.Minute)
+	var watermark *time.Time
+	if err := s.DB.Pool.QueryRow(ctx, `
+		SELECT GREATEST(
+			COALESCE((SELECT MAX(minute) FROM reliability_minutes), '-infinity'::timestamptz),
+			COALESCE((SELECT MIN(started_at) FROM reliability_intervals), 'infinity'::timestamptz)
+				- interval '1 minute'
+		) AS from_minute`).Scan(&watermark); err != nil {
+		return err
+	}
+	start := watermark.UTC().Truncate(time.Minute)
+	retentionFloor := now.UTC().Add(-MinuteRetention).Truncate(time.Minute)
+	if start.Before(retentionFloor) {
+		// Older rows have been swept; their facts are gone, so there is nothing
+		// to summarise and pretending otherwise would write empty days.
+		start = retentionFloor
+	}
+	if !start.Before(end) {
+		return nil
+	}
+	// One bounded slice per pass; the loop runs every minute, so a backlog
+	// drains steadily without ever holding a long transaction.
+	if start.Add(rollupLookback).Before(end) {
+		end = start.Add(rollupLookback)
+	}
+	return s.RollupMinutes(ctx, start, end)
+}
+
+// FinalizeDaily derives daily rows from the minute rows that exist.
 //
 // Derived from minutes rather than from intervals so the two tiers cannot
 // disagree about the same day, and so the daily tier keeps working after the
 // minute tier has been swept.
+//
+// No age filter. An earlier version folded only minutes older than the minute
+// retention window, on the reasoning that "a day is finalised once it is about
+// to be swept" — which had it backwards: it meant recent days produced no daily
+// rows at all, so the trend and cross-channel endpoints were empty on a healthy
+// site. The correct picture is that the daily row is *maintained* while its
+// minutes still exist and simply stops changing once they are swept, having
+// already accumulated everything.
+//
+// A day still in progress is included for the same reason: a trend chart has to
+// show today. It is recomputed on every pass, and its watermark says so.
 func (s *Service) FinalizeDaily(ctx context.Context) error {
 	if s.DB == nil {
 		return nil
 	}
-	// A day is finalised only once its last minute is beyond the minute
-	// retention window; until then it is recomputed on every pass.
-	cutoff := time.Now().UTC().Add(-MinuteRetention).Truncate(24 * time.Hour)
 	if _, err := s.DB.Pool.Exec(ctx, `
 		WITH daily AS (
 			SELECT channel_id,kind,
@@ -225,7 +290,6 @@ func (s *Service) FinalizeDaily(ctx context.Context) error {
 				SUM(unverified_ms) AS unverified_ms, SUM(fault_count) AS fault_count,
 				MAX(input_watermark) AS input_watermark
 			FROM reliability_minutes
-			WHERE minute < $1
 			GROUP BY channel_id,kind,date_trunc('day',minute)
 		), worst AS (
 			-- The worst single outage that touched each day, clipped to the day.
@@ -249,7 +313,7 @@ func (s *Service) FinalizeDaily(ctx context.Context) error {
 			(channel_id,kind,day,healthy_ms,unavailable_ms,unknown_ms,excluded_ms,owed_ms,covered_ms,unverified_ms,fault_count,longest_fault_ms,computed_at,input_watermark,metric_version)
 		SELECT d.channel_id,d.kind,d.day,d.healthy_ms,d.unavailable_ms,d.unknown_ms,d.excluded_ms,
 			d.owed_ms,d.covered_ms,d.unverified_ms,d.fault_count,COALESCE(w.longest_fault_ms,0),
-			clock_timestamp(),d.input_watermark,$2
+			clock_timestamp(),d.input_watermark,$1
 		FROM daily d LEFT JOIN worst w ON w.channel_id=d.channel_id AND w.kind=d.kind AND w.day=d.day
 		ON CONFLICT(channel_id,kind,day) DO UPDATE SET
 			healthy_ms=EXCLUDED.healthy_ms, unavailable_ms=EXCLUDED.unavailable_ms,
@@ -259,7 +323,7 @@ func (s *Service) FinalizeDaily(ctx context.Context) error {
 			longest_fault_ms=EXCLUDED.longest_fault_ms,
 			computed_at=EXCLUDED.computed_at, input_watermark=EXCLUDED.input_watermark,
 			metric_version=EXCLUDED.metric_version`,
-		cutoff, MetricVersion); err != nil {
+		MetricVersion); err != nil {
 		return err
 	}
 	return nil
@@ -271,7 +335,7 @@ func RunRollups(ctx context.Context, db *database.DB) {
 	ticker := time.NewTicker(RollupInterval)
 	defer ticker.Stop()
 	for {
-		if err := service.RollupSealedMinutes(ctx, time.Time{}); err != nil && ctx.Err() == nil {
+		if err := service.RollupPending(ctx, time.Now().UTC()); err != nil && ctx.Err() == nil {
 			slog.Warn("minute rollup unavailable", "error", err)
 		}
 		if err := service.FinalizeDaily(ctx); err != nil && ctx.Err() == nil {

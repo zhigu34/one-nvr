@@ -69,10 +69,8 @@ func TestMinuteRollupAgreesWithIntervalFacts(t *testing.T) {
 	}
 
 	// Write the rollups for the same span, then read the same window from them.
-	for minute := from.Truncate(time.Minute); minute.Before(to); minute = minute.Add(time.Minute) {
-		if err := service.RollupSealedMinutes(ctx, minute); err != nil {
-			t.Fatal(err)
-		}
+	if err := service.RollupMinutes(ctx, from, to); err != nil {
+		t.Fatal(err)
 	}
 	// A window long enough to be answered from the minute tier, so the tier
 	// switch itself is exercised rather than only the rollup contents.
@@ -259,15 +257,95 @@ func TestComparisonMarksInsufficientSamples(t *testing.T) {
 	}
 }
 
+// A recent day must produce a daily row. The first version of the daily pass
+// filtered to minutes older than the minute retention window, which meant a
+// healthy site produced no daily rows at all and both the trend and the
+// cross-channel endpoints came back empty. Only a live site surfaced it, so it
+// gets a test on the live-shaped case: today's minutes.
+func TestDailyRollupIncludesRecentDays(t *testing.T) {
+	fixture, service := metricsFixture(t, time.Now().UTC().Add(-30*time.Minute))
+	ctx := context.Background()
+	// Roll the last half hour, which is exactly the case the old filter excluded.
+	now := time.Now().UTC()
+	if err := service.RollupMinutes(ctx, now.Add(-30*time.Minute), now); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.FinalizeDaily(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var rows int
+	if err := fixture.DB.Pool.QueryRow(ctx,
+		"SELECT count(*) FROM reliability_daily WHERE channel_id=$1", fixture.Channel).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows == 0 {
+		t.Fatal("a recent day produced no daily row; the trend and cross-channel " +
+			"endpoints read this table, so an empty result on a healthy site is a bug")
+	}
+	// And the trend endpoint that reads it must return the day.
+	trend, err := service.DailyTrend(ctx, fixture.Admin, fixture.Channel, "main", now.Add(-48*time.Hour), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(trend) == 0 {
+		t.Fatal("trend is empty although the daily tier has the day")
+	}
+}
+
+// A fresh install has only a few hours of facts. The loop must summarise them
+// on its first pass rather than assuming a fixed amount of history exists — the
+// bug this test exists for is a fixed lookback window silently skipping
+// everything older than itself, which is exactly a new site's situation and
+// which left the trend and cross-channel endpoints empty on a live deployment.
+func TestRollupPendingCoversAFreshInstall(t *testing.T) {
+	fixture, service := metricsFixture(t, time.Now().UTC().Add(-4*time.Hour))
+	ctx := context.Background()
+	// Four hours of facts exist; nothing has been summarised yet.
+	if err := service.RollupPending(ctx, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	// The first pass is bounded, so it may not reach the oldest end; keep
+	// passing until it has, as the real loop does.
+	for i := 0; i < 5; i++ {
+		var minutes int
+		if err := fixture.DB.Pool.QueryRow(ctx,
+			"SELECT count(*) FROM reliability_minutes WHERE channel_id=$1", fixture.Channel).Scan(&minutes); err != nil {
+			t.Fatal(err)
+		}
+		if minutes >= 4*60-1 {
+			break
+		}
+		if err := service.RollupPending(ctx, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var oldest, newest time.Time
+	if err := fixture.DB.Pool.QueryRow(ctx,
+		`SELECT MIN(minute),MAX(minute) FROM reliability_minutes WHERE channel_id=$1`, fixture.Channel).
+		Scan(&oldest, &newest); err != nil {
+		t.Fatal(err)
+	}
+	if oldest.IsZero() {
+		t.Fatal("no minutes were summarised for a fresh install")
+	}
+	// The oldest fact is four hours back; the rollup must reach within a few
+	// minutes of it rather than starting at "now minus a fixed lookback".
+	if gap := time.Now().UTC().Sub(oldest); gap > 4*time.Hour+10*time.Minute {
+		t.Fatalf("oldest summarised minute is %s old, but facts exist from 4h ago; "+
+			"a fixed lookback would skip history like this", gap)
+	}
+}
+
 // The daily tier folds sealed days forward from the minute tier.
 func TestDailyRollupDerivesFromMinutes(t *testing.T) {
 	fixture, service := metricsFixture(t, time.Now().UTC().Add(-40*24*time.Hour))
 	ctx := context.Background()
-	day := time.Now().UTC().Add(-40 * 24 * time.Hour).Truncate(24 * time.Hour)
-	for minute := day; minute.Before(day.Add(2 * time.Hour)); minute = minute.Add(time.Minute) {
-		if err := service.RollupSealedMinutes(ctx, minute); err != nil {
-			t.Fatal(err)
-		}
+	// Anchor on the fixture's own facts. Rolling a calendar day would be flaky:
+	// the fixture places them at "40 days ago, this time of day", which is not
+	// necessarily inside the first two hours of that day.
+	base := time.Now().UTC().Add(-40 * 24 * time.Hour)
+	if err := service.RollupMinutes(ctx, base, base.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
 	}
 	if err := service.FinalizeDaily(ctx); err != nil {
 		t.Fatal(err)
