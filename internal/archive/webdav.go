@@ -23,9 +23,9 @@ var (
 // must surface as such, never as a fully healthy target: the expiry sweeper
 // depends on it.
 type Capabilities struct {
-	Write  bool `json:"write"`
-	Read   bool `json:"read"`
-	Range  bool `json:"range"`
+	Write bool `json:"write"`
+	Read  bool `json:"read"`
+	Range bool `json:"range"`
 	Delete bool `json:"delete"`
 }
 

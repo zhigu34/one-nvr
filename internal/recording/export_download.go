@@ -156,7 +156,7 @@ type exportManifest struct {
 		Start time.Time `json:"start"`
 		End   time.Time `json:"end"`
 	} `json:"requested"`
-	Actual *struct {
+	Actual   *struct {
 		Start time.Time `json:"start"`
 		End   time.Time `json:"end"`
 	} `json:"actual,omitempty"`
