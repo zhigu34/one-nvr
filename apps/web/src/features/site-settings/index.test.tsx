@@ -190,3 +190,25 @@ test('a disabled module offers no configuration link', async () => {
     .toHaveTextContent('功能未启用')
   expect(document.querySelector(`[data-testid='intelligence-status'] a`)).toBeNull()
 })
+
+// The OpenList switch decides whether the bundled container ships, not whether
+// cloud archiving works: a site reaching its own WebDAV archives with it off.
+// The panel must therefore stay actionable rather than reading "功能未启用".
+test('cloud archive offers configuration even with the bundled service off', async () => {
+  const { view } = fixture(true, {
+    enabled: true,
+    implemented: true,
+    state: 'not_configured',
+    reason: 'archive_target_missing',
+  })
+  const screen = await render(view)
+  await expect
+    .element(screen.getByTestId('cloud-status'))
+    .toHaveTextContent('待配置')
+  // And it points at the page where a target is added — the operator's own
+  // WebDAV is a valid answer, so the guidance must not be conditional on the
+  // bundled container.
+  const link = screen.getByRole('link', { name: '去配置归档目标' })
+  await expect.element(link).toBeVisible()
+  expect(link.element().getAttribute('href')).toContain('/archive-targets')
+})

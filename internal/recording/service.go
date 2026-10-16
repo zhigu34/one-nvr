@@ -40,18 +40,18 @@ type Probe interface {
 	ConcatMP4(context.Context, []probe.ConcatPart, string, func(float64)) (probe.FileEvidence, error)
 }
 type Service struct {
-	DB             *database.DB
-	Auth           *auth.Service
-	Files          FilePublisher
-	Media          Media
-	Probe          Probe
-	Roots          []string
-	DataDir        string
-	Pools          *storage.Service
-	Sources        *channel.SourceService
-	FreshNetwork   func(context.Context) (channel.NetworkPolicy, error)
-	ProbeToken     string
-	AuthorizeLive  func(context.Context, zlm.StreamKey, string) error
+	DB            *database.DB
+	Auth          *auth.Service
+	Files         FilePublisher
+	Media         Media
+	Probe         Probe
+	Roots         []string
+	DataDir       string
+	Pools         *storage.Service
+	Sources       *channel.SourceService
+	FreshNetwork  func(context.Context) (channel.NetworkPolicy, error)
+	ProbeToken    string
+	AuthorizeLive func(context.Context, zlm.StreamKey, string) error
 	// OnPublished runs inside the publication transaction when a segment turns
 	// ready (M2.1 immediate archive). Optional: nil keeps publishing unchanged,
 	// and an error is logged, never propagated — PRD ARC-06 keeps cloud work
@@ -60,11 +60,11 @@ type Service struct {
 	// ArchiveLocalGate confirms a verified cloud copy is really readable before
 	// the archive-bound local cleanup removes the local file (M2.1 ARC-05).
 	ArchiveLocalGate func(ctx context.Context, segmentID id.ID) (bool, error)
-	siteID         id.ID
-	discoveryMu    sync.Mutex
-	discoveryAfter id.ID
-	discoveryTime  time.Time
-	discoveryFiles map[id.ID]string
+	siteID           id.ID
+	discoveryMu      sync.Mutex
+	discoveryAfter   id.ID
+	discoveryTime    time.Time
+	discoveryFiles   map[id.ID]string
 }
 
 func New(db *database.DB, media Media, checker Probe, roots []string, dataDir string) *Service {

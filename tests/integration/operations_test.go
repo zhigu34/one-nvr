@@ -25,25 +25,34 @@ func TestCapabilitiesReportIntentConfigurationAndHealth(t *testing.T) {
 	db, accounts, sites, admin := authFixture(t)
 	ctx := context.Background()
 
-	// Switch off: nothing is claimed, and the module's actions stay gated.
+	// Frigate off: detection does not exist, so it reads disabled and its
+	// actions stay gated. Cloud archive is unaffected — see below.
 	off := capability.Service{Operations: operations.New(db, accounts, false, false)}
 	snapshot, err := off.Snapshot(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []capability.Capability{snapshot.Intelligence, snapshot.Archive} {
-		if c.Enabled || !c.Implemented || c.State != capability.StateDisabled || c.Reason != "feature_disabled" {
-			t.Fatalf("a disabled module must read disabled and implemented: %+v", c)
-		}
+	if c := snapshot.Intelligence; c.Enabled || !c.Implemented || c.State != capability.StateDisabled || c.Reason != "feature_disabled" {
+		t.Fatalf("with Frigate off detection must read disabled and implemented: %+v", c)
 	}
 	if err := off.Require("intelligence"); err == nil {
 		t.Fatal("a disabled module must refuse its actions")
+	}
+	// The OpenList switch is a module switch, not a capability switch: it
+	// decides whether the bundled container ships, not whether archiving works.
+	// A site reaching its own NAS over WebDAV archives with the switch off, so
+	// the module must not claim to be disabled.
+	if c := snapshot.Archive; !c.Enabled || c.State != capability.StateNotConfigured || c.Reason != "archive_target_missing" {
+		t.Fatalf("archive without a target asks for configuration regardless of the bundled container: %+v", c)
+	}
+	if err := off.Require("archive"); err != nil {
+		t.Fatal("cloud archive is not gated on the bundled OpenList container", err)
 	}
 
 	// Switch on but nothing configured: the operator is asked to configure it,
 	// not told the feature does not exist.
 	ops := operations.New(db, accounts, true, true)
-	caps := capability.Service{Operations: ops, FrigateEnabled: true, OpenListEnabled: true}
+	caps := capability.Service{Operations: ops, FrigateEnabled: true}
 	snapshot, err = caps.Snapshot(ctx)
 	if err != nil {
 		t.Fatal(err)

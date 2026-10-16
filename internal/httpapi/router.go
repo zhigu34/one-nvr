@@ -84,7 +84,7 @@ func NewHandler(d Dependencies) http.Handler {
 		d.Operations = operations.New(d.Auth.DB, d.Auth, d.FrigateEnabled, d.OpenListEnabled)
 	}
 	if d.Capabilities == nil {
-		d.Capabilities = &capability.Service{Operations: d.Operations, FrigateEnabled: d.FrigateEnabled, OpenListEnabled: d.OpenListEnabled}
+		d.Capabilities = &capability.Service{Operations: d.Operations, FrigateEnabled: d.FrigateEnabled}
 	}
 	if d.Storage == nil {
 		d.Storage = storage.New(d.Auth.DB, d.Auth, []string{"/storage"})

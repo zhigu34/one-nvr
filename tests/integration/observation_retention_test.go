@@ -1,12 +1,12 @@
 package integration
 
 import (
-	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/zhigu34/one-nvr/internal/archive"
 	"github.com/zhigu34/one-nvr/internal/channel"
 	"github.com/zhigu34/one-nvr/internal/httpapi"
 
@@ -121,39 +121,29 @@ func TestObservationSweepDrainsInBatches(t *testing.T) {
 	}
 }
 
-// PRD §14: with ONE_NVR_OPENLIST_ENABLE=no the cloud module is stopped and every
-// cloud action is paused. Hiding the page is not enough — the API must refuse
-// too, or a deployment with the module off can still register targets and
-// upload.
-func TestArchiveEndpointsAreClosedWhenTheModuleIsOff(t *testing.T) {
+// The OpenList switch governs the bundled container, not the archive feature.
+//
+// Archiving's substrate is whichever WebDAV target the operator mounted; the
+// bundled service is only the convenient default. So a deployment with the
+// switch off must still be able to register and use its own targets — tying the
+// endpoints to that switch would take away a capability the operator has.
+func TestArchiveEndpointsWorkWithoutTheBundledOpenList(t *testing.T) {
 	_, accounts, sites, admin := authFixture(t)
-	// No archive service is wired, exactly as the assembly does when the switch
-	// is off.
-	h := httpapi.NewHandler(httpapi.Dependencies{Auth: accounts, Site: sites, PublicURL: "http://nvr.example.com", OpenListEnabled: false})
+	fixture := newPublicationFixture(t)
+	// The switch is off: no bundled container ships or is probed.
+	h := httpapi.NewHandler(httpapi.Dependencies{
+		Auth: accounts, Site: sites, PublicURL: "http://nvr.example.com",
+		Archive: archive.New(fixture.DB, accounts, fixture.Site.Secrets, nil),
+	})
+	_ = accounts
 
-	paths := []struct{ method, path string }{
-		{"GET", "/api/v1/archive-targets"},
-		{"POST", "/api/v1/archive-targets"},
-		{"PATCH", "/api/v1/archive-targets/00000000-0000-4000-8000-000000000001"},
-		{"DELETE", "/api/v1/archive-targets/00000000-0000-4000-8000-000000000001"},
-		{"POST", "/api/v1/archive-targets/test"},
-		{"POST", "/api/v1/recordings/archive"},
-		{"GET", "/api/v1/archive-policies"},
-		{"PUT", "/api/v1/archive-policies"},
-	}
-	for _, entry := range paths {
-		body := bytes.NewBufferString(`{}`)
-		r := httptest.NewRequest(entry.method, "http://nvr.example.com"+entry.path, body)
-		r.AddCookie(&http.Cookie{Name: "one_nvr_session", Value: admin.RawSession})
-		r.Header.Set("Origin", "http://nvr.example.com")
-		r.Header.Set("X-CSRF-Token", accounts.CSRF(admin.RawSession))
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, r)
-		// Closed means "there is no such thing here", the same answer the
-		// detection endpoints give when their module is off.
-		if w.Code != 404 {
-			t.Fatalf("%s %s: a stopped module must not accept archive work, got %d %s",
-				entry.method, entry.path, w.Code, w.Body.String())
-		}
+	// Listing targets is the entry point an operator needs to add their own.
+	r := httptest.NewRequest("GET", "http://nvr.example.com/api/v1/archive-targets", nil)
+	r.AddCookie(&http.Cookie{Name: "one_nvr_session", Value: admin.RawSession})
+	r.Header.Set("Origin", "http://nvr.example.com")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("targets must be readable without the bundled service, got %d %s", w.Code, w.Body.String())
 	}
 }

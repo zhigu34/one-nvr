@@ -83,7 +83,11 @@ test('moduleSwitchConfigurationAndHealthAreDistinct', async ({ page }) => {
   // ships in this build and only needs configuring. Reporting it as missing
   // would be exactly the conflation this test exists to catch.
   await expect(page.getByTestId('intelligence-status')).toContainText(enabled ? '待配置' : '功能未启用')
-  await expect(page.getByTestId('cloud-status')).toContainText(enabled ? '待配置' : '功能未启用')
+  // Cloud archive is "待配置" either way. ONE_NVR_OPENLIST_ENABLE decides
+  // whether the bundled OpenList container ships, not whether archiving works:
+  // a site reaching its own WebDAV archives with the switch off, so claiming
+  // "功能未启用" would deny a capability the operator has.
+  await expect(page.getByTestId('cloud-status')).toContainText('待配置')
   // The M1-A placeholder address keeps its admin + module gate, and when the
   // module is on it refuses with the "wrong address" code rather than claiming
   // the feature does not exist.
@@ -97,6 +101,19 @@ test('moduleSwitchConfigurationAndHealthAreDistinct', async ({ page }) => {
     return { status: response.status, code: (await response.json()).error?.code }
   })
   expect(refusal).toEqual(enabled ? { status: 501, code: 'endpoint_not_available' } : { status: 409, code: 'feature_disabled' })
+  // The archive placeholder address has the same shape but no switch behind it:
+  // cloud archive is never "the feature does not exist", so it always points at
+  // the real endpoints instead of pretending to be disabled.
+  const archiveRefusal = await page.evaluate(async () => {
+    const me = await fetch('/api/v1/auth/me').then((r) => r.json()).then((r) => r.data)
+    const response = await fetch('/api/v1/archive-tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token },
+      body: '{}',
+    })
+    return { status: response.status, code: (await response.json()).error?.code }
+  })
+  expect(archiveRefusal).toEqual({ status: 501, code: 'endpoint_not_available' })
 })
 
 test('tlsPendingIsNotActive', async ({ page }) => {

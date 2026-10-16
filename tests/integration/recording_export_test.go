@@ -161,9 +161,9 @@ func TestRecordingExportLifecycle(t *testing.T) {
 		t.Fatal("bundle unavailable", err)
 	}
 	var manifest struct {
-		Format    string `json:"format"`
-		TaskID    id.ID  `json:"task_id"`
-		Channel   struct {
+		Format  string `json:"format"`
+		TaskID  id.ID  `json:"task_id"`
+		Channel struct {
 			No   int    `json:"no"`
 			Name string `json:"name"`
 		} `json:"channel"`

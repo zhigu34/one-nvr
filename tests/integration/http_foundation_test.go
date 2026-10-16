@@ -55,7 +55,20 @@ func TestFutureModuleDirectHTTPGates(t *testing.T) {
 	_, accounts, sites, admin := authFixture(t)
 	for _, enabled := range []bool{false, true} {
 		h := httpapi.NewHandler(httpapi.Dependencies{Auth: accounts, Site: sites, PublicURL: "http://nvr.example.com", FrigateEnabled: enabled, OpenListEnabled: enabled})
-		for _, path := range []string{"/api/v1/archive-tasks", "/api/v1/detection-rules"} {
+		for _, entry := range []struct {
+			path string
+			// The two placeholder addresses are no longer the same case.
+			// Detection is built on Frigate and MQTT, so with those switched off
+			// the feature genuinely does not exist and the caller is told the
+			// module switch is the problem. Cloud archive has no such switch —
+			// it works against any WebDAV target — so it never claims to be
+			// disabled and always points at where its business lives.
+			gatedBySwitch bool
+		}{
+			{"/api/v1/detection-rules", true},
+			{"/api/v1/archive-tasks", false},
+		} {
+			path := entry.path
 			r := httptest.NewRequest("POST", "http://nvr.example.com"+path, bytes.NewBufferString(`{}`))
 			r.AddCookie(&http.Cookie{Name: "one_nvr_session", Value: admin.RawSession})
 			r.Header.Set("Origin", "http://nvr.example.com")
@@ -66,9 +79,9 @@ func TestFutureModuleDirectHTTPGates(t *testing.T) {
 			// means the module runs, but this M1-A placeholder address is not
 			// where its business lives — that is a different refusal with a
 			// different code, and it must not claim the feature does not exist.
-			wantCode, wantStatus := "feature_disabled", 409
-			if enabled {
-				wantCode, wantStatus = "endpoint_not_available", 501
+			wantCode, wantStatus := "endpoint_not_available", 501
+			if entry.gatedBySwitch && !enabled {
+				wantCode, wantStatus = "feature_disabled", 409
 			}
 			if w.Code != wantStatus {
 				t.Fatalf("%s enabled=%v: %d %s", path, enabled, w.Code, w.Body.String())

@@ -31,8 +31,11 @@ type Snapshot struct {
 	Archive      Capability `json:"cloud_archive"`
 }
 type Service struct {
-	Operations                      *operations.Service
-	FrigateEnabled, OpenListEnabled bool
+	Operations *operations.Service
+	// FrigateEnabled is the one deployment switch that removes a capability:
+	// detection and events are built on Frigate and MQTT, so without them the
+	// feature does not exist. Cloud archive has no such switch (see archive()).
+	FrigateEnabled bool
 }
 
 // The four states an enabled module can be in, plus disabled. They map to the
@@ -91,18 +94,22 @@ func (s *Service) intelligence(ctx context.Context) (Capability, error) {
 	return out, nil
 }
 
-// archive derives the cloud module's state from registered targets.
+// archive derives the cloud archive module's state from its registered targets.
 //
-// A single unhealthy target does not make the module unavailable: the PRD
-// requires other WebDAV endpoints to keep working while the bundled service is
-// down, so one reachable target is enough to call the module healthy. The
-// per-target detail lives in the target list, where it belongs.
+// It deliberately does not consult OpenListEnabled. That switch is a *module*
+// switch in the deployment sense — whether the bundled OpenList container ships
+// and is probed — not a statement about whether cloud archiving exists.
+// Archiving's substrate is whichever WebDAV target the operator mounted; the
+// bundled service is only the convenient default among them, and a site
+// reaching its own NAS over WebDAV needs none of it. Tying the feature to that
+// switch would report "not enabled" for a capability that is working.
+//
+// What the module actually needs is a target that answers. A single unhealthy
+// target does not make it unavailable either: PRD §14.5 requires the other
+// WebDAV endpoints to keep working while one is down, so one reachable target
+// is enough. The per-target detail lives in the target list, where it belongs.
 func (s *Service) archive(ctx context.Context) (Capability, error) {
-	out := Capability{Enabled: s.OpenListEnabled, Implemented: true}
-	if !s.OpenListEnabled {
-		out.State, out.Reason = StateDisabled, "feature_disabled"
-		return out, nil
-	}
+	out := Capability{Enabled: true, Implemented: true}
 	var total, healthy int
 	if err := s.Operations.DB.Pool.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE last_check->>'state'='healthy') FROM archive_targets WHERE enabled`).Scan(&total, &healthy); err != nil {
 		return out, err
@@ -139,21 +146,25 @@ func unhealthy(components []operations.Component, names ...string) (string, bool
 	return "", false
 }
 
-// Require gates a module's actions on the deployment switch. It only answers
-// "is this module enabled"; whether the business behind the action exists is a
-// property of the build, and it does for both modules.
+// Require gates a module's actions on the deployment switch.
+//
+// Only intelligence has such a switch that actually removes the capability:
+// detection and events are built on Frigate and MQTT, so with those absent the
+// feature does not exist and its endpoints answer accordingly. Cloud archive has
+// no equivalent: it works against any WebDAV target, so nothing about the
+// deployment disables it and this always permits. The method is kept (and kept
+// honest) rather than deleted because the placeholder endpoints still ask it,
+// and because a future module may genuinely need the distinction.
 func (s *Service) Require(feature string) error {
-	var enabled bool
 	switch feature {
 	case "intelligence":
-		enabled = s.FrigateEnabled
+		if !s.FrigateEnabled {
+			return fault.New(409, "feature_disabled", "该功能未启用")
+		}
+		return nil
 	case "archive":
-		enabled = s.OpenListEnabled
+		return nil
 	default:
 		return auth.ErrInvalid
 	}
-	if !enabled {
-		return fault.New(409, "feature_disabled", "该功能未启用")
-	}
-	return nil
 }
