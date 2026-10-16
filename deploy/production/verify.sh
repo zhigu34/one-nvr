@@ -71,6 +71,20 @@ eslint() { pnpm --dir "$web" exec eslint src; }
 vitest() { pnpm --dir "$web" test; }
 go_unit() { go test -race ./internal/... ./cmd/... ./migrations; }
 go_vet() { go vet ./...; }
+
+# 2. The integration suite needs an isolated PostgreSQL. The env file holds a
+#    local fixture database; without it the check is reported as skipped rather
+#    than silently passing.
+integration() {
+ local env_file=$HOME/.one-nvr/test-pg.env
+ if [[ ! -f $env_file ]]; then
+  printf '%s\n' "SKIP: $env_file missing, no local PostgreSQL fixture. See AGENTS.md." >&2
+  return 0
+ fi
+ set -a; . "$env_file"; set +a
+ go test ./tests/integration -count=1 -timeout 45m
+}
+
 # Two separate hazards, and the first version of this check only caught the
 # second.
 #
@@ -81,18 +95,21 @@ go_vet() { go vet ./...; }
 # them clean. The question that actually catches it is different: are the files
 # staged for this commit the ones the change was about?
 #
-# So this reports two things and fails on neither by default:
-#   - staged Go files that are not gofmt-clean (the original check);
+# So this reports two things and fails on only the first:
+#   - staged Go files that are not gofmt-clean (hard failure);
 #   - staged Go files whose only difference from HEAD is whitespace, which is
-#     the signature of a formatting sweep.
+#     the signature of a formatting sweep (note).
 # The second is a warning rather than a failure: a deliberate formatting commit
 # is legitimate, it just has to be deliberate.
+#
+# Note this only sees *staged* files. Run it after `git add`, not before.
+hash_of() { shasum -a 256 | cut -d' ' -f1; }
 gofmt_touched() {
  local staged
  staged=$(git diff --cached --name-only -- '*.go')
- local dirty
+ local dirty=''
  if [[ -n $staged ]]; then
-  dirty=$(printf '%s\n' "$staged" | tr '\n' '\0' | xargs -0 gofmt -l 2>/dev/null)
+  dirty=$(printf '%s\n' "$staged" | tr '\n' '\0' | xargs -0 gofmt -l 2>/dev/null || true)
  fi
  if [[ -n $dirty ]]; then
   printf '%s\n' "These staged files are not gofmt-clean:"
@@ -107,8 +124,8 @@ gofmt_touched() {
   [[ -n $file ]] || continue
   if git cat-file -e "HEAD:$file" 2>/dev/null; then
    local now before
-   now=$(tr -d '[:space:]' < "$file" | sha256sum)
-   before=$(git show "HEAD:$file" | tr -d '[:space:]' | sha256sum)
+   now=$(tr -d '[:space:]' < "$file" | hash_of)
+   before=$(git show "HEAD:$file" | tr -d '[:space:]' | hash_of)
    [[ $now == "$before" ]] && swept+=("$file")
   fi
  done <<< "$staged"
@@ -117,6 +134,12 @@ gofmt_touched() {
   printf '  %s\n' "${swept[@]}"
  fi
 }
+
+run 'API types drift' api_drift
+run 'TypeScript build' tsc
+run 'ESLint' eslint
+run 'Browser unit tests (vitest)' vitest
+run 'Go unit tests (-race)' go_unit
 run 'go vet' go_vet
 run 'gofmt on modified files' gofmt_touched
 if [[ $full == yes ]]; then
