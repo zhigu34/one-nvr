@@ -73,11 +73,11 @@ func faultResponse(message string) string {
 // prove which addresses were contacted and that each authenticated call carries
 // a digest the device itself would accept.
 type device struct {
-	clock      time.Time
-	mediaXAddr string
-	profiles   []string
-	uri        map[string]string
-	faults     map[string]string
+	clock       time.Time
+	mediaXAddr  string
+	profiles    []string
+	uri         map[string]string
+	faults      map[string]string
 	// rawFaults answers an action with a fault body verbatim, for vendor
 	// structures the standard helper cannot express.
 	rawFaults   map[string]string

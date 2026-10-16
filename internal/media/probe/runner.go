@@ -33,11 +33,11 @@ type Runner struct{ FFmpeg, FFprobe string }
 func (Runner) String() string { return "<bounded media probe>" }
 
 type VideoEvidence struct {
-	FirstFrame bool    `json:"first_frame"`
-	Codec      string  `json:"codec"`
-	Width      int     `json:"width"`
-	Height     int     `json:"height"`
-	FPS        float64 `json:"fps"`
+	FirstFrame bool      `json:"first_frame"`
+	Codec      string    `json:"codec"`
+	Width      int       `json:"width"`
+	Height     int       `json:"height"`
+	FPS        float64   `json:"fps"`
 	// AudioCodec is the first input audio stream's codec as printed by ffmpeg
 	// ("pcm_alaw", "aac", ...). A non-nil empty string means the stream
 	// genuinely carries no audio; nil means the evidence predates this capture
