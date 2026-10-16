@@ -125,13 +125,45 @@ func (s *Service) FoldTx(ctx context.Context, tx pgx.Tx, in Observation) (foldOu
 	return out, nil
 }
 
+// validObservation rejects a sample that cannot describe anything. It also
+// normalises the state, which is the only place that happens.
 func validObservation(in Observation) bool {
 	return in.ChannelID != "" && in.Kind != "" && in.State != "" && !in.ObservedAt.IsZero()
+}
+
+// storedState maps an observation's state to the value an interval may hold.
+//
+// The observation vocabulary and the interval vocabulary are not the same, and
+// conflating them broke recording history outright on a live site: the recorder
+// emits "disabled" and "not_configured", the intervals table's CHECK allows only
+// healthy/unavailable/unknown/excluded, and so every recording sample was
+// rejected by the database and the recording kind had NO history at all. The
+// exclusion column is what carries "not required"; the state must still be one
+// of the four the table can express.
+//
+// The mapping is deliberately total: an unrecognised state becomes "unknown"
+// rather than reaching the CHECK constraint, because a sample we cannot classify
+// is still evidence that something was observed, and losing it silently is
+// exactly the failure this function exists to prevent.
+func storedState(in Observation) string {
+	switch in.State {
+	case "healthy", "unavailable", "unknown", "excluded":
+		return in.State
+	case "disabled", "not_configured", "degraded":
+		// Not required to be up: the reason travels in exclusion (or in the
+		// reason code when the caller did not set one).
+		return "excluded"
+	}
+	return "unknown"
 }
 
 func (s *Service) foldTx(ctx context.Context, tx pgx.Tx, in Observation) (foldOutcome, error) {
 	var out foldOutcome
 	observed := in.ObservedAt.UTC()
+	// Normalise once, up front: every comparison and both writes below use the
+	// stored vocabulary, so a recorder's "disabled" can never reach the CHECK
+	// constraint as itself.
+	in.State = storedState(in)
 
 	// What is open now, if anything. FOR UPDATE so a concurrent sample for the
 	// same channel and kind waits rather than folding against a stale read.

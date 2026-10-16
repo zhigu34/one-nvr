@@ -48,6 +48,68 @@ func metricsFixture(t *testing.T, base time.Time) (publishFixture, *reliability.
 	return fixture, service
 }
 
+// Every stream kind must be able to write an interval, including the states the
+// recorder actually emits.
+//
+// This exists because of a live-site defect: the recorder reports "disabled" for
+// a channel whose recording mode is none, the intervals table's CHECK accepts
+// only healthy/unavailable/unknown/excluded, and the write failed silently —
+// so the recording kind had zero history on a site where recording was simply
+// turned off. Nothing noticed, because "no rows" and "no facts" look identical
+// from outside.
+func TestRecordingKindRecordsItsStates(t *testing.T) {
+	fixture := newPublicationFixture(t)
+	service := reliability.New(fixture.DB, fixture.Auth)
+	ctx := context.Background()
+	base := time.Now().UTC().Add(-time.Hour)
+	// The exact pair the recorder sends when recording is off.
+	for _, sample := range []reliability.Observation{
+		{ChannelID: fixture.Channel, Kind: "recording", State: "disabled", Reason: "recording_disabled", Exclusion: "disabled", ObservedAt: base},
+		{ChannelID: fixture.Channel, Kind: "recording", State: "not_configured", Reason: "sub_not_configured", Exclusion: "not_configured", ObservedAt: base.Add(time.Minute)},
+	} {
+		if err := service.Fold(ctx, sample); err != nil {
+			t.Fatalf("folding %q failed: %v; the recorder emits exactly this and the "+
+				"interval table cannot store it, which is how recording history went "+
+				"missing entirely on a live site", sample.State, err)
+		}
+	}
+	var rows int
+	if err := fixture.DB.Pool.QueryRow(ctx,
+		"SELECT count(*) FROM reliability_intervals WHERE channel_id=$1 AND kind='recording'", fixture.Channel).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows == 0 {
+		t.Fatal("recording intervals were not persisted")
+	}
+	// And the stored state is one of the four the table can express, with the
+	// reason preserved in the exclusion column.
+	var state, exclusion string
+	if err := fixture.DB.Pool.QueryRow(ctx,
+		`SELECT state,COALESCE(exclusion,'') FROM reliability_intervals WHERE channel_id=$1 AND kind='recording' ORDER BY started_at LIMIT 1`,
+		fixture.Channel).Scan(&state, &exclusion); err != nil {
+		t.Fatal(err)
+	}
+	if state != "excluded" {
+		t.Fatalf("stored state = %q, want excluded; the recorder's own vocabularly "+
+			"must not reach the table", state)
+	}
+	if exclusion == "" {
+		t.Fatal("the reason was lost; 'not required to be up' must stay visible")
+	}
+	// Metrics must then report the recording kind rather than no_observation.
+	now := time.Now().UTC()
+	metrics, err := service.ChannelMetrics(ctx, fixture.Admin, reliability.MetricsQuery{
+		ChannelID: fixture.Channel, Kind: "recording", From: base, To: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metrics.Observed.ExcludedMS == 0 {
+		t.Fatal("the excluded time did not reach the metrics; a disabled recorder " +
+			"should read as 'not required', not as no observation at all")
+	}
+}
+
 // The summary tier must reproduce the detailed one. This is the claim the whole
 // rollup design rests on: if the two disagree, every long-window figure is
 // wrong in a way nobody can see.
