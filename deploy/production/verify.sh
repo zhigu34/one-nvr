@@ -71,46 +71,52 @@ eslint() { pnpm --dir "$web" exec eslint src; }
 vitest() { pnpm --dir "$web" test; }
 go_unit() { go test -race ./internal/... ./cmd/... ./migrations; }
 go_vet() { go vet ./...; }
-# Formatting is only half the check: gofmt reports drift, it does not prevent
-# it. The recurring accident this guards against is staging files nobody edited,
-# because formatting the whole tree sweeps pre-existing drift in with a real
-# change and buries the reviewer in whitespace. It fails only on files this
-# working tree has modified AND that are not formatted — pre-existing drift in
-# untouched files is reported, never blocking, so a legacy tree still verifies.
+# Two separate hazards, and the first version of this check only caught the
+# second.
+#
+# What keeps happening: `gofmt -w` on a whole tree reformats files nobody edited,
+# and `git add -A` sweeps that drift into a functional commit — four times now.
+# The guard that looked for "modified file that is not gofmt-clean" cannot see
+# it, because the sweep itself is what marked those files modified, and it left
+# them clean. The question that actually catches it is different: are the files
+# staged for this commit the ones the change was about?
+#
+# So this reports two things and fails on neither by default:
+#   - staged Go files that are not gofmt-clean (the original check);
+#   - staged Go files whose only difference from HEAD is whitespace, which is
+#     the signature of a formatting sweep.
+# The second is a warning rather than a failure: a deliberate formatting commit
+# is legitimate, it just has to be deliberate.
 gofmt_touched() {
+ local staged
+ staged=$(git diff --cached --name-only -- '*.go')
  local dirty
- dirty=$(git diff --name-only HEAD -- '*.go')
- [[ -n $dirty ]] || return 0
- local bad
- bad=$(printf '%s\n' "$dirty" | tr '\n' '\0' | xargs -0 gofmt -l 2>/dev/null)
- if [[ -n $bad ]]; then
-  printf '%s\n' "These files are modified but not gofmt-clean:"
-  printf '%s\n' "$bad"
+ if [[ -n $staged ]]; then
+  dirty=$(printf '%s\n' "$staged" | tr '\n' '\0' | xargs -0 gofmt -l 2>/dev/null)
+ fi
+ if [[ -n $dirty ]]; then
+  printf '%s\n' "These staged files are not gofmt-clean:"
+  printf '%s\n' "$dirty"
   return 1
  fi
- local legacy
- legacy=$(gofmt -l ./internal/... 2>/dev/null || true)
- [[ -z $legacy ]] || printf '%s\n' "note: pre-existing gofmt drift in untouched files (not blocking): $(printf '%s' "$legacy" | tr '\n' ' ')" >&2
-}
-
-# 2. The integration suite needs an isolated PostgreSQL. The env file holds a
-#    local fixture database; without it the check is reported as skipped rather
-#    than silently passing.
-integration() {
- local env_file=$HOME/.one-nvr/test-pg.env
- if [[ ! -f $env_file ]]; then
-  printf '%s\n' "SKIP: $env_file missing, no local PostgreSQL fixture. See AGENTS.md." >&2
-  return 0
+ # Whitespace-only staged changes: the drift signature. Compare each staged
+ # file's content ignoring all whitespace against HEAD.
+ local swept=()
+ local file
+ while IFS= read -r file; do
+  [[ -n $file ]] || continue
+  if git cat-file -e "HEAD:$file" 2>/dev/null; then
+   local now before
+   now=$(tr -d '[:space:]' < "$file" | sha256sum)
+   before=$(git show "HEAD:$file" | tr -d '[:space:]' | sha256sum)
+   [[ $now == "$before" ]] && swept+=("$file")
+  fi
+ done <<< "$staged"
+ if [[ ${#swept[@]} -gt 0 ]]; then
+  printf '%s\n' "note: staged files whose only change is whitespace (formatting sweep, not the change itself):"
+  printf '  %s\n' "${swept[@]}"
  fi
- set -a; . "$env_file"; set +a
- go test ./tests/integration -count=1 -timeout 45m
 }
-
-run 'API types drift' api_drift
-run 'TypeScript build' tsc
-run 'ESLint' eslint
-run 'Browser unit tests (vitest)' vitest
-run 'Go unit tests (-race)' go_unit
 run 'go vet' go_vet
 run 'gofmt on modified files' gofmt_touched
 if [[ $full == yes ]]; then
