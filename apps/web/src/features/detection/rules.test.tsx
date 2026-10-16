@@ -132,9 +132,9 @@ test('a dwell rule carries its threshold, an appearance rule carries no zone', a
   await screen.getByRole('option', { name: '区域停留', exact: true }).click()
   await screen.getByLabelText('区域').click()
   await screen.getByRole('option', { name: '门口', exact: true }).click()
-  await userEvent.fill(screen.getByLabelText('停留秒数'), '30')
-  await userEvent.fill(screen.getByLabelText('布防开始时间'), '22:00')
-  await userEvent.fill(screen.getByLabelText('布防结束时间'), '06:00')
+  await userEvent.fill(screen.getByLabelText('停留多久算停留（秒）'), '30')
+  await userEvent.fill(screen.getByLabelText('布防开始（HH:MM）'), '22:00')
+  await userEvent.fill(screen.getByLabelText('布防结束（HH:MM）'), '06:00')
   await screen.getByRole('button', { name: '保存规则' }).click()
 
   await vi.waitFor(() => expect(mutations.length).toBe(2))

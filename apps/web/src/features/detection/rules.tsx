@@ -2,12 +2,11 @@ import { useState } from 'react'
 import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { useAPI } from '@/features/foundation/hooks'
 import { apiErrorText } from '@/features/foundation/api-errors'
 import { LoadingButton } from '@/features/foundation/loading-button'
 import { StatusBadge, type StatusTone } from '@/features/foundation/status-badge'
-import { CheckboxField, Empty, QueryState, SelectField } from '@/features/foundation/ui'
+import { CheckboxField, Empty, Field, QueryState, SelectField } from '@/features/foundation/ui'
 
 type Rule = Schema<'DetectionRule'>
 type Zone = Schema<'DetectionZone'>
@@ -172,7 +171,9 @@ export function RulePanel({ channelID, onChanged }: { channelID: string; onChang
           {error}
         </p>
       )}
-      {rules.data && !items.length && <Empty>这个通道还没有规则。</Empty>}
+      {rules.data && !items.length && !editing && (
+        <Empty>这个通道还没有规则。点「新建规则」开始配置；规则决定哪些检测会被记录并提醒。</Empty>
+      )}
       <div className='space-y-1'>
         {items.map((rule) => (
           <div
@@ -218,7 +219,11 @@ export function RulePanel({ channelID, onChanged }: { channelID: string; onChang
         ))}
       </div>
       {editing && (
-        <RuleEditor
+        <div className='space-y-2'>
+          <p className='text-sm font-medium'>
+            {editing.id ? '编辑规则' : '新建规则'}
+          </p>
+          <RuleEditor
           rule={editing}
           zones={zoneItems}
           allRules={items}
@@ -228,7 +233,8 @@ export function RulePanel({ channelID, onChanged }: { channelID: string; onChang
           onCancel={() => setEditing(null)}
           onSave={save}
           onBinding={setBinding}
-        />
+          />
+        </div>
       )}
     </div>
   )
@@ -283,14 +289,16 @@ function RuleEditor({
   return (
     <div data-testid='rule-editor' className='space-y-3 rounded-xl border bg-card p-3'>
       <div className='grid gap-3 sm:grid-cols-2'>
-        <Input
-          aria-label='规则名称'
-          placeholder='规则名称'
+        <Field
+          label='规则名称'
+          name='rule-name'
           value={draft.name ?? ''}
           maxLength={64}
+          placeholder='如「非工作时间有人」'
           onChange={(event) => update({ name: event.target.value })}
         />
         <SelectField
+          label='规则类型'
           ariaLabel='规则类型'
           value={draft.kind ?? 'appear'}
           onValueChange={(next) =>
@@ -330,6 +338,7 @@ function RuleEditor({
           </p>
         </fieldset>
         <SelectField
+          label='严重级别'
           ariaLabel='严重级别'
           value={draft.severity ?? 'medium'}
           onValueChange={(next) => update({ severity: (next || 'medium') as Rule['severity'] })}
@@ -337,6 +346,7 @@ function RuleEditor({
         />
         {needsZone && (
           <SelectField
+            label='区域'
             ariaLabel='区域'
             value={zoneID}
             onValueChange={(next) => update({ zone_id: next || null })}
@@ -347,8 +357,9 @@ function RuleEditor({
           />
         )}
         {draft.kind === 'dwell' && (
-          <Input
-            aria-label='停留秒数'
+          <Field
+            label='停留多久算停留（秒）'
+            name='rule-dwell'
             type='number'
             min={1}
             max={86400}
@@ -356,33 +367,37 @@ function RuleEditor({
             onChange={(event) => update({ dwell_seconds: Number(event.target.value) })}
           />
         )}
-        <Input
-          aria-label='置信下限'
+        <Field
+          label='置信度下限（%）'
+          name='rule-min-score'
           type='number'
           min={0}
           max={100}
-          placeholder='置信下限 %'
+          placeholder='0 表示不限制'
           value={Math.round((draft.min_score ?? 0) * 100)}
           onChange={(event) => update({ min_score: Number(event.target.value) / 100 })}
         />
-        <Input
-          aria-label='冷却秒数'
+        <Field
+          label='提醒冷却（秒）'
+          name='rule-cooldown'
           type='number'
           min={0}
           max={86400}
           value={draft.cooldown_seconds ?? 60}
           onChange={(event) => update({ cooldown_seconds: Number(event.target.value) })}
         />
-        <Input
-          aria-label='布防开始时间'
-          placeholder='HH:MM（留空为全天）'
+        <Field
+          label='布防开始（HH:MM）'
+          name='rule-arm-from'
+          placeholder='留空 = 全天'
           value={draft.arm_from ?? ''}
           maxLength={5}
           onChange={(event) => update({ arm_from: event.target.value })}
         />
-        <Input
-          aria-label='布防结束时间'
-          placeholder='HH:MM（早于开始表示跨午夜）'
+        <Field
+          label='布防结束（HH:MM）'
+          name='rule-arm-to'
+          placeholder='早于开始 = 跨午夜'
           value={draft.arm_to ?? ''}
           maxLength={5}
           onChange={(event) => update({ arm_to: event.target.value })}
