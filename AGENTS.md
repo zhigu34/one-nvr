@@ -5,7 +5,7 @@
 ## 产品状态
 
 - 项目面向单站点、本地部署、16–32 个固定通道。Go + PostgreSQL 管理配置、任务和录像索引；ZLMediaKit（ZLM）取流、录像；Web 前端基于 shadcn-admin。
-- Frigate 与 OpenList 是可选模块。README 明确标出的未实现功能仍按未实现处理，不能从容器存在推断业务可用（README 已于 2026-10-15 更新：回放/事件/云归档都已交付，仍明确列为未实现的是周计划与手动录像、可靠性历史与统计、异常事件全集、备份恢复、容量水位与配额）。**`docs/功能总结.md` 仍滞后**（标题写「截至 2026-10-11」、云归档节标题仍写「M2.1 进行中」、未实现清单漏列下述 P0），判断范围时以本文件快照与代码为准：**PRD §6.12「可用性、录像完整性与可靠性历史」（REL-01～REL-06，整章 P0）、§6.4 的周计划/手动录像（REC-02/03/04）、EVT-04 异常事件全集、SYS-02 备份恢复、SYS-01 的审计 180 天保留、STO-02/03 水位与配额至今没有实现，也没有计划文件。**
+- Frigate 与 OpenList 是可选模块。README 明确标出的未实现功能仍按未实现处理，不能从容器存在推断业务可用（README 已于 2026-10-15 更新：回放/事件/云归档都已交付，仍明确列为未实现的是周计划与手动录像、可靠性历史与统计、异常事件全集、备份恢复、容量水位与配额）。**`docs/功能总结.md` 仍滞后**（标题写「截至 2026-10-11」、云归档节标题仍写「M2.1 进行中」、未实现清单漏列下述 P0），判断范围时以本文件快照与代码为准：**PRD §6.12「可用性、录像完整性与可靠性历史」不再是「整章未实现」——REL-01/02 与 REL-03 已交付（批次 1/2，事实层与完整性证据齐备），仍缺的是 REL-04 指标口径、REL-05 可靠性页面与 CSV、REL-06 的分钟/日汇总**；此外 §6.4 的周计划/手动录像（REC-02/03/04）、EVT-04 异常事件全集、SYS-02 备份恢复、SYS-01 的审计 180 天保留、STO-02/03 水位与配额至今没有实现，也没有计划文件。
 - 通道号和通道身份固定。更换摄像头修改来源修订，不应丢失通道权限、录像策略或历史录像。
 
 ## 项目地图
@@ -64,6 +64,21 @@ CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真�
 
 ## 当前交接快照（2026-10-09）
 
+- **2026-10-16 M4 可靠性批次 2 已交付：应录区间与录像完整性证据（REL-03）**（计划：`docs/superpowers/plans/2026-10-16-reliability-batch2.md`，提交 `414dee7`）。批次 1 交付「流是否可用」（主/子流），本批交付「本该录多少、实际录了多少」。**难点不在计算而在分母的来源。**
+  - **`recording_policies` 只有当前值，而 REL-03 明令「不用当前计划重新解释过去」**——把今天的 `continuous` 套到上个月，等于每次改设置都重写历史。故新增 `recording_policy_versions`（迁移 `0025`）记录每个 mode 版本及 `effective_at`。
+  - **策略历史写入口只有一处**：`recording/`source_switch.go` 的 `finishSwitch`（全库唯一的 `UPDATE recording_policies`），所以 policy_apply / 切换 / 回滚一次覆盖；`site/setup.go` 与 `site/service.go` 建站补 `version=1`——不补的话「建站之前」与「建之后没要求」无法区分。**改策略写入时不要绕过这两处。**
+  - **回填不猜时刻**：迁移为既有策略行补的标 `backfill`，`effective_at` 取通道创建时间作**下界**；读路径据此降精度为 `assumed`（REL-06 要求跨保留边界注明精度）。任何声称知道建站前策略真实生效时刻的实现都是在编数据。
+  - **义务区间由独立对账循环推导，不挂观测流（这条改过，别改回去）**：第一版想挂在 `observations.go`（批次 1 折 interval 处），核对发现 `monitor.go` 的扫描是 `WHERE c.enabled AND c.current_revision_id IS NOT NULL OR EXISTS(...)`——**停用或未配源的通道根本不在扫描范围**，而这两类排除恰是 REL-03 要求显式记录的。改为每 10 秒遍历**全部**通道重算（`recording.ReconcileAllObligations`）：策略/启停/配源/维护四个写入点互相独立，逐个挂钩必漏，重算天然全收且能自愈。
+  - **不缩小分母（本批最重要的一条）**：录像服务停机、源故障、存储阻断期间**仍然开应录区间**。否则分母随失败一起缩小、可用率反而好看。`obligationFor` 的判定顺序即规格（未配源 → 停用 → 维护 → continuous 应录 → 其他不要求），注释里写死了每一步的理由。
+  - **义务必须平铺时间轴，与 interval 折叠故意不同**：interval 闭合在「最后一次支持旧状态的观测」（避免把中断算短）；**义务闭合在本次对账时刻**。因为义务是分母，按前者闭合会留下一个对账周期宽的空洞，那瞬间既不属于应录也不属于排除，完整性根本无从计入。精确变更时刻仍可从 `effective_at` 恢复。
+  - **完整性只给四个时长，不给百分比**：应录/有效/缺口/待核验，`covered+missing+unverified=owed` 恒成立（单测钉住）。REL-04 要求每个率值带分子分母、不可判定时间、校验级别与时区——一个裸百分比正是本章要防的东西。
+  - **`deleted` 段算有效、`provisional` 段算待核验**：删除是保留策略的决定而非录像失败（否则老媒体一去完整性就掉）；provisional 的边界是推断的，不能作证也不能算失败。
+  - **`planned`/`manual` 留词汇不假装支持**：PRD REC-02/03/04 未实现，推导按「不要求录像」处理并在 evidence 标 `mode_not_implemented`。
+  - **新端点**：`GET /channels/{id}/reliability/obligations`（playback）、`GET /channels/{id}/reliability/integrity`（playback）、`GET /recording-policy-history`（admin）。契约与 `api-types.ts` 同步。
+  - **保留**：义务并入 365 天层；**策略版本不清理**——义务引用它，删了义务就无法解释。
+  - **本批修掉两处实际缺陷（都是新测试发现的）**：① `ListObligations`/`gapReasons`/`segmentSpans` 的 `COALESCE(ended_at,$n)` 让 PostgreSQL 无法推断参数类型（SQLSTATE 42P18），加显式 `::timestamptz`；② `ListPolicyVersions` 传了 `from` 却未在 SQL 引用，同样触发 42P18——改为真正使用它（窗口起点仍生效的版本必须返回）。
+  - **本机验证**：单测 12（完整性算术 9 + 精度 3）、集成 17 全过；`verify.sh` 7/7 PASS；**另实跑真二进制**——worker 在已迁移 schema 上启动、对账循环真的写出义务（CH01/CH02 各一条，排除项正确）、`SIGTERM` 0 秒干净退出 exit 0。
+  - **未做**：可靠性页面（REL-05）、REL-04 指标口径与分钟/日汇总、`planned`/`manual` 模式——留批次 3。
 - **2026-10-16 现场部署暴露三处问题，已修并推送（`f63295e`、`3695b7f`、`1f779bc`）**：REL 批次 1 推送后用户在 NAS 部署，**worker 容器起不来**。追下去是「本机测试 + 现场部署」这条新验收路线本身的缺口 —— 本机没有 Docker daemon，`Run()` 的装配路径从来没被任何测试执行过（单测只覆盖各模块内部逻辑），所以接错线要等容器起不来才发现。三处：
   - **① 启动 panic**：`reliability.New(db, recordings.Sources.Auth)` 写在 `recordings.Sources = channel.NewSources(...)` **之前** —— 此时 `Sources` 是 nil，取 `.Auth` 直接段错误（`run.go:139`）。已后移。
   - **② `CloseOpenOnStart` 原本同步且致命**：失败即 `return`，整个 worker 不启动，且它排在健康服务器之前。可靠性是对媒体链路的**观测**，不能成为录像的前提。改为在 monitor 协程内先 settle 再进循环，失败只 `Warn`。**这条是设计口径，别改回去。**
