@@ -60,6 +60,19 @@ CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真�
 
 ## 当前交接快照（2026-10-09）
 
+- **2026-10-16 M4 可靠性批次 1 已交付（REL-01/02 + REL-06 持久化部分）**（计划：`docs/superpowers/plans/2026-10-16-reliability-batch1.md`）。PRD §6.12 整章此前零实现，本批先让**事实**完整可复算；**指标（REL-03/04）与页面（REL-05）留批次 2/3，本批不产生任何率值**。
+  - **为什么新建表**：`source_observations` 是「当前状态」不是历史（30 秒 TTL、只取最新一行，答不了「上月在线多久」）；`recording_gaps` 是**录制**中断证据、由录像状态机驱动，不覆盖 REL-01 谈的主/子流可用性。故新增 `reliability_intervals`（事实层）、`fault_events`、`maintenance_windows`（迁移 `0024`）。
+  - **区间由观测的变化点产生**（不按固定窗口切分），半开 `[started_at, ended_at)`；同 state+reason 续期、变则闭旧开新。**闭合时刻用「最后一次仍支持旧状态的观测」而不是「发现故障的那次采样」**——否则每次中断都少算一个采样周期。`first/last_observed_at` 一起返回，承载 REL-01 要求的「轮询无法精确到亚秒」这个不确定带。
+  - **监测未知显式记录**：启动时先闭合所有开放区间、把停机时段记成 `monitoring_gap`，**再开始采样**；运行中超过 2 个采样周期无观测同样开 gap。停机时间不会被填成在线。
+  - **故障由区间状态转变驱动**：`unavailable` 开故障、`healthy` 自动关闭记 `recovery=auto`；**`unknown` 不开故障**（证据缺口 ≠ 设备故障）；排除状态（停用/未配置）不开故障。同一连续故障更新原行（部分唯一索引 `fault_events_one_open` 做栅栏）。
+  - **八大类归因保守**：断流只归 `upstream_unavailable`，**绝不细分到摄像头硬件损坏**（REL-02 明令）；未知归 `unknown`，不自造第九类。
+  - **根事件只聚合不改写**：同轮同类故障挂到一个组件级根事件，业务影响按**集合并集**算（8 路同时断 5 分钟 = 5 分钟而非 40 分钟）。子故障保留各自行，归错也不影响单通道数据。
+  - **归因修订不改写原始值**：`initial_reason`/`initial_category` 永不改，确认结果追加 `revisions` 并与 `confirmed_*` 并列；`EffectiveCategory()` 决定报表按哪个计数。这是防「事后把故障改登记成维护来静默提高可用率」的机制。
+  - **保留（REL-06 第一阶段）**：观测 7 天、区间与故障 365 天，分批删除，**只删已结束的行**——持续中的中断是很老的当前事实，不能当过期历史删。
+  - **顺带修一处既有风险**：`monitor.go` 原先在数据库错误时 `return err` **退出整个采样循环**（三处：通道扫描、逐行 Scan、码率清理）。数据库抖一下采样就停，反而制造出 REL-01 要求我们发现的监测缺口。已改为记日志 + 等下一轮。
+  - **新端点**：`GET /channels/{id}/reliability/intervals`（playback）、`GET /faults`（带 channel_id 要 playback、跨通道要 admin）、`PATCH /faults/{id}`（admin 确认原因）、`GET /faults/{id}/impact`、`GET/POST /maintenance-windows`（admin）。契约与 `api-types.ts` 已同步。
+  - **本机验证**：集成新增 22 个用例（区间折叠 6、故障 8、维护与并集 3、保留 1、端点 2、协作 2）全过；`verify.sh` 7/7 PASS。
+
 - **2026-10-16 两处既有缺口已修（本机取证 → 修复，未经 CI）**：
   - **`source_observations` 只增不删**：全库 0 处删除，而 `monitor.go` 每 10 秒对每个已配置通道写 main/sub/recording 三行（实测统计口径）：**每通道每天约 2.6 万行**，8 路每月约 600 万行、32 路每月约 2500 万行，且无任何保留策略。这些行**携带 30 秒 TTL、只服务「最新状态」查询**（唯一读者 `channel/source_status.go` 取每通道每 kind 的最新一行），历史价值为零。修法：`recording.SweepObservations` 按 `ObservationRetention`（24 小时）分批删除，挂进既有 `RunRetention` 循环；同时新增迁移 `0023` 的 `source_observations(observed_at)` 索引——**原有索引以 `channel_id` 开头，删除条件只用 `observed_at`，用不上它**，不加索引会全表扫。**删除不会改变 UI 结论**：某 kind 无行时 `statusTx` 落到显式的 unknown 分支（有集成测试钉住），不会把「没观测」读成「健康」。
   - **`recording_gaps` 核实后判定不需要清理**（与上一条区分开）：它有去重（`NOT EXISTS ... end_at IS NULL`，同一通道同时只留一条未闭合缺口），所以是「每故障一条」而非每 tick 一条；而且它是**证据**——REL-02/05 故障归因与故障表的原料，今天只是尚无读者（全库只有 INSERT/UPDATE）。**不要在 REL 批次之前删它。**
