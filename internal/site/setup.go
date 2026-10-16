@@ -115,6 +115,20 @@ func (s *Service) Setup(ctx context.Context, in SetupInput) (Site, error) {
 			if _, err := tx.Exec(ctx, "INSERT INTO recording_policies(channel_id) VALUES($1)", channelID); err != nil {
 				return err
 			}
+			// The policy timeline starts at the channel's first version. Without
+			// this row the history would begin at whatever the operator changes
+			// next, and everything before it would be unanswerable — PRD REL-03
+			// needs to know that this stretch was owed nothing, not that it is
+			// unknown.
+			versionID, err := id.New()
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO recording_policy_versions(id,channel_id,version,mode,event_recording,effective_at,reason)
+					SELECT $1,$2,p.version,p.mode,p.event_recording,clock_timestamp(),'setup'
+					FROM recording_policies p WHERE p.channel_id=$2`, versionID, channelID); err != nil {
+				return err
+			}
 		}
 		return audit.Append(ctx, tx, audit.Entry{ActorID: adminID, Action: "site.initialized", ObjectID: result.ID})
 	})

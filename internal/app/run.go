@@ -285,11 +285,11 @@ func Run(name string) error {
 		// answer readiness never starts at all), and a failure to settle old
 		// history must not stop recording — reliability is an observation of the
 		// media pipeline, never a precondition for it.
-		// Four goroutines follow, and the count is stated once so a fifth cannot
+		// Five goroutines follow, and the count is stated once so a sixth cannot
 		// be added without the Add moving with it. (It was wrong here twice
 		// already: an Add(2) covering one goroutine hangs shutdown, an Add(1)
 		// covering two panics it with a negative counter.)
-		background.Add(4)
+		background.Add(5)
 		go func() { defer background.Done(); runReliabilityRetention(ctx, db) }()
 		go func() {
 			defer background.Done()
@@ -299,6 +299,12 @@ func Run(name string) error {
 			}
 			runRecordingMonitor(ctx, recordings)
 		}()
+		// Recording obligations (PRD REL-03) are derived here rather than hooked
+		// onto the write paths that change them: four independent paths decide
+		// whether recording is owed, and a loop that recomputes from the facts
+		// collects all of them by construction — including the disabled and
+		// unconfigured channels the sampler never visits.
+		go func() { defer background.Done(); runObligationReconciliation(ctx, recordings) }()
 		go func() { defer background.Done(); recordings.MonitorIdlePools(ctx) }()
 		// Retention runs with the recorder loops because it touches pool files
 		// and publishes into the same index. It stays inert until a site sets a

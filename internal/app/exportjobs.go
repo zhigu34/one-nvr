@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/zhigu34/one-nvr/internal/archive"
@@ -120,6 +121,28 @@ func runEventReconciliation(ctx context.Context, s *events.Service) {
 // one behaviour in one place rather than a per-table habit.
 func runReliabilityRetention(ctx context.Context, db *database.DB) {
 	reliability.RunRetention(ctx, db)
+}
+
+// runObligationReconciliation keeps the recording-obligation timeline current
+// (PRD REL-03).
+//
+// A database failure must not end the loop: the obligation timeline is the
+// denominator of every completeness figure, and a worker that stops reconciling
+// turns an unrecorded policy change into a permanent hole nobody can see. Log,
+// wait for the next tick, try again — the same discipline the sampler follows.
+func runObligationReconciliation(ctx context.Context, recordings *recording.Service) {
+	ticker := time.NewTicker(recording.ObligationInterval)
+	defer ticker.Stop()
+	for {
+		if err := recordings.ReconcileAllObligations(ctx); err != nil && ctx.Err() == nil {
+			slog.Warn("recording obligation reconciliation unavailable", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // runDeliveryReconciliation settles delivery rows whose job ended without the

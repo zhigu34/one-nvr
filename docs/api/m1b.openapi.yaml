@@ -5590,6 +5590,60 @@
         }
       }
     },
+    "/api/v1/channels/{id}/reliability/obligations": {
+      "get": {
+        "operationId": "reliabilityObligations",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "playback",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
+          { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
+          { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "When recording was required, and when it explicitly was not, half-open [started_at, ended_at). This is the completeness denominator (REL-03). An empty exclusion means recording WAS owed — including while the recorder, source or pool was failing, because a denominator that shrinks on failure makes availability rise when the site does worse. Exclusions (disabled/not_configured/maintenance/cleared) are reported separately rather than blended. Each row names the policy_version that formed it, so a reader can resolve the exact change instant from the policy timeline instead of trusting the reconciler's cadence."
+          }
+        }
+      }
+    },
+    "/api/v1/channels/{id}/reliability/integrity": {
+      "get": {
+        "operationId": "reliabilityIntegrity",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "playback",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
+          { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
+          { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recording completeness as four durations, never a bare percentage: owed_ms (denominator), covered_ms (numerator), missing_ms (owed and not covered, with attributed gaps), unverified_ms (cannot be judged either way), and excluded_ms broken down by reason. covered + missing + unverified = owed always holds. Media recorded before a policy change is not credited; segments recorded and later deleted by retention still count as covered, because the recording happened. precision is 'exact' only when the window begins at or after the first observed (non-backfilled) policy version, per REL-06."
+          }
+        }
+      }
+    },
+    "/api/v1/recording-policy-history": {
+      "get": {
+        "operationId": "recordingPolicyHistory",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "channel_id", "in": "query", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
+          { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
+          { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "The recording-mode timeline behind the obligation denominator: which mode was in force from when, and what changed it. PRD REL-03 forbids reinterpreting the past with the current plan, so this exists to answer 'why does this month differ from last month' without reading today's setting back into history. Rows written by the migration whose real effective time could not be known are labelled 'backfill' and make the response precision 'assumed' rather than inventing an instant."
+          }
+        }
+      }
+    },
     "/api/v1/faults": {
       "get": {
         "operationId": "reliabilityFaults",

@@ -158,6 +158,113 @@ func (r *router) faultImpact(w http.ResponseWriter, q *http.Request, p auth.Prin
 	}{impact.Milliseconds()})
 }
 
+// reliabilityObligations handles GET /api/v1/channels/{id}/reliability/obligations.
+//
+// This is the recording-completeness denominator (PRD REL-03): the stretches
+// during which recording was required, and the stretches it was explicitly not
+// required with the reason. It exists as its own endpoint because the reasons
+// matter as much as the totals — "not required because you disabled the channel"
+// and "required but nothing was recorded" are different answers, and a single
+// number would merge them.
+func (r *router) reliabilityObligations(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Reliability == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
+	channelID, err := pathID(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	from, to, err := parseWindow(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	// The obligation timeline is evidence about a channel's media, so it
+	// travels with the playback grant — the same grant the intervals endpoint
+	// requires.
+	if err := r.d.Auth.RequireChannel(q.Context(), p, channelID, auth.Playback); err != nil {
+		fail(w, q, err)
+		return
+	}
+	items, err := r.d.Reliability.ListObligations(q.Context(), channelID, from, to)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, struct {
+		Items []reliability.ObligationView `json:"items"`
+	}{items})
+}
+
+// reliabilityIntegrity handles GET /api/v1/channels/{id}/reliability/integrity.
+//
+// It returns the four durations and their attribution, never a bare percentage:
+// PRD REL-04 requires every rate to carry its numerator, denominator,
+// unjudgeable time and verification level, and a lone percentage is exactly the
+// figure this chapter exists to prevent.
+func (r *router) reliabilityIntegrity(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Reliability == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
+	channelID, err := pathID(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	from, to, err := parseWindow(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	coverage, err := r.d.Reliability.RecordingCoverage(q.Context(), p, channelID, from, to)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, coverage)
+}
+
+// recordingPolicyHistory handles GET /api/v1/recording-policy-history.
+//
+// The timeline an operator needs to answer "why does this month's denominator
+// differ from last month's". It is an administrator read: the mode history of
+// every channel is configuration, not media, and the channel-scoped version of
+// the same question is already answered by the obligations endpoint.
+func (r *router) recordingPolicyHistory(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Reliability == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
+	if err := r.d.Auth.RequireAdmin(q.Context(), p); err != nil {
+		fail(w, q, err)
+		return
+	}
+	channelID := id.ID(q.URL.Query().Get("channel_id"))
+	if channelID == "" {
+		fail(w, q, auth.ErrInvalid)
+		return
+	}
+	from, to, err := parseWindow(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	items, err := r.d.Reliability.ListPolicyVersions(q.Context(), channelID, from, to)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, struct {
+		Items []reliability.PolicyVersionView `json:"items"`
+		// Precision travels with the timeline because a version this migration
+		// backfilled has no observed start, and a reader must be able to tell.
+		Precision string `json:"precision"`
+	}{items, reliability.PolicyPrecision(items, from)})
+}
+
 // listMaintenance handles GET /api/v1/maintenance-windows.
 func (r *router) listMaintenance(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
 	if r.d.Reliability == nil {

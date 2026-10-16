@@ -104,6 +104,18 @@ func (s *Service) Expand(ctx context.Context, p auth.Principal, expected int64) 
 			if _, err := tx.Exec(ctx, "INSERT INTO recording_policies(channel_id) VALUES($1)", cid); err != nil {
 				return err
 			}
+			// Open the policy timeline with the channel, for the reason spelled
+			// out in setup.go: PRD REL-03 must be able to say a stretch was owed
+			// nothing rather than that it is unknown.
+			versionID, err := id.New()
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO recording_policy_versions(id,channel_id,version,mode,event_recording,effective_at,reason)
+					SELECT $1,$2,p.version,p.mode,p.event_recording,clock_timestamp(),'setup'
+					FROM recording_policies p WHERE p.channel_id=$2`, versionID, cid); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx, "INSERT INTO channel_grants(user_id,channel_id,live,playback,export,configure,archive) VALUES($1,$2,true,true,true,true,true)", p.UserID, cid); err != nil {
 				return err
 			}

@@ -1520,6 +1520,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/channels/{id}/reliability/obligations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["reliabilityObligations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/{id}/reliability/integrity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["reliabilityIntegrity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/recording-policy-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["recordingPolicyHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/faults": {
         parameters: {
             query?: never;
@@ -7909,6 +7957,74 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Contiguous state intervals overlapping the window, newest first. Half-open [started_at, ended_at), so a boundary instant belongs to exactly one interval. Each carries first_observed_at and last_observed_at because polling cannot resolve the exact instant of a change; a reader that needs the uncertainty band reports the pair rather than the start. Excluded intervals carry their exclusion reason so a deliberate stop is never counted as an outage. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    reliabilityObligations: {
+        parameters: {
+            query: {
+                from: string;
+                to: string;
+            };
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description When recording was required, and when it explicitly was not, half-open [started_at, ended_at). This is the completeness denominator (REL-03). An empty exclusion means recording WAS owed — including while the recorder, source or pool was failing, because a denominator that shrinks on failure makes availability rise when the site does worse. Exclusions (disabled/not_configured/maintenance/cleared) are reported separately rather than blended. Each row names the policy_version that formed it, so a reader can resolve the exact change instant from the policy timeline instead of trusting the reconciler's cadence. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    reliabilityIntegrity: {
+        parameters: {
+            query: {
+                from: string;
+                to: string;
+            };
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recording completeness as four durations, never a bare percentage: owed_ms (denominator), covered_ms (numerator), missing_ms (owed and not covered, with attributed gaps), unverified_ms (cannot be judged either way), and excluded_ms broken down by reason. covered + missing + unverified = owed always holds. Media recorded before a policy change is not credited; segments recorded and later deleted by retention still count as covered, because the recording happened. precision is 'exact' only when the window begins at or after the first observed (non-backfilled) policy version, per REL-06. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    recordingPolicyHistory: {
+        parameters: {
+            query: {
+                channel_id: components["schemas"]["UUID"];
+                from: string;
+                to: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The recording-mode timeline behind the obligation denominator: which mode was in force from when, and what changed it. PRD REL-03 forbids reinterpreting the past with the current plan, so this exists to answer 'why does this month differ from last month' without reading today's setting back into history. Rows written by the migration whose real effective time could not be known are labelled 'backfill' and make the response precision 'assumed' rather than inventing an instant. */
             200: {
                 headers: {
                     [name: string]: unknown;

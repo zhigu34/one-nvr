@@ -357,7 +357,44 @@ func (s *Service) finishSwitch(ctx context.Context, e *channel.Execution, w *cha
 			return err
 		}
 		if w.Kind != "clear" {
+			// Recording policy history is the timeline PRD REL-03 needs. The
+			// policy row answers "what is the mode now", and applying that to
+			// last month would rewrite the past every time an operator changes a
+			// setting, so each version gets its own row with the instant it took
+			// effect.
+			//
+			// Written here because this is the only path that ever changes a
+			// recording policy — one hook covers policy_apply, source switches
+			// and rollbacks alike. The INSERT reads the policy row after the
+			// UPDATE above, so it records the mode that is now in force; the
+			// conflict clause makes a retried switch idempotent instead of
+			// rewriting an already-recorded version.
 			if _, err := tx.Exec(ctx, "UPDATE recording_policies SET mode=$2,version=version+1 WHERE channel_id=$1 AND mode IS DISTINCT FROM $2", e.ChannelID, mode); err != nil {
+				return err
+			}
+			versionID, err := id.New()
+			if err != nil {
+				return err
+			}
+			// Which change caused this version. A rollback is recorded as a
+			// rollback even though it restores an older mode: the operator needs
+			// to see that the mode reverted, not a gap in the timeline.
+			origin := "policy_apply"
+			switch {
+			case phase == "rolled_back" || phase == "failed":
+				origin = "rollback"
+			case w.Kind == "apply" || w.Kind == "pool_switch":
+				origin = "source_switch"
+			}
+			var actor any
+			if w.Task.ActorID != "" {
+				actor = w.Task.ActorID
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO recording_policy_versions(id,channel_id,version,mode,event_recording,effective_at,reason,actor_id,switch_id)
+					SELECT $1,$2,p.version,p.mode,p.event_recording,clock_timestamp(),$3,$4,$5
+					FROM recording_policies p WHERE p.channel_id=$2
+					ON CONFLICT(channel_id,version) DO NOTHING`,
+				versionID, e.ChannelID, origin, actor, w.ID); err != nil {
 				return err
 			}
 		}

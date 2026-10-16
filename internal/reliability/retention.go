@@ -26,6 +26,10 @@ const (
 	// faults, gaps and verification evidence.
 	IntervalRetention = 365 * 24 * time.Hour
 	FaultRetention    = 365 * 24 * time.Hour
+	// ObligationRetention matches the interval tier: an availability or
+	// completeness figure divides a numerator by a denominator, and the two
+	// expiring on different schedules would leave windows nobody can recompute.
+	ObligationRetention = 365 * 24 * time.Hour
 )
 
 // retentionBatch bounds one sweep. The first run after upgrade may have a long
@@ -46,6 +50,15 @@ func (s *Service) Sweep(ctx context.Context) {
 	s.sweepTable(ctx, "source_observations", "observed_at", ObservationRetention)
 	s.sweepTable(ctx, "reliability_intervals", "ended_at", IntervalRetention)
 	s.sweepTable(ctx, "fault_events", "ended_at", FaultRetention)
+	// Obligations are the completeness denominator (REL-03), so they live in the
+	// same 365-day tier as the intervals they are read against: a rate whose
+	// denominator expired while its numerator survived would be incomputable.
+	s.sweepTable(ctx, "recording_obligations", "ended_at", ObligationRetention)
+	// Policy versions are metadata, not observations, and PRD REL-06 keeps
+	// metadata that is still referenced: an obligation names the policy version
+	// that formed it, so deleting the version would leave the obligation
+	// unexplainable. Kept forever, and the table only grows when a policy
+	// actually changes (single digits per channel per month at worst).
 }
 
 // sweepTable deletes rows older than the window in bounded batches.
