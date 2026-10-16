@@ -5626,6 +5626,60 @@
         }
       }
     },
+    "/api/v1/channels/{id}/reliability/metrics": {
+      "get": {
+        "operationId": "reliabilityMetrics",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "playback",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
+          { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
+          { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "The REL-04 rate values, one entry per stream kind (main/sub/recording). No merged figure exists, because a healthy sub stream must not mask an unavailable main stream. Every rate carries numerator_ms, denominator_ms and unjudgeable_ms so a reader can recompute it; a rate with no value states why — no_observation (nothing observed to divide by), not_applicable (the question does not apply), or no_samples (no completed sample yet) — rather than reporting 0%. precision states which retention tier answered the window. The definitions are the PRD's own worked example: 40m up, 10m down, 10m unknown in a 60m window gives 83.33% monitoring coverage, 80% observed availability and 66.67% conservative availability."
+          }
+        }
+      }
+    },
+    "/api/v1/channels/{id}/reliability/trend": {
+      "get": {
+        "operationId": "reliabilityTrend",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "playback",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
+          { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
+          { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
+          { "name": "kind", "in": "query", "schema": { "type": "string", "enum": ["main", "sub", "recording"] } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-day series for one stream kind, read from the daily rollup so a 90-day window does not scan the interval rows inside it. Each point also carries computed_at and input_watermark (REL-06: a stored figure must be identifiable and its staleness judgeable). Days whose evidence has passed the daily retention are absent rather than reported as zero, so 'no evidence left' cannot be read as 'nothing happened'."
+          }
+        }
+      }
+    },
+    "/api/v1/reliability/summary": {
+      "get": {
+        "operationId": "reliabilitySummary",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
+          { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cross-channel comparison for the overview's abnormal-channel list and the operations page (REL-05), over main and recording kinds. Each row carries the channel's observed_ms and a sample_sufficient flag: a channel with ten minutes of history in a 90-day window at 100% availability is the least monitored channel, not the most reliable one, so insufficient samples are marked rather than ranked. No average availability is provided — averaging rates across channels with different observed durations would weight them equally and describe nothing."
+          }
+        }
+      }
+    },
     "/api/v1/recording-policy-history": {
       "get": {
         "operationId": "recordingPolicyHistory",

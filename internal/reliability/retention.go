@@ -11,11 +11,9 @@ import (
 // Retention, PRD REL-06's first stage.
 //
 // The chapter asks for four tiers and this batch delivers the two whose facts
-// already exist: raw observations for drill-down, and the intervals and faults
-// that summaries are computed from. Minute and daily roll-ups belong to a later
-// batch — there is nothing to roll up until the facts below them are complete,
-// and a summary computed from partial facts would be a number nobody can
-// recompute.
+// already exist: raw observations for drill-down, the intervals and faults that
+// summaries are computed from, and (from batch 3) the minute and daily rollups
+// those facts project into.
 const (
 	// ObservationRetention keeps raw samples long enough to answer "what exactly
 	// did the sampler see" for a recent incident. The reader only ever wants the
@@ -30,6 +28,11 @@ const (
 	// completeness figure divides a numerator by a denominator, and the two
 	// expiring on different schedules would leave windows nobody can recompute.
 	ObligationRetention = 365 * 24 * time.Hour
+	// MinuteRetention and DailyRetention are the PRD's 30 and 730 days for the
+	// summary tiers. They exist so a 90-day query does not have to re-read every
+	// interval: beyond 30 days the answer comes from the rollups.
+	MinuteRetention = 30 * 24 * time.Hour
+	DailyRetention  = 730 * 24 * time.Hour
 )
 
 // retentionBatch bounds one sweep. The first run after upgrade may have a long
@@ -54,11 +57,40 @@ func (s *Service) Sweep(ctx context.Context) {
 	// same 365-day tier as the intervals they are read against: a rate whose
 	// denominator expired while its numerator survived would be incomputable.
 	s.sweepTable(ctx, "recording_obligations", "ended_at", ObligationRetention)
+	// The summary tiers (REL-06). Minute rows are recomputable from the
+	// intervals above them and daily rows from the minutes, so sweeping either
+	// costs precision, never correctness.
+	s.sweepKeyed(ctx, "reliability_minutes", "minute", MinuteRetention)
+	s.sweepKeyed(ctx, "reliability_daily", "day", DailyRetention)
 	// Policy versions are metadata, not observations, and PRD REL-06 keeps
 	// metadata that is still referenced: an obligation names the policy version
 	// that formed it, so deleting the version would leave the obligation
 	// unexplainable. Kept forever, and the table only grows when a policy
 	// actually changes (single digits per channel per month at worst).
+}
+
+// sweepKeyed is the same bounded delete for tables whose age column is never
+// null and whose key is composite.
+//
+// The interval tables need "ended_at IS NOT NULL" because an open row has no
+// end and must survive however old it is. A rollup row has no such state: a
+// minute either was summarised or was not, so age alone decides.
+func (s *Service) sweepKeyed(ctx context.Context, table, column string, window time.Duration) {
+	// Identifiers are constants from this file, never caller input.
+	delete := "DELETE FROM " + table + " WHERE (" + column + ") IN (SELECT " + column +
+		" FROM " + table + " WHERE " + column + " < clock_timestamp() - $1::interval LIMIT $2)"
+	for {
+		tag, err := s.DB.Pool.Exec(ctx, delete, window.String(), retentionBatch)
+		if err != nil {
+			if ctx.Err() == nil {
+				slog.Warn("reliability retention sweep unavailable", "table", table, "error", err)
+			}
+			return
+		}
+		if tag.RowsAffected() < retentionBatch || ctx.Err() != nil {
+			return
+		}
+	}
 }
 
 // sweepTable deletes rows older than the window in bounded batches.

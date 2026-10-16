@@ -123,6 +123,17 @@ func runReliabilityRetention(ctx context.Context, db *database.DB) {
 	reliability.RunRetention(ctx, db)
 }
 
+// runReliabilityRollups keeps the minute and daily summary tiers current.
+//
+// The rollups are a projection, never a source of truth: nothing decides
+// anything by reading them, and a divergence from the intervals is a bug in
+// this loop rather than a new fact (PRD REL-06: accumulated snapshots must not
+// cover for the raw facts). That is also why the loop may fail freely — the
+// reports fall back to reading intervals directly.
+func runReliabilityRollups(ctx context.Context, db *database.DB) {
+	reliability.RunRollups(ctx, db)
+}
+
 // runObligationReconciliation keeps the recording-obligation timeline current
 // (PRD REL-03).
 //

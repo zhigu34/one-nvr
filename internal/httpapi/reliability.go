@@ -227,6 +227,113 @@ func (r *router) reliabilityIntegrity(w http.ResponseWriter, q *http.Request, p 
 	respond(w, q, 200, coverage)
 }
 
+// reliabilityMetrics handles GET /api/v1/channels/{id}/reliability/metrics.
+//
+// This is where the chapter's rate values arrive, and the shape is the
+// requirement: PRD REL-04 forbids a lone percentage, so every figure travels
+// with its numerator, denominator and unjudgeable time, and the denominators
+// that cannot be evaluated say why (no observation / not applicable / no
+// samples) instead of dividing by zero and printing 0%.
+//
+// All stream kinds are returned separately. There is deliberately no merged
+// value: "a healthy sub stream must not mask an unavailable main stream" is a
+// statement about the shape of the answer, so the shape has no room for it.
+func (r *router) reliabilityMetrics(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Reliability == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
+	channelID, err := pathID(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	from, to, err := parseWindow(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	items, err := r.d.Reliability.ChannelMetricsAllKinds(q.Context(), p, channelID, from, to)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, struct {
+		Items []reliability.Metrics `json:"items"`
+	}{items})
+}
+
+// reliabilityTrend handles GET /api/v1/channels/{id}/reliability/trend.
+//
+// The per-day series the reliability page draws. Read from the daily rollup so
+// a 90-day window does not scan every interval row it contains; when the day is
+// still inside the minute tier the figure is the same either way, which the
+// integration tests assert rather than assume.
+func (r *router) reliabilityTrend(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Reliability == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
+	channelID, err := pathID(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	from, to, err := parseWindow(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	kind := q.URL.Query().Get("kind")
+	if kind == "" {
+		kind = "main"
+	}
+	items, err := r.d.Reliability.DailyTrend(q.Context(), p, channelID, kind, from, to)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, struct {
+		Items []reliability.TrendPoint `json:"items"`
+		// Precision says which tier answered, per REL-06.
+		Precision string `json:"precision"`
+	}{items, reliability.PrecisionDaily})
+}
+
+// reliabilitySummary handles GET /api/v1/reliability/summary.
+//
+// A cross-channel view for the overview page's abnormal-channel list and the
+// operations page's comparison (REL-05). It is an administrator read: comparing
+// channels means reading media evidence about all of them.
+//
+// It sums durations per stream kind and returns the channel count alongside.
+// There is deliberately no average availability: averaging rates across
+// channels with different observed durations would weight them equally and
+// produce a number that describes nothing.
+func (r *router) reliabilitySummary(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Reliability == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
+	if err := r.d.Auth.RequireAdmin(q.Context(), p); err != nil {
+		fail(w, q, err)
+		return
+	}
+	from, to, err := parseWindow(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	items, err := r.d.Reliability.ChannelComparison(q.Context(), from, to)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, struct {
+		Items []reliability.ChannelSummary `json:"items"`
+	}{items})
+}
+
 // recordingPolicyHistory handles GET /api/v1/recording-policy-history.
 //
 // The timeline an operator needs to answer "why does this month's denominator

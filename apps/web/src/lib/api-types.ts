@@ -1552,6 +1552,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/channels/{id}/reliability/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["reliabilityMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/{id}/reliability/trend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["reliabilityTrend"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reliability/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["reliabilitySummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recording-policy-history": {
         parameters: {
             query?: never;
@@ -8003,6 +8051,74 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Recording completeness as four durations, never a bare percentage: owed_ms (denominator), covered_ms (numerator), missing_ms (owed and not covered, with attributed gaps), unverified_ms (cannot be judged either way), and excluded_ms broken down by reason. covered + missing + unverified = owed always holds. Media recorded before a policy change is not credited; segments recorded and later deleted by retention still count as covered, because the recording happened. precision is 'exact' only when the window begins at or after the first observed (non-backfilled) policy version, per REL-06. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    reliabilityMetrics: {
+        parameters: {
+            query: {
+                from: string;
+                to: string;
+            };
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The REL-04 rate values, one entry per stream kind (main/sub/recording). No merged figure exists, because a healthy sub stream must not mask an unavailable main stream. Every rate carries numerator_ms, denominator_ms and unjudgeable_ms so a reader can recompute it; a rate with no value states why — no_observation (nothing observed to divide by), not_applicable (the question does not apply), or no_samples (no completed sample yet) — rather than reporting 0%. precision states which retention tier answered the window. The definitions are the PRD's own worked example: 40m up, 10m down, 10m unknown in a 60m window gives 83.33% monitoring coverage, 80% observed availability and 66.67% conservative availability. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    reliabilityTrend: {
+        parameters: {
+            query: {
+                from: string;
+                to: string;
+                kind?: "main" | "sub" | "recording";
+            };
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Per-day series for one stream kind, read from the daily rollup so a 90-day window does not scan the interval rows inside it. Each point also carries computed_at and input_watermark (REL-06: a stored figure must be identifiable and its staleness judgeable). Days whose evidence has passed the daily retention are absent rather than reported as zero, so 'no evidence left' cannot be read as 'nothing happened'. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    reliabilitySummary: {
+        parameters: {
+            query: {
+                from: string;
+                to: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cross-channel comparison for the overview's abnormal-channel list and the operations page (REL-05), over main and recording kinds. Each row carries the channel's observed_ms and a sample_sufficient flag: a channel with ten minutes of history in a 90-day window at 100% availability is the least monitored channel, not the most reliable one, so insufficient samples are marked rather than ranked. No average availability is provided — averaging rates across channels with different observed durations would weight them equally and describe nothing. */
             200: {
                 headers: {
                     [name: string]: unknown;
