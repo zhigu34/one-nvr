@@ -60,6 +60,13 @@ CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真�
 
 ## 当前交接快照（2026-10-09）
 
+- **2026-10-16 快照卡住的**第三种**成因已修（用户截图复现：已结束但图仍 pending）**：前一条修的是「MQTT 丢 end → 事件永不开闭」。用户随后截图一张**已正常结束**（时长 1m00s、状态未处理）却显示「无抓拍图像」的卡片——那是**另一条路径**，上一轮没覆盖：
+  - **成因**：Frigate 的 `end` 消息里 `has_snapshot` 用的是**该时刻的值**，而快照文件可能稍后才落盘；**发完 end 后 Frigate 把事件从 `events_in_process` 删除、不再发任何 update**（源码 `maintainer.py`：`del self.events_in_process[...]`）。于是 one-nvr 永久停在 `ended_at` 非空 + `snapshot_state='pending'`。
+  - **为什么无人修复**：三条路径的筛选条件都把它排除——对账要 `ended_at IS NULL`、24h 兜底要 `ended_at IS NULL`、归档 sweep 要 `snapshot_state='ready'`。**「已结束 + pending」全库没有任何修复者**，且因为它有结束时间和时长、看起来"完整"，也没有别的机制会去检查它。
+  - **修法**：对账候选扩展为「未结束」**或**「已结束且 `snapshot_state='pending'`」；后者的年龄门槛按 `ended_at` 算（那是检测器停止汇报的时刻）。
+  - **关键设计：以图为准，不信标志位。** 用户的原话是「我看 frigate 里都是有的」，而 Frigate 自己的代码注释就说 `has_snapshot` 可能过期——所以当事件已结束且标志位说"没有"时，**直接请求那张图**（`GET /api/events/{id}/snapshot.jpg`）：200 → 补成 `ready`（归档 sweep 随之取走）；404 → 才判定无图并终态为 `gone`；其他响应（检测器挣扎中）→ 保持 pending 下轮再问，**不拿「问不出来」当「没有」**。
+  - **前端**：新增第三支显示——已结束且 pending 显示「**抓拍待同步 · 稍后自动核对**」（灰点，非故障样式），与「抓拍未到达 · 事件未正常结束」（琥珀，事件未闭合）和「无抓拍图像」（确认无图）三者互不冒充。
+  - **测试**：集成新增 3 个（标志位说 false 但图取得到 → 补回 ready；图确实 404 → 终态 gone；已完成的事件不再被询问）。vitest 新增 1 个（三态区分）。
 - **2026-10-16 事件丢失结束消息的根因已修（现场实测 13/50 卡住）**：现场取证发现最近 50 条事件中 13 条 `snapshot_state=pending` 且全部 `ended_at=null`（最老的挂 2.5 小时），事件页因此出现四分之一卡片的「无抓拍图像」黑块。
   - **根因链**：MQTT `end` 消息丢失后，upsert 再也等不到补齐 `ended_at`/`has_snapshot` 的 update；归档 sweep 只挑 `snapshot_state='ready'`，pending 事件永不被抓取；`internal/events/run.go` 只订阅 MQTT、**没有任何对 Frigate API 的补账机制**。前端 5 分钟收口（`ONGOING_MAX_AGE_MS`）本身按设计工作，只是后端数据永远补不上——**此前 2026-10-14 那次只修了显示层**（AGENTS 旧条目「修掉 MQTT end 丢失导致永挂进行中」指的仅是前端文案），数据层一直没修。
   - **顺带查实的第二个缺陷**：`StaleOpenThreshold`（24h，注释写明「上游从未关闭的事件应在此时点后正常过期」）自加入起**声明后从未被任何代码引用**，且清理 SQL 要求 `ended_at IS NOT NULL`、`expires_at` 也只在有 end 时计算——所以无结束时间的事件**永远不会被清理，只增不删**（与 `source_observations` 同类问题）。

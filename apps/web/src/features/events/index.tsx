@@ -431,6 +431,23 @@ export function Events() {
                             抓拍未到达
                             <span className='text-[10px] opacity-80'>事件未正常结束</span>
                           </span>
+                        ) : item.snapshot_state === 'pending' ? (
+                          // The event closed but the picture has not arrived yet.
+                          // The detector announces snapshots as they stand when an
+                          // event ends, so one written just after is never
+                          // announced; reconciliation asks about it directly.
+                          // Until then this is neither "loading" nor "missing".
+                          <span
+                            className='flex flex-col items-center gap-1.5 px-2 text-center text-xs'
+                            title='这条事件已结束，但检测器当时还没有生成抓拍。系统会向检测器核对，确认有就补回、确认没有就标记为无图。'
+                          >
+                            <span
+                              aria-hidden
+                              className='size-2 animate-pulse rounded-full bg-zinc-500'
+                            />
+                            抓拍待同步
+                            <span className='text-[10px] opacity-80'>稍后自动核对</span>
+                          </span>
                         ) : (
                           <span className='flex flex-col items-center gap-1.5 text-xs'>
                             <ImageOff aria-hidden className='size-4' />

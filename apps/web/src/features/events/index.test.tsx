@@ -383,3 +383,35 @@ test('an event nobody was told about says so instead of showing an empty box', a
     .element(screen.getByText(/没有触发通知：可能是规则未绑定渠道/))
     .toBeVisible()
 })
+
+test('a closed event waiting for its picture says so, not "no picture"', async () => {
+  // The detector announces snapshots as they stand when an event ends, so one
+  // written just after is never announced. Until reconciliation asks, this is
+  // neither "loading" nor "missing" — it is "we will check".
+  const pending: Schema<'Event'> = {
+    id: eventID,
+    channel_id: channelID,
+    source: 'frigate',
+    source_id: 'evt-pending',
+    category: 'person',
+    score: 0.74,
+    zones: [],
+    started_at: new Date(Date.now() - 3_600_000).toISOString(),
+    ended_at: new Date(Date.now() - 3_540_000).toISOString(),
+    snapshot_state: 'pending',
+    media_state: 'linked',
+    handle_state: 'open',
+    version: 1,
+    handling: [],
+  }
+  const { client } = fixture([], { events: [pending] })
+  const screen = await view(client)
+  const card = screen.getByTestId('event-card')
+  await expect.element(card).toHaveTextContent('抓拍待同步')
+  await expect.element(card).toHaveTextContent('稍后自动核对')
+  // Not dressed as a fault (nothing is known to be wrong) and not as an
+  // ordinary missing picture (which would be a claim it does not have).
+  await expect.element(card).not.toHaveTextContent('无抓拍图像')
+  await expect.element(card).not.toHaveTextContent('抓拍未到达')
+  client.clear()
+})

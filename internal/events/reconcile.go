@@ -40,8 +40,18 @@ const reconcileMinAge = 10 * time.Minute
 // detector, and an unbounded sweep on first enable would hammer it.
 const reconcileBatch = 50
 
-// ReconcileOpenEvents asks the detector about events whose stream never closed
-// them, and fills in what it reports.
+// ReconcileOpenEvents asks the detector about the events this index cannot
+// finish on its own, and fills in what it reports. Two conditions qualify, and
+// they are different failures with the same symptom:
+//
+//   - the stream never closed the event (a lost end message);
+//   - the event closed but its snapshot never arrived.
+//
+// The second is easy to miss because the event *looks* complete: it has an end
+// time and a duration, so nothing downstream waits for it. The detector sends
+// `has_snapshot` as it stands when the event ends, then stops reporting on that
+// event entirely — so a picture written just after the end is never announced,
+// and the row sits at pending forever with no repair path looking at it.
 func (s *Service) ReconcileOpenEvents(ctx context.Context) {
 	if s.Frigate == "" || s.DB == nil {
 		return
@@ -61,31 +71,60 @@ func (s *Service) ReconcileOpenEvents(ctx context.Context) {
 		report, err := s.fetchEvent(ctx, client, candidate.SourceID)
 		if err != nil {
 			// A detector that cannot answer is not evidence that the event is
-			// over; leave it open and try again next pass.
+			// over; leave it alone and try again next pass.
 			if !errors.Is(err, errEventGone) {
 				slog.Warn("event reconciliation fetch failed", "source_id", candidate.SourceID, "error", err)
 			} else {
-				s.closeAbandoned(ctx, candidate)
+				s.settleAbandoned(ctx, candidate)
 			}
 			continue
 		}
 		if err := s.applyReport(ctx, candidate, report); err != nil && ctx.Err() == nil {
 			slog.Warn("event reconciliation write failed", "source_id", candidate.SourceID, "error", err)
 		}
+		// A closed event whose flag says "no picture" is where the detector's
+		// own bookkeeping is known to lag: it stopped reporting on this event at
+		// the end, so a picture written just after is never announced. Trust the
+		// bytes over the flag — ask for the image itself before concluding
+		// anything, because "the flag is stale" and "the picture exists" look
+		// identical from here.
+		if candidate.Closed && !report.HasSnapshot {
+			switch s.probeSnapshot(ctx, client, candidate.SourceID) {
+			case snapshotPresent:
+				s.markSnapshotReady(ctx, candidate)
+			case snapshotAbsent:
+				s.settleWithoutSnapshot(ctx, candidate)
+			case snapshotUnknown:
+				// The detector could not answer about the picture; leave the
+				// event pending and ask again next pass rather than declaring a
+				// picture missing on no evidence.
+			}
+		}
 	}
 }
 
-// openEvent is one event the stream left open, with what reconciliation needs
-// to ask about it.
+// openEvent is one event this index cannot finish, with what reconciliation
+// needs to ask about it.
 type openEvent struct {
 	ID       id.ID
 	SourceID string
 	Started  time.Time
+	// Ended is set when the event closed but its snapshot never arrived: the
+	// two cases need different reports, because an unclosed event may still be
+	// running while a closed one definitely is not.
+	Ended  *time.Time
+	Closed bool
 }
 
 func (s *Service) openEvents(ctx context.Context) ([]openEvent, error) {
-	rows, err := s.DB.Pool.Query(ctx, `SELECT id,source_id,started_at FROM events
-		WHERE source='frigate' AND ended_at IS NULL AND started_at < clock_timestamp() - $1::interval
+	rows, err := s.DB.Pool.Query(ctx, `SELECT id,source_id,started_at,ended_at,snapshot_state FROM events
+		WHERE source='frigate' AND (
+			-- The stream never closed it.
+			(ended_at IS NULL AND started_at < clock_timestamp() - $1::interval)
+			-- It closed but the picture never arrived. The age test uses the
+			-- end, because that is when the detector stopped reporting on it.
+			OR (ended_at IS NOT NULL AND ended_at < clock_timestamp() - $1::interval AND snapshot_state='pending')
+		)
 		ORDER BY started_at DESC LIMIT $2`,
 		reconcileMinAge.String(), reconcileBatch)
 	if err != nil {
@@ -95,9 +134,11 @@ func (s *Service) openEvents(ctx context.Context) ([]openEvent, error) {
 	out := []openEvent{}
 	for rows.Next() {
 		var item openEvent
-		if err := rows.Scan(&item.ID, &item.SourceID, &item.Started); err != nil {
+		var snapshotState string
+		if err := rows.Scan(&item.ID, &item.SourceID, &item.Started, &item.Ended, &snapshotState); err != nil {
 			return nil, err
 		}
+		item.Closed = item.Ended != nil
 		out = append(out, item)
 	}
 	return out, rows.Err()
@@ -210,24 +251,80 @@ func (s *Service) applyReport(ctx context.Context, candidate openEvent, report e
 	return err
 }
 
-// closeAbandoned handles an event the detector no longer knows about at all.
+// settleAbandoned handles an event the detector no longer knows about at all.
 //
 // The detector's own retention can drop an event before its closing message
-// arrived. That is not our record's fault, and the truthful outcome is a closed
-// event with no snapshot: leaving it open forever would claim something is
-// still happening. It is closed at its start time, which is the last moment the
-// detector is known to have seen it, and the picture is marked gone rather than
-// pending so the UI stops promising one.
-func (s *Service) closeAbandoned(ctx context.Context, candidate openEvent) {
+// arrived, or before its snapshot reached us. That is not our record's fault,
+// and the truthful outcome is a closed event with no picture: leaving it open
+// would claim something is still happening, and leaving it pending would
+// promise a picture nobody can produce. An unclosed event is closed at its
+// start time, the last moment the detector is known to have seen it.
+func (s *Service) settleAbandoned(ctx context.Context, candidate openEvent) {
 	_, err := s.DB.Pool.Exec(ctx, `UPDATE events SET
 			ended_at=COALESCE(ended_at,started_at),
-			expires_at=COALESCE(expires_at,started_at + $2::interval),
+			expires_at=COALESCE(expires_at,COALESCE(ended_at,started_at) + $2::interval),
 			snapshot_state=CASE WHEN snapshot_state='pending' THEN 'gone' ELSE snapshot_state END,
 			updated_at=clock_timestamp()
-		WHERE id=$1 AND ended_at IS NULL`,
+		WHERE id=$1 AND (ended_at IS NULL OR snapshot_state='pending')`,
 		candidate.ID, EventIndexRetention.String())
 	if err != nil && ctx.Err() == nil {
-		slog.Warn("abandoned event not closed", "event", candidate.ID, "error", err)
+		slog.Warn("abandoned event not settled", "event", candidate.ID, "error", err)
+	}
+}
+
+// snapshotVerdict is what asking the detector for the image itself established.
+type snapshotVerdict int
+
+const (
+	snapshotUnknown snapshotVerdict = iota
+	snapshotPresent
+	snapshotAbsent
+)
+
+// probeSnapshot asks for the picture instead of the flag. The flag is a claim
+// the detector makes when it finishes an event; the bytes are the fact, and the
+// two disagree exactly in the case that produced this code.
+func (s *Service) probeSnapshot(ctx context.Context, client *http.Client, sourceID string) snapshotVerdict {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, s.Frigate+"/api/events/"+sourceID+"/snapshot.jpg", nil)
+	if err != nil {
+		return snapshotUnknown
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return snapshotUnknown
+	}
+	defer response.Body.Close()
+	switch {
+	case response.StatusCode == http.StatusOK:
+		return snapshotPresent
+	case response.StatusCode == http.StatusNotFound:
+		return snapshotAbsent
+	default:
+		// A struggling detector must not be read as "no picture".
+		return snapshotUnknown
+	}
+}
+
+// markSnapshotReady records a picture the detector does have. The event is
+// already closed, so only the snapshot dimension changes; the archive sweep
+// picks it up from here on its own tick.
+func (s *Service) markSnapshotReady(ctx context.Context, candidate openEvent) {
+	_, err := s.DB.Pool.Exec(ctx, `UPDATE events SET snapshot_state='ready',updated_at=clock_timestamp()
+		WHERE id=$1 AND snapshot_state='pending'`, candidate.ID)
+	if err != nil && ctx.Err() == nil {
+		slog.Warn("recovered snapshot not recorded", "event", candidate.ID, "error", err)
+	}
+}
+
+// settleWithoutSnapshot records that a closed event has no picture and is not
+// going to get one. The event closed, the detector has been asked for the image
+// itself well after the fact, and it answered that there is none: waiting longer
+// would only keep the operator watching a placeholder.
+func (s *Service) settleWithoutSnapshot(ctx context.Context, candidate openEvent) {
+	_, err := s.DB.Pool.Exec(ctx, `UPDATE events SET snapshot_state='gone',updated_at=clock_timestamp()
+		WHERE id=$1 AND snapshot_state='pending'`, candidate.ID)
+	if err != nil && ctx.Err() == nil {
+		slog.Warn("closed event without a snapshot not settled", "event", candidate.ID, "error", err)
 	}
 }
 
@@ -244,10 +341,13 @@ func (s *Service) ReconcileStaleOpen(ctx context.Context) {
 	}
 	_, err := s.DB.Pool.Exec(ctx, `UPDATE events SET
 			ended_at=COALESCE(ended_at,started_at),
-			expires_at=COALESCE(expires_at,started_at + $2::interval),
+			expires_at=COALESCE(expires_at,COALESCE(ended_at,started_at) + $2::interval),
 			snapshot_state=CASE WHEN snapshot_state='pending' THEN 'gone' ELSE snapshot_state END,
 			updated_at=clock_timestamp()
-		WHERE source='frigate' AND ended_at IS NULL AND started_at < clock_timestamp() - $1::interval`,
+		WHERE source='frigate' AND (
+			(ended_at IS NULL AND started_at < clock_timestamp() - $1::interval)
+			OR (ended_at IS NOT NULL AND snapshot_state='pending' AND ended_at < clock_timestamp() - $1::interval)
+		)`,
 		StaleOpenThreshold.String(), EventIndexRetention.String())
 	if err != nil && ctx.Err() == nil {
 		slog.Warn("stale open events not closed", "error", err)

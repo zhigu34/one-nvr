@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -624,5 +625,135 @@ func TestReconciliationLeavesAProbablyRunningEventOpen(t *testing.T) {
 	}
 	if snapshot != "pending" {
 		t.Fatalf("its snapshot is still legitimately pending, got %q", snapshot)
+	}
+}
+
+// The screenshot case: an event that closed normally, whose snapshot arrived at
+// the detector just after the end message — so the end carried
+// has_snapshot=false and no later update ever came. It has a duration and looks
+// complete, which is why nothing downstream noticed it stayed pending forever.
+func TestReconciliationRecoversASnapshotAnnouncedAfterTheEnd(t *testing.T) {
+	f := newNotifyFixture(t)
+	f.mapCamera(t, "front-door")
+	// The stream delivered start and end, but the end said has_snapshot=false.
+	started := float64(time.Now().UTC().Add(-20 * time.Minute).Unix())
+	if err := f.service.Ingest(context.Background(),
+		frigatePayload("new", "evt-late-shot", "front-door", "person", started, nil, nil, false)); err != nil {
+		t.Fatal(err)
+	}
+	ended := started + 60
+	if err := f.service.Ingest(context.Background(),
+		frigatePayload("end", "evt-late-shot", "front-door", "person", started, &ended, nil, false)); err != nil {
+		t.Fatal(err)
+	}
+	// The event is closed and its picture is stuck pending.
+	var state string
+	if err := f.fixture.DB.Pool.QueryRow(context.Background(),
+		`SELECT snapshot_state FROM events WHERE source_id='evt-late-shot'`).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "pending" {
+		t.Fatalf("the setup must leave the picture pending, got %q", state)
+	}
+
+	// The detector's event record still says has_snapshot=false — its
+	// bookkeeping stopped at the end — but the image itself is there. The
+	// bytes are what matters.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/snapshot.jpg") {
+			w.Header().Set("Content-Type", "image/jpeg")
+			_, _ = w.Write([]byte("jpeg-bytes"))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "evt-late-shot", "camera": "front-door", "label": "person",
+			"start_time": started, "end_time": ended, "has_snapshot": false,
+			"data": map[string]any{"score": 0.7},
+		})
+	}))
+	defer server.Close()
+	f.service.Frigate = server.URL
+
+	f.service.ReconcileOpenEvents(context.Background())
+
+	if err := f.fixture.DB.Pool.QueryRow(context.Background(),
+		`SELECT snapshot_state FROM events WHERE source_id='evt-late-shot'`).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "ready" {
+		t.Fatalf("a snapshot the detector has must be recovered, got %q", state)
+	}
+}
+
+// The other half of the same case: the detector confirms there is no picture.
+// Leaving the row pending would promise one forever, so it becomes an honest
+// "none" the operator can stop waiting on.
+func TestReconciliationSettlesAClosedEventWithNoPicture(t *testing.T) {
+	f := newNotifyFixture(t)
+	f.mapCamera(t, "front-door")
+	started := float64(time.Now().UTC().Add(-20 * time.Minute).Unix())
+	if err := f.service.Ingest(context.Background(),
+		frigatePayload("new", "evt-no-shot", "front-door", "person", started, nil, nil, false)); err != nil {
+		t.Fatal(err)
+	}
+	ended := started + 60
+	if err := f.service.Ingest(context.Background(),
+		frigatePayload("end", "evt-no-shot", "front-door", "person", started, &ended, nil, false)); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/snapshot.jpg") {
+			// The detector was asked for the image itself and has none.
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "evt-no-shot", "camera": "front-door", "label": "person",
+			"start_time": started, "end_time": ended, "has_snapshot": false,
+			"data": map[string]any{"score": 0.7},
+		})
+	}))
+	defer server.Close()
+	f.service.Frigate = server.URL
+
+	f.service.ReconcileOpenEvents(context.Background())
+
+	var state string
+	if err := f.fixture.DB.Pool.QueryRow(context.Background(),
+		`SELECT snapshot_state FROM events WHERE source_id='evt-no-shot'`).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "gone" {
+		t.Fatalf("a picture the detector does not have must stop being promised, got %q", state)
+	}
+}
+
+// A closed event whose picture is already stored must not be revisited: there is
+// nothing to ask about, and the sweep must not spend detector calls on it.
+func TestReconciliationSkipsEventsWhosePictureIsSettled(t *testing.T) {
+	f := newNotifyFixture(t)
+	f.mapCamera(t, "front-door")
+	started := float64(time.Now().UTC().Add(-20 * time.Minute).Unix())
+	if err := f.service.Ingest(context.Background(),
+		frigatePayload("new", "evt-done", "front-door", "person", started, nil, nil, true)); err != nil {
+		t.Fatal(err)
+	}
+	ended := started + 60
+	if err := f.service.Ingest(context.Background(),
+		frigatePayload("end", "evt-done", "front-door", "person", started, &ended, nil, true)); err != nil {
+		t.Fatal(err)
+	}
+	var asked int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked++
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+	f.service.Frigate = server.URL
+
+	f.service.ReconcileOpenEvents(context.Background())
+
+	if asked != 0 {
+		t.Fatalf("a settled event must not be asked about, got %d calls", asked)
 	}
 }
