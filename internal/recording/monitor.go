@@ -48,14 +48,28 @@ func (s *Service) Monitor(ctx context.Context) error {
 		// even when their channel is disabled/cleared, until its sessions close.
 		rows, err := s.DB.Pool.Query(ctx, `SELECT c.id FROM channels c WHERE (c.enabled AND c.current_revision_id IS NOT NULL) OR EXISTS(SELECT 1 FROM stream_sessions ss WHERE ss.channel_id=c.id AND ss.purpose IN ('main','sub') AND ss.state NOT IN ('closed','failed')) ORDER BY c.channel_no`)
 		if err != nil {
-			return err
+			// A database blip must not end monitoring: stopping the loop turns
+			// a transient fault into an unmonitored stretch, which is the one
+			// thing reliability history cannot reconstruct. Wait for the next
+			// tick and try again.
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			slog.Warn("channel scan unavailable", "error", err)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-ticker.C:
+			}
+			continue
 		}
 		var channels []id.ID
 		for rows.Next() {
 			var ch id.ID
 			if err := rows.Scan(&ch); err != nil {
 				rows.Close()
-				return err
+				slog.Warn("channel scan unavailable", "error", err)
+				break
 			}
 			channels = append(channels, ch)
 		}
@@ -75,9 +89,10 @@ func (s *Service) Monitor(ctx context.Context) error {
 			}
 			mu.Unlock()
 		}
-		// These are transient rate samples, not camera reliability history.
-		if _, err := s.DB.Pool.Exec(ctx, "DELETE FROM recording_bitrate_samples WHERE observed_at<clock_timestamp()-interval '10 minutes'"); err != nil {
-			return err
+		// These are transient rate samples, not camera reliability history, and
+		// a failure here is housekeeping — it must never stop the sampler.
+		if _, err := s.DB.Pool.Exec(ctx, "DELETE FROM recording_bitrate_samples WHERE observed_at<clock_timestamp()-interval '10 minutes'"); err != nil && ctx.Err() == nil {
+			slog.Warn("bitrate sample cleanup unavailable", "error", err)
 		}
 		select {
 		case <-ctx.Done():

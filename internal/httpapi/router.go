@@ -17,6 +17,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/notify"
 	"github.com/zhigu34/one-nvr/internal/operations"
 	"github.com/zhigu34/one-nvr/internal/recording"
+	"github.com/zhigu34/one-nvr/internal/reliability"
 	"github.com/zhigu34/one-nvr/internal/site"
 	"github.com/zhigu34/one-nvr/internal/storage"
 	"github.com/zhigu34/one-nvr/internal/tlsmanager"
@@ -40,6 +41,7 @@ type Dependencies struct {
 	Archive                         *archive.Service
 	Events                          *events.Service
 	Notify                          *notify.Service
+	Reliability                     *reliability.Service
 	Detection                       *detection.Service
 	Live                            *live.Service
 	Storage                         *storage.Service
@@ -201,6 +203,12 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("POST /api/v1/settings/tls/check", r.protected(r.tlsCheck))
 	r.mux.HandleFunc("POST /api/v1/settings/tls/{id}/apply", r.protected(r.tlsApply))
 	r.mux.HandleFunc("POST /api/v1/settings/tls/rollback", r.protected(r.tlsRollback))
+	r.mux.HandleFunc("GET /api/v1/channels/{id}/reliability/intervals", r.protected(r.reliabilityIntervals))
+	r.mux.HandleFunc("GET /api/v1/faults", r.protected(r.reliabilityFaults))
+	r.mux.HandleFunc("PATCH /api/v1/faults/{id}", r.protected(r.confirmFault))
+	r.mux.HandleFunc("GET /api/v1/faults/{id}/impact", r.protected(r.faultImpact))
+	r.mux.HandleFunc("GET /api/v1/maintenance-windows", r.protected(r.listMaintenance))
+	r.mux.HandleFunc("POST /api/v1/maintenance-windows", r.protected(r.registerMaintenance))
 	r.mux.HandleFunc("GET /api/v1/capabilities", r.protected(r.capabilities))
 	r.mux.HandleFunc("GET /api/v1/operations/components", r.protected(r.components))
 	r.mux.HandleFunc("GET /api/v1/jobs/{id}", r.protected(r.job))

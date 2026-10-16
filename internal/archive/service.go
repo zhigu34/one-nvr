@@ -26,14 +26,14 @@ import (
 
 // Task failure codes, shared with the jobs table and the drawer.
 const (
-	errTargetGone       = "target_unavailable"
-	errTargetDenied     = "target_unauthorized"
-	errSourceGone       = "source_unavailable"
-	errUploadFailed     = "upload_failed"
-	errVerifyFailed     = "verify_failed"
-	errJobExhausted     = "job_exhausted"
-	uploadConcurrency   = 2
-	maxManualBatch      = 100
+	errTargetGone     = "target_unavailable"
+	errTargetDenied   = "target_unauthorized"
+	errSourceGone     = "source_unavailable"
+	errUploadFailed   = "upload_failed"
+	errVerifyFailed   = "verify_failed"
+	errJobExhausted   = "job_exhausted"
+	uploadConcurrency = 2
+	maxManualBatch    = 100
 )
 
 var (
@@ -477,7 +477,6 @@ func (s *Service) failRetry(ctx context.Context, copyID id.ID, code string) erro
 	_, err := s.DB.Pool.Exec(ctx, `UPDATE recording_archive_copies SET error_code=$2 WHERE id=$1 AND state='uploading'`, copyID, code)
 	return err
 }
-
 
 // uploadSource is the slice of segment state the upload kernel needs.
 type uploadSource struct {

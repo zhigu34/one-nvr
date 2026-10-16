@@ -23,7 +23,9 @@ type Grant struct {
 	Actions   []Action `json:"actions"`
 }
 
-func validAction(a Action) bool { return a == Live || a == Playback || a == Export || a == Configure || a == Archive }
+func validAction(a Action) bool {
+	return a == Live || a == Playback || a == Export || a == Configure || a == Archive
+}
 func (s *Service) RequireChannel(ctx context.Context, p Principal, channelID id.ID, action Action) error {
 	return s.requireChannel(ctx, p, channelID, action, s.DB.Pool)
 }

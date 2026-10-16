@@ -5570,6 +5570,130 @@
           }
         }
       }
+    },
+    "/api/v1/channels/{id}/reliability/intervals": {
+      "get": {
+        "operationId": "reliabilityIntervals",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "playback",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
+          { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
+          { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
+          { "name": "kind", "in": "query", "schema": { "type": "array", "items": { "type": "string", "enum": ["main", "sub", "recording"] } } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Contiguous state intervals overlapping the window, newest first. Half-open [started_at, ended_at), so a boundary instant belongs to exactly one interval. Each carries first_observed_at and last_observed_at because polling cannot resolve the exact instant of a change; a reader that needs the uncertainty band reports the pair rather than the start. Excluded intervals carry their exclusion reason so a deliberate stop is never counted as an outage."
+          }
+        }
+      }
+    },
+    "/api/v1/faults": {
+      "get": {
+        "operationId": "reliabilityFaults",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "playback (with channel_id); admin (across channels)",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
+          { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
+          { "name": "channel_id", "in": "query", "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
+          { "name": "category", "in": "query", "schema": { "type": "string" } },
+          { "name": "state", "in": "query", "schema": { "type": "string", "enum": ["open", "resolved"] } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Faults overlapping the window, with the automatic attribution preserved verbatim beside any operator confirmation (initial_reason/initial_category are never rewritten), the effective category a report counts by, the category vocabulary this build classifies, and whether the fault fell inside a registered maintenance window."
+          }
+        }
+      }
+    },
+    "/api/v1/faults/{id}": {
+      "patch": {
+        "operationId": "confirmFault",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": { "type": "string" },
+                  "category": { "type": "string", "description": "One of the eight categories reported by the fault list. An empty value keeps the previous confirmation." },
+                  "note": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Confirmation recorded beside the automatic classification, with a revision appended. The original classification is untouched: an unfavourable record cannot be erased." }
+        }
+      }
+    },
+    "/api/v1/faults/{id}/impact": {
+      "get": {
+        "operationId": "faultImpact",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
+          { "name": "channel_id", "in": "query", "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+        ],
+        "responses": {
+          "200": { "description": "A component incident's real business impact: the union of its channels' intervals, not their sum. Eight channels down for five minutes is five minutes of site impact." }
+        }
+      }
+    },
+    "/api/v1/maintenance-windows": {
+      "get": {
+        "operationId": "maintenanceWindows",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
+          { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }
+        ],
+        "responses": {
+          "200": { "description": "Registered planned stops overlapping the window." }
+        }
+      },
+      "post": {
+        "operationId": "maintenanceWindowRegister",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "security": [{ "sessionCookie": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["starts_at", "ends_at"],
+                "properties": {
+                  "channel_id": { "type": "string", "format": "uuid", "nullable": true, "description": "Null means every channel: a site-wide window." },
+                  "starts_at": { "type": "string", "format": "date-time" },
+                  "ends_at": { "type": "string", "format": "date-time" },
+                  "note": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Window registered. Faults already recorded inside it are reclassified as planned without being deleted: the outage happened, the operator is saying it was expected. A window registered after the fact keeps its registration time, so a report can tell a forecast from a backfill." }
+        }
+      }
     }
   },
   "components": {

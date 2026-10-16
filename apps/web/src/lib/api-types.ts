@@ -1504,6 +1504,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/channels/{id}/reliability/intervals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["reliabilityIntervals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/faults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["reliabilityFaults"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/faults/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["confirmFault"];
+        trace?: never;
+    };
+    "/api/v1/faults/{id}/impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["faultImpact"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/maintenance-windows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["maintenanceWindows"];
+        put?: never;
+        post: operations["maintenanceWindowRegister"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -7810,6 +7890,159 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["RuleChannelBinding"];
                 };
+            };
+        };
+    };
+    reliabilityIntervals: {
+        parameters: {
+            query: {
+                from: string;
+                to: string;
+                kind?: ("main" | "sub" | "recording")[];
+            };
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Contiguous state intervals overlapping the window, newest first. Half-open [started_at, ended_at), so a boundary instant belongs to exactly one interval. Each carries first_observed_at and last_observed_at because polling cannot resolve the exact instant of a change; a reader that needs the uncertainty band reports the pair rather than the start. Excluded intervals carry their exclusion reason so a deliberate stop is never counted as an outage. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    reliabilityFaults: {
+        parameters: {
+            query: {
+                from: string;
+                to: string;
+                channel_id?: components["schemas"]["UUID"];
+                category?: string;
+                state?: "open" | "resolved";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Faults overlapping the window, with the automatic attribution preserved verbatim beside any operator confirmation (initial_reason/initial_category are never rewritten), the effective category a report counts by, the category vocabulary this build classifies, and whether the fault fell inside a registered maintenance window. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    confirmFault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason?: string;
+                    /** @description One of the eight categories reported by the fault list. An empty value keeps the previous confirmation. */
+                    category?: string;
+                    note?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Confirmation recorded beside the automatic classification, with a revision appended. The original classification is untouched: an unfavourable record cannot be erased. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    faultImpact: {
+        parameters: {
+            query?: {
+                channel_id?: components["schemas"]["UUID"];
+            };
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A component incident's real business impact: the union of its channels' intervals, not their sum. Eight channels down for five minutes is five minutes of site impact. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    maintenanceWindows: {
+        parameters: {
+            query: {
+                from: string;
+                to: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered planned stops overlapping the window. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    maintenanceWindowRegister: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: uuid
+                     * @description Null means every channel: a site-wide window.
+                     */
+                    channel_id?: string | null;
+                    /** Format: date-time */
+                    starts_at: string;
+                    /** Format: date-time */
+                    ends_at: string;
+                    note?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Window registered. Faults already recorded inside it are reclassified as planned without being deleted: the outage happened, the operator is saying it was expected. A window registered after the fact keeps its registration time, so a report can tell a forecast from a backfill. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

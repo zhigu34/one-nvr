@@ -9,8 +9,21 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/zhigu34/one-nvr/internal/channel"
 	"github.com/zhigu34/one-nvr/internal/id"
+	"github.com/zhigu34/one-nvr/internal/reliability"
 )
 
+// observation records one sample twice, and the two rows answer different
+// questions.
+//
+// source_observations is *current state*: thirty-second TTL, newest row wins,
+// and what the channels page reads. reliability_intervals is *history*: one
+// contiguous stretch per state, which is what availability is computed from.
+// Writing both in one transaction is what keeps them from disagreeing — a
+// crash can leave neither, but never one without the other.
+//
+// The fold is skipped when the reliability service is not wired (unit tests,
+// and any assembly that only wants current status), which is why it is an
+// optional dependency rather than a hard one.
 func (s *Service) observation(ctx context.Context, e *channel.Execution, ss physicalSession, kind, state, reason string, evidence any) error {
 	raw, err := json.Marshal(evidence)
 	if err != nil {
@@ -29,6 +42,32 @@ func (s *Service) observation(ctx context.Context, e *channel.Execution, ss phys
 			session = &ss.ID
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO source_observations(id,channel_id,source_revision_id,session_id,kind,state,reason_code,evidence,observed_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,clock_timestamp(),clock_timestamp()+interval '30 seconds')`, observation, e.ChannelID, revision, session, kind, state, reason, raw)
+		if err != nil {
+			return err
+		}
+		if s.Reliability == nil {
+			return nil
+		}
+		// The exclusion distinguishes a deliberate stop from a failure. A
+		// recorder that is off because the operator turned it off is not an
+		// outage, and blending the two is exactly what PRD REL-04 forbids.
+		exclusion := ""
+		switch state {
+		case "disabled":
+			exclusion = "disabled"
+		case "not_configured":
+			exclusion = "not_configured"
+		}
+		_, err = s.Reliability.FoldTx(ctx, tx, reliability.Observation{
+			ChannelID:        e.ChannelID,
+			SourceRevisionID: revision,
+			SessionID:        session,
+			Kind:             kind,
+			State:            state,
+			Reason:           reason,
+			Exclusion:        exclusion,
+			ObservedAt:       time.Now().UTC(),
+		})
 		return err
 	})
 }

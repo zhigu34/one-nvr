@@ -5,10 +5,12 @@ import (
 	"time"
 
 	"github.com/zhigu34/one-nvr/internal/archive"
+	"github.com/zhigu34/one-nvr/internal/database"
 	"github.com/zhigu34/one-nvr/internal/detection"
 	"github.com/zhigu34/one-nvr/internal/events"
 	"github.com/zhigu34/one-nvr/internal/notify"
 	"github.com/zhigu34/one-nvr/internal/recording"
+	"github.com/zhigu34/one-nvr/internal/reliability"
 )
 
 // runExportReconciliation terminalizes export rows whose job exhausted its
@@ -111,6 +113,13 @@ func runEventReconciliation(ctx context.Context, s *events.Service) {
 		case <-ticker.C:
 		}
 	}
+}
+
+// runReliabilityRetention removes observation history past its tier's window
+// (PRD REL-06). It runs in the worker beside the other sweeps so retention is
+// one behaviour in one place rather than a per-table habit.
+func runReliabilityRetention(ctx context.Context, db *database.DB) {
+	reliability.RunRetention(ctx, db)
 }
 
 // runDeliveryReconciliation settles delivery rows whose job ended without the

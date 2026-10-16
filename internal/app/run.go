@@ -23,6 +23,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/notify"
 	"github.com/zhigu34/one-nvr/internal/operations"
 	"github.com/zhigu34/one-nvr/internal/recording"
+	"github.com/zhigu34/one-nvr/internal/reliability"
 	"github.com/zhigu34/one-nvr/internal/secrets"
 	"github.com/zhigu34/one-nvr/internal/site"
 	"github.com/zhigu34/one-nvr/internal/storage"
@@ -132,6 +133,11 @@ func Run(name string) error {
 		}
 		mediaProbe := probe.Runner{FFmpeg: "/usr/bin/ffmpeg", FFprobe: "/usr/bin/ffprobe"}
 		recordings := recording.New(db, media, mediaProbe, []string{"/storage"}, c.DataDir)
+		// Reliability history rides on the sampler: every observation the
+		// worker records also folds into a state interval, and the intervals are
+		// what availability is computed from (M4 REL-01).
+		reliabilityService := reliability.New(db, recordings.Sources.Auth)
+		recordings.Reliability = reliabilityService
 		baseNetwork, err := channel.ParseNetworkPolicy(c.CameraCIDRs, nil)
 		if err != nil {
 			return err
@@ -270,6 +276,14 @@ func Run(name string) error {
 		for _, kind := range []string{"source.apply", "source.clear", "source.policy_apply", "source.pool_switch"} {
 			go func() { defer background.Done(); runSourceChangeJobs(ctx, recordings, kind) }()
 		}
+		// PRD REL-01: a worker that was down must not leave its last state
+		// standing. This runs before the monitor starts so the first fresh
+		// sample cannot extend an interval that spans the downtime.
+		if err := reliabilityService.CloseOpenOnStart(ctx); err != nil {
+			return fmt.Errorf("reliability history not settled after restart")
+		}
+		background.Add(2)
+		go func() { defer background.Done(); runReliabilityRetention(ctx, db) }()
 		background.Add(3)
 		go func() { defer background.Done(); runRecordingMonitor(ctx, recordings) }()
 		go func() { defer background.Done(); recordings.MonitorIdlePools(ctx) }()
@@ -370,7 +384,7 @@ func Run(name string) error {
 				return fmt.Errorf("detection service wiring incomplete")
 			}
 		}
-		handler = httpapi.NewHandler(httpapi.Dependencies{Events: intelligence, Detection: detectionService, Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, Sources: sources, Live: &live.Service{DB: db, Auth: accounts, Media: media}, PublicURL: c.PublicURL, TrustedProxyToken: proxyKey, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled, Archive: archive.New(db, accounts, secret, pools), Notify: notify.New(db, accounts, secret, secret.SiteID)})
+		handler = httpapi.NewHandler(httpapi.Dependencies{Events: intelligence, Detection: detectionService, Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, Sources: sources, Live: &live.Service{DB: db, Auth: accounts, Media: media}, PublicURL: c.PublicURL, TrustedProxyToken: proxyKey, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled, Archive: archive.New(db, accounts, secret, pools), Notify: notify.New(db, accounts, secret, secret.SiteID), Reliability: reliability.New(db, accounts)})
 	}
 	if name == "worker" {
 		prober := &operations.Prober{Checks: map[string]func(context.Context) error{"zlm": media.Health}, Operations: operations.New(db, nil, c.FrigateEnabled, c.OpenListEnabled), Client: operations.NewProbeClient(), Targets: map[string]operations.ProbeTarget{

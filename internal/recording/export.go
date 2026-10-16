@@ -33,16 +33,16 @@ var (
 
 // ExportAnalysis is the API projection of one analyzed window.
 type ExportAnalysis struct {
-	ChannelID       id.ID                    `json:"channel_id"`
-	Start           time.Time                `json:"start"`
-	End             time.Time                `json:"end"`
-	CoverageMS      int64                    `json:"coverage_ms"`
-	Groups          []ExportGroupView        `json:"groups"`
-	Gaps            []ExportSpanView         `json:"gaps"`
-	Unavailable     []ExportUnavailableView  `json:"unavailable"`
-	DuplicateCount  int                      `json:"duplicate_count"`
-	ReadyBytes      int64                    `json:"ready_bytes"`
-	MediaConsistent bool                     `json:"media_consistent"`
+	ChannelID       id.ID                   `json:"channel_id"`
+	Start           time.Time               `json:"start"`
+	End             time.Time               `json:"end"`
+	CoverageMS      int64                   `json:"coverage_ms"`
+	Groups          []ExportGroupView       `json:"groups"`
+	Gaps            []ExportSpanView        `json:"gaps"`
+	Unavailable     []ExportUnavailableView `json:"unavailable"`
+	DuplicateCount  int                     `json:"duplicate_count"`
+	ReadyBytes      int64                   `json:"ready_bytes"`
+	MediaConsistent bool                    `json:"media_consistent"`
 }
 type ExportGroupView struct {
 	Start      time.Time `json:"start"`
@@ -57,10 +57,10 @@ type ExportSpanView struct {
 	DurationMS int64     `json:"duration_ms"`
 }
 type ExportUnavailableView struct {
-	SegmentID   id.ID     `json:"segment_id"`
-	State       string    `json:"state"`
-	Start       time.Time `json:"start"`
-	End         time.Time `json:"end"`
+	SegmentID id.ID     `json:"segment_id"`
+	State     string    `json:"state"`
+	Start     time.Time `json:"start"`
+	End       time.Time `json:"end"`
 }
 
 // Export is the task view. Artifacts ride along so one GET serves the drawer.
