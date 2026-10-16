@@ -133,16 +133,18 @@ func Run(name string) error {
 		}
 		mediaProbe := probe.Runner{FFmpeg: "/usr/bin/ffmpeg", FFprobe: "/usr/bin/ffprobe"}
 		recordings := recording.New(db, media, mediaProbe, []string{"/storage"}, c.DataDir)
-		// Reliability history rides on the sampler: every observation the
-		// worker records also folds into a state interval, and the intervals are
-		// what availability is computed from (M4 REL-01).
-		reliabilityService := reliability.New(db, recordings.Sources.Auth)
-		recordings.Reliability = reliabilityService
 		baseNetwork, err := channel.ParseNetworkPolicy(c.CameraCIDRs, nil)
 		if err != nil {
 			return err
 		}
 		recordings.Sources = channel.NewSources(db, auth.NewService(db, secret, auth.NewPasswordHasher(2)), secret, baseNetwork)
+		// Reliability history rides on the sampler: every observation the worker
+		// records also folds into a state interval, and the intervals are what
+		// availability is computed from (M4 REL-01). It is wired here because it
+		// needs the authorization service, which the recorder only has once its
+		// sources are built.
+		reliabilityService := reliability.New(db, recordings.Sources.Auth)
+		recordings.Reliability = reliabilityService
 		viewers := &live.Service{DB: db, Auth: recordings.Sources.Auth, Media: media}
 		recordings.AuthorizeLive = viewers.AuthorizePlay
 		background.Add(1)
@@ -277,15 +279,23 @@ func Run(name string) error {
 			go func() { defer background.Done(); runSourceChangeJobs(ctx, recordings, kind) }()
 		}
 		// PRD REL-01: a worker that was down must not leave its last state
-		// standing. This runs before the monitor starts so the first fresh
-		// sample cannot extend an interval that spans the downtime.
-		if err := reliabilityService.CloseOpenOnStart(ctx); err != nil {
-			return fmt.Errorf("reliability history not settled after restart")
-		}
+		// standing, so the settling runs before the first sample rather than
+		// beside it. It is sequenced *inside* the monitor goroutine for two
+		// reasons: it must not delay the health server (a worker that cannot
+		// answer readiness never starts at all), and a failure to settle old
+		// history must not stop recording — reliability is an observation of the
+		// media pipeline, never a precondition for it.
 		background.Add(2)
 		go func() { defer background.Done(); runReliabilityRetention(ctx, db) }()
-		background.Add(3)
-		go func() { defer background.Done(); runRecordingMonitor(ctx, recordings) }()
+		background.Add(1)
+		go func() {
+			defer background.Done()
+			if err := reliabilityService.CloseOpenOnStart(ctx); err != nil && ctx.Err() == nil {
+				// Recording continues; the history just misses this boundary.
+				slog.Warn("reliability history not settled after restart", "error", err)
+			}
+			runRecordingMonitor(ctx, recordings)
+		}()
 		go func() { defer background.Done(); recordings.MonitorIdlePools(ctx) }()
 		// Retention runs with the recorder loops because it touches pool files
 		// and publishes into the same index. It stays inert until a site sets a
