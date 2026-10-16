@@ -45,6 +45,10 @@
 
 脚本会自己找到 PATH 外的 node（`/opt/homebrew/opt/node@*`）与 go（`~/.local/toolchain/go`），并在结尾给出逐项 PASS/FAIL 与耗时。**改代码时就跑这个**，不要为了一个类型错误等 CI 往返。
 
+**它必须真的跑完 7 项**（API 类型 / tsc / eslint / vitest / go 单测 / vet / gofmt）。若输出的 summary 只有两项、耗时 1 秒，说明脚本又被人改坏了 —— 这个已经发生过一次：`234043a` 在重写文件时把五条 `run` 调用和 `integration()` 整体删掉，此后近一小时的开发都在「假绿」下进行。**看到的项数不对就先修脚本。**
+
+**改 `internal/app/run.go`（进程装配）时，除了 `go test` 还要实跑一次真二进制** —— 本机没有 Docker，`Run()` 的启动与关停路径没有任何测试执行，REL 批次 1 的 worker 启动 panic 与 WaitGroup 计数错就是这样漏到现场的。至少跑到「进程起来并能干净退出」：起 worker、看日志有 `process started`、`kill -TERM` 后 0 秒退出且 exit code 0。`internal/app/run_waitgroup_test.go` 会静态核对 `background.Add` 与回报 `Done` 的协程数，别绕过它。
+
 CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真实浏览器），并按改动路径裁剪：纯文档推送只跑 ~1 分钟的 Compose/shell 校验；纯前端推送跑 `frontend` + 两个浏览器 job；Go/迁移/部署改动才跑完整媒体验收。详见 `.github/workflows/foundation-ci.yml` 顶部注释。发布前要一次跑全，用 `workflow_dispatch` 并置 `full_suite=true`。
 
 需要 Docker 的验收（本机无 daemon，只能走 CI）：
@@ -60,6 +64,14 @@ CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真�
 
 ## 当前交接快照（2026-10-09）
 
+- **2026-10-16 现场部署暴露三处问题，已修并推送（`f63295e`、`3695b7f`、`1f779bc`）**：REL 批次 1 推送后用户在 NAS 部署，**worker 容器起不来**。追下去是「本机测试 + 现场部署」这条新验收路线本身的缺口 —— 本机没有 Docker daemon，`Run()` 的装配路径从来没被任何测试执行过（单测只覆盖各模块内部逻辑），所以接错线要等容器起不来才发现。三处：
+  - **① 启动 panic**：`reliability.New(db, recordings.Sources.Auth)` 写在 `recordings.Sources = channel.NewSources(...)` **之前** —— 此时 `Sources` 是 nil，取 `.Auth` 直接段错误（`run.go:139`）。已后移。
+  - **② `CloseOpenOnStart` 原本同步且致命**：失败即 `return`，整个 worker 不启动，且它排在健康服务器之前。可靠性是对媒体链路的**观测**，不能成为录像的前提。改为在 monitor 协程内先 settle 再进循环，失败只 `Warn`。**这条是设计口径，别改回去。**
+  - **③ 关停路径 WaitGroup 计数错（现场版本就有，且修 ① 时我一度改成了另一个错值）**：该块 `Add(2)+Add(3)=5` 但只有 4 个协程回报 → `Wait()` 永不返回、SIGTERM 后挂死到被强杀；我第一版修复改成 3 对 4 → 关机时 `panic: sync: negative WaitGroup counter`。两个方向都静默且延迟暴露，现已写死为 `Add(4)` 并附注释说明两个方向各自怎么坏。
+  - **新增护栏 `internal/app/run_waitgroup_test.go`**：用 `go/parser` 读 `run.go`，把 `background.Add(n)` 乘以所在循环迭代数，与带 `background.Done()` 的 `go` 语句数比对。**已验证它对着现场版本 FAIL（38 vs 37）、对着 REL 之前的 `c14645b` 与修复后的当前树 PASS。** 循环边界不是字面量时报 note 而非猜测。以后往 `Run()` 里加协程，这个测试是唯一会拦住漏 `Add` 的东西。
+  - **顺带修掉一个更严重的问题：`deploy/production/verify.sh` 被 `234043a` 误删了半张脸**。那个提交只在做 gofmt 护栏，却在重写文件时删掉整段 —— api/tsc/eslint/vitest/go_unit 五条 `run` 调用与 `integration()` 函数全部消失。**从那之后（含整个 REL 批次 1 的开发过程）verify.sh 只跑 `go vet` + `gofmt` 两项、约 1 秒「全绿」收尾，`--full` 会调用不存在的函数直接报错。** 它让人以为验证过了，而实际什么都没验 —— 这正是脚本本身要防的那类事。已恢复为 7/7 PASS（21 秒）。顺带把护栏里 `sha256sum`（coreutils 才有，macOS 原生没有）换成 `shasum -a 256`，并给 `xargs gofmt -l` 补 `|| true`（无匹配输入时退出码非零会在 `set -e` 下中断整个脚本）。
+  - **实跑验证（本机，真实配置 + 测试库）**：worker 启动正常并持续运行，`SIGTERM` 后 **0 秒干净退出（exit 0）**；另构造第一版错误修复的二进制证明它确实 `panic: negative WaitGroup counter`。
+  - **教训**：「本机测试 + 现场部署」路线下，**本机跑不到的那部分（进程装配、容器启动）必须由「跑一次真二进制」来补**，不能只靠 `go test`。本轮 worker 的启动与关停都实跑过才算数。
 - **2026-10-16 M4 可靠性批次 1 已交付（REL-01/02 + REL-06 持久化部分）**（计划：`docs/superpowers/plans/2026-10-16-reliability-batch1.md`）。PRD §6.12 整章此前零实现，本批先让**事实**完整可复算；**指标（REL-03/04）与页面（REL-05）留批次 2/3，本批不产生任何率值**。
   - **为什么新建表**：`source_observations` 是「当前状态」不是历史（30 秒 TTL、只取最新一行，答不了「上月在线多久」）；`recording_gaps` 是**录制**中断证据、由录像状态机驱动，不覆盖 REL-01 谈的主/子流可用性。故新增 `reliability_intervals`（事实层）、`fault_events`、`maintenance_windows`（迁移 `0024`）。
   - **区间由观测的变化点产生**（不按固定窗口切分），半开 `[started_at, ended_at)`；同 state+reason 续期、变则闭旧开新。**闭合时刻用「最后一次仍支持旧状态的观测」而不是「发现故障的那次采样」**——否则每次中断都少算一个采样周期。`first/last_observed_at` 一起返回，承载 REL-01 要求的「轮询无法精确到亚秒」这个不确定带。

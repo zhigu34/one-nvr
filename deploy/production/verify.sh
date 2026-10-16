@@ -102,22 +102,26 @@ integration() {
 # The second is a warning rather than a failure: a deliberate formatting commit
 # is legitimate, it just has to be deliberate.
 #
-# Note this only sees *staged* files. Run it after `git add`, not before.
+# Note this looks at staged *and* unstaged Go changes, because the habit being
+# guarded is to run verify.sh before `git add` — checking only the index would
+# stay silent in exactly the workflow that produces the accident.
 hash_of() { shasum -a 256 | cut -d' ' -f1; }
 gofmt_touched() {
- local staged
- staged=$(git diff --cached --name-only -- '*.go')
+ # Both the index and the working tree; a path staged and then edited again
+ # should be judged on what is on disk.
+ local changed
+ changed=$( { git diff --cached --name-only -- '*.go'; git diff --name-only -- '*.go'; } | sort -u)
  local dirty=''
- if [[ -n $staged ]]; then
-  dirty=$(printf '%s\n' "$staged" | tr '\n' '\0' | xargs -0 gofmt -l 2>/dev/null || true)
+ if [[ -n $changed ]]; then
+  dirty=$(printf '%s\n' "$changed" | tr '\n' '\0' | xargs -0 gofmt -l 2>/dev/null || true)
  fi
  if [[ -n $dirty ]]; then
-  printf '%s\n' "These staged files are not gofmt-clean:"
+  printf '%s\n' "These changed files are not gofmt-clean:"
   printf '%s\n' "$dirty"
   return 1
  fi
- # Whitespace-only staged changes: the drift signature. Compare each staged
- # file's content ignoring all whitespace against HEAD.
+ # Whitespace-only changes: the drift signature. Compare each file's content
+ # ignoring all whitespace against HEAD.
  local swept=()
  local file
  while IFS= read -r file; do
@@ -128,9 +132,9 @@ gofmt_touched() {
    before=$(git show "HEAD:$file" | tr -d '[:space:]' | hash_of)
    [[ $now == "$before" ]] && swept+=("$file")
   fi
- done <<< "$staged"
+ done <<< "$changed"
  if [[ ${#swept[@]} -gt 0 ]]; then
-  printf '%s\n' "note: staged files whose only change is whitespace (formatting sweep, not the change itself):"
+  printf '%s\n' "note: changed files whose only difference is whitespace (formatting sweep, not the change itself):"
   printf '  %s\n' "${swept[@]}"
  fi
 }
