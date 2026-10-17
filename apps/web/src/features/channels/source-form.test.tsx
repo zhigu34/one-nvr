@@ -338,3 +338,44 @@ test('an empty ONVIF port is filled from the port the probe actually used', asyn
     JSON.parse(calls.request.mock.calls[1][1].body).config.onvif_port
   ).toBe(80)
 })
+
+// The metadata fields are new surface: brand, model and type must be on the form
+// and must survive into the submitted config. Without them the ONVIF probe has
+// nowhere to put what it read, which was the point of adding them.
+test('device metadata is editable and travels with the submission', async () => {
+  calls.request.mockResolvedValue(revision)
+  const saved = vi.fn(),
+    view = await render(wrapper(channel, revision, saved))
+
+  await userEvent.fill(view.getByLabelText(/摄像头品牌/), '大华')
+  await userEvent.fill(
+    view.getByLabelText(/设备型号/),
+    'IPC-HFW2431'
+  )
+  await userEvent.click(
+    view.getByRole('combobox', { name: '摄像头类型' })
+  )
+  await userEvent.click(view.getByRole('option', { name: '枪机' }))
+
+  await userEvent.click(view.getByRole('button', { name: '仅保存', exact: true }))
+  const body = JSON.parse(calls.request.mock.calls[0][1].body)
+  expect(body.config.brand).toBe('大华')
+  expect(body.config.model).toBe('IPC-HFW2431')
+  expect(body.config.camera_type).toBe('bullet')
+})
+
+// The vendor template is the reason the paths card no longer repeats the paths:
+// the space it used to take is now an action.
+test('a known brand offers its RTSP path template', async () => {
+  const view = await render(wrapper(channel, revision, vi.fn()))
+  await userEvent.fill(view.getByLabelText(/摄像头品牌/), '海康威视')
+  const template = view.getByRole('button', { name: /填入通道 1 主流\/子流/ })
+  await expect.element(template).toBeVisible()
+  await userEvent.click(template)
+  await expect
+    .element(view.getByLabelText('主流路径', { exact: true }))
+    .toHaveValue('/Streaming/Channels/101')
+  await expect
+    .element(view.getByLabelText('子流路径（可留空）'))
+    .toHaveValue('/Streaming/Channels/102')
+})
