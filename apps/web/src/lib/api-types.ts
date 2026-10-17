@@ -1600,6 +1600,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/channels/{id}/reliability/export.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["reliabilityComplianceCSV"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reliability/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["reliabilityAlerts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reliability/alert-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["reliabilityAlertRules"];
+        put?: never;
+        post: operations["setReliabilityAlertRule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reliability/alert-rules/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteReliabilityAlertRule"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recording-policy-history": {
         parameters: {
             query?: never;
@@ -8119,6 +8183,120 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Cross-channel comparison for the overview's abnormal-channel list and the operations page (REL-05), over main and recording kinds. Each row carries the channel's observed_ms and a sample_sufficient flag: a channel with ten minutes of history in a 90-day window at 100% availability is the least monitored channel, not the most reliable one, so insufficient samples are marked rather than ranked. No average availability is provided — averaging rates across channels with different observed durations would weight them equally and describe nothing. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    reliabilityComplianceCSV: {
+        parameters: {
+            query: {
+                from: string;
+                to: string;
+            };
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Per-day reliability series as CSV (REL-05). Carries the denominator, excluded and unverified durations, the metric version and the site time zone on every row, so no percentage in the file can be quoted without the thing it is a fraction of. Sanitised: no credentials, paths or addresses. Precision is labelled per row because one file may span days answered from different retention tiers. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    reliabilityAlerts: {
+        parameters: {
+            query: {
+                from: string;
+                to: string;
+                channel_id?: components["schemas"]["UUID"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Threshold crossings (REL-05), newest first, with the kinds vocabulary this build evaluates. Each alert records the window judged, the configured threshold and the value observed (plus the peak while firing), so an operator can check whether the alarm was right. Alerts are deliberately not faults: a fault is derived from what was observed, an alert from what was configured, and editing a threshold must change future behaviour only. A continued condition is one firing alert refreshed rather than one per evaluation pass; recovery closes it and leaves the record. notified is set only by the delivery path, so it means 'delivered', not 'recorded'. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    reliabilityAlertRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every configured threshold with the kinds vocabulary this build evaluates. No rules means no alarms: thresholds are opt-in, so a fresh install does not begin alerting on its own. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    setReliabilityAlertRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    channel_id?: components["schemas"]["UUID"];
+                    /** @enum {string} */
+                    kind: "main_down_streak" | "recording_segment_timeout" | "daily_coverage_drop" | "monitoring_stopped";
+                    /** @description Duration thresholds in milliseconds. Required for every kind except daily_coverage_drop; a percentage on a duration rule is rejected rather than silently unevaluatable. */
+                    threshold_ms?: number;
+                    /** @description Coverage floor, 0-100. Required for daily_coverage_drop and rejected for the others. */
+                    threshold_percent?: number;
+                    enabled?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The rule, created or replaced. Upsert rather than recreate: firing alerts reference the rule, and replacing the row would orphan the history explaining why an alert fired. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    deleteReliabilityAlertRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rule and, by cascade, its alerts: a firing alert has no meaning without the rule that defined it, and keeping it would leave rows whose threshold exists nowhere. */
             200: {
                 headers: {
                     [name: string]: unknown;

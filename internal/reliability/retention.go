@@ -33,6 +33,10 @@ const (
 	// interval: beyond 30 days the answer comes from the rollups.
 	MinuteRetention = 30 * 24 * time.Hour
 	DailyRetention  = 730 * 24 * time.Hour
+	// AlertRetention keeps resolved alerts as long as faults, for the reason
+	// stated at the sweep call: an annual report of what went wrong and what the
+	// site alarmed on should cover the same period.
+	AlertRetention = 365 * 24 * time.Hour
 )
 
 // retentionBatch bounds one sweep. The first run after upgrade may have a long
@@ -62,6 +66,11 @@ func (s *Service) Sweep(ctx context.Context) {
 	// costs precision, never correctness.
 	s.sweepKeyed(ctx, "reliability_minutes", "minute", MinuteRetention)
 	s.sweepKeyed(ctx, "reliability_daily", "day", DailyRetention)
+	// Resolved alerts share the fault tier: an alert is the record of a
+	// threshold being crossed, and a report that can look back a year at faults
+	// must be able to look back the same distance at what the site alarmed on.
+	// Firing alerts are never swept — they are current state.
+	s.sweepTable(ctx, "reliability_alerts", "ended_at", AlertRetention)
 	// Policy versions are metadata, not observations, and PRD REL-06 keeps
 	// metadata that is still referenced: an obligation names the policy version
 	// that formed it, so deleting the version would leave the obligation

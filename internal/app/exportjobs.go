@@ -134,6 +134,13 @@ func runReliabilityRollups(ctx context.Context, db *database.DB) {
 	reliability.RunRollups(ctx, db)
 }
 
+// runReliabilityAlerts evaluates the configured reliability thresholds
+// (PRD REL-05). Rules default to none, so this loop is quiet until an operator
+// configures one.
+func runReliabilityAlerts(ctx context.Context, db *database.DB) {
+	reliability.RunAlerts(ctx, db)
+}
+
 // runObligationReconciliation keeps the recording-obligation timeline current
 // (PRD REL-03).
 //

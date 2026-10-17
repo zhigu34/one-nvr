@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -332,6 +334,136 @@ func (r *router) reliabilitySummary(w http.ResponseWriter, q *http.Request, p au
 	respond(w, q, 200, struct {
 		Items []reliability.ChannelSummary `json:"items"`
 	}{items})
+}
+
+// reliabilityComplianceCSV handles
+// GET /api/v1/channels/{id}/reliability/export.csv.
+//
+// The download carries what PRD REL-05 names: the denominator, excluded and
+// unverified time, the metric version and the time zone — so nobody can quote a
+// percentage from this file without the thing it is a fraction of. The zone
+// comes from the site, matching how every other timestamp in the product is
+// interpreted.
+func (r *router) reliabilityComplianceCSV(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Reliability == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
+	channelID, err := pathID(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	from, to, err := parseWindow(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	zone := "UTC"
+	if r.d.Site != nil {
+		if site, err := r.d.Site.Current(q.Context(), p); err == nil && site.Timezone != "" {
+			zone = site.Timezone
+		}
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "reliability-"+string(channelID)+".csv"))
+	w.Header().Set("Cache-Control", "private, no-store")
+	// Streamed rather than buffered: a 90-day export is small, but writing
+	// directly means a long window cannot be turned into a memory spike.
+	if err := r.d.Reliability.WriteComplianceCSV(q.Context(), p, channelID, from, to, zone, w); err != nil {
+		// The headers are already sent, so the failure cannot become a JSON
+		// error body; logging is all that is left, and the truncated file is
+		// visibly short.
+		slog.Warn("reliability CSV export incomplete", "channel", channelID, "error", err)
+	}
+}
+
+// reliabilityAlerts handles GET /api/v1/reliability/alerts.
+func (r *router) reliabilityAlerts(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Reliability == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
+	from, to, err := parseWindow(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	var channelID *id.ID
+	if raw := q.URL.Query().Get("channel_id"); raw != "" {
+		value, err := id.Parse(raw)
+		if err != nil {
+			fail(w, q, auth.ErrInvalid)
+			return
+		}
+		channelID = &value
+	}
+	items, err := r.d.Reliability.ListAlerts(q.Context(), p, channelID, from, to)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, struct {
+		Items []reliability.Alert `json:"items"`
+		// Kinds is the vocabulary this build evaluates, so the settings UI
+		// renders the rules that exist rather than a copy that can drift.
+		Kinds []string `json:"kinds"`
+	}{items, reliability.AlertKinds()})
+}
+
+// reliabilityAlertRules handles GET/POST /api/v1/reliability/alert-rules.
+//
+// Thresholds are configuration, so both directions are administrator-only. The
+// page that owns them shows the same vocabulary the evaluator implements.
+func (r *router) reliabilityAlertRules(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Reliability == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
+	switch q.Method {
+	case http.MethodGet:
+		items, err := r.d.Reliability.ListAlertRules(q.Context(), p)
+		if err != nil {
+			fail(w, q, err)
+			return
+		}
+		respond(w, q, 200, struct {
+			Items []reliability.AlertRule `json:"items"`
+			Kinds []string                `json:"kinds"`
+		}{items, reliability.AlertKinds()})
+	default:
+		var in reliability.AlertRuleInput
+		if err := decode(w, q, &in); err != nil {
+			fail(w, q, err)
+			return
+		}
+		rule, err := r.d.Reliability.SetAlertRule(q.Context(), p, in)
+		if err != nil {
+			fail(w, q, err)
+			return
+		}
+		respond(w, q, 200, rule)
+	}
+}
+
+// reliabilityAlertRuleDelete handles DELETE /api/v1/reliability/alert-rules/{id}.
+func (r *router) reliabilityAlertRuleDelete(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Reliability == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
+	ruleID, err := pathID(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	if err := r.d.Reliability.DeleteAlertRule(q.Context(), p, ruleID); err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, struct {
+		Deleted bool `json:"deleted"`
+	}{true})
 }
 
 // recordingPolicyHistory handles GET /api/v1/recording-policy-history.

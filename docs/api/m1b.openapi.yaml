@@ -5680,6 +5680,95 @@
         }
       }
     },
+    "/api/v1/channels/{id}/reliability/export.csv": {
+      "get": {
+        "operationId": "reliabilityComplianceCSV",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "playback",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
+          { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
+          { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-day reliability series as CSV (REL-05). Carries the denominator, excluded and unverified durations, the metric version and the site time zone on every row, so no percentage in the file can be quoted without the thing it is a fraction of. Sanitised: no credentials, paths or addresses. Precision is labelled per row because one file may span days answered from different retention tiers."
+          }
+        }
+      }
+    },
+    "/api/v1/reliability/alerts": {
+      "get": {
+        "operationId": "reliabilityAlerts",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "playback (with channel_id); admin (across channels)",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
+          { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
+          { "name": "channel_id", "in": "query", "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Threshold crossings (REL-05), newest first, with the kinds vocabulary this build evaluates. Each alert records the window judged, the configured threshold and the value observed (plus the peak while firing), so an operator can check whether the alarm was right. Alerts are deliberately not faults: a fault is derived from what was observed, an alert from what was configured, and editing a threshold must change future behaviour only. A continued condition is one firing alert refreshed rather than one per evaluation pass; recovery closes it and leaves the record. notified is set only by the delivery path, so it means 'delivered', not 'recorded'."
+          }
+        }
+      }
+    },
+    "/api/v1/reliability/alert-rules": {
+      "get": {
+        "operationId": "reliabilityAlertRules",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [],
+        "responses": {
+          "200": { "description": "Every configured threshold with the kinds vocabulary this build evaluates. No rules means no alarms: thresholds are opt-in, so a fresh install does not begin alerting on its own." }
+        }
+      },
+      "post": {
+        "operationId": "setReliabilityAlertRule",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin (plus configure on the channel when scoped)",
+        "security": [{ "sessionCookie": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "channel_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+                  "kind": { "type": "string", "enum": ["main_down_streak", "recording_segment_timeout", "daily_coverage_drop", "monitoring_stopped"] },
+                  "threshold_ms": { "type": "integer", "description": "Duration thresholds in milliseconds. Required for every kind except daily_coverage_drop; a percentage on a duration rule is rejected rather than silently unevaluatable." },
+                  "threshold_percent": { "type": "number", "description": "Coverage floor, 0-100. Required for daily_coverage_drop and rejected for the others." },
+                  "enabled": { "type": "boolean" }
+                },
+                "required": ["kind"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "The rule, created or replaced. Upsert rather than recreate: firing alerts reference the rule, and replacing the row would orphan the history explaining why an alert fired." }
+        }
+      }
+    },
+    "/api/v1/reliability/alert-rules/{id}": {
+      "delete": {
+        "operationId": "deleteReliabilityAlertRule",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+        ],
+        "responses": {
+          "200": { "description": "The rule and, by cascade, its alerts: a firing alert has no meaning without the rule that defined it, and keeping it would leave rows whose threshold exists nowhere." }
+        }
+      }
+    },
     "/api/v1/recording-policy-history": {
       "get": {
         "operationId": "recordingPolicyHistory",

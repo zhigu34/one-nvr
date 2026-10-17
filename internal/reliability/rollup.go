@@ -348,3 +348,32 @@ func RunRollups(ctx context.Context, db *database.DB) {
 		}
 	}
 }
+
+// AlertInterval is how often configured thresholds are evaluated.
+//
+// The same cadence as the sampler, because two of the four rule kinds describe a
+// state happening right now: a stream that went down should alarm within a
+// sampling interval, not within an hour. The two period-based kinds tolerate it
+// easily — they read a settled day, which cannot change between passes.
+const AlertInterval = 30 * time.Second
+
+// RunAlerts evaluates the configured thresholds until the context ends.
+//
+// Failures are logged and retried rather than fatal: an alerting loop that stops
+// on a database blip is worse than one that misses a pass, since the next tick
+// re-evaluates the same conditions from the same facts.
+func RunAlerts(ctx context.Context, db *database.DB) {
+	service := New(db, nil)
+	ticker := time.NewTicker(AlertInterval)
+	defer ticker.Stop()
+	for {
+		if _, err := service.EvaluateAlerts(ctx, time.Now().UTC()); err != nil && ctx.Err() == nil {
+			slog.Warn("reliability alert evaluation unavailable", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}

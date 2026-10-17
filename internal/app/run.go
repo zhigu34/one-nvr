@@ -285,15 +285,19 @@ func Run(name string) error {
 		// answer readiness never starts at all), and a failure to settle old
 		// history must not stop recording — reliability is an observation of the
 		// media pipeline, never a precondition for it.
-		// Six goroutines follow, and the count is stated once so a seventh cannot
-		// be added without the Add moving with it. (It was wrong here twice
-		// already: an Add(2) covering one goroutine hangs shutdown, an Add(1)
-		// covering two panics it with a negative counter.)
-		background.Add(6)
+		// Seven goroutines follow, and the count is stated once so an eighth
+		// cannot be added without the Add moving with it. (It was wrong here
+		// twice already: an Add(2) covering one goroutine hangs shutdown, an
+		// Add(1) covering two panics it with a negative counter. The guard test
+		// in run_waitgroup_test.go is what keeps this honest.)
+		background.Add(7)
 		go func() { defer background.Done(); runReliabilityRetention(ctx, db) }()
 		// The summary tiers (REL-06). Derived data: if this loop never runs, the
 		// reports read intervals directly and stay correct.
 		go func() { defer background.Done(); runReliabilityRollups(ctx, db) }()
+		// Configurable thresholds (REL-05). No rules means no work: the loop
+		// reads the rule table, finds nothing enabled, and returns.
+		go func() { defer background.Done(); runReliabilityAlerts(ctx, db) }()
 		go func() {
 			defer background.Done()
 			if err := reliabilityService.CloseOpenOnStart(ctx); err != nil && ctx.Err() == nil {
