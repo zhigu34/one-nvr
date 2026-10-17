@@ -18,7 +18,10 @@ function Switch({
       <SwitchPrimitive.Thumb
         data-slot='switch-thumb'
         className={cn(
-          'pointer-events-none block size-4 rounded-full bg-background ring-0 transition-transform data-[state=checked]:translate-x-[calc(100%-2px)] data-[state=unchecked]:translate-x-0 rtl:data-[state=checked]:-translate-x-[calc(100%-2px)] dark:data-[state=checked]:bg-primary-foreground dark:data-[state=unchecked]:bg-foreground'
+          // calc() needs whitespace around the minus sign; without it the whole
+          // declaration is invalid and the thumb never moves, which is exactly
+          // what happened: the track turned primary while the dot stayed left.
+          'pointer-events-none block size-4 rounded-full bg-background ring-0 transition-transform data-[state=checked]:translate-x-[calc(100%_-_2px)] data-[state=unchecked]:translate-x-0 rtl:data-[state=checked]:-translate-x-[calc(100%_-_2px)] dark:data-[state=checked]:bg-primary-foreground dark:data-[state=unchecked]:bg-foreground'
         )}
       />
     </SwitchPrimitive.Root>

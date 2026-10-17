@@ -173,14 +173,24 @@ export function Panel({
   title,
   children,
   anchor,
+  spaced = true,
 }: {
   title: string
   children: ReactNode
   /** Optional id, so an in-page anchor can scroll to this card. */
   anchor?: string
+  /**
+   * Whether the card carries its own bottom margin. Pages that lay their cards
+   * out in a flex column with a gap pass false, so one card cannot end up with a
+   * different gap depending on which wrapper it sits in.
+   */
+  spaced?: boolean
 }) {
   return (
-    <Card id={anchor} className='mb-6 scroll-mt-24'>
+    <Card
+      id={anchor}
+      className={cn('scroll-mt-24', spaced && 'mb-6')}
+    >
       {/* An empty title renders no header: cards that draw their own header
           row (pool cards) ask for exactly that. */}
       {title && (

@@ -4,6 +4,7 @@ import {
   EMPTY_FILTERS,
   filterFaults,
   groupFlappingFaults,
+  groupIsSevere,
   isSevere,
   orderFaults,
   relativeTime,
@@ -205,5 +206,46 @@ describe('spanShares', () => {
   test('treats a row with only one band as full width', () => {
     const shares = spanShares({ healthy_ms: 1000, unavailable_ms: 0, unknown_ms: 0 })
     expect(shares!.healthy).toBe(1)
+  })
+})
+
+describe('groupIsSevere', () => {
+  // The distinction this exists for: twelve ten-second blips add up past five
+  // minutes but are a flapping stream, while one nine-minute outage is a
+  // different failure. Only the latter is highlighted.
+  test('is false when short blips merely add up past five minutes', () => {
+    // One drop every 30 seconds, each lasting 10 — the flapping pattern the
+    // grouping exists for.
+    const items = Array.from({ length: 40 }, (_, index) => {
+      const start = new Date(Date.parse('2026-10-17T10:00:00Z') + index * 30_000)
+      const end = new Date(start.getTime() + 10_000)
+      return fault({
+        id: `f${index}`,
+        started_at: start.toISOString(),
+        ended_at: end.toISOString(),
+        duration_ms: 10_000,
+      })
+    })
+    const groups = groupFlappingFaults(items)
+    expect(groups).toHaveLength(1)
+    // 40 × 10s = 400s of downtime, well past five minutes in total…
+    expect(groups[0].totalDurationMs).toBeGreaterThan(300_000)
+    // …but no single interruption lasted five minutes, so it is not severe.
+    expect(groupIsSevere(groups[0])).toBe(false)
+  })
+
+  test('is true when any single member reaches five minutes', () => {
+    const items = [
+      fault({ id: 'a', started_at: '2026-10-17T10:00:00Z', ended_at: '2026-10-17T10:00:10Z' }),
+      fault({
+        id: 'b',
+        started_at: '2026-10-17T10:01:00Z',
+        ended_at: '2026-10-17T10:10:00Z',
+        duration_ms: 540_000,
+      }),
+    ]
+    const groups = groupFlappingFaults(items)
+    expect(groups).toHaveLength(1)
+    expect(groupIsSevere(groups[0])).toBe(true)
   })
 })

@@ -41,6 +41,13 @@ export const AUDIT_FAMILIES: { value: string; label: string }[] = [
   { value: 'onvif', label: 'ONVIF' },
 ]
 
+/** Session actions whose object is the session itself, not a separate entity. */
+const SESSION_ACTIONS = new Set([
+  'auth.login',
+  'auth.logout',
+  'auth.session_revoked',
+])
+
 const ACTION_LABEL: Record<string, string> = {
   // Sessions
   'auth.login': '登录',
@@ -113,11 +120,20 @@ export function actorLabel(
   return '系统'
 }
 
-/** objectLabel prefers the resolved label and never shows a bare UUID. */
+/**
+ * objectLabel prefers the resolved label and never shows a bare UUID.
+ *
+ * One case needs the action: a login records the acting user as its object, so
+ * the row read "admin | admin" in two adjacent columns. The object of a session
+ * event is the session, not the person, and saying so is both accurate and
+ * readable.
+ */
 export function objectLabel(
   label: string | undefined,
-  objectType: string | undefined
+  objectType: string | undefined,
+  action?: string
 ): string {
+  if (action && SESSION_ACTIONS.has(action)) return 'Web 会话'
   if (label && label.trim() !== '') return label
   switch (objectType) {
     case 'channel':
@@ -166,6 +182,10 @@ export interface AuditGroup<T extends AuditRowLike> {
   first: T
   count: number
   labels: string[]
+  /** True when the rows have no actor: retention, pressure cleanup, probes. */
+  systemActor: boolean
+  /** Every row in the group, newest first, for the expand view. */
+  items: T[]
 }
 
 /**
@@ -197,6 +217,7 @@ export function groupAudits<T extends AuditRowLike>(items: T[]): AuditGroup<T>[]
     const existing = index.get(key)
     if (existing) {
       existing.count += 1
+      existing.items.push(item)
       if (existing.labels.length < 3 && item.object_label) {
         existing.labels.push(item.object_label)
       }
@@ -207,6 +228,8 @@ export function groupAudits<T extends AuditRowLike>(items: T[]): AuditGroup<T>[]
       first: item,
       count: 1,
       labels: item.object_label ? [item.object_label] : [],
+      systemActor: !item.actor_id,
+      items: [item],
     }
     index.set(key, group)
     groups.push(group)

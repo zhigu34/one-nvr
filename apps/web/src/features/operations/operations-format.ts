@@ -173,6 +173,20 @@ export function isSevere(durationMs: number | undefined): boolean {
 }
 
 /**
+ * groupIsSevere reports whether an aggregated group contains a single outage of
+ * five minutes or more.
+ *
+ * This is deliberately NOT "the summed duration crosses five minutes". Twelve
+ * ten-second blips add up to two minutes of downtime spread across an hour, which
+ * is a flapping stream; one nine-minute outage is a different failure with a
+ * different cause and a different remedy. Highlighting both the same way would
+ * make the number that matters — the longest single interruption — unreadable.
+ */
+export function groupIsSevere(group: { items: { duration_ms?: number }[] }): boolean {
+  return group.items.some((item) => isSevere(item.duration_ms))
+}
+
+/**
  * relativeTime renders "just now", "4 小时前" and so on.
  *
  * Timestamps in this table are read to answer "when did this happen", and for

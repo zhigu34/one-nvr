@@ -189,7 +189,7 @@ func validAuditPrefix(prefix string) bool {
 
 func (s *Service) Audits(ctx context.Context, p auth.Principal, prefix string, cursor id.ID, limit int) (AuditPage, error) {
 	out := AuditPage{Items: make([]Audit, 0)}
-	if limit < 1 || limit > 100 || !validAuditPrefix(prefix) {
+	if limit < 1 || limit > 200 || !validAuditPrefix(prefix) {
 		return out, auth.ErrInvalid
 	}
 	if err := s.Auth.RequireAdmin(ctx, p); err != nil {

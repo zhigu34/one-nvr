@@ -60,6 +60,15 @@ describe('objectLabel', () => {
     expect(objectLabel('', 'recording_segment')).toBe('录像片段（已过期）')
   })
 
+  // A login records the acting user as its object, so the row read
+  // "admin | admin" in two adjacent columns.
+  test('names the session for session events instead of repeating the user', () => {
+    expect(objectLabel('admin', 'user', 'auth.login')).toBe('Web 会话')
+    expect(objectLabel('admin', 'user', 'auth.logout')).toBe('Web 会话')
+    // A non-session action against a user still shows the user.
+    expect(objectLabel('admin', 'user', 'user.disabled')).toBe('admin')
+  })
+
   test('never renders a bare UUID or an empty cell', () => {
     for (const type of ['', 'unknown_type']) {
       const label = objectLabel('', type)
@@ -164,5 +173,33 @@ describe('groupAudits', () => {
       'auth.login',
       'recording.deleted_local',
     ])
+  })
+})
+
+describe('groupAudits systemActor', () => {
+  const row = (overrides: Record<string, unknown> = {}) => ({
+    created_at: '2026-10-17T11:27:05.605020Z',
+    action: 'recording.deleted_local',
+    actor_id: null,
+    object_type: 'recording_segment',
+    object_label: '2026-10-11 04:49 的录像',
+    ...overrides,
+  })
+
+  // The distinction drives the colour: automatic retention is bookkeeping, a
+  // person's deletion is the row an operator must not miss.
+  test('marks groups with no actor as system work', () => {
+    const groups = groupAudits([row(), row()])
+    expect(groups[0].systemActor).toBe(true)
+  })
+
+  test('does not mark a group with an actor as system work', () => {
+    const groups = groupAudits([row({ actor_id: 'user-1' })])
+    expect(groups[0].systemActor).toBe(false)
+  })
+
+  test('keeps every member for the expand view', () => {
+    const groups = groupAudits([row(), row(), row()])
+    expect(groups[0].items).toHaveLength(3)
   })
 })

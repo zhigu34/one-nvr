@@ -30,8 +30,10 @@ import {
   DURATION_FILTERS,
   EMPTY_FILTERS,
   MINIMUM_SAMPLE_MS,
+  SEVERE_FAULT_MS,
   filterFaults,
   groupFlappingFaults,
+  groupIsSevere,
   isSevere,
   orderFaults,
   type FaultFilters,
@@ -89,7 +91,7 @@ export function ReliabilityOperations() {
   const insufficient = sorted.filter((row) => !row.sample_sufficient)
 
   return (
-    <div className='space-y-5' data-testid='reliability-operations'>
+    <div className='flex flex-col gap-5' data-testid='reliability-operations'>
       <Card id='reliability' className='scroll-mt-24'>
         <CardHeader>
           <CardTitle className='flex items-center gap-2 text-base'>
@@ -307,7 +309,12 @@ function FaultsPanel({
     if (groups) return groups.map((group) => ({ key: group.key, fault: group.latest, group }))
     return orderFaults(filtered).map((fault) => ({ key: fault.id, fault, group: null }))
   }, [groups, filtered])
-  const severe = filtered.filter((fault) => isSevere(fault.duration_ms)).length
+  // Counted per group by its longest single outage, not by the summed duration:
+  // twelve ten-second blips are a flapping stream, one nine-minute outage is a
+  // different failure. The badge says how many rows contain a real outage.
+  const severe = groups
+    ? groups.filter((group) => groupIsSevere(group)).length
+    : filtered.filter((fault) => isSevere(fault.duration_ms)).length
   const open = filtered.filter((fault) => fault.state === 'open').length
   const filteredActive =
     filters.channel !== '' ||
@@ -333,9 +340,25 @@ function FaultsPanel({
             </span>
           )}
           {severe > 0 && (
-            <span className='rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-xs font-normal text-amber-400'>
+            <button
+              type='button'
+              aria-pressed={filters.minDurationMs >= SEVERE_FAULT_MS}
+              onClick={() =>
+                setFilters({
+                  ...filters,
+                  // Toggling off restores "all durations" rather than some
+                  // intermediate floor the operator did not ask for.
+                  minDurationMs:
+                    filters.minDurationMs >= SEVERE_FAULT_MS
+                      ? 0
+                      : SEVERE_FAULT_MS,
+                })
+              }
+              title='只看单次 ≥ 5 分钟的故障'
+              className='cursor-pointer rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-xs font-normal text-amber-400 transition-colors hover:bg-amber-500/20 aria-pressed:ring-1 aria-pressed:ring-amber-500/40'
+            >
               {severe} 条 ≥ 5 分钟
-            </span>
+            </button>
           )}
         </CardTitle>
       </CardHeader>
@@ -464,23 +487,23 @@ function FaultsPanel({
                             </span>
                           )}
                         </TableCell>
-                        <TableCell className='whitespace-nowrap text-right'>
-                          {/* A five-minute outage must be findable at a glance
-                              among ten-second blips. */}
+                        <TableCell className='whitespace-nowrap pr-6 text-right'>
+                          {/* Highlight only a single outage of five minutes or
+                              more. A group whose members add up past five
+                              minutes is a flapping stream and reads as a
+                              cumulative figure instead — the same colour for
+                              both would hide the distinction that matters. */}
                           <span
                             className={
-                              isSevere(duration)
+                              isSevere(fault.duration_ms)
                                 ? 'font-semibold tabular-nums text-amber-500'
                                 : 'tabular-nums text-muted-foreground'
                             }
                           >
-                            {formatDuration(duration)}
+                            {group && group.count > 1
+                              ? `累计 ${formatDuration(duration)} (${group.count} 次)`
+                              : formatDuration(duration)}
                           </span>
-                          {group && group.count > 1 && (
-                            <span className='ml-1.5 text-xs text-muted-foreground'>
-                              × {group.count}
-                            </span>
-                          )}
                         </TableCell>
                         <TableCell className='whitespace-nowrap'>
                           {isOpen ? (

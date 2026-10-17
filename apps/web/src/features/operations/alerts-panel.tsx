@@ -82,7 +82,12 @@ export function AlertAndRulesPanel({
           <h3 className='text-sm font-medium'>当前告警</h3>
           <QueryState pending={pending} error={error} />
           {!pending && !error && items.length === 0 && (
-            <Empty>该窗口没有阈值告警。</Empty>
+            /* A compact empty state: the full Empty block is a 64px-tall dashed
+               box, and on a healthy site this is the normal state of the card —
+               it should not push the fault list below the fold. */
+            <p className='rounded-lg border border-dashed px-3 py-2.5 text-center text-sm text-muted-foreground'>
+              该窗口没有阈值告警。
+            </p>
           )}
           {items.length > 0 && (
             <div className='overflow-x-auto rounded-lg border'>

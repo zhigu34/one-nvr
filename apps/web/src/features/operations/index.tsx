@@ -11,8 +11,9 @@ import {
   QueryState,
   Forbidden,
 } from '@/features/foundation/ui'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ReliabilityOperations } from './reliability'
-import { AuditTrail } from './audit-trail'
+import { AuditFamilyFilter, AuditTrail } from './audit-trail'
 
 /**
  * In-page anchors, in the order the sections appear.
@@ -80,6 +81,7 @@ function reasonLabel(reason: string): string {
 export function Operations() {
   const admin = useAuthStore((s) => s.user?.role === 'admin')
   const [job, setJob] = useState('')
+  const [auditFamily, setAuditFamily] = useState('')
   const components = useAPI<Schema<'Component'>[]>(
     '/api/v1/operations/components',
     admin,
@@ -101,12 +103,14 @@ export function Operations() {
     (c) => c.enabled && c.state !== 'healthy'
   )
   return (
-    <>
+    // One flex column with one gap replaces per-card margins: the cards used to
+    // carry their own mb-6 while others did not, so spacing drifted.
+    <div className='flex flex-col gap-5'>
       <PageTitle
         title='运维与审计'
         description='组件状态每 5 秒刷新；过期探测显示为未知，而不是当作正常。'
       />
-      <nav aria-label='页内导航' className='mb-5 flex flex-wrap gap-1.5'>
+      <nav aria-label='页内导航' className='-mt-2 flex flex-wrap gap-1.5'>
         {ANCHORS.map((anchor) => (
           <a
             key={anchor.id}
@@ -118,7 +122,7 @@ export function Operations() {
         ))}
       </nav>
 
-      <Panel title='组件状态' anchor='components'>
+      <Panel title='组件状态' anchor='components' spaced={false}>
         <QueryState
           pending={components.isPending}
           error={components.error}
@@ -172,11 +176,22 @@ export function Operations() {
 
       <ReliabilityOperations />
 
-      <Panel title='操作审计' anchor='audit'>
-        <AuditTrail displayTime={displayTime} />
-      </Panel>
+      <Card id='audit' className='scroll-mt-24'>
+        <CardHeader>
+          <div className='flex flex-wrap items-center justify-between gap-2'>
+            <CardTitle className='text-base'>操作审计</CardTitle>
+            <AuditFamilyFilter
+              value={auditFamily}
+              onChange={setAuditFamily}
+            />
+          </div>
+        </CardHeader>
+        <CardContent>
+          <AuditTrail family={auditFamily} />
+        </CardContent>
+      </Card>
 
-      <details className='mb-6 rounded-lg border'>
+      <details className='rounded-lg border'>
         <summary className='cursor-pointer px-4 py-3 text-lg font-medium'>
           按任务 ID 查询
         </summary>
@@ -222,6 +237,6 @@ export function Operations() {
           )}
         </div>
       </details>
-    </>
+    </div>
   )
 }

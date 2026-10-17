@@ -135,7 +135,11 @@ func (r *router) job(w http.ResponseWriter, q *http.Request, p auth.Principal, _
 	respond(w, q, 200, out)
 }
 func (r *router) auditLogs(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
-	cursor, limit, err := pagination(q)
+	// Audits get a higher ceiling than the shared default: one cleanup round
+	// writes hundreds of rows sharing a timestamp, and the page collapses those
+	// into a single line. At 50 per page a collapsed first page can show three
+	// rows, which reads as missing data rather than as a large batch.
+	cursor, limit, err := paginationLimit(q, 100, 200)
 	if err != nil {
 		fail(w, q, err)
 		return
