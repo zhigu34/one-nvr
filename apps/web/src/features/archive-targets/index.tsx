@@ -101,7 +101,11 @@ export function ArchiveTargets() {
   return (
     <div className='space-y-4'>
       <div>
-        <h1 className='text-2xl font-semibold tracking-tight'>归档</h1>
+        {/* h2, not h1: this panel sits under the storage workspace, whose tab
+            strip is the page-level navigation. The heading names the tab in
+            full ("归档目标") rather than abbreviating it, so the tab label and
+            the heading agree. */}
+        <h2 className='text-2xl font-semibold tracking-tight'>归档目标</h2>
         <p className='mt-1 text-sm text-muted-foreground'>
           WebDAV 归档目标是录像完成后的异步上传去处，与目录存储池互不替代；密码加密存储，测试会验证写入、读取、Range 与删除能力。
         </p>
