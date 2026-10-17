@@ -16,6 +16,7 @@ import {
   ALERT_KIND_LABEL,
   KIND_LABEL,
   WINDOW_PRESETS,
+  channelLabel,
   emptyObservationReason,
   formatDuration,
   sampleNote,
@@ -145,7 +146,7 @@ export function ReliabilityOperations() {
                     <TableRow key={`${row.channel_id}-${row.kind}`}>
                       <TableCell>
                         <span className='font-mono text-xs text-muted-foreground'>
-                          CH{String(row.channel_no).padStart(2, '0')}
+                          {channelLabel(row.channel_no)}
                         </span>{' '}
                         {row.channel_name}
                       </TableCell>
@@ -242,7 +243,7 @@ function AlertsPanel({
               {items.map((alert) => (
                 <TableRow key={alert.id}>
                   <TableCell>{new Date(alert.started_at).toLocaleString('zh-CN', { hour12: false })}</TableCell>
-                  <TableCell>CH{String(alert.channel_no).padStart(2, '0')}</TableCell>
+                  <TableCell>{channelLabel(alert.channel_no)}</TableCell>
                   <TableCell>{ALERT_KIND_LABEL[alert.kind] || alert.kind}</TableCell>
                   <TableCell className='tabular-nums'>{alert.threshold_value}</TableCell>
                   <TableCell className='tabular-nums'>{alert.observed_value}</TableCell>
@@ -295,7 +296,7 @@ function FaultsPanel({
               {items.map((fault) => (
                 <TableRow key={fault.id}>
                   <TableCell>{new Date(fault.started_at).toLocaleString('zh-CN', { hour12: false })}</TableCell>
-                  <TableCell>CH{String(fault.channel_no).padStart(2, '0')}</TableCell>
+                  <TableCell>{channelLabel(fault.channel_no)}</TableCell>
                   <TableCell>{KIND_LABEL[fault.kind] || fault.kind}</TableCell>
                   <TableCell>
                     {fault.effective_category}

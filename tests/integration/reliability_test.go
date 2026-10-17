@@ -702,6 +702,13 @@ func TestReliabilityEndpointsServeTheRecordedHistory(t *testing.T) {
 	if items[0].EffectiveCategory != reliability.CategoryUpstream {
 		t.Fatalf("the fault reports its category, got %q", items[0].EffectiveCategory)
 	}
+	// The fault page renders "CH<number>". The contract promised channel_no from
+	// the start but the implementation never sent it, so every row read
+	// "CHundefined" — the API has to carry the number, not just the UUID.
+	if items[0].ChannelNo < 1 || items[0].ChannelNo > 32 {
+		t.Fatalf("fault channel_no = %d, want the operator-facing channel number; "+
+			"without it the UI cannot name the channel", items[0].ChannelNo)
+	}
 	if len(categories) != 8 {
 		t.Fatalf("the eight PRD categories travel with the list, got %d", len(categories))
 	}

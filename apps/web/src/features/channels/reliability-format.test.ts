@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest'
 import {
   bandReason,
   bandTone,
+  channelLabel,
   emptyObservationReason,
   formatDuration,
   percentage,
@@ -173,6 +174,26 @@ describe('emptyObservationReason', () => {
   test('names the reason per kind', () => {
     expect(emptyObservationReason('recording')).toContain('未要求录像')
     expect(emptyObservationReason('main')).not.toContain('未要求录像')
+  })
+})
+
+describe('channelLabel', () => {
+  // The fault table used to interpolate channel_no directly, so a response that
+  // omitted the field rendered "CHundefined" on every row — which looks like a
+  // channel literally named "undefined" rather than a missing value.
+  test('pads a real channel number', () => {
+    expect(channelLabel(1)).toBe('CH01')
+    expect(channelLabel(8)).toBe('CH08')
+    expect(channelLabel(32)).toBe('CH32')
+  })
+
+  test('never prints undefined', () => {
+    for (const value of [undefined, null, Number.NaN, 0, -1]) {
+      const label = channelLabel(value as number | null | undefined)
+      expect(label).toBe('CH—')
+      expect(label).not.toContain('undefined')
+      expect(label).not.toContain('NaN')
+    }
   })
 })
 

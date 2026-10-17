@@ -86,13 +86,22 @@ func nullableKinds(kinds []string) any {
 
 // FaultView is one fault as the API reports it.
 type FaultView struct {
-	ID         id.ID      `json:"id"`
-	ChannelID  id.ID      `json:"channel_id"`
-	Kind       string     `json:"kind"`
-	State      string     `json:"state"`
-	Started    time.Time  `json:"started_at"`
-	Ended      *time.Time `json:"ended_at"`
-	DurationMS *int64     `json:"duration_ms,omitempty"`
+	ID        id.ID `json:"id"`
+	ChannelID id.ID `json:"channel_id"`
+	// ChannelNo is the operator-facing number. It has to travel with the fault
+	// because the fault page renders "CH<number>": without it the UI printed
+	// CHundefined for every row, which is what the contract already promised
+	// but the implementation never sent.
+	ChannelNo int `json:"channel_no"`
+	// ChannelName is empty for a channel that was never named. Empty is
+	// reported as-is rather than substituted: an unnamed channel is not a
+	// channel called "unknown".
+	ChannelName string     `json:"channel_name,omitempty"`
+	Kind        string     `json:"kind"`
+	State       string     `json:"state"`
+	Started     time.Time  `json:"started_at"`
+	Ended       *time.Time `json:"ended_at"`
+	DurationMS  *int64     `json:"duration_ms,omitempty"`
 	// The automatic attribution, never rewritten. Effective is what a report
 	// counts by; both travel so a reader can tell whether an operator has ruled.
 	InitialReason     string    `json:"initial_reason"`
@@ -150,15 +159,15 @@ func (s *Service) ListFaults(ctx context.Context, p auth.Principal, q FaultQuery
 	if q.ChannelID != "" {
 		channel = q.ChannelID
 	}
-	rows, err := s.DB.Pool.Query(ctx, `SELECT id,channel_id,kind,state,started_at,ended_at,duration_ms,
-			initial_reason,category,COALESCE(confirmed_reason,''),COALESCE(confirmed_category,''),
-			note,root_event_id,maintenance,COALESCE(recovery,''),revisions,created_at
-		FROM fault_events
-		WHERE started_at < $1 AND COALESCE(ended_at,$1) > $2
-			AND ($3::uuid IS NULL OR channel_id=$3)
-			AND ($4::text IS NULL OR COALESCE(confirmed_category,category)=$4)
-			AND ($5::text IS NULL OR state=$5)
-		ORDER BY started_at DESC,id DESC
+	rows, err := s.DB.Pool.Query(ctx, `SELECT f.id,f.channel_id,c.channel_no,COALESCE(c.channel_name,''),f.kind,f.state,f.started_at,f.ended_at,f.duration_ms,
+			f.initial_reason,f.category,COALESCE(f.confirmed_reason,''),COALESCE(f.confirmed_category,''),
+			f.note,f.root_event_id,f.maintenance,COALESCE(f.recovery,''),f.revisions,f.created_at
+		FROM fault_events f JOIN channels c ON c.id=f.channel_id
+		WHERE f.started_at < $1 AND COALESCE(f.ended_at,$1) > $2
+			AND ($3::uuid IS NULL OR f.channel_id=$3)
+			AND ($4::text IS NULL OR COALESCE(f.confirmed_category,f.category)=$4)
+			AND ($5::text IS NULL OR f.state=$5)
+		ORDER BY f.started_at DESC,f.id DESC
 		LIMIT $6`, q.To.UTC(), q.From.UTC(), channel, category, state, q.Limit)
 	if err != nil {
 		return out, err
@@ -166,7 +175,7 @@ func (s *Service) ListFaults(ctx context.Context, p auth.Principal, q FaultQuery
 	defer rows.Close()
 	for rows.Next() {
 		var item FaultView
-		if err := rows.Scan(&item.ID, &item.ChannelID, &item.Kind, &item.State, &item.Started, &item.Ended, &item.DurationMS,
+		if err := rows.Scan(&item.ID, &item.ChannelID, &item.ChannelNo, &item.ChannelName, &item.Kind, &item.State, &item.Started, &item.Ended, &item.DurationMS,
 			&item.InitialReason, &item.InitialCategory, &item.ConfirmedReason, &item.ConfirmedCategory,
 			&item.Note, &item.RootEventID, &item.Maintenance, &item.Recovery, &item.Revisions, &item.CreatedAt); err != nil {
 			return out, err

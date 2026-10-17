@@ -261,3 +261,19 @@ export function windowFor(hours: number, now = new Date()): { from: string; to: 
     to: now.toISOString(),
   }
 }
+
+/**
+ * channelLabel renders the operator-facing channel number.
+ *
+ * It refuses to invent one. The previous inline `CH{channel_no}` printed
+ * "CHundefined" for every row when the API omitted the field, which reads like a
+ * real channel named "undefined" instead of a missing value. An absent number is
+ * shown as an explicit placeholder so the defect is visible rather than
+ * convincing.
+ */
+export function channelLabel(channelNo: number | null | undefined): string {
+  if (typeof channelNo !== 'number' || !Number.isFinite(channelNo) || channelNo <= 0) {
+    return 'CH—'
+  }
+  return `CH${String(channelNo).padStart(2, '0')}`
+}
