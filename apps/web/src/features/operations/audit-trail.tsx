@@ -9,7 +9,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { useAPI } from '@/features/foundation/hooks'
+import { useQueries } from '@tanstack/react-query'
+import { apiRequest } from '@/lib/api-client'
 import { QueryState, Empty, SelectField } from '@/features/foundation/ui'
 import {
   AUDIT_FAMILIES,
@@ -25,6 +26,13 @@ import { InfoHint } from './info-hint'
  *  a single cleanup round collapses dozens of rows into one line, so a page of 50
  *  can render as three visible rows. */
 const AUDIT_PAGE_SIZE = 200
+
+/** Below this many visible rows the trail keeps pulling older pages: a page can
+ *  collapse into a handful of lines and an empty-looking card reads as a bug. */
+const MIN_VISIBLE_ROWS = 10
+
+/** Hard stop for the automatic fill, so a pathological log cannot page forever. */
+const MAX_AUTO_PAGES = 5
 
 /**
  * The audit trail.
@@ -46,21 +54,75 @@ const AUDIT_PAGE_SIZE = 200
 export function AuditTrail({ family }: { family: string }) {
   const [cursor, setCursor] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  const query = `/api/v1/audit-logs?limit=${AUDIT_PAGE_SIZE}${
-    cursor ? '&cursor=' + cursor : ''
-  }${family ? '&action_prefix=' + family : ''}`
-  const audits = useAPI<PageData<Schema<'Audit'>>>(query, true)
-  const items = useMemo(() => audits.data?.items ?? [], [audits.data])
-  const groups = useMemo(() => groupAudits(items), [items])
+  // A single cleanup round can fill an entire page with rows that collapse into
+  // one line, so a correct page of 200 can render as four visible rows — which
+  // reads as missing data. While the visible list is thin and the server still
+  // has history, the next cursor joins the set of pages to load. This is derived
+  // during render rather than appended from an effect: the effect version wrote
+  // state while rendering the same data it read, and React flagged the loop.
+  const [autoCursors, setAutoCursors] = useState<string[]>([])
+  const pages = useMemo(
+    () => [cursor, ...autoCursors],
+    [cursor, autoCursors]
+  )
+  const paths = useMemo(
+    () =>
+      pages.map(
+        (page) =>
+          `/api/v1/audit-logs?limit=${AUDIT_PAGE_SIZE}${
+            page ? '&cursor=' + page : ''
+          }${family ? '&action_prefix=' + family : ''}`
+      ),
+    [pages, family]
+  )
+  const responses = useQueries({
+    queries: paths.map((path) => ({
+      queryKey: [path],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        apiRequest<PageData<Schema<'Audit'>>>(path, { signal }),
+      retry: false,
+    })),
+  })
+
+  // Plain derivation, no memo: this is at most a few hundred rows and the
+  // grouping is a single pass. Memoising it bought nothing and cost a
+  // dependency-array argument with a hook that returns fresh identities.
+  const loaded = responses
+    .map((response) => response.data)
+    .filter((page): page is PageData<Schema<'Audit'>> => !!page)
+  const items = loaded.flatMap((page) => page.items)
+  const groups = groupAudits(items)
+
+  // A single cleanup round can fill an entire page with rows that collapse into
+  // one line, so a correct page of 200 can render as four visible rows. That
+  // reads as missing data. Keep pulling while the visible list is thin and the
+  // server still has history — bounded, so a pathological log cannot turn this
+  // into an unbounded fetch.
+  const last = loaded[loaded.length - 1]
+  const nextCursor = last?.next_cursor ?? null
+  const pendingPage = responses[responses.length - 1]
+  const thin = groups.length < MIN_VISIBLE_ROWS
+  const canExtend = thin && !!nextCursor && autoCursors.length < MAX_AUTO_PAGES
+  // Adopt the next cursor once the page that produced it has settled. Guarded by
+  // "not already queued" so a settled render cannot queue the same page twice.
+  if (
+    canExtend &&
+    !pendingPage?.isPending &&
+    nextCursor &&
+    !autoCursors.includes(nextCursor) &&
+    !pages.includes(nextCursor)
+  ) {
+    setAutoCursors([...autoCursors, nextCursor])
+  }
 
   return (
     <div className='space-y-3'>
       <QueryState
-        pending={audits.isPending}
-        error={audits.error}
-        retry={() => audits.refetch()}
+        pending={responses[0]?.isPending}
+        error={responses[0]?.error}
+        retry={() => void responses[0]?.refetch()}
       />
-      {items.length === 0 && !audits.isPending && !audits.error && (
+      {items.length === 0 && !responses[0]?.isPending && !responses[0]?.error && (
         <Empty>该类别下没有操作记录。</Empty>
       )}
       {items.length > 0 && (
@@ -189,19 +251,33 @@ export function AuditTrail({ family }: { family: string }) {
               </TableBody>
             </Table>
           </div>
-          <div className='flex gap-3'>
-            {audits.data?.next_cursor && (
+          <div className='flex items-center gap-3'>
+            {nextCursor && (
               <Button
                 variant='outline'
-                onClick={() => setCursor(audits.data!.next_cursor!)}
+                onClick={() => {
+                  setCursor(nextCursor)
+                  setAutoCursors([])
+                  setExpanded(new Set())
+                }}
               >
                 更早记录
               </Button>
             )}
-            {cursor && (
-              <Button variant='ghost' onClick={() => setCursor('')}>
+            {(cursor || autoCursors.length > 0) && (
+              <Button
+                variant='ghost'
+                onClick={() => {
+                  setCursor('')
+                  setAutoCursors([])
+                  setExpanded(new Set())
+                }}
+              >
                 返回最新
               </Button>
+            )}
+            {pendingPage?.isPending && (
+              <span className='text-xs text-muted-foreground'>加载更多…</span>
             )}
           </div>
         </>
