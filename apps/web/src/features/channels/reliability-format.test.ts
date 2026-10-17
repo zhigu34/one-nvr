@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest'
 import {
   bandReason,
   bandTone,
+  emptyObservationReason,
   formatDuration,
   percentage,
   precisionNote,
@@ -133,11 +134,28 @@ describe('sampleNote', () => {
   // reliable".
   test('warns when the window holds almost no observation', () => {
     expect(sampleNote(60_000, 86_400_000)).toContain('样本不足')
-    expect(sampleNote(0, 86_400_000)).toContain('没有观测记录')
+  })
+
+  // Zero observation is a different fact from a small sample: it usually means
+  // nothing was required to run (recording off), not that the camera is bad.
+  test('zero observation is not described as an insufficient sample', () => {
+    const note = sampleNote(0, 86_400_000)
+    expect(note).not.toContain('样本不足')
+    expect(note).toContain('没有观测记录')
   })
 
   test('says nothing when the evidence is substantial', () => {
     expect(sampleNote(50_000_000, 86_400_000)).toBe('')
+  })
+})
+
+describe('emptyObservationReason', () => {
+  // On a default install every channel has recording off, so every recording row
+  // has no observation. Saying "insufficient sample" there would imply the
+  // camera is unreliable rather than switched off.
+  test('names the reason per kind', () => {
+    expect(emptyObservationReason('recording')).toContain('未要求录像')
+    expect(emptyObservationReason('main')).not.toContain('未要求录像')
   })
 })
 

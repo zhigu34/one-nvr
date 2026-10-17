@@ -264,6 +264,23 @@ func ComputeMetrics(in MetricsInput) Metrics {
 	unavailable := union(in.Unavailable)
 	unknown := union(in.Unknown)
 	excluded := unionExclusions(in.Excluded)
+
+	// Time inside the window that no interval explains is monitoring unknown,
+	// not silence. PRD REL-04 lists "monitoring unknown" as its own category and
+	// requires it be shown apart; leaving it out entirely makes the coverage
+	// figures quietly understate themselves.
+	//
+	// This is not hypothetical: a channel whose monitoring began six hours ago
+	// has eighteen hours of a 24-hour window with no interval at all, and before
+	// this the report divided by 24 hours while accounting for six — reporting
+	// 25% coverage for a stream that was up the entire time it was observed.
+	windowSpan := TimeSpan{Start: in.Window.From, End: in.Window.To}
+	explained := union(append(append(append(append([]TimeSpan{}, healthy...), unavailable...), unknown...), excluded...))
+	unexplained := subtract([]TimeSpan{windowSpan}, explained)
+	if len(unexplained) > 0 {
+		unknown = union(append(unknown, unexplained...))
+	}
+
 	out.Observed = IntervalTotals{
 		HealthyMS:     totalMS(healthy),
 		UnavailableMS: totalMS(unavailable),
@@ -275,7 +292,6 @@ func ComputeMetrics(in MetricsInput) Metrics {
 	// required. Monitoring coverage and conservative availability both divide
 	// by it, which is what makes "unknown" hurt: it is inside the denominator
 	// but in neither numerator's known-good part.
-	windowSpan := TimeSpan{Start: in.Window.From, End: in.Window.To}
 	out.ExpectedMS = totalMS(subtract([]TimeSpan{windowSpan}, excluded))
 
 	// Known time cannot exceed the window even if facts overlap awkwardly; clip

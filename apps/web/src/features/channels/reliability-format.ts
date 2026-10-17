@@ -192,12 +192,32 @@ export const EXCLUSION_LABEL: Record<string, string> = {
  * is thin, and the UI shows it instead of a ranking.
  */
 export function sampleNote(observedMs: number, windowMs: number): string {
-  if (observedMs <= 0) return '窗口内没有观测记录，无法评估'
+  if (observedMs <= 0) {
+    // Zero observation is not a sample-size problem, it is a "nothing was ever
+    // required to run" problem. On a site where every channel has recording
+    // turned off, this is the normal state of the recording rows, and calling it
+    // "insufficient sample" would suggest the camera is unreliable rather than
+    // switched off.
+    return '窗口内没有观测记录（可能未要求运行）'
+  }
   const ratio = observedMs / windowMs
   if (ratio < 0.1) {
     return `观测时长仅占窗口 ${(ratio * 100).toFixed(1)}%，样本不足，不参与可靠性比较`
   }
   return ''
+}
+
+/**
+ * emptyObservationReason explains a zero-observation row for the kind concerned.
+ *
+ * Separated from sampleNote because the two answer different questions: "the
+ * sample is too small to judge" versus "there was nothing to observe because the
+ * feature is off". Only the second applies to a channel whose recording mode is
+ * none, which is every channel on a default install.
+ */
+export function emptyObservationReason(kind: string): string {
+  if (kind === 'recording') return '未要求录像（模式为关闭），因此没有观测'
+  return '窗口内没有任何观测记录'
 }
 
 /**

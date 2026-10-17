@@ -16,6 +16,7 @@ import {
   ALERT_KIND_LABEL,
   KIND_LABEL,
   WINDOW_PRESETS,
+  emptyObservationReason,
   formatDuration,
   sampleNote,
   windowFor,
@@ -132,7 +133,14 @@ export function ReliabilityOperations() {
               </TableHeader>
               <TableBody>
                 {sorted.map((row) => {
-                  const note = sampleNote(row.observed_ms, windowMs)
+                  // A recording row on a site with recording off has no
+                  // observation because nothing was required, not because the
+                  // sample is too small. The two read very differently and only
+                  // one of them is about reliability.
+                  const note =
+                    row.observed_ms === 0
+                      ? emptyObservationReason(row.kind)
+                      : sampleNote(row.observed_ms, windowMs)
                   return (
                     <TableRow key={`${row.channel_id}-${row.kind}`}>
                       <TableCell>

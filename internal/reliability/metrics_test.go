@@ -148,6 +148,70 @@ func TestEmptyDenominatorsAreDistinguished(t *testing.T) {
 	}
 }
 
+// Time inside the window that no interval explains is monitoring unknown.
+//
+// This is the fresh-install / newly-added-channel case, and it is how the live
+// NAS reported 25%-looking coverage for a stream that was up the entire time it
+// was observed: monitoring had started six hours into a 24-hour window, and the
+// eighteen hours before it belonged to no interval at all, so they vanished
+// from both the numerator and the unknown column while staying in the
+// denominator.
+func TestUnexplainedWindowTimeCountsAsMonitoringUnknown(t *testing.T) {
+	// Monitoring covers only the last quarter of the window.
+	m := ComputeMetrics(MetricsInput{
+		Kind:    "main",
+		Window:  Window{From: at(0), To: at(3600)},
+		Healthy: []TimeSpan{span(2700, 3600)},
+		Now:     at(3600),
+	})
+	if m.Observed.HealthyMS != 900000 {
+		t.Fatalf("healthy = %d, want the 15 observed minutes", m.Observed.HealthyMS)
+	}
+	if m.Observed.UnknownMS != 2700000 {
+		t.Fatalf("unknown = %d, want the 45 minutes before monitoring began; "+
+			"omitting it makes coverage understate itself", m.Observed.UnknownMS)
+	}
+	// The four categories now account for the whole window.
+	if sum := m.Observed.HealthyMS + m.Observed.UnavailableMS + m.Observed.UnknownMS + m.Observed.ExcludedMS; sum != 3600000 {
+		t.Fatalf("categories sum to %d, want the full window", sum)
+	}
+	// Coverage is 25% because only a quarter of the window was ever observed,
+	// which is the honest answer -- and the unknown is visible beside it.
+	if got, ok := m.MonitoringCoverage.Percent(); !ok || math.Abs(got-25) > 0.01 {
+		t.Fatalf("coverage = %v (ok=%v), want 25%%", got, ok)
+	}
+	// Conservative availability stays low because unknown is not online.
+	if got, _ := m.ConservativeAvailability.Percent(); math.Abs(got-25) > 0.01 {
+		t.Fatalf("conservative = %v, want 25%%", got)
+	}
+	// Observed availability, which divides by known time only, is 100%: of what
+	// we saw, all of it was up. That is why the two must be shown together.
+	if got, _ := m.ObservedAvailability.Percent(); math.Abs(got-100) > 0.01 {
+		t.Fatalf("observed availability = %v, want 100%%", got)
+	}
+}
+
+// Excluded time is not "unexplained": a deliberately stopped channel must not
+// have its excluded hours counted as a monitoring gap.
+func TestExcludedTimeIsNotCountedAsUnknown(t *testing.T) {
+	m := ComputeMetrics(MetricsInput{
+		Kind:     "recording",
+		Window:   Window{From: at(0), To: at(3600)},
+		Excluded: []ExclusionSpan{{Exclusion: "disabled", Span: span(0, 3600)}},
+		Now:      at(3600),
+	})
+	if m.Observed.UnknownMS != 0 {
+		t.Fatalf("unknown = %d, want 0: excluded time is explained, not a gap",
+			m.Observed.UnknownMS)
+	}
+	if m.Observed.ExcludedMS != 3600000 {
+		t.Fatalf("excluded = %d, want the whole window", m.Observed.ExcludedMS)
+	}
+	if m.ExpectedMS != 0 {
+		t.Fatalf("expected = %d, want 0 when nothing was required", m.ExpectedMS)
+	}
+}
+
 // Conservative availability can never exceed observed availability: the only
 // difference between them is that the conservative one counts unknown time
 // against the site.
