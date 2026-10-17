@@ -22,6 +22,8 @@ type Channel struct {
 	Enabled      bool          `json:"enabled"`
 	Version      int64         `json:"version"`
 	Permissions  []auth.Action `json:"permissions"`
+	// RecordingQuotaBytes 0 means no per-channel quota.
+	RecordingQuotaBytes int64 `json:"recording_quota_bytes"`
 }
 type Page struct {
 	Items      []Channel `json:"items"`
@@ -37,6 +39,10 @@ type UpdateInput struct {
 	ChannelName  *string `json:"channel_name,omitempty"`
 	ChannelGroup *string `json:"channel_group,omitempty"`
 	Enabled      *bool   `json:"enabled,omitempty"`
+	// RecordingQuotaBytes caps this channel's indexed recordings. Zero means no
+	// quota. It is a housekeeping limit, not a filesystem quota: pressure
+	// cleanup on the whole volume is a separate policy (STO-02 vs STO-03).
+	RecordingQuotaBytes *int64 `json:"recording_quota_bytes,omitempty"`
 }
 
 // Slot contains only grant-management metadata, never video permissions or URLs.
@@ -103,7 +109,7 @@ func (s *Service) List(ctx context.Context, p auth.Principal, cursor id.ID, limi
 			return out, err
 		}
 	}
-	rows, err := s.DB.Pool.Query(ctx, `SELECT c.id,c.channel_no,c.channel_name,c.channel_group,c.enabled,c.version,g.live,g.playback,g.export,g.configure,g.archive FROM channels c JOIN channel_grants g ON g.channel_id=c.id WHERE g.user_id=$1 AND c.channel_no>$2 AND (g.live OR g.playback OR g.export OR g.archive OR (g.configure AND $3<>'viewer')) ORDER BY c.channel_no LIMIT $4`, p.UserID, from, u.Role, limit+1)
+	rows, err := s.DB.Pool.Query(ctx, `SELECT c.id,c.channel_no,c.channel_name,c.channel_group,c.enabled,c.version,c.recording_quota_bytes,g.live,g.playback,g.export,g.configure,g.archive FROM channels c JOIN channel_grants g ON g.channel_id=c.id WHERE g.user_id=$1 AND c.channel_no>$2 AND (g.live OR g.playback OR g.export OR g.archive OR (g.configure AND $3<>'viewer')) ORDER BY c.channel_no LIMIT $4`, p.UserID, from, u.Role, limit+1)
 	if err != nil {
 		return out, err
 	}
@@ -111,7 +117,7 @@ func (s *Service) List(ctx context.Context, p auth.Principal, cursor id.ID, limi
 	for rows.Next() {
 		var c Channel
 		var live, playback, export, configure, archive bool
-		if err := rows.Scan(&c.ID, &c.ChannelNo, &c.ChannelName, &c.ChannelGroup, &c.Enabled, &c.Version, &live, &playback, &export, &configure, &archive); err != nil {
+		if err := rows.Scan(&c.ID, &c.ChannelNo, &c.ChannelName, &c.ChannelGroup, &c.Enabled, &c.Version, &c.RecordingQuotaBytes, &live, &playback, &export, &configure, &archive); err != nil {
 			return out, err
 		}
 		c.Permissions = permissions(u.Role, live, playback, export, configure, archive)
@@ -135,7 +141,12 @@ func (s *Service) List(ctx context.Context, p auth.Principal, cursor id.ID, limi
 // stops fetching and recording without discarding the source or its history.
 func (s *Service) Update(ctx context.Context, p auth.Principal, channelID id.ID, expected int64, in UpdateInput) (Channel, error) {
 	var out Channel
-	if expected < 1 || in.ChannelName == nil && in.ChannelGroup == nil && in.Enabled == nil {
+	if expected < 1 || in.ChannelName == nil && in.ChannelGroup == nil && in.Enabled == nil && in.RecordingQuotaBytes == nil {
+		return out, auth.ErrInvalid
+	}
+	if in.RecordingQuotaBytes != nil && (*in.RecordingQuotaBytes < 0 || *in.RecordingQuotaBytes > 1<<50) {
+		// 1 PiB is far beyond any real deployment and keeps the value inside
+		// what the byte arithmetic downstream can multiply without overflow.
 		return out, auth.ErrInvalid
 	}
 	var name, group *string
@@ -157,7 +168,7 @@ func (s *Service) Update(ctx context.Context, p auth.Principal, channelID id.ID,
 		if err := s.Auth.RequireChannelTx(ctx, p, channelID, auth.Configure, tx); err != nil {
 			return err
 		}
-		err := tx.QueryRow(ctx, `UPDATE channels SET channel_name=coalesce($2::text,channel_name),channel_group=coalesce($3::text,channel_group),enabled=coalesce($4::boolean,enabled),version=version+1 WHERE id=$1 AND version=$5 RETURNING id,channel_no,channel_name,channel_group,enabled,version`, channelID, name, group, in.Enabled, expected).Scan(&out.ID, &out.ChannelNo, &out.ChannelName, &out.ChannelGroup, &out.Enabled, &out.Version)
+		err := tx.QueryRow(ctx, `UPDATE channels SET channel_name=coalesce($2::text,channel_name),channel_group=coalesce($3::text,channel_group),enabled=coalesce($4::boolean,enabled),recording_quota_bytes=coalesce($6::bigint,recording_quota_bytes),version=version+1 WHERE id=$1 AND version=$5 RETURNING id,channel_no,channel_name,channel_group,enabled,version,recording_quota_bytes`, channelID, name, group, in.Enabled, expected, in.RecordingQuotaBytes).Scan(&out.ID, &out.ChannelNo, &out.ChannelName, &out.ChannelGroup, &out.Enabled, &out.Version, &out.RecordingQuotaBytes)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return auth.ErrConflict
 		}
@@ -192,6 +203,15 @@ func (s *Service) Update(ctx context.Context, p auth.Principal, channelID id.ID,
 				action = "channel.enabled"
 			}
 			if err := audit.Append(ctx, tx, audit.Entry{ActorID: p.UserID, Action: action, ObjectID: channelID}); err != nil {
+				return err
+			}
+		}
+		if in.RecordingQuotaBytes != nil {
+			details, err := json.Marshal(map[string]int64{"recording_quota_bytes": *in.RecordingQuotaBytes})
+			if err != nil {
+				return err
+			}
+			if err := audit.Append(ctx, tx, audit.Entry{ActorID: p.UserID, Action: "channel.quota_changed", ObjectID: channelID, Details: details}); err != nil {
 				return err
 			}
 		}

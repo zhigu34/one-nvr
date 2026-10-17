@@ -1791,6 +1791,8 @@ export interface components {
             enabled: boolean;
             version: components["schemas"]["Version"];
             permissions: ("live" | "playback" | "export" | "configure" | "archive")[];
+            /** @description Per-channel recording quota in bytes; 0 means no quota. Housekeeping limit, not a filesystem quota. */
+            recording_quota_bytes?: number;
         };
         SetupInput: {
             token: string;
@@ -1849,6 +1851,19 @@ export interface components {
             state: "ready" | "pending" | "unavailable" | "low_space" | "disabled";
             /** @description Indexed media usage; null until the media index is implemented. */
             used_bytes: number | null;
+            /** @description Used percentage at which the pool is reported as warning. Advisory only: nothing is deleted. */
+            warning_percent: number;
+            /** @description Used percentage at which pressure cleanup starts deleting the oldest safe segments. */
+            pressure_percent: number;
+            /** @description Used percentage cleanup aims to restore; the measured safety line may require more free space than this. */
+            pressure_target_percent: number;
+            /** @description Used percentage at which cleanup continues and the condition is surfaced as critical. */
+            critical_percent: number;
+            /**
+             * @description Effective state against the thresholds. unknown means capacity has not been measured, which is not the same as ok.
+             * @enum {string}
+             */
+            watermark_state?: "ok" | "warning" | "pressure" | "critical" | "unknown";
         };
         PoolCheck: {
             /** @enum {string} */
@@ -2182,6 +2197,8 @@ export interface components {
              * @enum {string}
              */
             recording_mode?: "none" | "continuous";
+            /** @description Per-channel recording quota in bytes; 0 means no quota. Carried so the configure page edits it without a second request. */
+            recording_quota_bytes?: number;
             /** @description Empty when no source revision is applied. Never carries credentials or a full URL. */
             source_ip?: string;
             main_path?: string;
@@ -3332,6 +3349,8 @@ export interface operations {
                     channel_group?: string;
                     /** @description Enable or disable the channel. Independent of clearing the source and of disabling recording. */
                     enabled?: boolean;
+                    /** @description Per-channel recording quota in bytes; 0 clears it. */
+                    recording_quota_bytes?: number;
                 };
             };
         };
@@ -3842,6 +3861,10 @@ export interface operations {
                     name?: string;
                     enabled?: boolean;
                     is_default?: boolean;
+                    warning_percent?: number;
+                    pressure_percent?: number;
+                    pressure_target_percent?: number;
+                    critical_percent?: number;
                 };
             };
         };

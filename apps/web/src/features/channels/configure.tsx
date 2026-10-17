@@ -27,6 +27,9 @@ import { SourceHistory } from './source-history'
 import { SourceTestControls } from './source-test'
 import { ChannelReliability } from './reliability'
 
+// GiB keeps the quota field readable; the API stores exact bytes.
+const GIB = 1024 * 1024 * 1024
+
 function numberLabel(channel: { channel_no: number }) {
   return `CH${String(channel.channel_no).padStart(2, '0')}`
 }
@@ -660,6 +663,13 @@ function ChannelBasics({
                   {
                     channel_name: text(data, 'channel_name'),
                     channel_group: text(data, 'channel_group'),
+                    // Entered in GiB because a byte count is unreadable at this
+                    // scale; the API takes bytes so the limit stays exact.
+                    recording_quota_bytes:
+                      Math.round(
+                        Number(text(data, 'recording_quota_gib') || '0') *
+                          GIB
+                      ) || 0,
                   },
                   channel.version
                 )
@@ -682,6 +692,19 @@ function ChannelBasics({
           maxLength={64}
           placeholder='例如 一层 / 外围'
         />
+        <Field
+          label='录像配额（GiB，0 = 不限制）'
+          name='recording_quota_gib'
+          type='number'
+          min={0}
+          step={1}
+          defaultValue={String(
+            Math.round((channel.recording_quota_bytes ?? 0) / GIB)
+          )}
+        />
+        <p className='text-xs text-muted-foreground md:col-span-2'>
+          超过配额时按最旧优先删除本通道可安全清理的录像；受保护、导出中、等待归档的片段不会被删除。配额是逻辑上限，不是文件系统硬配额。
+        </p>
         <div className='flex flex-wrap items-center justify-between gap-3 border-t pt-4 md:col-span-2'>
           <span className='text-xs text-muted-foreground'>
             改名与分组不会重建媒体流

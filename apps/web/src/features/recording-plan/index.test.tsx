@@ -72,6 +72,10 @@ function fixture(
     checks: options.checks || [],
     state: 'ready',
     used_bytes: null,
+    warning_percent: 80,
+    pressure_percent: 85,
+    pressure_target_percent: 80,
+    critical_percent: 95,
   }
   const mutations: { path: string; init: RequestInit }[] = []
   const attempts = { batch: 0, bind: 0 }

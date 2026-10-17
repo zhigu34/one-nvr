@@ -882,6 +882,12 @@
                   "enabled": {
                     "type": "boolean",
                     "description": "Enable or disable the channel. Independent of clearing the source and of disabling recording."
+                  },
+                  "recording_quota_bytes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1125899906842624,
+                    "description": "Per-channel recording quota in bytes; 0 clears it."
                   }
                 },
                 "minProperties": 1,
@@ -1865,6 +1871,26 @@
                   },
                   "is_default": {
                     "type": "boolean"
+                  },
+                  "warning_percent": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 99
+                  },
+                  "pressure_percent": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 99
+                  },
+                  "pressure_target_percent": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 99
+                  },
+                  "critical_percent": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100
                   }
                 },
                 "required": [],
@@ -2952,6 +2978,11 @@
                 "archive"
               ]
             }
+          },
+          "recording_quota_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Per-channel recording quota in bytes; 0 means no quota. Housekeeping limit, not a filesystem quota."
           }
         },
         "required": [
@@ -3187,6 +3218,41 @@
             ],
             "minimum": 0,
             "description": "Indexed media usage; null until the media index is implemented."
+          },
+          "warning_percent": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 99,
+            "description": "Used percentage at which the pool is reported as warning. Advisory only: nothing is deleted."
+          },
+          "pressure_percent": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 99,
+            "description": "Used percentage at which pressure cleanup starts deleting the oldest safe segments."
+          },
+          "pressure_target_percent": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 99,
+            "description": "Used percentage cleanup aims to restore; the measured safety line may require more free space than this."
+          },
+          "critical_percent": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "description": "Used percentage at which cleanup continues and the condition is surfaced as critical."
+          },
+          "watermark_state": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "warning",
+              "pressure",
+              "critical",
+              "unknown"
+            ],
+            "description": "Effective state against the thresholds. unknown means capacity has not been measured, which is not the same as ok."
           }
         },
         "required": [
@@ -3198,7 +3264,11 @@
           "version",
           "checks",
           "state",
-          "used_bytes"
+          "used_bytes",
+          "warning_percent",
+          "pressure_percent",
+          "pressure_target_percent",
+          "critical_percent"
         ],
         "additionalProperties": false
       },

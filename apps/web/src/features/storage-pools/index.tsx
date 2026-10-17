@@ -229,6 +229,38 @@ function CapacityBar({ pool }: { pool: Schema<'Pool'> }) {
   )
 }
 
+// The watermark band is about capacity, not about pool readiness, so it gets its
+// own labels: "filled up" and "unreachable" are different problems with different
+// remedies.
+const WATERMARK_LABEL: Record<string, string> = {
+  ok: '容量正常',
+  warning: '容量预警',
+  pressure: '压力清理中',
+  critical: '容量临界',
+  unknown: '容量未知',
+}
+const WATERMARK_HINT: Record<string, string> = {
+  ok: '已用空间低于预警线',
+  warning: '已用空间超过预警线，仅提示，不会删除录像',
+  pressure: '已用空间超过压力线，正在按最旧优先删除可安全清理的录像',
+  critical: '已用空间超过临界线，持续清理中',
+  unknown: '尚未采集到容量证据；未知不等于正常',
+}
+function watermarkTone(state: string) {
+  switch (state) {
+    case 'ok':
+      return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-400'
+    case 'warning':
+      return 'border-amber-500/20 bg-amber-500/10 text-amber-400'
+    case 'pressure':
+      return 'border-orange-500/20 bg-orange-500/10 text-orange-400'
+    case 'critical':
+      return 'border-red-500/20 bg-red-500/10 text-red-400'
+    default:
+      return 'border-zinc-500/20 bg-zinc-500/10 text-zinc-400'
+  }
+}
+
 function PoolRow({ pool }: { pool: Schema<'Pool'> }) {
   const action = useAction(true)
   const [job, setJob] = useState('')
@@ -258,6 +290,17 @@ function PoolRow({ pool }: { pool: Schema<'Pool'> }) {
           {pool.is_default && (
             <span className='rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-400'>
               默认池
+            </span>
+          )}
+          {pool.enabled && pool.watermark_state && (
+            <span
+              className={cn(
+                'rounded-full border px-2 py-0.5 text-xs',
+                watermarkTone(pool.watermark_state)
+              )}
+              title={WATERMARK_HINT[pool.watermark_state]}
+            >
+              {WATERMARK_LABEL[pool.watermark_state]}
             </span>
           )}
           <span
@@ -405,6 +448,12 @@ function PoolRow({ pool }: { pool: Schema<'Pool'> }) {
                         name: text(data, 'name'),
                         enabled: data.has('enabled'),
                         is_default: data.has('is_default'),
+                        warning_percent: Number(text(data, 'warning_percent')),
+                        pressure_percent: Number(text(data, 'pressure_percent')),
+                        pressure_target_percent: Number(
+                          text(data, 'pressure_target_percent')
+                        ),
+                        critical_percent: Number(text(data, 'critical_percent')),
                       },
                       pool.version
                     )
@@ -433,6 +482,46 @@ function PoolRow({ pool }: { pool: Schema<'Pool'> }) {
               name='is_default'
               defaultChecked={pool.is_default}
               className='pb-2'
+            />
+            <Field
+              label='预警 %'
+              id={`pool-warning-${pool.id}`}
+              name='warning_percent'
+              type='number'
+              min={1}
+              max={99}
+              defaultValue={String(pool.warning_percent)}
+              required
+            />
+            <Field
+              label='压力清理 %'
+              id={`pool-pressure-${pool.id}`}
+              name='pressure_percent'
+              type='number'
+              min={1}
+              max={99}
+              defaultValue={String(pool.pressure_percent)}
+              required
+            />
+            <Field
+              label='清理目标 %'
+              id={`pool-target-${pool.id}`}
+              name='pressure_target_percent'
+              type='number'
+              min={1}
+              max={99}
+              defaultValue={String(pool.pressure_target_percent)}
+              required
+            />
+            <Field
+              label='临界 %'
+              id={`pool-critical-${pool.id}`}
+              name='critical_percent'
+              type='number'
+              min={1}
+              max={100}
+              defaultValue={String(pool.critical_percent)}
+              required
             />
             <Button disabled={action.pending}>保存设置</Button>
             <Button

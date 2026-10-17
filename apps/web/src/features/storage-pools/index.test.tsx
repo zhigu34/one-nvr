@@ -62,6 +62,10 @@ function poolFixture(
       ] as Schema<'PoolCheck'>[]),
     state: 'pending',
     used_bytes: 30.6 * GiB,
+    warning_percent: 80,
+    pressure_percent: 85,
+    pressure_target_percent: 80,
+    critical_percent: 95,
     ...overrides,
   }
 }

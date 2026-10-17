@@ -156,9 +156,12 @@ type SummaryItem struct {
 	// The stored recording policy mode ('none' until first applied). Carried
 	// with the pool so the recording plan renders every row from one request.
 	RecordingMode string `json:"recording_mode"`
-	SourceIP      string `json:"source_ip"`
-	MainPath      string `json:"main_path"`
-	SubPath       string `json:"sub_path"`
+	// Quota rides along for the same reason as the pool binding: the configure
+	// page must render and edit it without a second request per channel.
+	RecordingQuotaBytes int64  `json:"recording_quota_bytes"`
+	SourceIP            string `json:"source_ip"`
+	MainPath            string `json:"main_path"`
+	SubPath             string `json:"sub_path"`
 	// OnvifPort is the ONVIF management port of the applied revision. Nil
 	// means the revision was saved as RTSP-only.
 	OnvifPort   *int           `json:"onvif_port,omitempty"`

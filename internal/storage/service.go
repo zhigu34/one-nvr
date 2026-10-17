@@ -28,6 +28,16 @@ type Pool struct {
 	State     string  `json:"state"`
 	// Verified indexed local usage; raw working/unpublished media usage is unknown.
 	UsedBytes *int64 `json:"used_bytes"`
+	// Watermark thresholds in percent. Warning only reports, pressure starts
+	// deleting until the target is met, critical keeps deleting. They live on
+	// the pool because each pool may sit on a different filesystem.
+	WarningPercent  int `json:"warning_percent"`
+	PressurePercent int `json:"pressure_percent"`
+	TargetPercent   int `json:"pressure_target_percent"`
+	CriticalPercent int `json:"critical_percent"`
+	// Effective state of the pool against its thresholds: ok, warning,
+	// pressure, critical or unknown. Empty until capacity has been measured.
+	WatermarkState string `json:"watermark_state,omitempty"`
 }
 type Page struct {
 	NextCursor *id.ID   `json:"next_cursor"`
@@ -42,6 +52,12 @@ type UpdateInput struct {
 	Name      *string `json:"name"`
 	Enabled   *bool   `json:"enabled"`
 	IsDefault *bool   `json:"is_default"`
+	// Watermark thresholds; each is optional so a rename does not have to
+	// restate them.
+	WarningPercent  *int `json:"warning_percent"`
+	PressurePercent *int `json:"pressure_percent"`
+	TargetPercent   *int `json:"pressure_target_percent"`
+	CriticalPercent *int `json:"critical_percent"`
 }
 type Service struct {
 	DB             *database.DB
@@ -55,12 +71,24 @@ func New(db *database.DB, a *auth.Service, roots []string) *Service {
 	return &Service{DB: db, Auth: a, Roots: append([]string(nil), roots...)}
 }
 
-const poolColumns = "id,site_id,name,canonical_path,enabled,is_default,version"
+const poolColumns = "id,site_id,name,canonical_path,enabled,is_default,version,warning_percent,pressure_percent,pressure_target_percent,critical_percent"
 
 func scanPool(row pgx.Row) (Pool, error) {
 	var p Pool
-	err := row.Scan(&p.ID, &p.SiteID, &p.Name, &p.Path, &p.Enabled, &p.IsDefault, &p.Version)
+	err := row.Scan(&p.ID, &p.SiteID, &p.Name, &p.Path, &p.Enabled, &p.IsDefault, &p.Version,
+		&p.WarningPercent, &p.PressurePercent, &p.TargetPercent, &p.CriticalPercent)
 	return p, err
+}
+
+// validWatermarks enforces the ordering the migration also enforces. The
+// service checks it first so the caller gets a 400 rather than a constraint
+// violation after a half-applied update.
+func validWatermarks(warning, pressure, target, critical int) bool {
+	return warning >= 1 && warning <= 99 &&
+		pressure >= 1 && pressure <= 99 &&
+		target >= 1 && target <= 99 &&
+		critical >= 1 && critical <= 100 &&
+		warning <= pressure && target <= pressure && pressure <= critical
 }
 func validName(name string) bool {
 	return name != "" && len(name) <= 128 && strings.IndexFunc(name, unicode.IsControl) < 0
@@ -150,7 +178,9 @@ func (s *Service) Register(ctx context.Context, p auth.Principal, in RegisterInp
 
 func (s *Service) Update(ctx context.Context, p auth.Principal, poolID id.ID, expected int64, in UpdateInput) (Pool, error) {
 	var out Pool
-	if expected < 1 || (in.Name == nil && in.Enabled == nil && in.IsDefault == nil) {
+	if expected < 1 || (in.Name == nil && in.Enabled == nil && in.IsDefault == nil &&
+		in.WarningPercent == nil && in.PressurePercent == nil &&
+		in.TargetPercent == nil && in.CriticalPercent == nil) {
 		return out, auth.ErrInvalid
 	}
 	if in.Name != nil {
@@ -186,6 +216,24 @@ func (s *Service) Update(ctx context.Context, p auth.Principal, poolID id.ID, ex
 		if in.IsDefault != nil {
 			out.IsDefault = *in.IsDefault
 		}
+		if in.WarningPercent != nil {
+			out.WarningPercent = *in.WarningPercent
+		}
+		if in.PressurePercent != nil {
+			out.PressurePercent = *in.PressurePercent
+		}
+		if in.TargetPercent != nil {
+			out.TargetPercent = *in.TargetPercent
+		}
+		if in.CriticalPercent != nil {
+			out.CriticalPercent = *in.CriticalPercent
+		}
+		// Validate the merged result, not just the fields that were sent: a
+		// request that moves only the pressure line can still invert the order
+		// against an unchanged neighbour.
+		if !validWatermarks(out.WarningPercent, out.PressurePercent, out.TargetPercent, out.CriticalPercent) {
+			return auth.ErrInvalid
+		}
 		if !out.Enabled {
 			if in.IsDefault != nil && *in.IsDefault {
 				return auth.ErrInvalid
@@ -197,7 +245,7 @@ func (s *Service) Update(ctx context.Context, p auth.Principal, poolID id.ID, ex
 				return err
 			}
 		}
-		out, err = scanPool(tx.QueryRow(ctx, "UPDATE storage_pools SET name=$2,enabled=$3,is_default=$4,version=version+1 WHERE id=$1 RETURNING "+poolColumns, out.ID, out.Name, out.Enabled, out.IsDefault))
+		out, err = scanPool(tx.QueryRow(ctx, "UPDATE storage_pools SET name=$2,enabled=$3,is_default=$4,warning_percent=$5,pressure_percent=$6,pressure_target_percent=$7,critical_percent=$8,version=version+1 WHERE id=$1 RETURNING "+poolColumns, out.ID, out.Name, out.Enabled, out.IsDefault, out.WarningPercent, out.PressurePercent, out.TargetPercent, out.CriticalPercent))
 		if err != nil {
 			return err
 		}
@@ -293,6 +341,7 @@ func (s *Service) withChecks(ctx context.Context, p Pool, usageContexts ...conte
 		p.Checks = append(p.Checks, c)
 	}
 	p.State = p.Readiness(now)
+	p.WatermarkState = p.watermarkState(now)
 	usageCtx := ctx
 	if len(usageContexts) == 1 {
 		usageCtx = usageContexts[0]
@@ -448,4 +497,56 @@ func (s *Service) SamplePool(ctx context.Context, pool Pool, service string) err
 		_, err = tx.Exec(ctx, `INSERT INTO storage_pool_checks(pool_id,service,state,reason_code,observed_at,expires_at,total_bytes,free_bytes,filesystem_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,'')) ON CONFLICT(pool_id,service) DO UPDATE SET state=EXCLUDED.state,reason_code=EXCLUDED.reason_code,observed_at=EXCLUDED.observed_at,expires_at=EXCLUDED.expires_at,total_bytes=EXCLUDED.total_bytes,free_bytes=EXCLUDED.free_bytes,filesystem_id=EXCLUDED.filesystem_id WHERE storage_pool_checks.observed_at<=EXCLUDED.observed_at`, current.ID, check.Service, check.State, check.Reason, check.ObservedAt, check.ExpiresAt, check.TotalBytes, check.FreeBytes, check.FilesystemID)
 		return err
 	})
+}
+
+// watermarkState classifies the pool's freshest capacity evidence against its
+// own thresholds.
+//
+// This mirrors recording.watermarkPolicy.state on purpose rather than sharing
+// code: the two processes answer different questions (this one renders, the
+// worker deletes) and a shared implementation would have to be exported from a
+// package that must not depend on the HTTP layer. The rules are pinned by tests
+// in both packages, and the comparison uses raw bytes rather than the rounded
+// display percentage so a pool at 79.9% does not read as 80%.
+func (p Pool) watermarkState(now time.Time) string {
+	checks := 0
+	var total, free int64
+	agreed := true
+	var filesystem string
+	for _, c := range p.Checks {
+		if c.Service != "api" && c.Service != "worker" {
+			continue
+		}
+		if c.State != "healthy" || !c.ExpiresAt.After(now) {
+			continue
+		}
+		checks++
+		if c.TotalBytes > 0 && (total == 0 || c.TotalBytes < total) {
+			total = c.TotalBytes
+		}
+		if c.FreeBytes < free || free == 0 {
+			free = c.FreeBytes
+		}
+		if filesystem == "" {
+			filesystem = c.FilesystemID
+		} else if c.FilesystemID != filesystem {
+			agreed = false
+		}
+	}
+	if checks != 2 || !agreed || filesystem == "" || total <= 0 {
+		return "unknown"
+	}
+	used := total - free
+	crosses := func(percent int) bool {
+		return percent > 0 && used*100 >= int64(percent)*total
+	}
+	switch {
+	case crosses(p.CriticalPercent):
+		return "critical"
+	case crosses(p.PressurePercent):
+		return "pressure"
+	case crosses(p.WarningPercent):
+		return "warning"
+	}
+	return "ok"
 }

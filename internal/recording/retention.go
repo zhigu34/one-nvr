@@ -46,6 +46,19 @@ func (s *Service) RunRetention(ctx context.Context) {
 		// confirmed remote copy (ARC-05); the gate hook is injected by the
 		// assembly, so without it nothing happens.
 		s.SweepArchiveLocal(ctx)
+		// Pressure cleanup is what keeps a long-running site from filling its
+		// disk: everything above only removes what is *old*, and a 24/7 site
+		// with a generous retention window reaches full before anything is old
+		// enough. It runs after the age-based sweeps so space freed by expiry is
+		// already visible, and it runs through the same delete core, so
+		// protection, export pins, uploads, playback leases and the archive
+		// safe-copy gate all still apply.
+		s.SweepWatermarks(ctx)
+		// Quota runs last: filling the volume is an emergency, one channel's
+		// share is bookkeeping, and the more urgent policy should free space
+		// first.
+		s.SweepQuotas(ctx)
+		s.SweepWatermarkEvents(ctx)
 		select {
 		case <-ctx.Done():
 			return
