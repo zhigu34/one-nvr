@@ -16,6 +16,13 @@ type SourceConfig struct {
 	SubPath   string `json:"sub_path"`
 	Transport string `json:"transport"`
 	ONVIFPort *int   `json:"onvif_port,omitempty"`
+	// Device metadata describes what the hardware is, not how to reach it.
+	// Free text with a closed suggestion list in the UI: vendors ship models
+	// faster than this schema can be migrated, and a mislabelled camera is a
+	// display problem. Empty means "not recorded".
+	Brand      string `json:"brand,omitempty"`
+	Model      string `json:"model,omitempty"`
+	CameraType string `json:"camera_type,omitempty"`
 }
 
 type CredentialInput struct {
@@ -164,7 +171,12 @@ type SummaryItem struct {
 	SubPath             string `json:"sub_path"`
 	// OnvifPort is the ONVIF management port of the applied revision. Nil
 	// means the revision was saved as RTSP-only.
-	OnvifPort   *int           `json:"onvif_port,omitempty"`
+	OnvifPort *int `json:"onvif_port,omitempty"`
+	// Device metadata, carried so the configure page can show what the camera is
+	// without a second request per channel.
+	Brand       string         `json:"brand"`
+	Model       string         `json:"model"`
+	CameraType  string         `json:"camera_type"`
 	Main        ObservedStatus `json:"main"`
 	Sub         ObservedStatus `json:"sub"`
 	Recording   ObservedStatus `json:"recording"`

@@ -259,9 +259,10 @@ test('ONVIF asks the camera for its streams and fills the paths, never the passw
     '192.168.33.20'
   )
   await userEvent.fill(view.getByLabelText('ONVIF 端口'), '8000')
-  await userEvent.click(view.getByRole('button', { name: '获取码流' }))
+  await userEvent.click(view.getByRole('button', { name: '探测设备与码流' }))
   await expect.element(view.getByText(/Fixture Vision FX-9000/)).toBeVisible()
-  await expect.element(view.getByText(/支持 PTZ/)).toBeVisible()
+  // The probe now says what it inferred, not just that PTZ exists.
+  await expect.element(view.getByText(/按 PTZ 能力推断/)).toBeVisible()
   await expect
     .element(view.getByLabelText('主流路径', { exact: true }))
     .toHaveValue('/Streaming/Channels/101?transport=tcp')
@@ -291,7 +292,7 @@ test('a refused ONVIF probe explains itself and still refuses to save', async ()
     view.getByLabelText('IP 地址', { exact: true }),
     '192.168.33.20'
   )
-  await userEvent.click(view.getByRole('button', { name: '获取码流' }))
+  await userEvent.click(view.getByRole('button', { name: '探测设备与码流' }))
   await expect
     .element(view.getByText('ONVIF 认证被拒绝，请检查用户名与密码'))
     .toBeVisible()
@@ -325,7 +326,7 @@ test('an empty ONVIF port is filled from the port the probe actually used', asyn
     '192.168.33.20'
   )
   // The operator trusts the "默认 80" hint and leaves the field empty.
-  await userEvent.click(view.getByRole('button', { name: '获取码流' }))
+  await userEvent.click(view.getByRole('button', { name: '探测设备与码流' }))
   expect(JSON.parse(calls.request.mock.calls[0][1].body)).toEqual({
     ip: '192.168.33.20',
     username: '',

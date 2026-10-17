@@ -243,7 +243,7 @@ func (s *SourceService) createDraftTx(tx pgx.Tx, worker bool, ctx context.Contex
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO source_revisions(id,channel_id,source_id,revision_no,ip,rtsp_port,main_path,sub_path,transport,onvif_port,credential_key_id,username_nonce,username_ciphertext,password_nonce,password_ciphertext,username_summary,password_state,configuration_digest,created_by) VALUES($1,$2,$3,$4,$5::inet,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`, revisionID, channelID, sourceID, number, in.Config.IP, in.Config.RTSPPort, in.Config.MainPath, in.Config.SubPath, in.Config.Transport, in.Config.ONVIFPort, userCipher.KeyID, userCipher.Nonce, userCipher.Ciphertext, passCipher.Nonce, passCipher.Ciphertext, usernameSummary(username), passwordState, cfgDigest, p.UserID)
+		_, err = tx.Exec(ctx, `INSERT INTO source_revisions(id,channel_id,source_id,revision_no,ip,rtsp_port,main_path,sub_path,transport,onvif_port,brand,model,camera_type,credential_key_id,username_nonce,username_ciphertext,password_nonce,password_ciphertext,username_summary,password_state,configuration_digest,created_by) VALUES($1,$2,$3,$4,$5::inet,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`, revisionID, channelID, sourceID, number, in.Config.IP, in.Config.RTSPPort, in.Config.MainPath, in.Config.SubPath, in.Config.Transport, in.Config.ONVIFPort, in.Config.Brand, in.Config.Model, in.Config.CameraType, userCipher.KeyID, userCipher.Nonce, userCipher.Ciphertext, passCipher.Nonce, passCipher.Ciphertext, usernameSummary(username), passwordState, cfgDigest, p.UserID)
 		if err != nil {
 			return err
 		}

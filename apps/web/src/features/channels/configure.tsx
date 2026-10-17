@@ -25,6 +25,7 @@ import { CredentialReveal } from './source-credentials'
 import { SourceForm } from './source-form'
 import { SourceHistory } from './source-history'
 import { SourceTestControls } from './source-test'
+import { cameraTypeLabel } from './device-meta'
 import { ChannelReliability } from './reliability'
 
 // GiB keeps the quota field readable; the API stores exact bytes.
@@ -79,16 +80,21 @@ function ChannelPicker({
       >
         ← 返回通道列表
       </a>
-      <SelectField
-        label='选择通道'
-        className='text-sm'
-        value={selectedId}
-        onValueChange={onSelect}
-        options={items.map((value) => ({
-          value: value.channel_id,
-          label: `${numberLabel(value)} · ${value.channel_name}`,
-        }))}
-      />
+      {/* The dropdown duplicates the grouped list right below it. On a desktop
+          width the list is always visible, so the shortcut only earns its space
+          when the rail collapses to a narrow layout. */}
+      <div className='lg:hidden'>
+        <SelectField
+          label='选择通道'
+          className='text-sm'
+          value={selectedId}
+          onValueChange={onSelect}
+          options={items.map((value) => ({
+            value: value.channel_id,
+            label: `${numberLabel(value)} · ${value.channel_name}`,
+          }))}
+        />
+      </div>
       <div className='relative mt-3'>
         <Input
           aria-label='搜索通道'
@@ -367,6 +373,16 @@ function ConfigureChannel({
               {configured && (
                 <span className='rounded border px-1.5 py-0.5 text-[11px] text-muted-foreground'>
                   {channel.onvif_port != null ? 'ONVIF 手动' : 'RTSP 手动'}
+                </span>
+              )}
+              {/* What the hardware is, when it was recorded. Rendered beside the
+                  connection method because the two together answer "which camera
+                  is this" — the IP alone does not. */}
+              {(channel.brand || channel.camera_type) && (
+                <span className='rounded border border-border bg-muted/50 px-1.5 py-0.5 text-[11px] text-muted-foreground'>
+                  {[channel.brand, cameraTypeLabel(channel.camera_type)]
+                    .filter(Boolean)
+                    .join(' · ')}
                 </span>
               )}
             </div>

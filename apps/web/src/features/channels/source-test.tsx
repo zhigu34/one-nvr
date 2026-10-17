@@ -160,29 +160,19 @@ export function SourceTestControls({
           )}
         </div>
       )}
-      <div className='grid gap-2'>
-        <Button
-          type='button'
-          variant='outline'
-          disabled={pending || busy}
-          onClick={() => void run('test')}
-        >
-          测试取流
-        </Button>
-        {/* This applies the revision loaded here, which the form's own submit
-            row does not do for a historical one. It is styled secondary because
-            saving and enabling the form is the page's primary action. */}
-        <Button
-          type='button'
-          variant='secondary'
-          disabled={pending || busy}
-          onClick={() => void run('apply')}
-        >
-          测试并启用
-        </Button>
-      </div>
+      {/* One action only. "保存并启用" at the bottom of the form is the page's
+          primary action and already tests when the evidence is missing or stale,
+          so a second apply button here did the same job in a second place. */}
+      <Button
+        type='button'
+        variant='outline'
+        disabled={pending || busy}
+        onClick={() => void run('test')}
+      >
+        测试取流
+      </Button>
       <p className='text-[11px] text-muted-foreground'>
-        测试不切换当前取流。启用前需要有通过的测试，「测试并启用」会在证据缺失或过期时自动补测一次。
+        测试不切换当前取流；「保存并启用」会复用这份结果，证据缺失或过期时自动补测。
       </p>
     </section>
   )

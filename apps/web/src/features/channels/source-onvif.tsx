@@ -3,6 +3,13 @@ import { ApiError, apiRequest, jsonRequest } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Notices, SelectField } from '@/features/foundation/ui'
+import {
+  cameraTypeLabel,
+  inferredBrand,
+  inferredModel,
+  inferCameraType,
+  suggestedBrandPreset,
+} from './device-meta'
 
 // ONVIF is a manual add method, not a scan: the operator names the camera and
 // this panel asks it for its own stream configuration. Nothing is stored here —
@@ -22,6 +29,10 @@ type Props = {
   // is better than letting the probe fail with an authentication error.
   savedPassword: boolean
   busy: boolean
+  /** Fills the device fields and reports which ones the device reported. */
+  onDevice: (device: { brand: string; model: string; cameraType: string }) => void
+  /** Switches the password action to "replace" when the operator starts typing. */
+  onPasswordNeeded: () => void
 }
 
 function pixels(stream: Schema<'OnvifStream'>) {
@@ -46,6 +57,8 @@ export function SourceOnvifPanel({
   onStreams,
   savedPassword,
   busy,
+  onDevice,
+  onPasswordNeeded,
 }: Props) {
   const [probe, setProbe] = useState<Schema<'OnvifProbe'> | null>(null)
   const [mainToken, setMainToken] = useState('')
@@ -85,6 +98,15 @@ export function SourceOnvifPanel({
         })
       )
       setProbe(value)
+      // The device reports its own manufacturer and model; the type can only be
+      // inferred from the PTZ node. All three land in the form as suggestions the
+      // operator may overwrite.
+      const preset = suggestedBrandPreset(value.device.manufacturer)
+      onDevice({
+        brand: preset || inferredBrand(value.device.manufacturer),
+        model: inferredModel(value.device.model),
+        cameraType: inferCameraType(value.ptz),
+      })
       // Record the port the probe actually used (the server resolves an empty
       // field to the device default): saving must not silently drop the ONVIF
       // identity just because the operator trusted the default.
@@ -119,8 +141,7 @@ export function SourceOnvifPanel({
     : []
   return (
     <section className='grid gap-3 rounded-lg border p-4'>
-      <p className='text-sm text-muted-foreground'>
-        ONVIF 方式只填写地址与凭据，码流地址由摄像头返回，不用手填路径。
+      <p className='text-xs text-muted-foreground'>
         探测只读取配置，不保存、不切换当前源。
       </p>
       <div className='flex flex-wrap items-end gap-3'>
@@ -128,14 +149,29 @@ export function SourceOnvifPanel({
           ONVIF 端口
           <input
             aria-label='ONVIF 端口'
-            className='rounded-md border bg-background p-2'
+            /* Wide enough for the whole placeholder: at the previous width
+               "默认 80，常见 8000" was clipped to "默认 80". */
+            className='w-64 rounded-md border bg-background p-2'
             type='number'
             min={1}
             max={65535}
-            placeholder='默认 80，常见 8000'
+            placeholder='默认 80，常见 8000 / 8899'
             value={port}
             onChange={(event) => onPortChange(event.target.value)}
           />
+          <span className='flex gap-1 text-[11px] text-muted-foreground'>
+            常见端口：
+            {['80', '8000', '8899'].map((value) => (
+              <button
+                key={value}
+                type='button'
+                className='rounded border px-1 hover:bg-accent'
+                onClick={() => onPortChange(value)}
+              >
+                {value}
+              </button>
+            ))}
+          </span>
         </label>
         <Button
           type='button'
@@ -143,7 +179,7 @@ export function SourceOnvifPanel({
           disabled={pending || busy || ip.trim() === ''}
           onClick={() => void request()}
         >
-          {pending ? '获取中…' : '获取码流'}
+          {pending ? '探测中…' : '探测设备与码流'}
         </Button>
         {ip.trim() === '' && (
           <span className='pb-2 text-xs text-muted-foreground'>
@@ -152,27 +188,46 @@ export function SourceOnvifPanel({
         )}
       </div>
       {savedPassword && (
-        <p className='text-xs text-amber-600'>
-          已保存的密码不会用于探测；摄像头需要认证时，请把「密码处理」改为「输入新密码」并填写。
+        /* An actionable hint instead of an instruction: the operator should not
+           have to find a dropdown after being told the probe will fail. */
+        <p className='flex flex-wrap items-center gap-2 text-xs text-amber-600'>
+          已保存的密码不会用于探测。
+          <button
+            type='button'
+            className='rounded border border-amber-600/40 px-1.5 py-0.5 hover:bg-amber-500/10'
+            onClick={onPasswordNeeded}
+          >
+            改为输入新密码
+          </button>
         </p>
       )}
       <Notices error={error} notice={notice} />
       {probe && (
         <div className='grid gap-3 rounded-lg border p-3 text-sm'>
-          <p>
-            设备：
-            {[probe.device.manufacturer, probe.device.model]
-              .filter(Boolean)
-              .join(' ') || '未报告型号'}
-            {probe.device.firmware_version
-              ? ` · 固件 ${probe.device.firmware_version}`
-              : ''}
-          </p>
-          <p className='text-xs text-muted-foreground'>
-            {probe.ptz
-              ? '设备报告支持 PTZ，方向与变焦控制后续开放'
-              : '设备未报告 PTZ 支持'}
-          </p>
+          <div className='grid gap-1'>
+            <p className='flex flex-wrap items-center gap-2'>
+              <span className='text-muted-foreground'>设备</span>
+              {[probe.device.manufacturer, probe.device.model]
+                .filter(Boolean)
+                .join(' ') || '未报告品牌与型号'}
+              <span className='rounded border border-emerald-500/30 bg-emerald-500/10 px-1 py-px text-[10px] text-emerald-500'>
+                已自动识别
+              </span>
+            </p>
+            {probe.device.firmware_version && (
+              <p className='text-xs text-muted-foreground'>
+                固件 {probe.device.firmware_version}
+                {probe.device.serial_number
+                  ? ` · 序列号 ${probe.device.serial_number}`
+                  : ''}
+              </p>
+            )}
+            <p className='text-xs text-muted-foreground'>
+              {probe.ptz
+                ? `类型已按 PTZ 能力推断为「${cameraTypeLabel('ptz')}」，方向与变焦控制后续开放`
+                : '设备未报告 PTZ，类型需手动选择（枪机与半球无法通过 ONVIF 区分）'}
+            </p>
+          </div>
           <SelectField
             label='主码流'
             className='text-sm'

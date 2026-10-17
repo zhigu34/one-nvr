@@ -55,9 +55,15 @@ func (s *Service) DailyTrend(ctx context.Context, p auth.Principal, channelID id
 	rows, err := s.DB.Pool.Query(ctx, `SELECT day::text,healthy_ms,unavailable_ms,unknown_ms,excluded_ms,
 			owed_ms,covered_ms,unverified_ms,fault_count,longest_fault_ms,computed_at,input_watermark
 		FROM reliability_daily
-		WHERE channel_id=$1 AND kind=$2 AND day >= $3::date AND day <= $4::date
+		-- Compare through the same calendar the writer used. FinalizeDaily seals
+		-- days with date_trunc('day', minute)::date, evaluated in the database
+		-- session's timezone; formatting from/to in Go as UTC dates put the two
+		-- on different calendars, so between local midnight and local 08:00 the
+		-- newest day existed but fell outside the query's upper bound. Passing
+		-- the instants and letting PostgreSQL derive the date keeps one calendar.
+		WHERE channel_id=$1 AND kind=$2 AND day >= ($3::timestamptz)::date AND day <= ($4::timestamptz)::date
 		ORDER BY day`,
-		channelID, kind, from.UTC().Format("2006-01-02"), to.UTC().Format("2006-01-02"))
+		channelID, kind, from.UTC(), to.UTC())
 	if err != nil {
 		return out, err
 	}
@@ -125,10 +131,12 @@ func (s *Service) ChannelComparison(ctx context.Context, from, to time.Time) ([]
 			SUM(d.healthy_ms),SUM(d.unavailable_ms),SUM(d.unknown_ms),SUM(d.excluded_ms),
 			SUM(d.owed_ms),SUM(d.covered_ms),SUM(d.fault_count)
 		FROM reliability_daily d JOIN channels c ON c.id=d.channel_id
-		WHERE d.day >= $1::date AND d.day <= $2::date AND d.kind IN ('main','recording')
+		-- Same calendar as the writer: see DailyTrend for why the instants are
+		-- passed instead of Go-formatted UTC dates.
+		WHERE d.day >= ($1::timestamptz)::date AND d.day <= ($2::timestamptz)::date AND d.kind IN ('main','recording')
 		GROUP BY c.id,c.channel_no,c.channel_name,d.kind
 		ORDER BY c.channel_no,d.kind`,
-		from.UTC().Format("2006-01-02"), to.UTC().Format("2006-01-02"))
+		from.UTC(), to.UTC())
 	if err != nil {
 		return out, err
 	}

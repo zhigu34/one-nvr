@@ -2009,6 +2009,15 @@ export interface components {
             /** @enum {string} */
             transport: "tcp" | "udp";
             onvif_port?: number;
+            /** @description Camera brand as recorded by the operator, optionally filled from the ONVIF manufacturer. Free text: vendors ship models faster than this schema can be migrated. Empty means not recorded. */
+            brand?: string;
+            /** @description Camera model. Empty means not recorded. */
+            model?: string;
+            /**
+             * @description Physical camera type. Empty means not recorded; ptz is inferred from an ONVIF PTZ node when the operator accepts the suggestion.
+             * @enum {string}
+             */
+            camera_type?: "" | "bullet" | "dome" | "ptz" | "fisheye" | "multi" | "nvr";
         };
         CredentialInput: {
             username?: string;
@@ -2212,6 +2221,15 @@ export interface components {
             source_ip?: string;
             main_path?: string;
             sub_path?: string;
+            /** @description Camera brand of the applied revision; empty when not recorded. */
+            brand?: string;
+            /** @description Camera model of the applied revision; empty when not recorded. */
+            model?: string;
+            /**
+             * @description Camera type of the applied revision; empty when not recorded.
+             * @enum {string}
+             */
+            camera_type?: "" | "bullet" | "dome" | "ptz" | "fisheye" | "multi" | "nvr";
             /** @description ONVIF management port of the applied source revision. Null when the revision was saved as RTSP-only. */
             onvif_port?: number | null;
             main: components["schemas"]["ObservedStatus"];
@@ -2671,6 +2689,10 @@ export interface components {
             /** @enum {string} */
             transport?: "tcp" | "udp";
             onvif_port?: number;
+            brand?: string;
+            model?: string;
+            /** @enum {string} */
+            camera_type?: "" | "bullet" | "dome" | "ptz" | "fisheye" | "multi" | "nvr";
         };
         LiveOffer: {
             /** @enum {string} */

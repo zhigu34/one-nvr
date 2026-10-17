@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { apiRequest, jsonRequest, newRequestKey } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import {
   Field,
   SelectField,
@@ -10,6 +11,12 @@ import {
 } from '@/features/foundation/ui'
 import { connectionError, type SaveConnection } from './source-connect'
 import { SourceOnvifPanel } from './source-onvif'
+import {
+  BRAND_PRESETS,
+  CAMERA_TYPES,
+  pathTemplate,
+  type CameraType,
+} from './device-meta'
 
 type Props = {
   channel: { id: string; version: number }
@@ -58,6 +65,15 @@ function SourceEditor({
   )
   const [probed, setProbed] = useState(false)
   const [pathsOpen, setPathsOpen] = useState(true)
+  // Device metadata. `recognised` records which fields the probe filled, so the
+  // form can mark them as device-reported instead of pretending the operator
+  // typed them — and so editing one clears its badge.
+  const [brand, setBrand] = useState(revision?.config.brand || '')
+  const [model, setModel] = useState(revision?.config.model || '')
+  const [cameraType, setCameraType] = useState<CameraType>(
+    (revision?.config.camera_type as CameraType) || ''
+  )
+  const [recognised, setRecognised] = useState<Record<string, boolean>>({})
   const [intentRevision, setIntentRevision] = useState(revision?.id)
   const [password, setPassword] = useState('')
   const form = useRef<HTMLFormElement>(null)
@@ -75,6 +91,10 @@ function SourceEditor({
     )
     setProbed(false)
     setPathsOpen(true)
+    setBrand(revision?.config.brand || '')
+    setModel(revision?.config.model || '')
+    setCameraType((revision?.config.camera_type as CameraType) || '')
+    setRecognised({})
   }
   // The probe uses what the operator is entering right now, so it reads the same
   // fields the submission will send instead of keeping a second copy.
@@ -115,6 +135,9 @@ function SourceEditor({
   )
   // ONVIF has nothing to submit until the camera answered, so both actions stay
   // unavailable before a probe fills the paths.
+  // Only offered in the manual-RTSP mode: in ONVIF mode the device supplies the
+  // paths, and a brand template would overwrite what it just returned.
+  const template = pathTemplate(brand)
   const blocked = method === 'onvif' && !probed
   return (
     <section className='grid gap-4'>
@@ -155,6 +178,11 @@ function SourceEditor({
           // the saved revision and only replaced when the operator sets one, so
           // data that came from an import is never silently dropped.
           if (onvifPort.trim() !== '') config.onvif_port = Number(onvifPort)
+          // Empty is a valid value: it means "not recorded", and sending the
+          // field anyway keeps clearing it expressible.
+          config.brand = brand.trim()
+          config.model = model.trim()
+          config.camera_type = cameraType
           const input: Schema<'DraftInput'> = {
             config,
             credentials,
@@ -237,11 +265,14 @@ function SourceEditor({
                     ONVIF 手动
                   </Button>
                 </div>
-                <p className='text-xs text-muted-foreground'>
-                  {method === 'onvif'
-                    ? '填写地址与凭据后从摄像头读取码流配置，不用手填路径。'
-                    : '手动填写 RTSP 端口与主/子流路径。'}
-                </p>
+                {/* One sentence only: the ONVIF panel repeats the rest where
+                    the probe actually happens, and two copies read as two
+                    different instructions. */}
+                {method === 'rtsp' && (
+                  <p className='text-xs text-muted-foreground'>
+                    手动填写 RTSP 端口与主/子流路径。
+                  </p>
+                )}
               </div>
               <div className='grid gap-4 sm:grid-cols-[minmax(0,1fr)_110px]'>
                 <div className='grid gap-2'>
@@ -252,8 +283,10 @@ function SourceEditor({
                     IP 地址
                   </label>
                   <div className='flex'>
+                    {/* ONVIF is HTTP/SOAP, not RTSP; showing rtsp:// in that
+                        mode described a protocol the probe never uses. */}
                     <span className='inline-flex items-center rounded-l-md border border-r-0 bg-muted/50 px-2 font-mono text-xs text-muted-foreground'>
-                      rtsp://
+                      {method === 'onvif' ? 'IP 地址' : 'rtsp://'}
                     </span>
                     <input
                       id='source-ip'
@@ -307,9 +340,20 @@ function SourceEditor({
                     value={password}
                     onChange={(event) => {
                       setPassword(event.target.value)
+                      // Typing is an unambiguous statement of intent, so the
+                      // action follows it instead of making the operator pick
+                      // "输入新密码" from a dropdown afterwards.
                       setPasswordAction(
                         revision && !event.target.value ? 'keep' : 'replace'
                       )
+                    }}
+                    onFocus={() => {
+                      // Focusing to type is the same intent; without this the
+                      // field stays disabled-looking next to a "keep" selector
+                      // and the first keystroke lands before the switch.
+                      if (revision && passwordAction === 'keep') {
+                        setPasswordAction('replace')
+                      }
                     }}
                   />
                 )}
@@ -351,8 +395,100 @@ function SourceEditor({
                   onStreams={applyStreams}
                   savedPassword={passwordAction === 'keep' && !!revision}
                   busy={pending}
+                  onDevice={(device) => {
+                    if (device.brand) setBrand(device.brand)
+                    if (device.model) setModel(device.model)
+                    if (device.cameraType) {
+                      setCameraType(device.cameraType as CameraType)
+                    }
+                    setRecognised({
+                      brand: !!device.brand,
+                      model: !!device.model,
+                      cameraType: !!device.cameraType,
+                    })
+                  }}
+                  onPasswordNeeded={() => {
+                    // Typing a password is the same intent as choosing "replace";
+                    // making the operator pick it from a dropdown afterwards is
+                    // one step too many.
+                    setPasswordAction('replace')
+                  }}
                 />
               )}
+              <div className='grid gap-4 rounded-lg border p-3 sm:grid-cols-3'>
+                <div className='grid gap-2'>
+                  <label htmlFor='source-brand' className='text-sm font-medium'>
+                    摄像头品牌
+                    {recognised.brand && <RecognisedBadge />}
+                  </label>
+                  {/* The label above carries the "已自动识别" badge, so this
+                      input is not wrapped in <Field>: that component renders its
+                      own label and would produce a second, empty one. */}
+                  <Input
+                    id='source-brand'
+                    name='brand'
+                    list='brand-presets'
+                    maxLength={64}
+                    placeholder='如 海康威视'
+                    value={brand}
+                    onChange={(event) => {
+                      setBrand(event.target.value)
+                      // Editing a device-reported value makes it the operator's
+                      // own, so the badge must not keep claiming the device said it.
+                      setRecognised((current) => ({ ...current, brand: false }))
+                    }}
+                  />
+                  <datalist id='brand-presets'>
+                    {BRAND_PRESETS.map((value) => (
+                      <option key={value} value={value} />
+                    ))}
+                  </datalist>
+                </div>
+                <div className='grid gap-2'>
+                  <label htmlFor='source-model' className='text-sm font-medium'>
+                    设备型号
+                    {recognised.model && <RecognisedBadge />}
+                  </label>
+                  <Input
+                    id='source-model'
+                    name='model'
+                    maxLength={128}
+                    placeholder='选填，或通过 ONVIF 探测自动回填'
+                    value={model}
+                    onChange={(event) => {
+                      setModel(event.target.value)
+                      setRecognised((current) => ({ ...current, model: false }))
+                    }}
+                  />
+                </div>
+                <div className='grid gap-2'>
+                  <label className='text-sm font-medium'>
+                    摄像头类型
+                    {recognised.cameraType && <RecognisedBadge />}
+                  </label>
+                  <SelectField
+                    ariaLabel='摄像头类型'
+                    value={cameraType}
+                    onValueChange={(value) => {
+                      setCameraType(value as CameraType)
+                      setRecognised((current) => ({
+                        ...current,
+                        cameraType: false,
+                      }))
+                    }}
+                    options={[
+                      { value: '', label: '未记录' },
+                      ...CAMERA_TYPES.map((entry) => ({
+                        value: entry.value,
+                        label: entry.label,
+                      })),
+                    ]}
+                  />
+                </div>
+                <p className='text-xs text-muted-foreground sm:col-span-3'>
+                  设备信息只用于展示与检索，不影响取流；ONVIF 探测会读取品牌与型号，并据 PTZ 能力推断类型，可手动修改。
+                </p>
+              </div>
               {(method === 'rtsp' || probed) && (
                 <details
                   className='rounded-lg border'
@@ -361,10 +497,38 @@ function SourceEditor({
                 >
                   <summary className='flex cursor-pointer items-center justify-between gap-3 px-3 py-2.5 text-sm font-medium'>
                     <span>码流路径</span>
-                    <span className='truncate font-mono text-[11px] text-muted-foreground'>
-                      {[mainPath, subPath].filter(Boolean).join(' · ') ||
-                        '未填写'}
-                    </span>
+                    {/* The paths themselves are one line below in the fields;
+                        repeating them here just competed with the template
+                        action. */}
+                    {method === 'rtsp' && template ? (
+                      <span
+                        role='button'
+                        tabIndex={0}
+                        title={template.hint}
+                        className='rounded-md border px-2 py-0.5 text-[11px] font-normal text-muted-foreground hover:bg-accent hover:text-foreground'
+                        onClick={(event) => {
+                          // The button lives inside <summary>: without this the
+                          // click would also toggle the disclosure.
+                          event.preventDefault()
+                          event.stopPropagation()
+                          setMainPath(template.main)
+                          setSubPath(template.sub)
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key !== 'Enter' && event.key !== ' ') return
+                          event.preventDefault()
+                          event.stopPropagation()
+                          setMainPath(template.main)
+                          setSubPath(template.sub)
+                        }}
+                      >
+                        填入{template.hint}
+                      </span>
+                    ) : (
+                      <span className='text-[11px] font-normal text-muted-foreground'>
+                        {method === 'onvif' ? '由摄像头返回' : ''}
+                      </span>
+                    )}
                   </summary>
                   <div className='grid gap-4 border-t p-3 sm:grid-cols-2'>
                     <Field
@@ -460,5 +624,21 @@ function SourceEditor({
         </fieldset>
       </form>
     </section>
+  )
+}
+
+/**
+ * RecognisedBadge marks a field the ONVIF probe filled.
+ *
+ * The operator needs to know which values came from the device and which they
+ * typed: a device-reported model is evidence about the hardware, while a typed
+ * one is a note. Editing the field clears the badge, because the value is then
+ * the operator's own.
+ */
+function RecognisedBadge() {
+  return (
+    <span className='ml-1.5 rounded border border-emerald-500/30 bg-emerald-500/10 px-1 py-px align-middle text-[10px] font-normal text-emerald-500'>
+      已自动识别
+    </span>
   )
 }

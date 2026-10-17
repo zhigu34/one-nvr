@@ -148,15 +148,15 @@ func (s *SourceService) Summaries(ctx context.Context, p auth.Principal) (Summar
 		// Both enrichment passes join the grant table instead of taking an id
 		// array, so no array encoding is involved and a channel outside the
 		// caller's grants can never contribute a row.
-		source, err := tx.Query(ctx, `SELECT c.id,host(r.ip),r.main_path,r.sub_path,r.onvif_port FROM channels c JOIN channel_grants g ON g.channel_id=c.id AND g.user_id=$1 JOIN source_revisions r ON r.id=c.current_revision_id`, p.UserID)
+		source, err := tx.Query(ctx, `SELECT c.id,host(r.ip),r.main_path,r.sub_path,r.onvif_port,r.brand,r.model,r.camera_type FROM channels c JOIN channel_grants g ON g.channel_id=c.id AND g.user_id=$1 JOIN source_revisions r ON r.id=c.current_revision_id`, p.UserID)
 		if err != nil {
 			return err
 		}
 		for source.Next() {
 			var ch id.ID
-			var ip, main, sub string
+			var ip, main, sub, brand, model, cameraType string
 			var onvif *int
-			if err := source.Scan(&ch, &ip, &main, &sub, &onvif); err != nil {
+			if err := source.Scan(&ch, &ip, &main, &sub, &onvif, &brand, &model, &cameraType); err != nil {
 				source.Close()
 				return err
 			}
@@ -165,6 +165,9 @@ func (s *SourceService) Summaries(ctx context.Context, p auth.Principal) (Summar
 				out.Items[at].MainPath = main
 				out.Items[at].SubPath = sub
 				out.Items[at].OnvifPort = onvif
+				out.Items[at].Brand = brand
+				out.Items[at].Model = model
+				out.Items[at].CameraType = cameraType
 			}
 		}
 		if err := source.Err(); err != nil {
