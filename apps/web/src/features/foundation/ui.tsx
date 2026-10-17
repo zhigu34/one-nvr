@@ -172,12 +172,15 @@ export function CheckboxField({
 export function Panel({
   title,
   children,
+  anchor,
 }: {
   title: string
   children: ReactNode
+  /** Optional id, so an in-page anchor can scroll to this card. */
+  anchor?: string
 }) {
   return (
-    <Card className='mb-6'>
+    <Card id={anchor} className='mb-6 scroll-mt-24'>
       {/* An empty title renders no header: cards that draw their own header
           row (pool cards) ask for exactly that. */}
       {title && (

@@ -15,6 +15,22 @@ import { ReliabilityOperations } from './reliability'
 import { AuditTrail } from './audit-trail'
 
 /**
+ * In-page anchors, in the order the sections appear.
+ *
+ * The page is five blocks tall and an operator usually arrives looking for one of
+ * them — "is the worker up", "what broke overnight", "who deleted those
+ * recordings". Scrolling past four unrelated cards to reach the fifth is the
+ * tax this removes.
+ */
+const ANCHORS = [
+  { id: 'components', label: '组件状态' },
+  { id: 'reliability', label: '可靠性' },
+  { id: 'alerts', label: '告警' },
+  { id: 'faults', label: '故障' },
+  { id: 'audit', label: '操作审计' },
+]
+
+/**
  * Component names and the reason codes the prober writes.
  *
  * The page used to print the raw pair ("healthy · probe_succeeded"), which is the
@@ -90,8 +106,19 @@ export function Operations() {
         title='运维与审计'
         description='组件状态每 5 秒刷新；过期探测显示为未知，而不是当作正常。'
       />
+      <nav aria-label='页内导航' className='mb-5 flex flex-wrap gap-1.5'>
+        {ANCHORS.map((anchor) => (
+          <a
+            key={anchor.id}
+            href={'#' + anchor.id}
+            className='rounded-full border border-border px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground'
+          >
+            {anchor.label}
+          </a>
+        ))}
+      </nav>
 
-      <Panel title='组件状态'>
+      <Panel title='组件状态' anchor='components'>
         <QueryState
           pending={components.isPending}
           error={components.error}
@@ -145,7 +172,7 @@ export function Operations() {
 
       <ReliabilityOperations />
 
-      <Panel title='操作审计'>
+      <Panel title='操作审计' anchor='audit'>
         <AuditTrail displayTime={displayTime} />
       </Panel>
 

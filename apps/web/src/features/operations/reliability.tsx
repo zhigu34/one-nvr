@@ -1,7 +1,9 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import type { Schema } from '@/lib/types'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Switch } from '@/components/ui/switch'
 import {
   Table,
   TableBody,
@@ -13,7 +15,6 @@ import {
 import { useAPI } from '@/features/foundation/hooks'
 import { QueryState, Empty, SelectField } from '@/features/foundation/ui'
 import {
-  ALERT_KIND_LABEL,
   KIND_LABEL,
   WINDOW_PRESETS,
   channelLabel,
@@ -23,7 +24,21 @@ import {
   sampleNote,
   windowFor,
 } from '@/features/channels/reliability-format'
-import { AlertRulesPanel } from './alert-rules'
+import { AlertAndRulesPanel } from './alerts-panel'
+import { InfoHint } from './info-hint'
+import {
+  DURATION_FILTERS,
+  EMPTY_FILTERS,
+  MINIMUM_SAMPLE_MS,
+  filterFaults,
+  groupFlappingFaults,
+  isSevere,
+  orderFaults,
+  type FaultFilters,
+  type FaultStateFilter,
+} from './operations-format'
+import { RelativeTime } from './relative-time'
+import { Sparkbar } from './sparkbar'
 
 /**
  * Cross-channel reliability comparison and the alerting rules (PRD REL-05).
@@ -75,9 +90,16 @@ export function ReliabilityOperations() {
 
   return (
     <div className='space-y-5' data-testid='reliability-operations'>
-      <Card>
+      <Card id='reliability' className='scroll-mt-24'>
         <CardHeader>
-          <CardTitle className='text-base'>跨通道可靠性比较</CardTitle>
+          <CardTitle className='flex items-center gap-2 text-base'>
+            跨通道可靠性比较
+            <InfoHint label='为什么按观察时长排序'>
+              按观察时长排序，不按可用率排名：窗口内只观测十分钟的通道不是最可靠，
+              而是被监测得最少。样本不足的通道会标注而不是参与比较，也不给出跨通道平均可用率
+              —— 平均不同分母的比率会把观测一小时的通道和观测一个月的通道等权。
+            </InfoHint>
+          </CardTitle>
         </CardHeader>
         <CardContent className='space-y-4'>
           <div className='flex flex-wrap items-end gap-3'>
@@ -107,9 +129,6 @@ export function ReliabilityOperations() {
                 ]}
               />
             </div>
-            <p className='text-xs text-muted-foreground'>
-              按观察时长排序，不按可用率排名：观察越少的通道不因数字好看而排前。
-            </p>
           </div>
 
           <QueryState
@@ -130,7 +149,16 @@ export function ReliabilityOperations() {
                   <TableHead>不可用</TableHead>
                   <TableHead>未知</TableHead>
                   <TableHead>中断</TableHead>
-                  <TableHead>结论</TableHead>
+                  <TableHead>
+                    <span className='flex items-center gap-1'>
+                      结论
+                      <InfoHint label='证据不足的判定基准'>
+                        有效评估至少需要 {formatDuration(MINIMUM_SAMPLE_MS)} 的观测：
+                        这是绝对时长而非窗口占比，因此七天的窗口里观测 14 小时不会被判为样本不足。
+                        低于该时长的行只标注「证据不足」，不参与可靠性比较。
+                      </InfoHint>
+                    </span>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -153,7 +181,21 @@ export function ReliabilityOperations() {
                       </TableCell>
                       {/* Observed duration sits beside every ratio: a channel
                           with little history cannot be read as reliable. */}
-                      <TableCell className='tabular-nums'>{formatDuration(row.observed_ms)}</TableCell>
+                      <TableCell className='min-w-32'>
+                        <span className='tabular-nums'>
+                          {formatDuration(row.observed_ms)}
+                        </span>
+                        {/* The bar makes an anomalous row findable without
+                            reading three numbers: a thin red sliver among solid
+                            green rows is the outlier. */}
+                        <div className='mt-1'>
+                          <Sparkbar
+                            healthyMs={row.healthy_ms}
+                            unavailableMs={row.unavailable_ms}
+                            unknownMs={row.unknown_ms}
+                          />
+                        </div>
+                      </TableCell>
                       <TableCell className='tabular-nums text-emerald-600 dark:text-emerald-400'>
                         {formatDuration(row.healthy_ms)}
                       </TableCell>
@@ -201,79 +243,28 @@ export function ReliabilityOperations() {
         </CardContent>
       </Card>
 
-      <AlertsPanel items={alerts.data?.items || []} pending={alerts.isPending} error={alerts.error} />
-
-      <AlertRulesPanel />
+      <AlertAndRulesPanel
+        items={alerts.data?.items || []}
+        pending={alerts.isPending}
+        error={alerts.error}
+      />
 
       <FaultsPanel items={faults.data?.items || []} pending={faults.isPending} error={faults.error} />
     </div>
   )
 }
 
-/**
- * AlertsPanel lists threshold crossings.
- *
- * Kept apart from the fault table on purpose: a fault is what was observed, an
- * alert is what crossed a configured line. Showing them in one list would invite
- * reading an alert as a new incident.
- */
-function AlertsPanel({
-  items,
-  pending,
-  error,
-}: {
-  items: Schema<'ReliabilityAlert'>[]
-  pending: boolean
-  error: Error | null
-}) {
-  return (
-    <Card data-testid='reliability-alerts'>
-      <CardHeader>
-        <CardTitle className='text-base'>阈值告警</CardTitle>
-      </CardHeader>
-      <CardContent className='space-y-3'>
-        <p className='text-xs text-muted-foreground'>
-          告警是「达到了你设的阈值」，与故障（观测到的问题）分开记录：改阈值只影响以后。
-        </p>
-        <QueryState pending={pending} error={error} />
-        {!pending && !error && items.length === 0 && <Empty>该窗口没有阈值告警。</Empty>}
-        {items.length > 0 && (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>开始</TableHead>
-                <TableHead>通道</TableHead>
-                <TableHead>规则</TableHead>
-                <TableHead>阈值</TableHead>
-                <TableHead>实际值</TableHead>
-                <TableHead>峰值</TableHead>
-                <TableHead>状态</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {items.map((alert) => (
-                <TableRow key={alert.id}>
-                  <TableCell>{new Date(alert.started_at).toLocaleString('zh-CN', { hour12: false })}</TableCell>
-                  <TableCell>{channelLabel(alert.channel_no)}</TableCell>
-                  <TableCell>{ALERT_KIND_LABEL[alert.kind] || alert.kind}</TableCell>
-                  <TableCell className='tabular-nums'>{alert.threshold_value}</TableCell>
-                  <TableCell className='tabular-nums'>{alert.observed_value}</TableCell>
-                  <TableCell className='tabular-nums'>{alert.peak_value}</TableCell>
-                  <TableCell>
-                    {alert.state === 'firing' ? '触发中' : '已恢复'}
-                    {alert.state === 'firing' && !alert.notified && ' · 未通知'}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-      </CardContent>
-    </Card>
-  )
-}
 
-/** FaultsPanel lists faults with the effective attribution and confirmation state. */
+/**
+ * FaultsPanel lists faults, filterable and with flapping aggregated.
+ *
+ * The problem this solves is signal-to-noise: one flapping sub stream produced
+ * hundreds of ten-second entries, and a nine-minute main-stream outage from the
+ * same morning was buried among them. Everything here is frontend state over the
+ * one list the API already returned — filtering and grouping change what is
+ * shown, never what was recorded, and the count always reports the filtered
+ * total so a narrowed view cannot be mistaken for a quiet window.
+ */
 function FaultsPanel({
   items,
   pending,
@@ -283,62 +274,278 @@ function FaultsPanel({
   pending: boolean
   error: Error | null
 }) {
+  const [filters, setFilters] = useState<FaultFilters>(EMPTY_FILTERS)
+  const [aggregate, setAggregate] = useState(true)
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+
+  // Channel options come from the faults themselves rather than a channels call:
+  // offering a channel that has no faults in this window would produce an empty
+  // table and no explanation.
+  const channelOptions = useMemo(() => {
+    const seen = new Map<string, { no: number }>()
+    for (const fault of items) {
+      if (!seen.has(fault.channel_id)) {
+        // The fault list carries the channel number but not its name; the
+        // number is what the table and the operator use.
+        seen.set(fault.channel_id, { no: fault.channel_no })
+      }
+    }
+    return [...seen.entries()]
+      .map(([id, value]) => ({ id, ...value }))
+      .sort((a, b) => a.no - b.no)
+  }, [items])
+
+  const filtered = useMemo(() => filterFaults(items, filters), [items, filters])
+  const groups = useMemo(
+    () => (aggregate ? groupFlappingFaults(filtered) : null),
+    [filtered, aggregate]
+  )
+  // One entry per row to render: a group when aggregating, a bare fault
+  // otherwise. Carrying the group alongside the fault avoids looking it up by
+  // id later, which would mis-associate if two rows shared an id.
+  const rows = useMemo(() => {
+    if (groups) return groups.map((group) => ({ key: group.key, fault: group.latest, group }))
+    return orderFaults(filtered).map((fault) => ({ key: fault.id, fault, group: null }))
+  }, [groups, filtered])
+  const severe = filtered.filter((fault) => isSevere(fault.duration_ms)).length
+  const open = filtered.filter((fault) => fault.state === 'open').length
+  const filteredActive =
+    filters.channel !== '' ||
+    filters.kind !== '' ||
+    filters.minDurationMs > 0 ||
+    filters.state !== 'all'
+
   return (
-    <Card data-testid='reliability-operations-faults'>
+    <Card id='faults' data-testid='reliability-operations-faults' className='scroll-mt-24'>
       <CardHeader>
-        <CardTitle className='text-base'>
+        <CardTitle className='flex flex-wrap items-center gap-2 text-base'>
           故障
-          {items.length > 0 && (
-            <span className='ml-2 text-xs font-normal text-muted-foreground'>
-              共 {items.length} 条，按时间倒序
+          <span className='text-xs font-normal text-muted-foreground'>
+            {filtered.length === items.length
+              ? `共 ${items.length} 条`
+              : `${filtered.length} / ${items.length} 条`}
+            {groups && filtered.length > 0 && ` · ${groups.length} 组`}
+          </span>
+          {open > 0 && (
+            <span className='flex items-center gap-1.5 rounded-full border border-red-500/20 bg-red-500/10 px-2 py-0.5 text-xs font-normal text-red-400'>
+              <span aria-hidden className='size-1.5 rounded-full bg-red-500' />
+              {open} 条未恢复
+            </span>
+          )}
+          {severe > 0 && (
+            <span className='rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-xs font-normal text-amber-400'>
+              {severe} 条 ≥ 5 分钟
             </span>
           )}
         </CardTitle>
       </CardHeader>
       <CardContent className='space-y-3'>
+        <div className='flex flex-wrap items-end gap-2'>
+          <div className='w-40'>
+            <SelectField
+              label='通道'
+              value={filters.channel}
+              onValueChange={(value) => setFilters({ ...filters, channel: value })}
+              options={[
+                { value: '', label: '全部通道' },
+                ...channelOptions.map((option) => ({
+                  value: option.id,
+                  label: channelLabel(option.no),
+                })),
+              ]}
+            />
+          </div>
+          <div className='w-32'>
+            <SelectField
+              label='码流'
+              value={filters.kind}
+              onValueChange={(value) => setFilters({ ...filters, kind: value })}
+              options={[
+                { value: '', label: '全部' },
+                { value: 'main', label: KIND_LABEL.main },
+                { value: 'sub', label: KIND_LABEL.sub },
+              ]}
+            />
+          </div>
+          <div className='w-36'>
+            <SelectField
+              label='最短时长'
+              value={String(filters.minDurationMs)}
+              onValueChange={(value) =>
+                setFilters({ ...filters, minDurationMs: Number(value) })
+              }
+              options={DURATION_FILTERS.map((option) => ({
+                value: option.value,
+                label: option.label,
+              }))}
+            />
+          </div>
+          <div className='w-32'>
+            <SelectField
+              label='状态'
+              value={filters.state}
+              onValueChange={(value) =>
+                setFilters({ ...filters, state: value as FaultStateFilter })
+              }
+              options={[
+                { value: 'all', label: '全部' },
+                { value: 'open', label: '未恢复' },
+                { value: 'resolved', label: '已恢复' },
+              ]}
+            />
+          </div>
+          <label className='flex items-center gap-2 pb-2 text-sm'>
+            <Switch
+              checked={aggregate}
+              onCheckedChange={setAggregate}
+              aria-label='聚合连续抖动'
+            />
+            聚合连续抖动
+          </label>
+          {filteredActive && (
+            <Button
+              variant='ghost'
+              size='sm'
+              onClick={() => setFilters(EMPTY_FILTERS)}
+              className='mb-1'
+            >
+              清除筛选
+            </Button>
+          )}
+        </div>
+        <p className='text-xs text-muted-foreground'>
+          筛选与聚合只改变展示，不修改记录；同一通道、同一码流、同一归因且相邻时间内反复中断的条目会归为一行。
+        </p>
+
         <QueryState pending={pending} error={error} />
         {!pending && !error && items.length === 0 && <Empty>该窗口没有故障。</Empty>}
-        {items.length > 0 && (
-          /* A flapping stream can produce hundreds of rows in one window, which
-             pushed every other section off the page. The list still shows all of
-             them; it scrolls instead of expanding the page. */
+        {!pending && !error && items.length > 0 && filtered.length === 0 && (
+          <Empty>当前筛选条件下没有故障。</Empty>
+        )}
+        {rows.length > 0 && (
+          /* A flapping stream can produce hundreds of rows, which pushed every
+             other section off the page. The list scrolls instead of expanding. */
           <div className='max-h-96 overflow-y-auto rounded-lg border'>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>开始</TableHead>
-                <TableHead>通道</TableHead>
-                <TableHead>码流</TableHead>
-                <TableHead>归因</TableHead>
-                <TableHead>时长</TableHead>
-                <TableHead>状态</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {items.map((fault) => (
-                <TableRow key={fault.id}>
-                  <TableCell>{new Date(fault.started_at).toLocaleString('zh-CN', { hour12: false })}</TableCell>
-                  <TableCell>{channelLabel(fault.channel_no)}</TableCell>
-                  <TableCell>{KIND_LABEL[fault.kind] || fault.kind}</TableCell>
-                  <TableCell>
-                    <span title={fault.effective_category}>
-                      {faultCategoryLabel(fault.effective_category)}
-                    </span>
-                    {fault.confirmed_category && (
-                      <span className='ml-1 text-xs text-muted-foreground'>
-                        （已确认，原始 {fault.initial_reason}）
-                      </span>
-                    )}
-                  </TableCell>
-                  <TableCell className='tabular-nums'>{formatDuration(fault.duration_ms || 0)}</TableCell>
-                  <TableCell>
-                    {fault.state === 'open' ? '持续中' : '已恢复'}
-                    {fault.maintenance && ' · 计划内'}
-                  </TableCell>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>开始</TableHead>
+                  <TableHead>通道</TableHead>
+                  <TableHead>码流</TableHead>
+                  <TableHead>归因</TableHead>
+                  <TableHead className='text-right'>时长</TableHead>
+                  <TableHead>状态</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {rows.map(({ key, fault, group }) => {
+                  const isOpen = group?.open || fault.state === 'open'
+                  const duration = group?.totalDurationMs ?? fault.duration_ms ?? 0
+                  const isExpanded = group ? expanded.has(group.key) : false
+                  return (
+                    <Fragment key={key}>
+                      <TableRow
+                        className={isOpen ? 'bg-red-500/5' : undefined}
+                      >
+                        <TableCell className='whitespace-nowrap'>
+                          <RelativeTime value={fault.started_at} />
+                        </TableCell>
+                        <TableCell className='whitespace-nowrap'>
+                          {channelLabel(fault.channel_no)}
+                        </TableCell>
+                        <TableCell>{KIND_LABEL[fault.kind] || fault.kind}</TableCell>
+                        <TableCell>
+                          <span title={fault.effective_category}>
+                            {faultCategoryLabel(fault.effective_category)}
+                          </span>
+                          {fault.confirmed_category && (
+                            <span className='ml-1 text-xs text-muted-foreground'>
+                              （已确认）
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell className='whitespace-nowrap text-right'>
+                          {/* A five-minute outage must be findable at a glance
+                              among ten-second blips. */}
+                          <span
+                            className={
+                              isSevere(duration)
+                                ? 'font-semibold tabular-nums text-amber-500'
+                                : 'tabular-nums text-muted-foreground'
+                            }
+                          >
+                            {formatDuration(duration)}
+                          </span>
+                          {group && group.count > 1 && (
+                            <span className='ml-1.5 text-xs text-muted-foreground'>
+                              × {group.count}
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell className='whitespace-nowrap'>
+                          {isOpen ? (
+                            <span className='flex items-center gap-1.5 text-red-400'>
+                              <span
+                                aria-hidden
+                                className='size-1.5 rounded-full bg-red-500'
+                              />
+                              持续中
+                            </span>
+                          ) : (
+                            <span className='text-muted-foreground'>已恢复</span>
+                          )}
+                          {fault.maintenance && (
+                            <span className='ml-1 text-xs text-muted-foreground'>
+                              · 计划内
+                            </span>
+                          )}
+                          {group && group.count > 1 && (
+                            <button
+                              type='button'
+                              className='ml-2 text-xs underline'
+                              aria-expanded={isExpanded}
+                              onClick={() =>
+                                setExpanded((current) => {
+                                  const next = new Set(current)
+                                  if (next.has(group.key)) next.delete(group.key)
+                                  else next.add(group.key)
+                                  return next
+                                })
+                              }
+                            >
+                              {isExpanded ? '收起明细' : '展开明细'}
+                            </button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                      {group && isExpanded &&
+                        group.items.slice(1).map((member) => (
+                          <TableRow
+                            key={member.id}
+                            className='bg-muted/30 text-xs'
+                          >
+                            <TableCell className='whitespace-nowrap pl-8'>
+                              <RelativeTime value={member.started_at} />
+                            </TableCell>
+                            <TableCell colSpan={2} className='text-muted-foreground'>
+                              同一组内的独立中断
+                            </TableCell>
+                            <TableCell className='text-muted-foreground'>
+                              {faultCategoryLabel(member.effective_category)}
+                            </TableCell>
+                            <TableCell className='whitespace-nowrap text-right tabular-nums text-muted-foreground'>
+                              {formatDuration(member.duration_ms ?? 0)}
+                            </TableCell>
+                            <TableCell className='text-muted-foreground'>
+                              {member.state === 'open' ? '持续中' : '已恢复'}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                    </Fragment>
+                  )
+                })}
+              </TableBody>
+            </Table>
           </div>
         )}
       </CardContent>

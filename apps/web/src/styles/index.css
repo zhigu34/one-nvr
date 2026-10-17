@@ -12,6 +12,15 @@
   }
   html {
     @apply overflow-x-hidden;
+    /* In-page anchors (运维与审计) glide instead of jumping. Suppressed below
+       when the reader asked the OS for reduced motion: a smooth scroll that
+       spans several screens is exactly what that preference is about. */
+    scroll-behavior: smooth;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
   }
   body {
     @apply min-h-svh w-full bg-background text-foreground has-[div[data-variant='inset']]:bg-sidebar;
