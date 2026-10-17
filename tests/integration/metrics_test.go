@@ -354,6 +354,26 @@ func TestDailyRollupIncludesRecentDays(t *testing.T) {
 	}
 }
 
+// A site with no facts at all must not break the rollup loop.
+//
+// This is the very first boot: no intervals, no summarised minutes. The
+// watermark query originally used PostgreSQL's +/-infinity as its "no rows"
+// sentinel, which cannot be scanned into a Go time.Time — so the loop failed on
+// every fresh install and the real binary logged "cannot scan Infinity" while
+// everything else looked healthy.
+func TestRollupPendingToleratesAnEmptySite(t *testing.T) {
+	fixture := newPublicationFixture(t)
+	ctx := context.Background()
+	service := reliability.New(fixture.DB, fixture.Auth)
+	if _, err := fixture.DB.Pool.Exec(ctx, "DELETE FROM reliability_intervals"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RollupPending(ctx, time.Now().UTC()); err != nil {
+		t.Fatalf("an empty site broke the rollup loop: %v; a fresh install has no "+
+			"facts, so this is the first thing the loop ever does", err)
+	}
+}
+
 // A fresh install has only a few hours of facts. The loop must summarise them
 // on its first pass rather than assuming a fixed amount of history exists — the
 // bug this test exists for is a fixed lookback window silently skipping

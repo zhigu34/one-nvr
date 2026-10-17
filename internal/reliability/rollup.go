@@ -232,14 +232,23 @@ func (s *Service) RollupPending(ctx context.Context, now time.Time) error {
 		return nil
 	}
 	end := now.UTC().Truncate(time.Minute)
+	// NULL rather than infinity for "no rows": PostgreSQL's +/-infinity cannot be
+	// scanned into a Go time.Time, and a fresh install legitimately has neither
+	// summarised minutes nor observed intervals — the condition this function
+	// has to handle most often. GREATEST ignores NULLs, so the two sides combine
+	// to the later of whatever exists, and NULL when neither does.
 	var watermark *time.Time
 	if err := s.DB.Pool.QueryRow(ctx, `
 		SELECT GREATEST(
-			COALESCE((SELECT MAX(minute) FROM reliability_minutes), '-infinity'::timestamptz),
-			COALESCE((SELECT MIN(started_at) FROM reliability_intervals), 'infinity'::timestamptz)
-				- interval '1 minute'
+			(SELECT MAX(minute) FROM reliability_minutes),
+			(SELECT MIN(started_at) FROM reliability_intervals) - interval '1 minute'
 		) AS from_minute`).Scan(&watermark); err != nil {
 		return err
+	}
+	if watermark == nil {
+		// Nothing to summarise anywhere; the next tick will find facts if any
+		// arrive.
+		return nil
 	}
 	start := watermark.UTC().Truncate(time.Minute)
 	retentionFloor := now.UTC().Add(-MinuteRetention).Truncate(time.Minute)

@@ -200,6 +200,18 @@ export function sampleNote(observedMs: number, windowMs: number): string {
   return ''
 }
 
+/**
+ * ALERT_KIND_LABEL names the four configurable thresholds as an operator thinks
+ * of them. Shared by the rules panel and the alert list so a rule and the alert
+ * it produced cannot be labelled differently.
+ */
+export const ALERT_KIND_LABEL: Record<string, string> = {
+  main_down_streak: '主流连续不可用',
+  recording_segment_timeout: '应录分片超时',
+  daily_coverage_drop: '每日录像覆盖下降',
+  monitoring_stopped: '监测停止',
+}
+
 /** Selectable windows. The PRD names these four plus a custom range. */
 export const WINDOW_PRESETS = [
   { label: '最近 24 小时', hours: 24 },

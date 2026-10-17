@@ -20,6 +20,7 @@ import {
   Forbidden,
   Empty,
 } from '@/features/foundation/ui'
+import { ReliabilityOperations } from './reliability'
 
 export function Operations() {
   const admin = useAuthStore((s) => s.user?.role === 'admin')
@@ -52,6 +53,7 @@ export function Operations() {
         title='运维与审计'
         description='组件每 5 秒刷新；过期探测显示未知。任务摘要与审计只包含公开诊断信息。'
       />
+      <ReliabilityOperations />
       <Panel title='组件状态'>
         <QueryState
           pending={components.isPending}

@@ -16,6 +16,7 @@ import { useState } from 'react'
 import { useAPI } from './hooks'
 import { Panel, QueryState, PageTitle } from './ui'
 import { formatClock } from '@/features/playback/zone'
+import { AbnormalChannels } from './abnormal-channels'
 
 type Summary = Schema<'ChannelSummary'>
 type Component = Schema<'Component'>
@@ -429,6 +430,9 @@ export function Overview() {
       )}
       {/* The quick patrol: live channels on the left, the latest detection
           events on the right — the bottom band stays balanced at any count. */}
+      {/* Abnormal channels sit above the patrol: the operator's eye should land
+          on what needs attention before the list of healthy channels. */}
+      {site.data && <AbnormalChannels />}
       {site.data && (
         <Panel title='活跃通道与快捷巡检'>
           <div className='grid gap-6 lg:grid-cols-2'>
