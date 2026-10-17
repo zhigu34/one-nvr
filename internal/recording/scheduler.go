@@ -51,9 +51,24 @@ func (s *Service) Reconcile(ctx context.Context, ch id.ID) error {
 	actual, err := s.Media.Inspect(ctx, ss.Key)
 	if err != nil {
 		if errors.Is(err, zlm.ErrStreamAbsent) {
+			// One absent sample is not proof the source is gone: ZLM reports
+			// online=false briefly while a large keyframe is ingested. Record
+			// the gap but keep the session, so a stream that comes back reads as
+			// one interval instead of a close-and-rebuild cycle.
 			if err := s.runtimeGap(ctx, e, ss, "source_unavailable", true); err != nil {
 				return err
 			}
+			gaps, gapErr := s.consecutiveGapSamples(ctx, e.ChannelID, "main", "stream_present_pending")
+			if gapErr != nil {
+				return gapErr
+			}
+			if gaps < streamGapGraceSamples {
+				return s.observation(ctx, e, ss, "main", "unknown", "stream_present_pending", nil)
+			}
+			// Persistent absence: now tear down and rebuild. The grace is what
+			// kept the previous implementation from running this on every absent
+			// sample, which is how one missing sample became a forty-second
+			// rebuild loop.
 			if err := s.observation(ctx, e, ss, "main", "unavailable", "source_unavailable", nil); err != nil {
 				return err
 			}

@@ -101,10 +101,36 @@ func (s *Service) reconcileRuntimeSub(ctx context.Context, e *channel.Execution,
 	}
 	snapshot, err := s.Media.Inspect(ctx, ss.Key)
 	if errors.Is(err, zlm.ErrStreamAbsent) {
+		// A single missing sample is not evidence the stream is gone. ZLM's
+		// registry reports online=false for a moment while a large keyframe is
+		// ingested, and VBR encoders legitimately pause between frames; the
+		// sampler runs every ten seconds, so one miss is well inside normal.
+		//
+		// The previous implementation tore the session down here, which is what
+		// turned a momentary gap into a rebuild loop: stopPhysical removed the
+		// proxy and marked the session closed, the next tick found no active
+		// session, created a fresh one and reconnected, and the newly pulled
+		// stream had no frames yet — so the cycle repeated every forty seconds,
+		// interrupting the picture each time. The grace count comes from the
+		// open interval the fold maintains, so it survives a worker restart.
+		gaps, gapErr := s.consecutiveGapSamples(ctx, e.ChannelID, "sub", "stream_present_pending")
+		if gapErr != nil {
+			return gapErr
+		}
+		if gaps < streamGapGraceSamples {
+			return s.observation(ctx, e, ss, "sub", "unknown", "stream_present_pending", nil)
+		}
+		// Persistent absence: tear down and let the next reconcile build a
+		// fresh session. The grace is what kept the previous implementation
+		// from running this on every absent sample, which is how one missing
+		// sample became a forty-second rebuild loop on a single channel.
 		if err := s.stopPhysical(ctx, e, ss); err != nil {
 			return err
 		}
-		return s.observation(ctx, e, ss, "sub", "unavailable", "sub_source_unavailable", nil)
+		if err := s.observation(ctx, e, ss, "sub", "unavailable", "sub_source_unavailable", nil); err != nil {
+			return err
+		}
+		return nil
 	}
 	if err != nil {
 		return s.observation(ctx, e, ss, "sub", "unknown", "source_observation_failed", nil)
@@ -113,10 +139,39 @@ func (s *Service) reconcileRuntimeSub(ctx context.Context, e *channel.Execution,
 	if err != nil {
 		return err
 	}
-	if state == "unavailable" {
-		if err := s.stopPhysical(ctx, e, ss); err != nil {
-			return err
-		}
-	}
+	// A stalled frame counter restarts the pull without discarding the session:
+	// runtimeFrameStatus already reconnects when its sample window has gone
+	// stale, and tearing the session down here only guaranteed that the next
+	// tick would build another one.
 	return s.observation(ctx, e, ss, "sub", state, reason, nil)
+}
+
+// streamGapGraceSamples is how many consecutive samples may report the stream
+// absent before the pull is restarted.
+//
+// Three samples at the ten-second cadence is half a minute, which is longer
+// than any keyframe ingestion pause and short enough that a genuinely dead
+// source is still noticed quickly.
+const streamGapGraceSamples = 3
+
+// consecutiveGapSamples reports how many samples in a row have observed the
+// same gap, read from the open interval the reliability fold maintains.
+//
+// Reading it from the fold rather than keeping a counter in memory means the
+// count survives a worker restart, and means there is exactly one place that
+// decides what "consecutive" means.
+func (s *Service) consecutiveGapSamples(ctx context.Context, channelID id.ID, kind, reason string) (int, error) {
+	if s.Reliability == nil {
+		// Without history there is nothing to count; behave as if this is the
+		// first gap, which is the safe direction — it only delays a reconnect.
+		return 0, nil
+	}
+	var count int
+	err := s.DB.Pool.QueryRow(ctx, `SELECT observed_count FROM reliability_intervals
+		WHERE channel_id=$1 AND kind=$2 AND ended_at IS NULL AND reason_code=$3`,
+		channelID, kind, reason).Scan(&count)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+	return count, err
 }

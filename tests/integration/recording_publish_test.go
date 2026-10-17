@@ -18,6 +18,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/media/probe"
 	"github.com/zhigu34/one-nvr/internal/media/zlm"
 	"github.com/zhigu34/one-nvr/internal/recording"
+	"github.com/zhigu34/one-nvr/internal/reliability"
 	"github.com/zhigu34/one-nvr/internal/site"
 	"github.com/zhigu34/one-nvr/internal/storage"
 	"net/http"
@@ -82,7 +83,9 @@ func newPublicationFixture(t *testing.T) publishFixture {
 		t.Fatal(err)
 	}
 	checker := probe.Runner{FFprobe: ffprobe}
+	reliabilitySvc := reliability.New(db, accounts)
 	service := recording.New(db, nil, checker, []string{base}, dir)
+	service.Reliability = reliabilitySvc
 	service.Auth = accounts
 	completion := recording.Completion{Key: zlm.StreamKey{VHost: "__defaultVhost__", App: "one_nvr", Stream: string(session)}, MediaServerID: "one-nvr-" + string(sites.Secrets.SiteID), FilePath: path, Size: info.Size(), StartTime: time.Date(2026, 10, 3, 16, 4, 39, 0, time.UTC), Duration: 2 * time.Second}
 	if err := service.Accept(ctx, completion); err != nil {

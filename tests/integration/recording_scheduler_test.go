@@ -436,6 +436,106 @@ func TestRecordingRecoveryFrozenFramesNotHealthy(t *testing.T) {
 	}
 }
 
+// streamGapGraceSamplesForTest mirrors recording.streamGapGraceSamples, which is
+// unexported. The integration package drives the public Reconcile entry point, so
+// it cannot read the constant; the loop below simply runs past it either way.
+const streamGapGraceSamplesForTest = 3
+
+// A momentarily absent stream must not tear the pull down.
+//
+// This is the live-site defect: ZLM reports online=false for a moment while a
+// large keyframe is ingested, and the sampler answered by removing the proxy and
+// closing the session. The next tick then found no active session, built a fresh
+// one and reconnected — and the freshly pulled stream had no frames yet, so the
+// cycle repeated every forty seconds, interrupting the picture each time. One
+// channel behaved this way while every other channel was fine, purely because
+// its encoder produced larger keyframes.
+//
+// The fix gives a short grace period and, when absence persists, restarts the
+// pull on the SAME session so a recovered stream reads as one interval.
+func TestRecordingRecoveryToleratesBriefStreamAbsence(t *testing.T) {
+	f, media, _, _ := testedSource(t)
+	ctx := context.Background()
+	media.mu.Lock()
+	// Simulate ZLM forgetting the stream for one sample: drop the key without
+	// removing the session, exactly as a registry hiccup does.
+	for stream := range media.urls {
+		delete(media.urls, stream)
+	}
+	beforeAdd := media.AddCalls
+	media.mu.Unlock()
+
+	if err := f.Service.Reconcile(ctx, f.Channel); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := f.Service.Sources.GetStatus(ctx, f.Admin, f.Channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One absent sample is "unknown", not "unavailable": we do not have proof the
+	// source is gone, and claiming it is down would be the opposite of honest.
+	if status.Main.State != "unknown" || status.Main.Reason != "stream_present_pending" {
+		t.Fatalf("one absent sample reported %s/%s, want unknown/stream_present_pending; "+
+			"a single miss is not evidence of an outage", status.Main.State, status.Main.Reason)
+	}
+	// And the pull was left alone: no reconnect, no rebuilt session.
+	media.mu.Lock()
+	afterAdd := media.AddCalls
+	media.mu.Unlock()
+	if afterAdd != beforeAdd {
+		t.Fatalf("a single absent sample triggered %d reconnects; the grace period "+
+			"exists precisely to avoid that", afterAdd-beforeAdd)
+	}
+	var runState string
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT state FROM recording_runs WHERE id=$1", f.Run).Scan(&runState); err != nil {
+		t.Fatal(err)
+	}
+	if runState != "recording" {
+		t.Fatalf("run state = %q after one absent sample, want recording: the "+
+			"recorder must not be disturbed by a momentary gap", runState)
+	}
+}
+
+// Persistent absence does restart the pull — but on the same session, so the
+// recovered stream extends one interval instead of opening a new one.
+func TestRecordingRecoveryReconnectsAfterSustainedAbsence(t *testing.T) {
+	f, media, _, _ := testedSource(t)
+	ctx := context.Background()
+	media.mu.Lock()
+	for stream := range media.urls {
+		delete(media.urls, stream)
+	}
+	beforeAdd := media.AddCalls
+	media.mu.Unlock()
+
+	// Three consecutive absent samples cross the grace threshold.
+	for i := 0; i < streamGapGraceSamplesForTest+1; i++ {
+		if err := f.Service.Reconcile(ctx, f.Channel); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	media.mu.Lock()
+	afterAdd := media.AddCalls
+	media.mu.Unlock()
+	if afterAdd <= beforeAdd {
+		t.Fatal("sustained absence never triggered a reconnect; a dead source would " +
+			"never be recovered from")
+	}
+	// The reconnect reuses the session: the same run is still the one recording.
+	var sessions int
+	if err := f.DB.Pool.QueryRow(ctx,
+		"SELECT count(*) FROM stream_sessions WHERE channel_id=$1 AND purpose='main' AND state='active'",
+		f.Channel).Scan(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	if sessions != 1 {
+		t.Fatalf("active main sessions = %d after a reconnect, want 1; rebuilding the "+
+			"session is what reset the frame baseline and caused the loop", sessions)
+	}
+}
+
 func TestRecordingRecoveryLowSpaceStopsOnlyRecorder(t *testing.T) {
 	f, media, _, _ := testedSource(t)
 	ctx := context.Background()
@@ -490,8 +590,12 @@ func TestRecordingRecoverySourceCreatesNewGenerationAndRun(t *testing.T) {
 	delete(media.urls, string(oldSession))
 	delete(media.recording, string(oldSession))
 	media.mu.Unlock()
-	if err := f.Service.Reconcile(ctx, f.Channel); err != nil {
-		t.Fatal(err)
+	// Three samples are absorbed by the grace period; the fourth crosses the
+	// threshold and triggers recovery on the same session.
+	for i := 0; i < streamGapGraceSamplesForTest+1; i++ {
+		if err := f.Service.Reconcile(ctx, f.Channel); err != nil {
+			t.Fatal(err)
+		}
 	}
 	var fresh id.ID
 	if err := f.DB.Pool.QueryRow(ctx, "SELECT id FROM stream_sessions WHERE channel_id=$1 AND purpose='main' AND state='active'", f.Channel).Scan(&fresh); err != nil || fresh == oldSession {
@@ -722,8 +826,12 @@ func TestRecordingRecoveryIdentifiesFirstFrameFailureWithoutSecrets(t *testing.T
 		}
 		media.mu.Unlock()
 	}}
-	if err := f.Service.Reconcile(ctx, f.Channel); err != nil {
-		t.Fatal(err)
+	// The grace period absorbs the first three absent samples; the fourth
+	// triggers recovery, which the probe then interrupts before first frame.
+	for i := 0; i < streamGapGraceSamplesForTest+1; i++ {
+		if err := f.Service.Reconcile(ctx, f.Channel); err != nil {
+			t.Fatal(err)
+		}
 	}
 	var reason string
 	if err := f.DB.Pool.QueryRow(ctx, "SELECT reason_code FROM source_observations WHERE channel_id=$1 AND kind='main' ORDER BY observed_at DESC LIMIT 1", f.Channel).Scan(&reason); err != nil || reason != "source_recovery_first_frame_unavailable" {

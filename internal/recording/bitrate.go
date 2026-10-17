@@ -12,10 +12,24 @@ import (
 	"github.com/zhigu34/one-nvr/internal/media/zlm"
 )
 
+// videoFrames reports the highest cumulative frame count across the stream's
+// tracks.
+//
+// A track's frame counter is evidence of progress whether or not ZLM currently
+// calls the track "ready": during a large keyframe ingest, and briefly after a
+// pull starts, getMediaInfo reports ready=false while the counter is already
+// advancing. Requiring readiness made a progressing stream read as zero frames,
+// which the sampler then classified as a stall and answered by tearing the pull
+// down — so the one moment the stream was busiest looked like the moment it had
+// died.
+//
+// Dimensions are still required for a track to count, because they are what
+// distinguishes a real video track from a data or metadata track with a frame
+// counter of its own.
 func videoFrames(snapshot zlm.StreamSnapshot) int64 {
 	var frames int64
 	for _, track := range snapshot.Tracks {
-		if track.Ready && track.Width > 0 && track.Height > 0 && track.Frames > frames {
+		if track.Width > 0 && track.Height > 0 && track.Frames > frames {
 			frames = track.Frames
 		}
 	}
