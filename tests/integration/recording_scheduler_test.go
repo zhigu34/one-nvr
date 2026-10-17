@@ -441,6 +441,87 @@ func TestRecordingRecoveryFrozenFramesNotHealthy(t *testing.T) {
 // it cannot read the constant; the loop below simply runs past it either way.
 const streamGapGraceSamplesForTest = 3
 
+// streamReconnectWaitSamplesForTest mirrors recording.streamReconnectWaitSamples,
+// the bound on how long a still-registered proxy may stay silent before the
+// session is rebuilt anyway.
+const streamReconnectWaitSamplesForTest = 12
+
+// A registered proxy means the media server is still re-pulling the source, so
+// persistent absence is not evidence that the source is gone.
+//
+// This is the second half of the live-site defect. The grace period absorbed a
+// single miss, but once three samples in a row were absent the session was torn
+// down regardless — even though ZLM still owned the pull and was retrying it.
+// Each teardown forced a fresh AddProxy, a fresh RTSP handshake and a fresh
+// frame baseline, which is what made one channel rebuild its sub stream 33
+// times in two hours while every other channel was untouched.
+func TestRecordingRecoveryKeepsPullWhileProxyRegistered(t *testing.T) {
+	f, media, _, _ := testedSource(t)
+	ctx := context.Background()
+	media.mu.Lock()
+	// The registry has no stream, but the proxy is still registered: this is an
+	// upstream interruption ZLM is handling, not a finished session.
+	media.MediaAbsent = true
+	beforeAdd := media.AddCalls
+	media.mu.Unlock()
+
+	for i := 0; i < streamGapGraceSamplesForTest+2; i++ {
+		if err := f.Service.Reconcile(ctx, f.Channel); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	media.mu.Lock()
+	afterAdd := media.AddCalls
+	media.mu.Unlock()
+	if afterAdd != beforeAdd {
+		t.Fatalf("a registered proxy was rebuilt %d time(s); the media server was "+
+			"still re-pulling the source, so the session should have been left alone",
+			afterAdd-beforeAdd)
+	}
+	var sessions int
+	if err := f.DB.Pool.QueryRow(ctx,
+		"SELECT count(*) FROM stream_sessions WHERE channel_id=$1 AND purpose='main' AND state='active'",
+		f.Channel).Scan(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	if sessions != 1 {
+		t.Fatalf("active main sessions = %d while the proxy was registered, want 1", sessions)
+	}
+	var runState string
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT state FROM recording_runs WHERE id=$1", f.Run).Scan(&runState); err != nil {
+		t.Fatal(err)
+	}
+	if runState != "recording" {
+		t.Fatalf("run state = %q while the proxy was registered, want recording", runState)
+	}
+}
+
+// A proxy the media server no longer holds is the terminal state: rebuild.
+func TestRecordingRecoveryRebuildsOnceProxyIsDropped(t *testing.T) {
+	f, media, _, _ := testedSource(t)
+	ctx := context.Background()
+	media.mu.Lock()
+	media.MediaAbsent = true
+	media.ProxyDropped = true
+	media.ClearAbsentOnAdd = true
+	beforeAdd := media.AddCalls
+	media.mu.Unlock()
+
+	for i := 0; i < streamGapGraceSamplesForTest+1; i++ {
+		if err := f.Service.Reconcile(ctx, f.Channel); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	media.mu.Lock()
+	afterAdd := media.AddCalls
+	media.mu.Unlock()
+	if afterAdd <= beforeAdd {
+		t.Fatal("a dropped proxy never triggered a rebuild; a dead source would never recover")
+	}
+}
+
 // A momentarily absent stream must not tear the pull down.
 //
 // This is the live-site defect: ZLM reports online=false for a moment while a
@@ -1038,5 +1119,39 @@ func TestRecordingOutputWatchdogOnlyAppliesWhenWriteProofIsOff(t *testing.T) {
 	status, err = f.Service.Sources.GetStatus(ctx, f.Admin, f.Channel)
 	if err != nil || status.Recording.State != "unavailable" || status.Recording.Reason != "recording_output_stalled" {
 		t.Fatalf("missing stall reason after opting out: %+v %v", status.Recording, err)
+	}
+}
+
+// A registered proxy that never produces again must not be waited on forever.
+//
+// "Still registered" buys time for the media server's own retry ladder, not
+// unlimited patience: a pull that never comes back would otherwise leave the
+// channel observed as unknown indefinitely, with nothing rebuilt and nothing
+// reported as unavailable.
+func TestRecordingRecoveryGivesUpOnRegisteredButSilentProxy(t *testing.T) {
+	f, media, _, _ := testedSource(t)
+	ctx := context.Background()
+	media.mu.Lock()
+	// Registry has no media, but the proxy stays registered: the server is
+	// retrying and never succeeds. Once the worker gives up and rebuilds, the
+	// fresh pull comes back, which is what proves the rebuild happened.
+	media.MediaAbsent = true
+	media.ClearAbsentOnAdd = true
+	beforeAdd := media.AddCalls
+	media.mu.Unlock()
+
+	for i := 0; i < streamReconnectWaitSamplesForTest+1; i++ {
+		if err := f.Service.Reconcile(ctx, f.Channel); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	media.mu.Lock()
+	afterAdd := media.AddCalls
+	media.mu.Unlock()
+	if afterAdd <= beforeAdd {
+		t.Fatalf("a proxy that stayed registered but produced nothing for %d samples "+
+			"was never rebuilt; the channel would be reported unknown forever",
+			streamReconnectWaitSamplesForTest+1)
 	}
 }

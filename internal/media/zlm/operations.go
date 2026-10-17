@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +19,23 @@ var ErrMediaOperation = errors.New("media_operation_unavailable")
 var ErrProxyAbsent = errors.New("media_proxy_absent")
 var ErrStreamAbsent = errors.New("media_stream_absent")
 var ErrInvalidMediaInput = errors.New("invalid_media_input")
+
+// proxyRetryCount is how many times ZLM may re-pull the source after the
+// upstream connection drops.
+//
+// Zero (the previous setting) means the proxy is destroyed on the first
+// interruption, and the worker only notices one sampling period later: the
+// media registry loses the stream, the reliability fold opens a gap, and the
+// session is torn down and rebuilt. On a source that hiccups periodically that
+// turned one brief upstream interruption into a rebuild loop — CH08's sub
+// stream rebuilt 33 times in two hours even while the camera was streaming
+// without a single-second gap.
+//
+// A bounded retry lets ZLM absorb the interruption in place, so the worker
+// keeps observing the same session. It stays finite on purpose: a source that
+// is genuinely gone must still surface as absent instead of being masked by
+// end-to-end retrying.
+const proxyRetryCount = 5
 
 type StreamKey struct{ VHost, App, Stream string }
 type ProxyInput struct {
@@ -127,7 +145,7 @@ func (c *Client) AddProxy(ctx context.Context, in ProxyInput) (ProxyRef, error) 
 	args.Set("enable_hls", "0")
 	args.Set("enable_hls_fmp4", "0")
 	args.Set("auto_close", "0")
-	args.Set("retry_count", "0")
+	args.Set("retry_count", strconv.Itoa(proxyRetryCount))
 	args.Set("timeout_sec", "8")
 	args.Set("enable_rtsp", "1")
 	args.Set("enable_rtmp", "0")
@@ -172,6 +190,54 @@ func (c *Client) RemoveProxy(ctx context.Context, ref ProxyRef) error {
 		return ErrProxyAbsent
 	}
 	return nil
+}
+
+// ProxyRegistered reports whether ZLM still holds a pull proxy for the key.
+//
+// This is the distinction the sampler needs when the media registry has no
+// stream: a proxy that is reconnecting after an upstream interruption is still
+// registered (getProxyInfo answers, and lists it), whereas a proxy ZLM gave up
+// on is gone. Treating those two the same is what turned a recoverable
+// interruption into a rebuild.
+//
+// It is deliberately a separate question from Inspect: Inspect answers "is
+// media flowing", this answers "is our pull still owned by the media server".
+func (c *Client) ProxyRegistered(ctx context.Context, ref ProxyRef) (bool, error) {
+	if err := ref.Key.Validate(); err != nil {
+		return false, err
+	}
+	if ref.OpaqueKey != ref.Key.VHost+"/"+ref.Key.App+"/"+ref.Key.Stream {
+		return false, ErrInvalidMediaInput
+	}
+	var out struct {
+		Data *struct {
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	err := c.call(ctx, "getProxyInfo", url.Values{"key": {ref.OpaqueKey}}, &out)
+	if err != nil {
+		if errors.Is(err, ErrMediaOperation) {
+			// The API reports an unknown key as a non-zero code, which call()
+			// surfaces as ErrMediaOperation. Confirm with the listing so a
+			// genuine transport failure is not read as "proxy deleted".
+			var list struct {
+				Data []struct {
+					Key string `json:"key"`
+				} `json:"data"`
+			}
+			if listErr := c.call(ctx, "listStreamProxy", url.Values{}, &list); listErr != nil {
+				return false, listErr
+			}
+			for _, item := range list.Data {
+				if item.Key == ref.OpaqueKey {
+					return true, nil
+				}
+			}
+			return false, nil
+		}
+		return false, err
+	}
+	return out.Data != nil, nil
 }
 func (c *Client) Inspect(ctx context.Context, key StreamKey) (StreamSnapshot, error) {
 	if err := key.Validate(); err != nil {

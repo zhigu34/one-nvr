@@ -31,6 +31,7 @@ var ErrCompletionUnavailable = errors.New("recording_completion_unavailable")
 type Media interface {
 	AddProxy(context.Context, zlm.ProxyInput) (zlm.ProxyRef, error)
 	RemoveProxy(context.Context, zlm.ProxyRef) error
+	ProxyRegistered(context.Context, zlm.ProxyRef) (bool, error)
 	Inspect(context.Context, zlm.StreamKey) (zlm.StreamSnapshot, error)
 	StartRecord(context.Context, zlm.StreamKey, string, int) error
 	StopRecord(context.Context, zlm.StreamKey) error

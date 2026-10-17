@@ -176,6 +176,17 @@ type controlledMedia struct {
 	InspectDelay time.Duration
 	FrozenFrames int64
 	AddCalls     int
+	// MediaAbsent makes Inspect report the stream as gone while the proxy
+	// stays registered, which is what an upstream interruption looks like
+	// from the sampler's side before the media server gives up.
+	MediaAbsent bool
+	// ProxyDropped makes ProxyRegistered report the media server no longer
+	// owns the pull, which is the terminal state.
+	ProxyDropped bool
+	// ClearAbsentOnAdd makes the next AddProxy restore media flow, so a test
+	// can model the real sequence: the server dropped the pull, the worker
+	// rebuilt it, and the stream came back.
+	ClearAbsentOnAdd bool
 }
 
 func newControlledMedia() *controlledMedia {
@@ -196,6 +207,10 @@ func (m *controlledMedia) AddProxy(ctx context.Context, in zlm.ProxyInput) (zlm.
 		return zlm.ProxyRef{}, zlm.ErrMediaOperation
 	}
 	m.urls[in.Key.Stream] = in.URL
+	if m.ClearAbsentOnAdd {
+		m.MediaAbsent = false
+		m.ProxyDropped = false
+	}
 	return zlm.ProxyRef{Key: in.Key, OpaqueKey: in.Key.VHost + "/" + in.Key.App + "/" + in.Key.Stream}, nil
 }
 func (m *controlledMedia) RemoveProxy(ctx context.Context, ref zlm.ProxyRef) error {
@@ -207,6 +222,22 @@ func (m *controlledMedia) RemoveProxy(ctx context.Context, ref zlm.ProxyRef) err
 	delete(m.urls, ref.Key.Stream)
 	delete(m.recording, ref.Key.Stream)
 	return nil
+}
+
+// ProxyRegistered mirrors the production distinction: a proxy stays registered
+// while the media server is re-pulling, and disappears only once the server
+// gave up on the source.
+func (m *controlledMedia) ProxyRegistered(ctx context.Context, ref zlm.ProxyRef) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ProxyDropped {
+		return false, nil
+	}
+	_, ok := m.urls[ref.Key.Stream]
+	return ok, nil
 }
 func (m *controlledMedia) Inspect(ctx context.Context, key zlm.StreamKey) (zlm.StreamSnapshot, error) {
 	if m.InspectDelay > 0 {
@@ -221,6 +252,9 @@ func (m *controlledMedia) Inspect(ctx context.Context, key zlm.StreamKey) (zlm.S
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.MediaAbsent {
+		return zlm.StreamSnapshot{}, zlm.ErrStreamAbsent
+	}
 	if _, ok := m.urls[key.Stream]; !ok {
 		return zlm.StreamSnapshot{}, zlm.ErrStreamAbsent
 	}

@@ -65,10 +65,17 @@ func (s *Service) Reconcile(ctx context.Context, ch id.ID) error {
 			if gaps < streamGapGraceSamples {
 				return s.observation(ctx, e, ss, "main", "unknown", "stream_present_pending", nil)
 			}
-			// Persistent absence: now tear down and rebuild. The grace is what
-			// kept the previous implementation from running this on every absent
-			// sample, which is how one missing sample became a forty-second
-			// rebuild loop.
+			// Persistent absence: distinguish "the pull is reconnecting" from
+			// "the media server dropped the pull". A registered proxy is still
+			// ours and comes back on its own; only a proxy the media server no
+			// longer holds means this session is finished.
+			registered, presenceErr := s.Media.ProxyRegistered(ctx, zlm.ProxyRef{Key: ss.Key, OpaqueKey: ss.Key.VHost + "/" + ss.Key.App + "/" + ss.Key.Stream})
+			if presenceErr != nil {
+				return s.observation(ctx, e, ss, "main", "unknown", "source_observation_failed", nil)
+			}
+			if registered && gaps < streamReconnectWaitSamples {
+				return s.observation(ctx, e, ss, "main", "unknown", "stream_present_pending", nil)
+			}
 			if err := s.observation(ctx, e, ss, "main", "unavailable", "source_unavailable", nil); err != nil {
 				return err
 			}

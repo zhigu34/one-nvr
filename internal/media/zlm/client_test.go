@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -62,10 +63,14 @@ func TestZLMTypedOperationsAndSanitizedSnapshot(t *testing.T) {
 		r.ParseForm()
 		switch r.URL.Path {
 		case "/index/api/addStreamProxy":
-			for k, v := range map[string]string{"enable_mp4": "0", "enable_hls": "0", "retry_count": "0", "auto_close": "0", "rtp_type": "0"} {
+			for k, v := range map[string]string{"enable_mp4": "0", "enable_hls": "0", "retry_count": strconv.Itoa(proxyRetryCount), "auto_close": "0", "rtp_type": "0"} {
 				if r.Form.Get(k) != v {
 					t.Error("unsafe proxy setting", k)
 				}
+			}
+			if r.Form.Get("retry_count") == "0" {
+				t.Error("proxy was configured to give up on the first interruption; " +
+					"a momentary upstream gap would destroy the pull and force a rebuild")
 			}
 			w.Write([]byte(`{"code":0,"data":{"key":"__defaultVhost__/one_nvr/` + fixtureStream + `"}}`))
 		case "/index/api/delStreamProxy":
@@ -209,5 +214,86 @@ func TestInspectTreatsIdleButProducingProxyAsPresent(t *testing.T) {
 	}
 	if len(snap.Tracks) != 1 || snap.Tracks[0].Frames != 900 || snap.BytesPerSecond != 128 {
 		t.Fatalf("snapshot lost track or byte rate: %+v", snap)
+	}
+}
+
+// ProxyRegistered separates "the media server is re-pulling the source" from
+// "the media server no longer owns our pull". The sampler treats the first as a
+// gap to observe and the second as a finished session, so misreading it either
+// way is a rebuild loop or a permanently dead stream.
+func TestProxyRegisteredDistinguishesReconnectingFromDropped(t *testing.T) {
+	ref := ProxyRef{Key: fixtureKey, OpaqueKey: "__defaultVhost__/one_nvr/" + fixtureStream}
+	cases := []struct {
+		name string
+		info string
+		list string
+		want bool
+	}{
+		{
+			name: "registered while reconnecting",
+			info: `{"code":0,"data":{"key":"__defaultVhost__/one_nvr/` + fixtureStream + `","status":"connecting"}}`,
+			want: true,
+		},
+		{
+			name: "unknown key confirmed absent by listing",
+			info: `{"code":-500,"msg":"can not find the proxy"}`,
+			list: `{"code":0,"data":[]}`,
+			want: false,
+		},
+		{
+			name: "unknown key still present in listing",
+			info: `{"code":-500,"msg":"can not find the proxy"}`,
+			list: `{"code":0,"data":[{"key":"__defaultVhost__/one_nvr/` + fixtureStream + `"}]}`,
+			want: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/index/api/getProxyInfo":
+					w.Write([]byte(tc.info))
+				case "/index/api/listStreamProxy":
+					if tc.list == "" {
+						w.Write([]byte(`{"code":0,"data":[]}`))
+						return
+					}
+					w.Write([]byte(tc.list))
+				default:
+					w.Write([]byte(`{"code":0}`))
+				}
+			}))
+			defer server.Close()
+			client, err := New(server.URL, "fixture", server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := client.ProxyRegistered(context.Background(), ref)
+			if err != nil {
+				t.Fatalf("presence query failed: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("ProxyRegistered = %v, want %v; treating a reconnecting pull as "+
+					"dropped rebuilds the session, and treating a dropped pull as "+
+					"reconnecting leaves a dead stream in place", got, tc.want)
+			}
+		})
+	}
+}
+
+// A transport failure must surface as an error, not as "the proxy is gone":
+// acting on that would tear down a session over a database or network blip.
+func TestProxyRegisteredPropagatesTransportFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"code":-1,"msg":"secret invalid"}`))
+	}))
+	defer server.Close()
+	client, err := New(server.URL, "fixture", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := ProxyRef{Key: fixtureKey, OpaqueKey: "__defaultVhost__/one_nvr/" + fixtureStream}
+	if _, err := client.ProxyRegistered(context.Background(), ref); err == nil {
+		t.Fatal("a rejected management call was read as a presence answer")
 	}
 }

@@ -120,10 +120,23 @@ func (s *Service) reconcileRuntimeSub(ctx context.Context, e *channel.Execution,
 		if gaps < streamGapGraceSamples {
 			return s.observation(ctx, e, ss, "sub", "unknown", "stream_present_pending", nil)
 		}
-		// Persistent absence: tear down and let the next reconcile build a
-		// fresh session. The grace is what kept the previous implementation
-		// from running this on every absent sample, which is how one missing
-		// sample became a forty-second rebuild loop on a single channel.
+		// Persistent absence: distinguish "the pull is reconnecting" from "the
+		// media server dropped the pull". A registered proxy is still ours and
+		// will come back on its own; tearing the session down there forced a
+		// fresh AddProxy and a fresh handshake for an interruption ZLM was
+		// already handling. Only a proxy the media server no longer holds is
+		// evidence that the session is finished.
+		registered, presenceErr := s.Media.ProxyRegistered(ctx, zlm.ProxyRef{Key: ss.Key, OpaqueKey: ss.Key.VHost + "/" + ss.Key.App + "/" + ss.Key.Stream})
+		if presenceErr != nil {
+			return s.observation(ctx, e, ss, "sub", "unknown", "source_observation_failed", nil)
+		}
+		if registered && gaps < streamReconnectWaitSamples {
+			return s.observation(ctx, e, ss, "sub", "unknown", "stream_present_pending", nil)
+		}
+		// Either the media server no longer owns the pull, or it has kept the
+		// registration far past its own retry ladder without producing frames.
+		// Both mean this session is finished: tear down and let the next
+		// reconcile build a fresh one.
 		if err := s.stopPhysical(ctx, e, ss); err != nil {
 			return err
 		}
@@ -153,6 +166,18 @@ func (s *Service) reconcileRuntimeSub(ctx context.Context, e *channel.Execution,
 // than any keyframe ingestion pause and short enough that a genuinely dead
 // source is still noticed quickly.
 const streamGapGraceSamples = 3
+
+// streamReconnectWaitSamples bounds how long a still-registered proxy may stay
+// silent before the session is rebuilt anyway.
+//
+// A registered proxy usually means the media server is re-pulling the source,
+// and waiting lets it recover in place. But "registered" is not a promise of
+// recovery: a proxy can keep its registration while the pull never succeeds.
+// Twelve samples is two minutes — longer than the media server's whole retry
+// ladder (~32s of backoff plus handshakes) with room to spare — after which a
+// session that still has no frames is treated as finished so the worker does
+// not observe a dead channel forever.
+const streamReconnectWaitSamples = 12
 
 // consecutiveGapSamples reports how many samples in a row have observed the
 // same gap, read from the open interval the reliability fold maintains.
