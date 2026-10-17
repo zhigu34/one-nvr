@@ -6,6 +6,7 @@ import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Card } from '@/components/ui/card'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Input } from '@/components/ui/input'
 import { useAPI, useAction, fields, text } from '@/features/foundation/hooks'
 import {
@@ -24,6 +25,7 @@ import { CredentialReveal } from './source-credentials'
 import { SourceForm } from './source-form'
 import { SourceHistory } from './source-history'
 import { SourceTestControls } from './source-test'
+import { ChannelReliability } from './reliability'
 
 function numberLabel(channel: { channel_no: number }) {
   return `CH${String(channel.channel_no).padStart(2, '0')}`
@@ -339,6 +341,14 @@ function ConfigureChannel({
           }
         </p>
       )}
+      {/* The reliability view is a tab of the channel detail rather than a new
+          navigation entry: PRD REL-05 says add a tab, not a top-level page. */}
+      <Tabs defaultValue='configure'>
+        <TabsList className='mb-4'>
+          <TabsTrigger value='configure'>连接配置</TabsTrigger>
+          <TabsTrigger value='reliability'>可靠性</TabsTrigger>
+        </TabsList>
+        <TabsContent value='configure'>
       <Card className='mb-5 gap-0 py-0'>
         <div className='flex flex-wrap items-start justify-between gap-4 p-5'>
           <div className='min-w-0'>
@@ -612,6 +622,11 @@ function ConfigureChannel({
           }}
         />
       )}
+        </TabsContent>
+        <TabsContent value='reliability'>
+          <ChannelReliability channelId={id} />
+        </TabsContent>
+      </Tabs>
     </>
   )
 }

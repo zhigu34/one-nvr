@@ -2690,6 +2690,208 @@ export interface components {
             ptz: boolean;
             onvif_port: number;
         };
+        ReliabilityRate: {
+            /**
+             * @description Why a rate has no value when it has none. Collapsing these into 0% would report 'nothing was observed' as 'everything was down'.
+             * @enum {string}
+             */
+            status: "ok" | "no_observation" | "not_applicable" | "no_samples";
+            numerator_ms: number;
+            denominator_ms: number;
+            /** @description Time inside the window that cannot be counted either way, reported beside the ratio and never folded into it. */
+            unjudgeable_ms: number;
+        };
+        ReliabilityIntervalTotals: {
+            healthy_ms: number;
+            unavailable_ms: number;
+            unknown_ms: number;
+            /** @description Time deliberately not required to be up. Shown, never divided by. */
+            excluded_ms: number;
+        };
+        ReliabilityCoverageGap: {
+            /** Format: date-time */
+            start_at: string;
+            /** Format: date-time */
+            end_at: string;
+            /** @description The recorder's own explanation, or 'unknown'. REL-02 forbids inventing a cause. */
+            reason: string;
+        };
+        ReliabilityMetrics: {
+            /**
+             * @description One entry per stream kind. There is no merged entry: a healthy sub stream must not mask an unavailable main stream.
+             * @enum {string}
+             */
+            kind: "main" | "sub" | "recording";
+            window: {
+                /** Format: date-time */
+                from: string;
+                /** Format: date-time */
+                to: string;
+            };
+            observed: components["schemas"]["ReliabilityIntervalTotals"];
+            /** @description Expected pull duration: the window minus excluded time. The denominator coverage divides by. */
+            expected_ms: number;
+            monitoring_coverage: components["schemas"]["ReliabilityRate"];
+            observed_availability: components["schemas"]["ReliabilityRate"];
+            /** @description Unknown counted as not-up, so this is the lower bound. Always <= observed availability. */
+            conservative_availability: components["schemas"]["ReliabilityRate"];
+            interruptions: {
+                count: number;
+                total_ms: number;
+                longest_ms: number;
+                open_count: number;
+                open_ms: number;
+                mean_time_to_recovery: components["schemas"]["ReliabilityRate"];
+                by_category: {
+                    [key: string]: number;
+                };
+                component_count: number;
+                maintenance_count: number;
+            };
+            /** @description Settled obligation time covered by real media. The denominator stays the full owed time even when recording failed. */
+            recording_coverage: components["schemas"]["ReliabilityRate"];
+            recording_gaps: {
+                missing_ms: number;
+                gap_count: number;
+                longest_gap_ms: number;
+                damaged_count: number;
+                reasons: {
+                    [key: string]: number;
+                };
+            };
+            media_accessibility: {
+                rate: components["schemas"]["ReliabilityRate"];
+                unverified_ms: number;
+                remote_unknown_ms: number;
+                verified_coverage_ms: number;
+            };
+            /** @description Identifies the definitions this build computed, so a stored figure can be told apart after they change. */
+            metric_version: number;
+            /**
+             * @description Which retention tier answered the window (REL-06).
+             * @enum {string}
+             */
+            precision: "exact" | "minute_rollup" | "daily_rollup" | "unavailable";
+        };
+        ReliabilityTrendPoint: {
+            day: string;
+            healthy_ms: number;
+            unavailable_ms: number;
+            unknown_ms: number;
+            excluded_ms: number;
+            owed_ms: number;
+            covered_ms: number;
+            unverified_ms: number;
+            fault_count: number;
+            longest_fault_ms: number;
+            /** Format: date-time */
+            computed_at: string;
+            /** Format: date-time */
+            input_watermark: string;
+        };
+        ReliabilityChannelSummary: {
+            channel_id: components["schemas"]["UUID"];
+            channel_no: number;
+            channel_name: string;
+            /** @enum {string} */
+            kind: "main" | "sub" | "recording";
+            healthy_ms: number;
+            unavailable_ms: number;
+            unknown_ms: number;
+            excluded_ms: number;
+            expected_ms: number;
+            owed_ms: number;
+            covered_ms: number;
+            fault_count: number;
+            /** @description How much time this row is based on. Shown beside every ratio: a channel observed for an hour cannot be ranked against one observed for a month. */
+            observed_ms: number;
+            /** @description False when the window holds too little observation to compare this channel. PRD REL-05: insufficient samples are marked, not ranked. */
+            sample_sufficient: boolean;
+        };
+        ReliabilityAlert: {
+            id: components["schemas"]["UUID"];
+            rule_id: components["schemas"]["UUID"];
+            channel_id: components["schemas"]["UUID"];
+            channel_no: number;
+            /** @enum {string} */
+            kind: "main_down_streak" | "recording_segment_timeout" | "daily_coverage_drop" | "monitoring_stopped";
+            /** @enum {string} */
+            state: "firing" | "resolved";
+            /** Format: date-time */
+            started_at: string;
+            ended_at?: string | null;
+            /** Format: date-time */
+            window_start: string;
+            window_end?: string | null;
+            threshold_value: number;
+            observed_value: number;
+            /** @description Highest value seen while firing, so a resolved alert shows how bad it got. */
+            peak_value: number;
+            /** @description Set only by the delivery path, so it means delivered rather than recorded. */
+            notified: boolean;
+        };
+        ReliabilityAlertRule: {
+            id: components["schemas"]["UUID"];
+            /** @description Null means every channel. */
+            channel_id?: components["schemas"]["UUID"] | null;
+            /** @enum {string} */
+            kind: "main_down_streak" | "recording_segment_timeout" | "daily_coverage_drop" | "monitoring_stopped";
+            threshold_ms?: number | null;
+            threshold_percent?: number | null;
+            enabled: boolean;
+            version: number;
+        };
+        ReliabilityInterval: {
+            id: components["schemas"]["UUID"];
+            /** @enum {string} */
+            kind: "main" | "sub" | "recording";
+            /** @enum {string} */
+            state: "healthy" | "unavailable" | "unknown" | "excluded";
+            reason: string;
+            exclusion?: string;
+            /** Format: date-time */
+            started_at: string;
+            ended_at?: string | null;
+            /** Format: date-time */
+            first_observed_at: string;
+            /** Format: date-time */
+            last_observed_at: string;
+            observed_count: number;
+            duration_ms: number;
+        };
+        ReliabilityIntegrity: {
+            owed_ms: number;
+            covered_ms: number;
+            missing_ms: number;
+            unverified_ms: number;
+            excluded_ms: number;
+            exclusions: {
+                [key: string]: number;
+            };
+            /** @enum {string} */
+            precision: "exact" | "assumed";
+        };
+        ReliabilityFault: {
+            id: components["schemas"]["UUID"];
+            channel_id: components["schemas"]["UUID"];
+            channel_no: number;
+            kind: string;
+            /** @enum {string} */
+            state: "open" | "resolved";
+            /** Format: date-time */
+            started_at: string;
+            ended_at?: string | null;
+            duration_ms?: number;
+            initial_reason: string;
+            category: string;
+            effective_category: string;
+            confirmed_reason?: string | null;
+            confirmed_category?: string | null;
+            note: string;
+            maintenance: boolean;
+            recovery?: string | null;
+            root_event_id?: components["schemas"]["UUID"] | null;
+        };
     };
     responses: never;
     parameters: never;
@@ -8073,7 +8275,11 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["ReliabilityInterval"][];
+                    };
+                };
             };
         };
     };
@@ -8119,7 +8325,11 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["ReliabilityIntegrity"][];
+                    };
+                };
             };
         };
     };
@@ -8142,7 +8352,11 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["ReliabilityMetrics"][];
+                    };
+                };
             };
         };
     };
@@ -8166,7 +8380,12 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["ReliabilityTrendPoint"][];
+                        precision: string;
+                    };
+                };
             };
         };
     };
@@ -8187,7 +8406,11 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["ReliabilityChannelSummary"][];
+                    };
+                };
             };
         };
     };
@@ -8232,7 +8455,12 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["ReliabilityAlert"][];
+                        kinds: string[];
+                    };
+                };
             };
         };
     };
@@ -8250,7 +8478,12 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["ReliabilityAlertRule"][];
+                        kinds: string[];
+                    };
+                };
             };
         };
     };
@@ -8281,7 +8514,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ReliabilityAlertRule"];
+                };
             };
         };
     };
@@ -8301,7 +8536,11 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        deleted: boolean;
+                    };
+                };
             };
         };
     };
@@ -8347,7 +8586,12 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["ReliabilityFault"][];
+                        categories: string[];
+                    };
+                };
             };
         };
     };

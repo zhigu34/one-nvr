@@ -3432,7 +3432,9 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["protected"],
+                "required": [
+                  "protected"
+                ],
                 "properties": {
                   "protected": {
                     "type": "boolean"
@@ -3495,13 +3497,19 @@
         "operationId": "archiveTargets",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Every configured WebDAV archive target, newest first.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ArchiveTargetPage" }
+                "schema": {
+                  "$ref": "#/components/schemas/ArchiveTargetPage"
+                }
               }
             }
           }
@@ -3511,22 +3519,50 @@
         "operationId": "archiveTargetRegister",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["name", "base_url", "remote_root", "username", "password"],
+                "required": [
+                  "name",
+                  "base_url",
+                  "remote_root",
+                  "username",
+                  "password"
+                ],
                 "properties": {
-                  "name": { "type": "string", "maxLength": 64 },
-                  "base_url": { "type": "string" },
-                  "remote_root": { "type": "string" },
-                  "username": { "type": "string" },
-                  "password": { "type": "string", "description": "Stored sealed; never returned." },
-                  "cloud_retention_days": { "type": "integer", "default": 365 },
-                  "enabled": { "type": "boolean", "default": true }
+                  "name": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "base_url": {
+                    "type": "string"
+                  },
+                  "remote_root": {
+                    "type": "string"
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string",
+                    "description": "Stored sealed; never returned."
+                  },
+                  "cloud_retention_days": {
+                    "type": "integer",
+                    "default": 365
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "default": true
+                  }
                 }
               }
             }
@@ -3537,7 +3573,9 @@
             "description": "The registered target.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ArchiveTarget" }
+                "schema": {
+                  "$ref": "#/components/schemas/ArchiveTarget"
+                }
               }
             }
           }
@@ -3549,7 +3587,11 @@
         "operationId": "archiveTargetTest",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -3557,13 +3599,27 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
-                  "name": { "type": "string" },
-                  "base_url": { "type": "string" },
-                  "remote_root": { "type": "string" },
-                  "username": { "type": "string" },
-                  "password": { "type": "string" },
-                  "cloud_retention_days": { "type": "integer" }
+                  "id": {
+                    "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "base_url": {
+                    "type": "string"
+                  },
+                  "remote_root": {
+                    "type": "string"
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  },
+                  "cloud_retention_days": {
+                    "type": "integer"
+                  }
                 },
                 "description": "With id: probe the stored credentials. Without id: probe the submitted draft."
               }
@@ -3575,7 +3631,9 @@
             "description": "Verified capabilities; missing delete means expiry cleanup is unavailable.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ArchiveTargetCapabilities" }
+                "schema": {
+                  "$ref": "#/components/schemas/ArchiveTargetCapabilities"
+                }
               }
             }
           }
@@ -3587,13 +3645,19 @@
         "operationId": "archiveTargetUpdate",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
           {
             "name": "id",
             "in": "path",
             "required": true,
-            "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" }
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
           }
         ],
         "requestBody": {
@@ -3602,15 +3666,36 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["name", "base_url", "remote_root", "username"],
+                "required": [
+                  "name",
+                  "base_url",
+                  "remote_root",
+                  "username"
+                ],
                 "properties": {
-                  "name": { "type": "string", "maxLength": 64 },
-                  "base_url": { "type": "string" },
-                  "remote_root": { "type": "string" },
-                  "username": { "type": "string" },
-                  "password": { "type": "string", "description": "Empty keeps the stored password." },
-                  "cloud_retention_days": { "type": "integer" },
-                  "enabled": { "type": "boolean" }
+                  "name": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "base_url": {
+                    "type": "string"
+                  },
+                  "remote_root": {
+                    "type": "string"
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string",
+                    "description": "Empty keeps the stored password."
+                  },
+                  "cloud_retention_days": {
+                    "type": "integer"
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  }
                 }
               }
             }
@@ -3621,7 +3706,9 @@
             "description": "The updated target.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ArchiveTarget" }
+                "schema": {
+                  "$ref": "#/components/schemas/ArchiveTarget"
+                }
               }
             }
           }
@@ -3631,18 +3718,28 @@
         "operationId": "archiveTargetDelete",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
           {
             "name": "id",
             "in": "path",
             "required": true,
-            "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" }
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
           }
         ],
         "responses": {
-          "200": { "description": "Deleted." },
-          "409": { "description": "The target has archive copies and can only be disabled." }
+          "200": {
+            "description": "Deleted."
+          },
+          "409": {
+            "description": "The target has archive copies and can only be disabled."
+          }
         }
       }
     },
@@ -3651,13 +3748,19 @@
         "operationId": "recordingLeaseRenew",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "playback",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
           {
             "name": "id",
             "in": "path",
             "required": true,
-            "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" }
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
           }
         ],
         "responses": {
@@ -3670,17 +3773,25 @@
         "operationId": "recordingLeaseRelease",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "playback",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
           {
             "name": "id",
             "in": "path",
             "required": true,
-            "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" }
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
           }
         ],
         "responses": {
-          "200": { "description": "The playback lease is released; cleanup no longer waits." }
+          "200": {
+            "description": "The playback lease is released; cleanup no longer waits."
+          }
         }
       }
     },
@@ -3689,20 +3800,28 @@
         "operationId": "recordingArchiveUpload",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "archive",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
           {
             "name": "Idempotency-Key",
             "in": "header",
             "required": true,
-            "schema": { "type": "string" }
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/ArchiveUploadRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/ArchiveUploadRequest"
+              }
             }
           }
         },
@@ -3711,7 +3830,9 @@
             "description": "One upload task per accepted ready segment; rows without the archive grant are silently skipped (partial success).",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ArchiveUploadCreated" }
+                "schema": {
+                  "$ref": "#/components/schemas/ArchiveUploadCreated"
+                }
               }
             }
           }
@@ -3723,13 +3844,19 @@
         "operationId": "archivePolicies",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Every channel archive binding.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ArchivePolicyPage" }
+                "schema": {
+                  "$ref": "#/components/schemas/ArchivePolicyPage"
+                }
               }
             }
           }
@@ -3739,12 +3866,18 @@
         "operationId": "archivePolicyUpsert",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/ArchivePolicy" }
+              "schema": {
+                "$ref": "#/components/schemas/ArchivePolicy"
+              }
             }
           }
         },
@@ -3753,7 +3886,9 @@
             "description": "The stored binding; mode manual without a target removes the binding.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ArchivePolicy" }
+                "schema": {
+                  "$ref": "#/components/schemas/ArchivePolicy"
+                }
               }
             }
           }
@@ -3765,40 +3900,98 @@
         "operationId": "detectionZones",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "channel_id", "in": "query", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+          {
+            "name": "channel_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "The channel's zones, each marked when the frame changed under it.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DetectionZonePage" } } } }
+          "200": {
+            "description": "The channel's zones, each marked when the frame changed under it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectionZonePage"
+                }
+              }
+            }
+          }
         }
       },
       "post": {
         "operationId": "detectionZoneSave",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["channel_id", "name", "coordinates"],
+                "required": [
+                  "channel_id",
+                  "name",
+                  "coordinates"
+                ],
                 "properties": {
-                  "id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID", "description": "Omit to create; supply to replace, keeping rule bindings." },
-                  "channel_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
-                  "name": { "type": "string", "maxLength": 32 },
-                  "coordinates": { "type": "array", "items": { "$ref": "#/components/schemas/ZonePoint" } },
-                  "objects": { "type": "array", "items": { "type": "string" }, "description": "Categories this zone cares about; empty means every tracked category." }
+                  "id": {
+                    "$ref": "m1a.openapi.yaml#/components/schemas/UUID",
+                    "description": "Omit to create; supply to replace, keeping rule bindings."
+                  },
+                  "channel_id": {
+                    "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 32
+                  },
+                  "coordinates": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/ZonePoint"
+                    }
+                  },
+                  "objects": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Categories this zone cares about; empty means every tracked category."
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "200": { "description": "The stored zone; the reference geometry is read from the channel's source test, never taken from the request.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DetectionZone" } } } },
-          "422": { "description": "The polygon is unusable (fewer than three vertices, self-intersecting, or outside the frame) or the name is taken." }
+          "200": {
+            "description": "The stored zone; the reference geometry is read from the channel's source test, never taken from the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectionZone"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The polygon is unusable (fewer than three vertices, self-intersecting, or outside the frame) or the name is taken."
+          }
         }
       }
     },
@@ -3807,13 +4000,33 @@
         "operationId": "detectionZoneDelete",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
-          { "name": "channel_id", "in": "query", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "channel_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Deleted, together with the rules that depended on it." }
+          "200": {
+            "description": "Deleted, together with the rules that depended on it."
+          }
         }
       }
     },
@@ -3822,19 +4035,39 @@
         "operationId": "detectionFrame",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "channel_id", "in": "query", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+          {
+            "name": "channel_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "One still of the frame the detector analyzes, at the detector's own size. The zone canvas draws on exactly this image, so a polygon is relative to the pixels the detector classifies.",
             "content": {
-              "image/jpeg": { "schema": { "type": "string", "format": "binary" } }
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
             }
           },
-          "409": { "description": "The channel has no frame yet: detection is not enabled, or nothing has been published for it." },
-          "503": { "description": "The detector is not reachable." }
+          "409": {
+            "description": "The channel has no frame yet: detection is not enabled, or nothing has been published for it."
+          },
+          "503": {
+            "description": "The detector is not reachable."
+          }
         }
       }
     },
@@ -3843,26 +4076,67 @@
         "operationId": "detectionRules",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "playback",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "channel_id", "in": "query", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+          {
+            "name": "channel_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "The channel's rules.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DetectionRulePage" } } } }
+          "200": {
+            "description": "The channel's rules.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectionRulePage"
+                }
+              }
+            }
+          }
         }
       },
       "post": {
         "operationId": "detectionRuleSave",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "requestBody": {
           "required": true,
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DetectionRule" } } }
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DetectionRule"
+              }
+            }
+          }
         },
         "responses": {
-          "200": { "description": "The stored rule.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DetectionRule" } } } },
-          "422": { "description": "The rule could never fire as written (missing zone, missing dwell threshold, half an arming window, unknown severity), or it contradicts the detector's per-zone dwell model: rule_enter_on_dwell_zone when entry and dwell would share a zone, rule_dwell_conflict when a zone would need two thresholds." }
+          "200": {
+            "description": "The stored rule.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectionRule"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The rule could never fire as written (missing zone, missing dwell threshold, half an arming window, unknown severity), or it contradicts the detector's per-zone dwell model: rule_enter_on_dwell_zone when entry and dwell would share a zone, rule_dwell_conflict when a zone would need two thresholds."
+          }
         }
       }
     },
@@ -3871,12 +4145,34 @@
         "operationId": "detectionRuleDelete",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
-        "security": [{ "sessionCookie": [] }],
-        "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
-          { "name": "channel_id", "in": "query", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+        "security": [
+          {
+            "sessionCookie": []
+          }
         ],
-        "responses": { "200": { "description": "Deleted." } }
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "channel_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted."
+          }
+        }
       }
     },
     "/api/v1/event-hits/{id}": {
@@ -3884,9 +4180,20 @@
         "operationId": "ruleHitMark",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "playback",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
         ],
         "requestBody": {
           "required": true,
@@ -3894,16 +4201,27 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["false_positive"],
+                "required": [
+                  "false_positive"
+                ],
                 "properties": {
-                  "false_positive": { "type": "boolean" },
-                  "note": { "type": "string", "maxLength": 500 }
+                  "false_positive": {
+                    "type": "boolean"
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
                 }
               }
             }
           }
         },
-        "responses": { "200": { "description": "Recorded as operational feedback; the hit keeps its original reason." } }
+        "responses": {
+          "200": {
+            "description": "Recorded as operational feedback; the hit keeps its original reason."
+          }
+        }
       }
     },
     "/api/v1/detection/configs": {
@@ -3911,11 +4229,29 @@
         "operationId": "detectionConfigs",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Every channel's detection settings; rows without the configure grant are absent.",
-            "content": { "application/json": { "schema": { "type": "object", "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/DetectionConfig" } } } } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DetectionConfig"
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -3925,9 +4261,20 @@
         "operationId": "detectionConfigUpdate",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
         ],
         "requestBody": {
           "required": true,
@@ -3935,22 +4282,58 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["enabled", "stream", "fps", "labels"],
+                "required": [
+                  "enabled",
+                  "stream",
+                  "fps",
+                  "labels"
+                ],
                 "properties": {
-                  "enabled": { "type": "boolean" },
-                  "stream": { "type": "string", "enum": ["main", "sub"] },
-                  "fps": { "type": "integer" },
-                  "labels": { "type": "array", "items": { "type": "string" } },
-                  "version": { "type": "integer", "description": "Expected current version; 0 skips the check." }
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "stream": {
+                    "type": "string",
+                    "enum": [
+                      "main",
+                      "sub"
+                    ]
+                  },
+                  "fps": {
+                    "type": "integer"
+                  },
+                  "labels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "version": {
+                    "type": "integer",
+                    "description": "Expected current version; 0 skips the check."
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "200": { "description": "The stored configuration.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DetectionConfig" } } } },
-          "409": { "description": "Version conflict." },
-          "422": { "description": "Unsupported label." }
+          "200": {
+            "description": "The stored configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectionConfig"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Version conflict."
+          },
+          "422": {
+            "description": "Unsupported label."
+          }
         }
       }
     },
@@ -3959,11 +4342,21 @@
         "operationId": "detectionPublish",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "The publication revision. A failed reload keeps the previous config and records the failure.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DetectionRevision" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectionRevision"
+                }
+              }
+            }
           }
         }
       }
@@ -3973,9 +4366,22 @@
         "operationId": "detectionRuntime",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "responses": {
-          "200": { "description": "Detector capability snapshot and latest publication.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DetectionRuntime" } } } }
+          "200": {
+            "description": "Detector capability snapshot and latest publication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectionRuntime"
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -3984,23 +4390,82 @@
         "operationId": "events",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "playback",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "start", "in": "query", "required": true, "schema": { "type": "integer" } },
-          { "name": "end", "in": "query", "required": true, "schema": { "type": "integer" } },
-          { "name": "channel_id", "in": "query", "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
-          { "name": "source_revision_id", "in": "query", "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
-          { "name": "category", "in": "query", "schema": { "type": "string" } },
-          { "name": "handle_state", "in": "query", "schema": { "type": "string" } },
-          { "name": "cursor", "in": "query", "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
-          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 } }
+          {
+            "name": "start",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "channel_id",
+            "in": "query",
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "source_revision_id",
+            "in": "query",
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "handle_state",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "Detection events newest-first; rows without a playback grant on their channel are absent.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/EventPage" }
+                "schema": {
+                  "$ref": "#/components/schemas/EventPage"
+                }
               }
             }
           }
@@ -4012,16 +4477,29 @@
         "operationId": "eventGet",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "playback",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "One event with its handling trail.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/Event" }
+                "schema": {
+                  "$ref": "#/components/schemas/Event"
+                }
               }
             }
           }
@@ -4031,9 +4509,20 @@
         "operationId": "eventHandle",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "playback",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
         ],
         "requestBody": {
           "required": true,
@@ -4041,11 +4530,27 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["state"],
+                "required": [
+                  "state"
+                ],
                 "properties": {
-                  "state": { "type": "string", "enum": ["open", "acknowledged", "closed", "false_positive"] },
-                  "note": { "type": "string", "maxLength": 500 },
-                  "version": { "type": "integer", "description": "Expected current version; 0 skips the check." }
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "open",
+                      "acknowledged",
+                      "closed",
+                      "false_positive"
+                    ]
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 500
+                  },
+                  "version": {
+                    "type": "integer",
+                    "description": "Expected current version; 0 skips the check."
+                  }
                 }
               }
             }
@@ -4056,11 +4561,15 @@
             "description": "The updated event with the new handling record.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/Event" }
+                "schema": {
+                  "$ref": "#/components/schemas/Event"
+                }
               }
             }
           },
-          "409": { "description": "Version conflict: someone else handled it first." }
+          "409": {
+            "description": "Version conflict: someone else handled it first."
+          }
         }
       }
     },
@@ -4069,18 +4578,36 @@
         "operationId": "eventSnapshot",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "playback",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "The snapshot image, proxied from the detector. Never a direct path.",
             "content": {
-              "image/jpeg": { "schema": { "type": "string", "format": "binary" } }
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
             }
           },
-          "409": { "description": "The snapshot has not been produced yet." }
+          "409": {
+            "description": "The snapshot has not been produced yet."
+          }
         }
       }
     },
@@ -4089,34 +4616,52 @@
         "operationId": "eventMappings",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "responses": {
-          "200": { "description": "Frigate camera name to channel mapping." }
+          "200": {
+            "description": "Frigate camera name to channel mapping."
+          }
         }
       },
       "put": {
         "operationId": "eventMappingsSet",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["mappings"],
+                "required": [
+                  "mappings"
+                ],
                 "properties": {
                   "mappings": {
                     "type": "object",
-                    "additionalProperties": { "type": "string" }
+                    "additionalProperties": {
+                      "type": "string"
+                    }
                   }
                 }
               }
             }
           }
         },
-        "responses": { "200": { "description": "Mappings replaced." } }
+        "responses": {
+          "200": {
+            "description": "Mappings replaced."
+          }
+        }
       }
     },
     "/api/v1/recordings": {
@@ -5405,39 +5950,76 @@
         "operationId": "notificationChannels",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "admin",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "responses": {
           "200": {
-          "description": "Configured destinations plus the channel kinds this build can deliver, read from the adapter registry so the UI never offers a kind without an adapter.",
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NotificationChannelList" } } }
-        }
+            "description": "Configured destinations plus the channel kinds this build can deliver, read from the adapter registry so the UI never offers a kind without an adapter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationChannelList"
+                }
+              }
+            }
+          }
         }
       },
       "post": {
         "operationId": "notificationChannelRegister",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "admin",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["kind", "name"],
+                "required": [
+                  "kind",
+                  "name"
+                ],
                 "properties": {
-                  "kind": { "type": "string", "enum": ["inapp", "webhook"] },
-                  "name": { "type": "string", "maxLength": 64 },
-                  "url": { "type": "string", "description": "Required for webhook; absent for the built-in inbox." },
-                  "secret": { "type": "string", "description": "Write-only signing secret. Required when creating a webhook." },
-                  "enabled": { "type": "boolean", "default": true }
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "inapp",
+                      "webhook"
+                    ]
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "url": {
+                    "type": "string",
+                    "description": "Required for webhook; absent for the built-in inbox."
+                  },
+                  "secret": {
+                    "type": "string",
+                    "description": "Write-only signing secret. Required when creating a webhook."
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "default": true
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "201": { "description": "Destination registered." }
+          "201": {
+            "description": "Destination registered."
+          }
         }
       }
     },
@@ -5446,9 +6028,20 @@
         "operationId": "notificationChannelUpdate",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "admin",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
         ],
         "requestBody": {
           "required": true,
@@ -5456,13 +6049,32 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["kind", "name"],
+                "required": [
+                  "kind",
+                  "name"
+                ],
                 "properties": {
-                  "kind": { "type": "string", "enum": ["inapp", "webhook"] },
-                  "name": { "type": "string", "maxLength": 64 },
-                  "url": { "type": "string" },
-                  "secret": { "type": "string", "description": "Empty keeps the stored secret, so renaming does not require re-entering it." },
-                  "enabled": { "type": "boolean" }
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "inapp",
+                      "webhook"
+                    ]
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "url": {
+                    "type": "string"
+                  },
+                  "secret": {
+                    "type": "string",
+                    "description": "Empty keeps the stored secret, so renaming does not require re-entering it."
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  }
                 }
               }
             }
@@ -5470,21 +6082,40 @@
         },
         "responses": {
           "200": {
-          "description": "Destination registered.",
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NotificationChannel" } } }
-        }
+            "description": "Destination registered.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationChannel"
+                }
+              }
+            }
+          }
         }
       },
       "delete": {
         "operationId": "notificationChannelDelete",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "admin",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Destination removed. Refused with 409 while a rule still binds it." }
+          "200": {
+            "description": "Destination removed. Refused with 409 while a rule still binds it."
+          }
         }
       }
     },
@@ -5493,9 +6124,20 @@
         "operationId": "notificationChannelTest",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "admin",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -5509,15 +6151,32 @@
         "operationId": "eventDeliveries",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "playback",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
         ],
         "responses": {
           "200": {
-          "description": "What was attempted for this event, read from the frozen message.",
-          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NotificationDeliveryPage" } } }
-        }
+            "description": "What was attempted for this event, read from the frozen message.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationDeliveryPage"
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -5526,14 +6185,31 @@
         "operationId": "ruleChannels",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "playback",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "Destinations this rule tells.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RuleChannelBinding" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleChannelBinding"
+                }
+              }
+            }
           }
         }
       },
@@ -5541,9 +6217,20 @@
         "operationId": "ruleChannelsSet",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "configure",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
         ],
         "requestBody": {
           "required": true,
@@ -5551,11 +6238,15 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["channel_ids"],
+                "required": [
+                  "channel_ids"
+                ],
                 "properties": {
                   "channel_ids": {
                     "type": "array",
-                    "items": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+                    "items": {
+                      "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+                    },
                     "description": "An empty list is legitimate: the rule still records its hits, it just tells no one."
                   }
                 }
@@ -5566,7 +6257,13 @@
         "responses": {
           "200": {
             "description": "Destinations this rule tells.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RuleChannelBinding" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleChannelBinding"
+                }
+              }
+            }
           }
         }
       }
@@ -5576,16 +6273,76 @@
         "operationId": "reliabilityIntervals",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "playback",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
-          { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
-          { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
-          { "name": "kind", "in": "query", "schema": { "type": "array", "items": { "type": "string", "enum": ["main", "sub", "recording"] } } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "main",
+                  "sub",
+                  "recording"
+                ]
+              }
+            }
+          }
         ],
         "responses": {
           "200": {
-            "description": "Contiguous state intervals overlapping the window, newest first. Half-open [started_at, ended_at), so a boundary instant belongs to exactly one interval. Each carries first_observed_at and last_observed_at because polling cannot resolve the exact instant of a change; a reader that needs the uncertainty band reports the pair rather than the start. Excluded intervals carry their exclusion reason so a deliberate stop is never counted as an outage."
+            "description": "Contiguous state intervals overlapping the window, newest first. Half-open [started_at, ended_at), so a boundary instant belongs to exactly one interval. Each carries first_observed_at and last_observed_at because polling cannot resolve the exact instant of a change; a reader that needs the uncertainty band reports the pair rather than the start. Excluded intervals carry their exclusion reason so a deliberate stop is never counted as an outage.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ReliabilityInterval"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         }
       }
@@ -5595,11 +6352,38 @@
         "operationId": "reliabilityObligations",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "playback",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
-          { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
-          { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -5613,15 +6397,61 @@
         "operationId": "reliabilityIntegrity",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "playback",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
-          { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
-          { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
         ],
         "responses": {
           "200": {
-            "description": "Recording completeness as four durations, never a bare percentage: owed_ms (denominator), covered_ms (numerator), missing_ms (owed and not covered, with attributed gaps), unverified_ms (cannot be judged either way), and excluded_ms broken down by reason. covered + missing + unverified = owed always holds. Media recorded before a policy change is not credited; segments recorded and later deleted by retention still count as covered, because the recording happened. precision is 'exact' only when the window begins at or after the first observed (non-backfilled) policy version, per REL-06."
+            "description": "Recording completeness as four durations, never a bare percentage: owed_ms (denominator), covered_ms (numerator), missing_ms (owed and not covered, with attributed gaps), unverified_ms (cannot be judged either way), and excluded_ms broken down by reason. covered + missing + unverified = owed always holds. Media recorded before a policy change is not credited; segments recorded and later deleted by retention still count as covered, because the recording happened. precision is 'exact' only when the window begins at or after the first observed (non-backfilled) policy version, per REL-06.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ReliabilityIntegrity"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         }
       }
@@ -5631,15 +6461,61 @@
         "operationId": "reliabilityMetrics",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "playback",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
-          { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
-          { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
         ],
         "responses": {
           "200": {
-            "description": "The REL-04 rate values, one entry per stream kind (main/sub/recording). No merged figure exists, because a healthy sub stream must not mask an unavailable main stream. Every rate carries numerator_ms, denominator_ms and unjudgeable_ms so a reader can recompute it; a rate with no value states why — no_observation (nothing observed to divide by), not_applicable (the question does not apply), or no_samples (no completed sample yet) — rather than reporting 0%. precision states which retention tier answered the window. The definitions are the PRD's own worked example: 40m up, 10m down, 10m unknown in a 60m window gives 83.33% monitoring coverage, 80% observed availability and 66.67% conservative availability."
+            "description": "The REL-04 rate values, one entry per stream kind (main/sub/recording). No merged figure exists, because a healthy sub stream must not mask an unavailable main stream. Every rate carries numerator_ms, denominator_ms and unjudgeable_ms so a reader can recompute it; a rate with no value states why — no_observation (nothing observed to divide by), not_applicable (the question does not apply), or no_samples (no completed sample yet) — rather than reporting 0%. precision states which retention tier answered the window. The definitions are the PRD's own worked example: 40m up, 10m down, 10m unknown in a 60m window gives 83.33% monitoring coverage, 80% observed availability and 66.67% conservative availability.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ReliabilityMetrics"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         }
       }
@@ -5649,16 +6525,77 @@
         "operationId": "reliabilityTrend",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "playback",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
-          { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
-          { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
-          { "name": "kind", "in": "query", "schema": { "type": "string", "enum": ["main", "sub", "recording"] } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "main",
+                "sub",
+                "recording"
+              ]
+            }
+          }
         ],
         "responses": {
           "200": {
-            "description": "Per-day series for one stream kind, read from the daily rollup so a 90-day window does not scan the interval rows inside it. Each point also carries computed_at and input_watermark (REL-06: a stored figure must be identifiable and its staleness judgeable). Days whose evidence has passed the daily retention are absent rather than reported as zero, so 'no evidence left' cannot be read as 'nothing happened'."
+            "description": "Per-day series for one stream kind, read from the daily rollup so a 90-day window does not scan the interval rows inside it. Each point also carries computed_at and input_watermark (REL-06: a stored figure must be identifiable and its staleness judgeable). Days whose evidence has passed the daily retention are absent rather than reported as zero, so 'no evidence left' cannot be read as 'nothing happened'.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ReliabilityTrendPoint"
+                      }
+                    },
+                    "precision": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "precision"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         }
       }
@@ -5668,14 +6605,53 @@
         "operationId": "reliabilitySummary",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "admin",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
-          { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
         ],
         "responses": {
           "200": {
-            "description": "Cross-channel comparison for the overview's abnormal-channel list and the operations page (REL-05), over main and recording kinds. Each row carries the channel's observed_ms and a sample_sufficient flag: a channel with ten minutes of history in a 90-day window at 100% availability is the least monitored channel, not the most reliable one, so insufficient samples are marked rather than ranked. No average availability is provided — averaging rates across channels with different observed durations would weight them equally and describe nothing."
+            "description": "Cross-channel comparison for the overview's abnormal-channel list and the operations page (REL-05), over main and recording kinds. Each row carries the channel's observed_ms and a sample_sufficient flag: a channel with ten minutes of history in a 90-day window at 100% availability is the least monitored channel, not the most reliable one, so insufficient samples are marked rather than ranked. No average availability is provided — averaging rates across channels with different observed durations would weight them equally and describe nothing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ReliabilityChannelSummary"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         }
       }
@@ -5685,11 +6661,38 @@
         "operationId": "reliabilityComplianceCSV",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "playback",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
-          { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
-          { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -5703,15 +6706,67 @@
         "operationId": "reliabilityAlerts",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "playback (with channel_id); admin (across channels)",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
-          { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
-          { "name": "channel_id", "in": "query", "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "channel_id",
+            "in": "query",
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
         ],
         "responses": {
           "200": {
-            "description": "Threshold crossings (REL-05), newest first, with the kinds vocabulary this build evaluates. Each alert records the window judged, the configured threshold and the value observed (plus the peak while firing), so an operator can check whether the alarm was right. Alerts are deliberately not faults: a fault is derived from what was observed, an alert from what was configured, and editing a threshold must change future behaviour only. A continued condition is one firing alert refreshed rather than one per evaluation pass; recovery closes it and leaves the record. notified is set only by the delivery path, so it means 'delivered', not 'recorded'."
+            "description": "Threshold crossings (REL-05), newest first, with the kinds vocabulary this build evaluates. Each alert records the window judged, the configured threshold and the value observed (plus the peak while firing), so an operator can check whether the alarm was right. Alerts are deliberately not faults: a fault is derived from what was observed, an alert from what was configured, and editing a threshold must change future behaviour only. A continued condition is one firing alert refreshed rather than one per evaluation pass; recovery closes it and leaves the record. notified is set only by the delivery path, so it means 'delivered', not 'recorded'.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ReliabilityAlert"
+                      }
+                    },
+                    "kinds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "kinds"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         }
       }
@@ -5721,17 +6776,53 @@
         "operationId": "reliabilityAlertRules",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "admin",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [],
         "responses": {
-          "200": { "description": "Every configured threshold with the kinds vocabulary this build evaluates. No rules means no alarms: thresholds are opt-in, so a fresh install does not begin alerting on its own." }
+          "200": {
+            "description": "Every configured threshold with the kinds vocabulary this build evaluates. No rules means no alarms: thresholds are opt-in, so a fresh install does not begin alerting on its own.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ReliabilityAlertRule"
+                      }
+                    },
+                    "kinds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "kinds"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
         }
       },
       "post": {
         "operationId": "setReliabilityAlertRule",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "admin (plus configure on the channel when scoped)",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -5739,19 +6830,48 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "channel_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
-                  "kind": { "type": "string", "enum": ["main_down_streak", "recording_segment_timeout", "daily_coverage_drop", "monitoring_stopped"] },
-                  "threshold_ms": { "type": "integer", "description": "Duration thresholds in milliseconds. Required for every kind except daily_coverage_drop; a percentage on a duration rule is rejected rather than silently unevaluatable." },
-                  "threshold_percent": { "type": "number", "description": "Coverage floor, 0-100. Required for daily_coverage_drop and rejected for the others." },
-                  "enabled": { "type": "boolean" }
+                  "channel_id": {
+                    "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "main_down_streak",
+                      "recording_segment_timeout",
+                      "daily_coverage_drop",
+                      "monitoring_stopped"
+                    ]
+                  },
+                  "threshold_ms": {
+                    "type": "integer",
+                    "description": "Duration thresholds in milliseconds. Required for every kind except daily_coverage_drop; a percentage on a duration rule is rejected rather than silently unevaluatable."
+                  },
+                  "threshold_percent": {
+                    "type": "number",
+                    "description": "Coverage floor, 0-100. Required for daily_coverage_drop and rejected for the others."
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  }
                 },
-                "required": ["kind"]
+                "required": [
+                  "kind"
+                ]
               }
             }
           }
         },
         "responses": {
-          "200": { "description": "The rule, created or replaced. Upsert rather than recreate: firing alerts reference the rule, and replacing the row would orphan the history explaining why an alert fired." }
+          "200": {
+            "description": "The rule, created or replaced. Upsert rather than recreate: firing alerts reference the rule, and replacing the row would orphan the history explaining why an alert fired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReliabilityAlertRule"
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -5760,12 +6880,41 @@
         "operationId": "deleteReliabilityAlertRule",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "admin",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "The rule and, by cascade, its alerts: a firing alert has no meaning without the rule that defined it, and keeping it would leave rows whose threshold exists nowhere." }
+          "200": {
+            "description": "The rule and, by cascade, its alerts: a firing alert has no meaning without the rule that defined it, and keeping it would leave rows whose threshold exists nowhere.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "deleted"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -5774,11 +6923,38 @@
         "operationId": "recordingPolicyHistory",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "admin",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "channel_id", "in": "query", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
-          { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
-          { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }
+          {
+            "name": "channel_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -5792,17 +6968,85 @@
         "operationId": "reliabilityFaults",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "playback (with channel_id); admin (across channels)",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
-          { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
-          { "name": "channel_id", "in": "query", "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
-          { "name": "category", "in": "query", "schema": { "type": "string" } },
-          { "name": "state", "in": "query", "schema": { "type": "string", "enum": ["open", "resolved"] } }
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "channel_id",
+            "in": "query",
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "resolved"
+              ]
+            }
+          }
         ],
         "responses": {
           "200": {
-            "description": "Faults overlapping the window, with the automatic attribution preserved verbatim beside any operator confirmation (initial_reason/initial_category are never rewritten), the effective category a report counts by, the category vocabulary this build classifies, and whether the fault fell inside a registered maintenance window."
+            "description": "Faults overlapping the window, with the automatic attribution preserved verbatim beside any operator confirmation (initial_reason/initial_category are never rewritten), the effective category a report counts by, the category vocabulary this build classifies, and whether the fault fell inside a registered maintenance window.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ReliabilityFault"
+                      }
+                    },
+                    "categories": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "categories"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         }
       }
@@ -5812,9 +7056,20 @@
         "operationId": "confirmFault",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "admin",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
         ],
         "requestBody": {
           "required": true,
@@ -5823,16 +7078,25 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "reason": { "type": "string" },
-                  "category": { "type": "string", "description": "One of the eight categories reported by the fault list. An empty value keeps the previous confirmation." },
-                  "note": { "type": "string" }
+                  "reason": {
+                    "type": "string"
+                  },
+                  "category": {
+                    "type": "string",
+                    "description": "One of the eight categories reported by the fault list. An empty value keeps the previous confirmation."
+                  },
+                  "note": {
+                    "type": "string"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "200": { "description": "Confirmation recorded beside the automatic classification, with a revision appended. The original classification is untouched: an unfavourable record cannot be erased." }
+          "200": {
+            "description": "Confirmation recorded beside the automatic classification, with a revision appended. The original classification is untouched: an unfavourable record cannot be erased."
+          }
         }
       }
     },
@@ -5841,13 +7105,32 @@
         "operationId": "faultImpact",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "admin",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } },
-          { "name": "channel_id", "in": "query", "schema": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "channel_id",
+            "in": "query",
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "A component incident's real business impact: the union of its channels' intervals, not their sum. Eight channels down for five minutes is five minutes of site impact." }
+          "200": {
+            "description": "A component incident's real business impact: the union of its channels' intervals, not their sum. Eight channels down for five minutes is five minutes of site impact."
+          }
         }
       }
     },
@@ -5856,39 +7139,83 @@
         "operationId": "maintenanceWindows",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "admin",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "parameters": [
-          { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
-          { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "Registered planned stops overlapping the window." }
+          "200": {
+            "description": "Registered planned stops overlapping the window."
+          }
         }
       },
       "post": {
         "operationId": "maintenanceWindowRegister",
         "x-one-nvr-implementation": "implemented",
         "x-one-nvr-permission": "admin",
-        "security": [{ "sessionCookie": [] }],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["starts_at", "ends_at"],
+                "required": [
+                  "starts_at",
+                  "ends_at"
+                ],
                 "properties": {
-                  "channel_id": { "type": "string", "format": "uuid", "nullable": true, "description": "Null means every channel: a site-wide window." },
-                  "starts_at": { "type": "string", "format": "date-time" },
-                  "ends_at": { "type": "string", "format": "date-time" },
-                  "note": { "type": "string" }
+                  "channel_id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "nullable": true,
+                    "description": "Null means every channel: a site-wide window."
+                  },
+                  "starts_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "ends_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "note": {
+                    "type": "string"
+                  }
                 }
               }
             }
           }
         },
         "responses": {
-          "201": { "description": "Window registered. Faults already recorded inside it are reclassified as planned without being deleted: the outage happened, the operator is saying it was expected. A window registered after the fact keeps its registration time, so a report can tell a forecast from a backfill." }
+          "201": {
+            "description": "Window registered. Faults already recorded inside it are reclassified as planned without being deleted: the outage happened, the operator is saying it was expected. A window registered after the fact keeps its registration time, so a report can tell a forecast from a backfill."
+          }
         }
       }
     }
@@ -7054,7 +8381,12 @@
       },
       "RecordingExportCreateInput": {
         "type": "object",
-        "required": ["channel_id", "start", "end", "gap_mode"],
+        "required": [
+          "channel_id",
+          "start",
+          "end",
+          "gap_mode"
+        ],
         "properties": {
           "channel_id": {
             "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
@@ -7069,7 +8401,10 @@
           },
           "gap_mode": {
             "type": "string",
-            "enum": ["merge", "split"],
+            "enum": [
+              "merge",
+              "split"
+            ],
             "description": "merge compresses gaps into one artifact; split writes one artifact per contiguous group."
           },
           "pool_id": {
@@ -7116,7 +8451,10 @@
           },
           "state": {
             "type": "string",
-            "enum": ["ready", "expired"]
+            "enum": [
+              "ready",
+              "expired"
+            ]
           },
           "protected": {
             "type": "boolean"
@@ -7152,11 +8490,19 @@
           },
           "gap_mode": {
             "type": "string",
-            "enum": ["merge", "split"]
+            "enum": [
+              "merge",
+              "split"
+            ]
           },
           "state": {
             "type": "string",
-            "enum": ["queued", "running", "succeeded", "failed"]
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed"
+            ]
           },
           "progress": {
             "type": "integer"
@@ -7206,7 +8552,12 @@
       },
       "RecordingWindowProtectionInput": {
         "type": "object",
-        "required": ["channel_id", "start", "end", "protected"],
+        "required": [
+          "channel_id",
+          "start",
+          "end",
+          "protected"
+        ],
         "properties": {
           "channel_id": {
             "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
@@ -7235,9 +8586,15 @@
       "ArchiveTargetCapabilities": {
         "type": "object",
         "properties": {
-          "write": { "type": "boolean" },
-          "read": { "type": "boolean" },
-          "range": { "type": "boolean" },
+          "write": {
+            "type": "boolean"
+          },
+          "read": {
+            "type": "boolean"
+          },
+          "range": {
+            "type": "boolean"
+          },
           "delete": {
             "type": "boolean",
             "description": "A target without delete permission cannot run cloud expiry cleanup."
@@ -7250,18 +8607,33 @@
           "id": {
             "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
           },
-          "name": { "type": "string" },
-          "base_url": { "type": "string" },
-          "remote_root": { "type": "string" },
-          "username": { "type": "string" },
-          "cloud_retention_days": { "type": "integer" },
-          "enabled": { "type": "boolean" },
+          "name": {
+            "type": "string"
+          },
+          "base_url": {
+            "type": "string"
+          },
+          "remote_root": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "cloud_retention_days": {
+            "type": "integer"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
           "last_check": {
             "type": "object",
             "nullable": true,
             "description": "Latest probe: {state, capabilities, observed_at}."
           },
-          "created_at": { "type": "string", "format": "date-time" }
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "ArchiveTargetPage": {
@@ -7277,7 +8649,10 @@
       },
       "ArchiveUploadRequest": {
         "type": "object",
-        "required": ["target_id", "segment_ids"],
+        "required": [
+          "target_id",
+          "segment_ids"
+        ],
         "properties": {
           "target_id": {
             "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
@@ -7305,9 +8680,20 @@
       "ArchivePolicy": {
         "type": "object",
         "properties": {
-          "channel_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
-          "target_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
-          "mode": { "type": "string", "enum": ["manual", "scheduled", "immediate"] },
+          "channel_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "target_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "scheduled",
+              "immediate"
+            ]
+          },
           "schedule": {
             "type": "string",
             "description": "Comma-separated HH:MM list in the site timezone; scheduled mode only."
@@ -7319,29 +8705,65 @@
         "properties": {
           "items": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/ArchivePolicy" }
+            "items": {
+              "$ref": "#/components/schemas/ArchivePolicy"
+            }
           }
         }
       },
       "ZonePoint": {
         "type": "object",
-        "required": ["x", "y"],
+        "required": [
+          "x",
+          "y"
+        ],
         "properties": {
-          "x": { "type": "number", "minimum": 0, "maximum": 1 },
-          "y": { "type": "number", "minimum": 0, "maximum": 1 }
+          "x": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
         }
       },
       "DetectionZone": {
         "type": "object",
         "properties": {
-          "id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
-          "channel_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
-          "name": { "type": "string" },
-          "coordinates": { "type": "array", "items": { "$ref": "#/components/schemas/ZonePoint" } },
-          "objects": { "type": "array", "items": { "type": "string" } },
-          "reference_width": { "type": "integer", "description": "Geometry of the analyzed stream when the drawing was saved, as read from the channel's source test. Zero when it was unknown then." },
-          "reference_height": { "type": "integer" },
-          "version": { "type": "integer" },
+          "id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "channel_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "name": {
+            "type": "string"
+          },
+          "coordinates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ZonePoint"
+            }
+          },
+          "objects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reference_width": {
+            "type": "integer",
+            "description": "Geometry of the analyzed stream when the drawing was saved, as read from the channel's source test. Zero when it was unknown then."
+          },
+          "reference_height": {
+            "type": "integer"
+          },
+          "version": {
+            "type": "integer"
+          },
           "needs_calibration": {
             "type": "boolean",
             "description": "The analyzed stream's aspect ratio no longer matches the one this drawing was made against, so the same coordinates describe a different part of the view."
@@ -7350,82 +8772,221 @@
       },
       "DetectionZonePage": {
         "type": "object",
-        "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/DetectionZone" } } }
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DetectionZone"
+            }
+          }
+        }
       },
       "DetectionRule": {
         "type": "object",
         "properties": {
-          "id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
-          "channel_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
-          "name": { "type": "string" },
+          "id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "channel_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "name": {
+            "type": "string"
+          },
           "kind": {
             "type": "string",
-            "enum": ["appear", "enter", "dwell"],
+            "enum": [
+              "appear",
+              "enter",
+              "dwell"
+            ],
             "description": "appear: any detection; enter: the detector reports the zone; dwell: enter plus a minimum stay (loitering)."
           },
-          "zone_id": { "type": "string", "format": "uuid", "nullable": true },
-          "categories": { "type": "array", "items": { "type": "string" } },
-          "min_score": { "type": "number" },
-          "arm_from": { "type": "string", "description": "HH:MM site-local; empty means always armed." },
-          "arm_to": { "type": "string", "description": "HH:MM site-local; an end before the start crosses midnight." },
-          "dwell_seconds": { "type": "integer", "nullable": true },
-          "severity": { "type": "string", "enum": ["low", "medium", "high"] },
-          "cooldown_seconds": { "type": "integer", "description": "Notification cooldown; it never suppresses the event record." },
-          "enabled": { "type": "boolean" },
-          "version": { "type": "integer" }
+          "zone_id": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "min_score": {
+            "type": "number"
+          },
+          "arm_from": {
+            "type": "string",
+            "description": "HH:MM site-local; empty means always armed."
+          },
+          "arm_to": {
+            "type": "string",
+            "description": "HH:MM site-local; an end before the start crosses midnight."
+          },
+          "dwell_seconds": {
+            "type": "integer",
+            "nullable": true
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "cooldown_seconds": {
+            "type": "integer",
+            "description": "Notification cooldown; it never suppresses the event record."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "integer"
+          }
         }
       },
       "DetectionRulePage": {
         "type": "object",
-        "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/DetectionRule" } } }
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DetectionRule"
+            }
+          }
+        }
       },
       "RuleHit": {
         "type": "object",
         "properties": {
-          "id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
-          "event_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
-          "rule_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
-          "rule_name": { "type": "string" },
-          "severity": { "type": "string" },
-          "zone_name": { "type": "string" },
+          "id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "event_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "rule_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "rule_name": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "zone_name": {
+            "type": "string"
+          },
           "reason": {
             "type": "object",
             "description": "Facts captured at match time: category, score, zone, reported zones.",
             "properties": {
-              "kind": { "type": "string", "enum": ["appear", "enter", "dwell"] },
-              "category": { "type": "string" },
-              "score": { "type": "number" },
-              "zone": { "type": "string" },
-              "zones_reported": { "type": "array", "items": { "type": "string" } },
-              "severity": { "type": "string" }
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "appear",
+                  "enter",
+                  "dwell"
+                ]
+              },
+              "category": {
+                "type": "string"
+              },
+              "score": {
+                "type": "number"
+              },
+              "zone": {
+                "type": "string"
+              },
+              "zones_reported": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "severity": {
+                "type": "string"
+              }
             }
           },
-          "notified_at": { "type": "string", "format": "date-time", "nullable": true },
-          "false_positive": { "type": "boolean" },
-          "false_positive_note": { "type": "string" },
-          "created_at": { "type": "string", "format": "date-time" }
+          "notified_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "false_positive": {
+            "type": "boolean"
+          },
+          "false_positive_note": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "DetectionConfig": {
         "type": "object",
         "properties": {
-          "channel_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
-          "enabled": { "type": "boolean" },
-          "stream": { "type": "string", "enum": ["main", "sub"] },
-          "fps": { "type": "integer", "minimum": 1, "maximum": 30 },
-          "labels": { "type": "array", "items": { "type": "string" } },
-          "version": { "type": "integer" }
+          "channel_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "stream": {
+            "type": "string",
+            "enum": [
+              "main",
+              "sub"
+            ]
+          },
+          "fps": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "version": {
+            "type": "integer"
+          }
         }
       },
       "DetectionRevision": {
         "type": "object",
         "properties": {
-          "id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
-          "config_hash": { "type": "string" },
-          "state": { "type": "string", "enum": ["published", "failed"] },
-          "camera_count": { "type": "integer" },
-          "error_code": { "type": "string", "nullable": true },
-          "created_at": { "type": "string" },
+          "id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "config_hash": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "published",
+              "failed"
+            ]
+          },
+          "camera_count": {
+            "type": "integer"
+          },
+          "error_code": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string"
+          },
           "pending": {
             "type": "boolean",
             "description": "The stored settings no longer render to the published hash: a publication is a snapshot, so this is true after any edit."
@@ -7438,73 +8999,195 @@
           "runtime": {
             "type": "object",
             "properties": {
-              "version": { "type": "string" },
-              "detector": { "type": "string" },
-              "inference_ms": { "type": "number", "nullable": true },
-              "overloaded": { "type": "boolean" },
-              "reachable": { "type": "boolean" },
-              "observed_at": { "type": "string" }
+              "version": {
+                "type": "string"
+              },
+              "detector": {
+                "type": "string"
+              },
+              "inference_ms": {
+                "type": "number",
+                "nullable": true
+              },
+              "overloaded": {
+                "type": "boolean"
+              },
+              "reachable": {
+                "type": "boolean"
+              },
+              "observed_at": {
+                "type": "string"
+              }
             }
           },
-          "revision": { "$ref": "#/components/schemas/DetectionRevision" },
-          "supported_labels": { "type": "array", "items": { "type": "string" } }
+          "revision": {
+            "$ref": "#/components/schemas/DetectionRevision"
+          },
+          "supported_labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       },
       "Event": {
         "type": "object",
         "properties": {
-          "id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
-          "channel_id": { "type": "string", "format": "uuid", "nullable": true },
-          "source_revision_id": { "type": "string", "format": "uuid", "nullable": true },
-          "source": { "type": "string", "enum": ["frigate"] },
-          "source_id": { "type": "string" },
-          "category": { "type": "string" },
-          "score": { "type": "number" },
-          "zones": { "type": "array", "items": { "type": "string" } },
-          "started_at": { "type": "string", "format": "date-time" },
-          "ended_at": { "type": "string", "format": "date-time", "nullable": true },
-          "snapshot_state": { "type": "string", "enum": ["pending", "ready", "gone"] },
-          "media_state": { "type": "string", "enum": ["pending", "linked", "unavailable"] },
-          "handle_state": { "type": "string", "enum": ["open", "acknowledged", "closed", "false_positive"] },
-          "handle_note": { "type": "string" },
-          "version": { "type": "integer" },
-          "expires_at": { "type": "string", "format": "date-time", "nullable": true },
+          "id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "channel_id": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "source_revision_id": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "frigate"
+            ]
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number"
+          },
+          "zones": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ended_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "snapshot_state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "ready",
+              "gone"
+            ]
+          },
+          "media_state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "linked",
+              "unavailable"
+            ]
+          },
+          "handle_state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "acknowledged",
+              "closed",
+              "false_positive"
+            ]
+          },
+          "handle_note": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
           "handling": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/EventHandlingRecord" }
+            "items": {
+              "$ref": "#/components/schemas/EventHandlingRecord"
+            }
           },
           "hits": {
             "type": "array",
             "description": "The rules this event tripped, on the detail response. Absent from list rows.",
-            "items": { "$ref": "#/components/schemas/RuleHit" }
+            "items": {
+              "$ref": "#/components/schemas/RuleHit"
+            }
           }
         }
       },
       "EventHandlingRecord": {
         "type": "object",
         "properties": {
-          "id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
-          "actor_name": { "type": "string" },
-          "state": { "type": "string" },
-          "note": { "type": "string" },
-          "created_at": { "type": "string", "format": "date-time" }
+          "id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "actor_name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "EventPage": {
         "type": "object",
         "properties": {
-          "items": { "type": "array", "items": { "$ref": "#/components/schemas/Event" } },
-          "next_cursor": { "type": "string", "format": "uuid", "nullable": true }
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            }
+          },
+          "next_cursor": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          }
         }
       },
       "NotificationChannel": {
         "type": "object",
         "properties": {
-          "id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
-          "kind": { "type": "string", "enum": ["inapp", "webhook"] },
-          "name": { "type": "string" },
-          "url": { "type": "string", "description": "Absent for the built-in inbox." },
-          "enabled": { "type": "boolean" },
+          "id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "inapp",
+              "webhook"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "description": "Absent for the built-in inbox."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
           "has_secret": {
             "type": "boolean",
             "description": "Whether a signing secret is stored. The secret itself is write-only and never returned."
@@ -7514,8 +9197,13 @@
             "nullable": true,
             "description": "Outcome of the last explicit test delivery: {state, status?, error?, checked_at}."
           },
-          "version": { "type": "integer" },
-          "created_at": { "type": "string", "format": "date-time" }
+          "version": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "NotificationChannelList": {
@@ -7523,11 +9211,15 @@
         "properties": {
           "items": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/NotificationChannel" }
+            "items": {
+              "$ref": "#/components/schemas/NotificationChannel"
+            }
           },
           "kinds": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "The channel kinds this build can deliver, read from the adapter registry. A build that ships a new adapter reports it here, so the UI never offers a kind without one."
           }
         }
@@ -7535,21 +9227,58 @@
       "NotificationDelivery": {
         "type": "object",
         "properties": {
-          "channel_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
-          "channel_name": { "type": "string" },
-          "channel_kind": { "type": "string" },
-          "notification_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+          "channel_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "channel_name": {
+            "type": "string"
+          },
+          "channel_kind": {
+            "type": "string"
+          },
+          "notification_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
           "state": {
             "type": "string",
-            "enum": ["sending", "failed", "retrying", "succeeded", "exhausted"],
+            "enum": [
+              "sending",
+              "failed",
+              "retrying",
+              "succeeded",
+              "exhausted"
+            ],
             "description": "sending: queued or being attempted. failed: this attempt failed and a retry is coming. retrying: failed at least once and still within budget. succeeded: the receiver answered 2xx. exhausted: out of attempts, or permanently refused."
           },
-          "error": { "type": "string", "description": "What the receiver said, or the transport reason. Never carries the signing secret." },
-          "http_status": { "type": "integer", "nullable": true },
-          "delivered_at": { "type": "string", "format": "date-time", "nullable": true },
-          "updated_at": { "type": "string", "format": "date-time" },
-          "title": { "type": "string", "description": "From the frozen message, so it agrees with the inbox after the rule or channel was later edited." },
-          "severity": { "type": "string", "enum": ["low", "medium", "high"] }
+          "error": {
+            "type": "string",
+            "description": "What the receiver said, or the transport reason. Never carries the signing secret."
+          },
+          "http_status": {
+            "type": "integer",
+            "nullable": true
+          },
+          "delivered_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "title": {
+            "type": "string",
+            "description": "From the frozen message, so it agrees with the inbox after the rule or channel was later edited."
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          }
         }
       },
       "NotificationDeliveryPage": {
@@ -7557,7 +9286,9 @@
         "properties": {
           "items": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/NotificationDelivery" }
+            "items": {
+              "$ref": "#/components/schemas/NotificationDelivery"
+            }
           }
         }
       },
@@ -7566,7 +9297,9 @@
         "properties": {
           "channel_ids": {
             "type": "array",
-            "items": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+            "items": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            },
             "description": "An empty list is legitimate: the rule still records its hits, it just tells no one."
           }
         }
@@ -8048,6 +9781,779 @@
           "streams",
           "ptz",
           "onvif_port"
+        ],
+        "additionalProperties": false
+      },
+      "ReliabilityRate": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "no_observation",
+              "not_applicable",
+              "no_samples"
+            ],
+            "description": "Why a rate has no value when it has none. Collapsing these into 0% would report 'nothing was observed' as 'everything was down'."
+          },
+          "numerator_ms": {
+            "type": "integer"
+          },
+          "denominator_ms": {
+            "type": "integer"
+          },
+          "unjudgeable_ms": {
+            "type": "integer",
+            "description": "Time inside the window that cannot be counted either way, reported beside the ratio and never folded into it."
+          }
+        },
+        "required": [
+          "status",
+          "numerator_ms",
+          "denominator_ms",
+          "unjudgeable_ms"
+        ],
+        "additionalProperties": false
+      },
+      "ReliabilityIntervalTotals": {
+        "type": "object",
+        "properties": {
+          "healthy_ms": {
+            "type": "integer"
+          },
+          "unavailable_ms": {
+            "type": "integer"
+          },
+          "unknown_ms": {
+            "type": "integer"
+          },
+          "excluded_ms": {
+            "type": "integer",
+            "description": "Time deliberately not required to be up. Shown, never divided by."
+          }
+        },
+        "required": [
+          "healthy_ms",
+          "unavailable_ms",
+          "unknown_ms",
+          "excluded_ms"
+        ],
+        "additionalProperties": false
+      },
+      "ReliabilityCoverageGap": {
+        "type": "object",
+        "properties": {
+          "start_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "end_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reason": {
+            "type": "string",
+            "description": "The recorder's own explanation, or 'unknown'. REL-02 forbids inventing a cause."
+          }
+        },
+        "required": [
+          "start_at",
+          "end_at",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "ReliabilityMetrics": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "main",
+              "sub",
+              "recording"
+            ],
+            "description": "One entry per stream kind. There is no merged entry: a healthy sub stream must not mask an unavailable main stream."
+          },
+          "window": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ],
+            "additionalProperties": false
+          },
+          "observed": {
+            "$ref": "#/components/schemas/ReliabilityIntervalTotals"
+          },
+          "expected_ms": {
+            "type": "integer",
+            "description": "Expected pull duration: the window minus excluded time. The denominator coverage divides by."
+          },
+          "monitoring_coverage": {
+            "$ref": "#/components/schemas/ReliabilityRate"
+          },
+          "observed_availability": {
+            "$ref": "#/components/schemas/ReliabilityRate"
+          },
+          "conservative_availability": {
+            "$ref": "#/components/schemas/ReliabilityRate",
+            "description": "Unknown counted as not-up, so this is the lower bound. Always <= observed availability."
+          },
+          "interruptions": {
+            "type": "object",
+            "properties": {
+              "count": {
+                "type": "integer"
+              },
+              "total_ms": {
+                "type": "integer"
+              },
+              "longest_ms": {
+                "type": "integer"
+              },
+              "open_count": {
+                "type": "integer"
+              },
+              "open_ms": {
+                "type": "integer"
+              },
+              "mean_time_to_recovery": {
+                "$ref": "#/components/schemas/ReliabilityRate"
+              },
+              "by_category": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer"
+                }
+              },
+              "component_count": {
+                "type": "integer"
+              },
+              "maintenance_count": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "count",
+              "total_ms",
+              "longest_ms",
+              "open_count",
+              "open_ms",
+              "mean_time_to_recovery",
+              "by_category",
+              "component_count",
+              "maintenance_count"
+            ],
+            "additionalProperties": false
+          },
+          "recording_coverage": {
+            "$ref": "#/components/schemas/ReliabilityRate",
+            "description": "Settled obligation time covered by real media. The denominator stays the full owed time even when recording failed."
+          },
+          "recording_gaps": {
+            "type": "object",
+            "properties": {
+              "missing_ms": {
+                "type": "integer"
+              },
+              "gap_count": {
+                "type": "integer"
+              },
+              "longest_gap_ms": {
+                "type": "integer"
+              },
+              "damaged_count": {
+                "type": "integer"
+              },
+              "reasons": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer"
+                }
+              }
+            },
+            "required": [
+              "missing_ms",
+              "gap_count",
+              "longest_gap_ms",
+              "damaged_count",
+              "reasons"
+            ],
+            "additionalProperties": false
+          },
+          "media_accessibility": {
+            "type": "object",
+            "properties": {
+              "rate": {
+                "$ref": "#/components/schemas/ReliabilityRate"
+              },
+              "unverified_ms": {
+                "type": "integer"
+              },
+              "remote_unknown_ms": {
+                "type": "integer"
+              },
+              "verified_coverage_ms": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "rate",
+              "unverified_ms",
+              "remote_unknown_ms",
+              "verified_coverage_ms"
+            ],
+            "additionalProperties": false
+          },
+          "metric_version": {
+            "type": "integer",
+            "description": "Identifies the definitions this build computed, so a stored figure can be told apart after they change."
+          },
+          "precision": {
+            "type": "string",
+            "enum": [
+              "exact",
+              "minute_rollup",
+              "daily_rollup",
+              "unavailable"
+            ],
+            "description": "Which retention tier answered the window (REL-06)."
+          }
+        },
+        "required": [
+          "kind",
+          "window",
+          "observed",
+          "expected_ms",
+          "monitoring_coverage",
+          "observed_availability",
+          "conservative_availability",
+          "interruptions",
+          "recording_coverage",
+          "recording_gaps",
+          "media_accessibility",
+          "metric_version",
+          "precision"
+        ],
+        "additionalProperties": false
+      },
+      "ReliabilityTrendPoint": {
+        "type": "object",
+        "properties": {
+          "day": {
+            "type": "string"
+          },
+          "healthy_ms": {
+            "type": "integer"
+          },
+          "unavailable_ms": {
+            "type": "integer"
+          },
+          "unknown_ms": {
+            "type": "integer"
+          },
+          "excluded_ms": {
+            "type": "integer"
+          },
+          "owed_ms": {
+            "type": "integer"
+          },
+          "covered_ms": {
+            "type": "integer"
+          },
+          "unverified_ms": {
+            "type": "integer"
+          },
+          "fault_count": {
+            "type": "integer"
+          },
+          "longest_fault_ms": {
+            "type": "integer"
+          },
+          "computed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "input_watermark": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "day",
+          "healthy_ms",
+          "unavailable_ms",
+          "unknown_ms",
+          "excluded_ms",
+          "owed_ms",
+          "covered_ms",
+          "unverified_ms",
+          "fault_count",
+          "longest_fault_ms",
+          "computed_at",
+          "input_watermark"
+        ],
+        "additionalProperties": false
+      },
+      "ReliabilityChannelSummary": {
+        "type": "object",
+        "properties": {
+          "channel_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "channel_no": {
+            "type": "integer"
+          },
+          "channel_name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "main",
+              "sub",
+              "recording"
+            ]
+          },
+          "healthy_ms": {
+            "type": "integer"
+          },
+          "unavailable_ms": {
+            "type": "integer"
+          },
+          "unknown_ms": {
+            "type": "integer"
+          },
+          "excluded_ms": {
+            "type": "integer"
+          },
+          "expected_ms": {
+            "type": "integer"
+          },
+          "owed_ms": {
+            "type": "integer"
+          },
+          "covered_ms": {
+            "type": "integer"
+          },
+          "fault_count": {
+            "type": "integer"
+          },
+          "observed_ms": {
+            "type": "integer",
+            "description": "How much time this row is based on. Shown beside every ratio: a channel observed for an hour cannot be ranked against one observed for a month."
+          },
+          "sample_sufficient": {
+            "type": "boolean",
+            "description": "False when the window holds too little observation to compare this channel. PRD REL-05: insufficient samples are marked, not ranked."
+          }
+        },
+        "required": [
+          "channel_id",
+          "channel_no",
+          "channel_name",
+          "kind",
+          "healthy_ms",
+          "unavailable_ms",
+          "unknown_ms",
+          "excluded_ms",
+          "expected_ms",
+          "owed_ms",
+          "covered_ms",
+          "fault_count",
+          "observed_ms",
+          "sample_sufficient"
+        ],
+        "additionalProperties": false
+      },
+      "ReliabilityAlert": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "rule_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "channel_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "channel_no": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "main_down_streak",
+              "recording_segment_timeout",
+              "daily_coverage_drop",
+              "monitoring_stopped"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "firing",
+              "resolved"
+            ]
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "window_start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "window_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "threshold_value": {
+            "type": "number"
+          },
+          "observed_value": {
+            "type": "number"
+          },
+          "peak_value": {
+            "type": "number",
+            "description": "Highest value seen while firing, so a resolved alert shows how bad it got."
+          },
+          "notified": {
+            "type": "boolean",
+            "description": "Set only by the delivery path, so it means delivered rather than recorded."
+          }
+        },
+        "required": [
+          "id",
+          "rule_id",
+          "channel_id",
+          "channel_no",
+          "kind",
+          "state",
+          "started_at",
+          "window_start",
+          "threshold_value",
+          "observed_value",
+          "peak_value",
+          "notified"
+        ],
+        "additionalProperties": false
+      },
+      "ReliabilityAlertRule": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "channel_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UUID"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null means every channel."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "main_down_streak",
+              "recording_segment_timeout",
+              "daily_coverage_drop",
+              "monitoring_stopped"
+            ]
+          },
+          "threshold_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "threshold_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "enabled",
+          "version"
+        ],
+        "additionalProperties": false
+      },
+      "ReliabilityInterval": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "main",
+              "sub",
+              "recording"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "unavailable",
+              "unknown",
+              "excluded"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "exclusion": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "first_observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "observed_count": {
+            "type": "integer"
+          },
+          "duration_ms": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "state",
+          "reason",
+          "started_at",
+          "first_observed_at",
+          "last_observed_at",
+          "observed_count",
+          "duration_ms"
+        ],
+        "additionalProperties": false
+      },
+      "ReliabilityIntegrity": {
+        "type": "object",
+        "properties": {
+          "owed_ms": {
+            "type": "integer"
+          },
+          "covered_ms": {
+            "type": "integer"
+          },
+          "missing_ms": {
+            "type": "integer"
+          },
+          "unverified_ms": {
+            "type": "integer"
+          },
+          "excluded_ms": {
+            "type": "integer"
+          },
+          "exclusions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "precision": {
+            "type": "string",
+            "enum": [
+              "exact",
+              "assumed"
+            ]
+          }
+        },
+        "required": [
+          "owed_ms",
+          "covered_ms",
+          "missing_ms",
+          "unverified_ms",
+          "excluded_ms",
+          "exclusions",
+          "precision"
+        ],
+        "additionalProperties": false
+      },
+      "ReliabilityFault": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "channel_id": {
+            "$ref": "#/components/schemas/UUID"
+          },
+          "channel_no": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "resolved"
+            ]
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "duration_ms": {
+            "type": "integer"
+          },
+          "initial_reason": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "effective_category": {
+            "type": "string"
+          },
+          "confirmed_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "confirmed_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "type": "string"
+          },
+          "maintenance": {
+            "type": "boolean"
+          },
+          "recovery": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root_event_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UUID"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "channel_id",
+          "channel_no",
+          "kind",
+          "state",
+          "started_at",
+          "initial_reason",
+          "category",
+          "effective_category",
+          "note",
+          "maintenance"
         ],
         "additionalProperties": false
       }
