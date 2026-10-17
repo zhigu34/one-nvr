@@ -115,6 +115,28 @@ describe('groupAudits', () => {
     expect(groups[0].first.action).toBe('recording.deleted_local')
   })
 
+  // The rows of one sweep differ by microseconds because they are written in one
+  // transaction. Keying on the raw timestamp made every row its own group, so the
+  // batch stayed uncollapsed on the live page.
+  test('groups rows written microseconds apart in the same second', () => {
+    const groups = groupAudits([
+      row({ created_at: '2026-10-17T11:27:05.605020Z' }),
+      row({ created_at: '2026-10-17T11:27:05.591710Z' }),
+      row({ created_at: '2026-10-17T11:27:05.576897Z' }),
+    ])
+    expect(groups).toHaveLength(1)
+    expect(groups[0].count).toBe(3)
+  })
+
+  // A different second is a different round, even with everything else equal.
+  test('keeps separate rounds separate', () => {
+    const groups = groupAudits([
+      row({ created_at: '2026-10-17T11:27:05.605020Z' }),
+      row({ created_at: '2026-10-17T11:27:06.100000Z' }),
+    ])
+    expect(groups).toHaveLength(2)
+  })
+
   // Different actors are different events even at the same instant; merging them
   // would attribute one person's action to another.
   test('keeps different actors apart', () => {

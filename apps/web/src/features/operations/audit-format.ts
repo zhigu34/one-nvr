@@ -184,8 +184,12 @@ export function groupAudits<T extends AuditRowLike>(items: T[]): AuditGroup<T>[]
   const groups: AuditGroup<T>[] = []
   const index = new Map<string, AuditGroup<T>>()
   for (const item of items) {
+    // Truncate to the second. A sweep writes its rows inside one transaction, so
+    // they differ by microseconds; keying on the raw timestamp made every row its
+    // own group and left the batch uncollapsed.
+    const second = item.created_at.slice(0, 19)
     const key = [
-      item.created_at,
+      second,
       item.action,
       item.actor_id ?? '',
       item.object_type ?? '',
