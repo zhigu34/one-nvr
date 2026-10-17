@@ -118,12 +118,20 @@ test('a rate with no value shows its reason instead of zero', async () => {
   await expect.element(page.getByText('不适用').first()).toBeVisible()
 })
 
-test('reports unjudgeable time beside the ratio rather than folding it in', async () => {
+test('shows unjudgeable time once as a window fact, not under every ratio', async () => {
   const value = metrics('main')
+  // The unjudgeable time is one fact about the window (how much time no
+  // interval explains). Printing it under all three ratios made them look like
+  // they each had a different one, and buried the numbers that do differ.
   value.observed_availability = rate({ unjudgeable_ms: 10_000 })
+  value.monitoring_coverage = rate({ unjudgeable_ms: 10_000 })
+  value.conservative_availability = rate({ unjudgeable_ms: 10_000 })
   stub({ items: [value] })
   mount()
-  await expect.element(page.getByText(/不可判定 10 秒/).first()).toBeVisible()
+  await expect.element(page.getByText('未知', { exact: true }).first()).toBeVisible()
+  // Not repeated per card.
+  const panel = page.getByTestId('reliability-metrics-main')
+  await expect.element(panel.getByText(/不可判定/)).not.toBeInTheDocument()
 })
 
 test('shows the recording split with exclusions kept apart', async () => {

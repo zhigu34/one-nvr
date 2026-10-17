@@ -66,8 +66,11 @@ describe('rateEvidence', () => {
     expect(rateEvidence(rate())).toBe('分子 40 秒 · 分母 50 秒')
   })
 
-  test('includes unjudgeable time only when there is some', () => {
-    expect(rateEvidence(rate({ unjudgeable_ms: 10_000 }))).toContain('不可判定 10 秒')
+  // Unjudgeable time is one fact about the window, shown once in the time
+  // accounting. Repeating it under every ratio made it look like each ratio had
+  // its own and pushed the differing numbers out of view.
+  test('does not repeat the window-level unjudgeable time per rate', () => {
+    expect(rateEvidence(rate({ unjudgeable_ms: 10_000 }))).not.toContain('不可判定')
     expect(rateEvidence(rate())).not.toContain('不可判定')
   })
 })

@@ -72,9 +72,10 @@ export function rateEvidence(rate: Rate): string {
     `分子 ${formatDuration(rate.numerator_ms)}`,
     `分母 ${formatDuration(rate.denominator_ms)}`,
   ]
-  if (rate.unjudgeable_ms > 0) {
-    parts.push(`不可判定 ${formatDuration(rate.unjudgeable_ms)}`)
-  }
+  // Unjudgeable time is deliberately NOT repeated per rate. It is one fact about
+  // the window (the monitoring-unknown total), and the panel already shows it
+  // once in the time-accounting row; repeating it under all three ratios made it
+  // look like each had its own, and buried the numbers that do differ.
   return parts.join(' · ')
 }
 
