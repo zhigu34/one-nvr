@@ -201,9 +201,22 @@ export function sampleNote(observedMs: number, windowMs: number): string {
     // switched off.
     return '窗口内没有观测记录（可能未要求运行）'
   }
-  const ratio = observedMs / windowMs
-  if (ratio < 0.1) {
-    return `观测时长仅占窗口 ${(ratio * 100).toFixed(1)}%，样本不足，不参与可靠性比较`
+  // The test is an absolute floor, not a fraction of the window.
+  //
+  // Requiring a percentage of the window punished the honest case: a site that
+  // has been up for fourteen hours but is compared over seven days has only 8%
+  // coverage and got labelled "insufficient sample" on every channel, even
+  // though fourteen hours is plenty to judge a camera. The question is "do we
+  // have enough evidence", which is a duration, not a proportion — a long window
+  // does not make the same evidence weaker.
+  const minimum = 60 * 60 * 1000
+  if (observedMs < minimum) {
+    return `观测时长仅 ${formatDuration(observedMs)}，样本不足，不参与可靠性比较`
+  }
+  // Beyond the floor, a window that is mostly unobserved still deserves a note,
+  // because the figures cover far less time than the header implies.
+  if (windowMs > 0 && observedMs / windowMs < 0.5) {
+    return `窗口内仅 ${formatDuration(observedMs)} 有观测（占 ${((observedMs / windowMs) * 100).toFixed(0)}%），比率只代表该时段`
   }
   return ''
 }

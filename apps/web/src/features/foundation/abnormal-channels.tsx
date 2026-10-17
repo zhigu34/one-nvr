@@ -3,7 +3,7 @@ import { Link } from '@tanstack/react-router'
 import { AlertTriangle, ArrowRight } from 'lucide-react'
 import type { Schema } from '@/lib/types'
 import { useAPI } from '@/features/foundation/hooks'
-import { KIND_LABEL, formatDuration, sampleNote, windowFor } from '@/features/channels/reliability-format'
+import { KIND_LABEL, formatDuration, windowFor } from '@/features/channels/reliability-format'
 
 /**
  * Overview card: which channels are abnormal right now (PRD REL-05).
@@ -27,7 +27,6 @@ export function AbnormalChannels() {
   // The overview is polled, so this must not be a heavy query. The daily rollup
   // behind it is a bounded read, and it is the same request the operations page
   // makes — one definition of "abnormal" rather than two.
-  const windowMs = new Date(window.to).getTime() - new Date(window.from).getTime()
 
   const abnormal = useMemo(() => {
     const items = (summary.data?.items || []).filter((row) => row.kind === 'main')
@@ -38,12 +37,16 @@ export function AbnormalChannels() {
       .slice(0, 5)
   }, [summary.data])
 
+  // Judged by the backend's own sufficiency flag rather than by re-deriving it
+  // from a note string: a scope note ("only 14h of this week was observed") is
+  // not the same as insufficiency, and treating it as one would hide a channel
+  // that has plenty of evidence.
   const unjudged = useMemo(
     () =>
       (summary.data?.items || []).filter(
-        (row) => row.kind === 'main' && sampleNote(row.observed_ms, windowMs) !== ''
+        (row) => row.kind === 'main' && !row.sample_sufficient
       ).length,
-    [summary.data, windowMs]
+    [summary.data]
   )
 
   // A failed read hides the card rather than showing "0 异常": claiming the site

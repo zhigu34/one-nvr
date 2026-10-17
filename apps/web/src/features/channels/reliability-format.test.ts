@@ -139,6 +139,20 @@ describe('sampleNote', () => {
     expect(sampleNote(60_000, 86_400_000)).toContain('样本不足')
   })
 
+  // The floor is a duration, not a fraction of the window. This is the live-site
+  // case: a site up for fourteen hours compared over seven days has 8% coverage,
+  // and the percentage rule labelled every channel insufficient even though
+  // fourteen hours is plenty of evidence.
+  test('fourteen hours of observation is enough, however long the window', () => {
+    const note = sampleNote(14 * 3600_000, 7 * 86_400_000)
+    // Never "insufficient sample": fourteen hours is real evidence.
+    expect(note).not.toContain('样本不足')
+    // But the reduced scope IS disclosed, because the ratios then cover far less
+    // time than the window header implies.
+    expect(note).toContain('仅')
+    expect(note).toContain('有观测')
+  })
+
   // Zero observation is a different fact from a small sample: it usually means
   // nothing was required to run (recording off), not that the camera is bad.
   test('zero observation is not described as an insufficient sample', () => {
