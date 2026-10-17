@@ -34,6 +34,11 @@ const MIN_VISIBLE_ROWS = 10
 /** Hard stop for the automatic fill, so a pathological log cannot page forever. */
 const MAX_AUTO_PAGES = 5
 
+/** How many members one expanded batch shows before stopping. The rest stay
+ *  reachable through the count and the family filter; rendering 107 rows inline
+ *  buries the rest of the page. */
+const EXPAND_LIMIT = 25
+
 /**
  * The audit trail.
  *
@@ -215,8 +220,12 @@ export function AuditTrail({ family }: { family: string }) {
                           )}
                         </TableCell>
                       </TableRow>
+                      {/* A batch can hold hundreds of rows. Expanded inline they
+                          would push everything below off the page, so the detail
+                          is capped and scrolls — the same treatment the fault
+                          list uses for a flapping stream. */}
                       {isExpanded &&
-                        group.items.map((member) => (
+                        group.items.slice(0, EXPAND_LIMIT).map((member) => (
                           <TableRow
                             key={member.id}
                             className='bg-muted/30 text-xs'
@@ -245,6 +254,17 @@ export function AuditTrail({ family }: { family: string }) {
                             <TableCell />
                           </TableRow>
                         ))}
+                      {isExpanded && group.count > EXPAND_LIMIT && (
+                        <TableRow className='bg-muted/30'>
+                          <TableCell
+                            colSpan={5}
+                            className='text-xs text-muted-foreground'
+                          >
+                            仅显示前 {EXPAND_LIMIT} 条，其余 {group.count - EXPAND_LIMIT}{' '}
+                            条按同一批次记录在审计库中
+                          </TableCell>
+                        </TableRow>
+                      )}
                     </Fragment>
                   )
                 })}
