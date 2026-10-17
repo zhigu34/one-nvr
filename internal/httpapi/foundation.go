@@ -139,7 +139,7 @@ func (r *router) auditLogs(w http.ResponseWriter, q *http.Request, p auth.Princi
 	// writes hundreds of rows sharing a timestamp, and the page collapses those
 	// into a single line. At 50 per page a collapsed first page can show three
 	// rows, which reads as missing data rather than as a large batch.
-	cursor, limit, err := paginationLimit(q, 100, 200)
+	cursor, limit, err := paginationLimit(q, 100, 500)
 	if err != nil {
 		fail(w, q, err)
 		return

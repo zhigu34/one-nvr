@@ -26,17 +26,25 @@ import { InfoHint } from './info-hint'
 import { Pager } from './pager'
 import { slicePage } from './operations-format'
 
-/** How many audit rows one page requests. Higher than the shared default because
- *  a single cleanup round collapses dozens of rows into one line, so a page of 50
- *  can render as three visible rows. */
-const AUDIT_PAGE_SIZE = 200
+/** How many audit rows one page requests.
+ *
+ *  Much higher than the shared default because a single cleanup round collapses
+ *  hundreds of rows into one line: this site's most recent 1200 rows were one
+ *  deletion batch, so a smaller page renders as three visible rows and buries the
+ *  operator's own actions. */
+const AUDIT_PAGE_SIZE = 500
 
 /** Below this many visible rows the trail keeps pulling older pages: a page can
  *  collapse into a handful of lines and an empty-looking card reads as a bug. */
 const MIN_VISIBLE_ROWS = 10
 
-/** Hard stop for the automatic fill, so a pathological log cannot page forever. */
-const MAX_AUTO_PAGES = 5
+/**
+ * Hard stop for the automatic fill. This site's log holds 2028 rows of which 1246
+ * are cleanup, so reaching the operator's own actions needs more than a few
+ * pages; twenty pages is 4000 rows, enough for a realistic log while still
+ * bounding a pathological one.
+ */
+const MAX_AUTO_PAGES = 20
 
 /** How many members one expanded batch shows before stopping. The rest stay
  *  reachable through the count and the family filter; rendering 107 rows inline
@@ -116,13 +124,18 @@ export function AuditTrail({
 
   // A single cleanup round can fill an entire page with rows that collapse into
   // one line, so a correct page of 200 can render as four visible rows. That
-  // reads as missing data. Keep pulling while the visible list is thin and the
-  // server still has history — bounded, so a pathological log cannot turn this
-  // into an unbounded fetch.
+  // reads as missing data.
+  //
+  // The test is on *records*, not on rendered groups. One cleanup group can
+  // stand for 1198 rows: counting it as "one visible row" made a page of nothing
+  // but cleanup look like a thin result, and the auto-fill stopped after five
+  // pages — 1200 rows — with the operator's own actions still below the fold.
+  // What matters is whether the non-cleanup records have been reached.
   const last = loaded[loaded.length - 1]
   const nextCursor = last?.next_cursor ?? null
   const pendingPage = responses[responses.length - 1]
-  const thin = groups.length < MIN_VISIBLE_ROWS
+  const substantive = items.filter((item) => !isSystemCleanup(item)).length
+  const thin = groups.length < MIN_VISIBLE_ROWS || substantive < MIN_VISIBLE_ROWS
   const canExtend = thin && !!nextCursor && autoCursors.length < MAX_AUTO_PAGES
   // Adopt the next cursor once the page that produced it has settled. Guarded by
   // "not already queued" so a settled render cannot queue the same page twice.
@@ -151,6 +164,7 @@ export function AuditTrail({
           <p className='text-xs text-muted-foreground'>
             共 {items.length} 条记录
             {groups.length < items.length && `（合并为 ${groups.length} 行）`}
+            {all.length > items.length && ` · 共载入 ${all.length} 条`}
             {hideCleanup && all.length !== items.length && (
               <span> · 已隐藏 {all.length - items.length} 条系统清理</span>
             )}

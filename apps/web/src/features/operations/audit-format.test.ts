@@ -4,6 +4,7 @@ import {
   actorLabel,
   destructiveAction,
   groupAudits,
+  isSystemCleanup,
   objectLabel,
 } from './audit-format'
 
@@ -229,5 +230,42 @@ describe('groupAudits systemActor', () => {
   test('keeps every member for the expand view', () => {
     const groups = groupAudits([row(), row(), row()])
     expect(groups[0].items).toHaveLength(3)
+  })
+})
+
+describe('isSystemCleanup', () => {
+  // This is the predicate that decides whether the audit list has reached the
+  // operator's own actions. Counting a 1198-row cleanup batch as "one visible
+  // row" is what made a full page look like three rows.
+  test('recognises an automatic deletion with no actor', () => {
+    expect(
+      isSystemCleanup({
+        created_at: '2026-10-17T11:27:05Z',
+        action: 'recording.deleted_local',
+        actor_id: null,
+      })
+    ).toBe(true)
+  })
+
+  // A person deleting a recording is exactly the row an operator must be able to
+  // find; it is never routine cleanup.
+  test('never treats a manual deletion as cleanup', () => {
+    expect(
+      isSystemCleanup({
+        created_at: '2026-10-17T11:27:05Z',
+        action: 'recording.deleted_local',
+        actor_id: 'user-1',
+      })
+    ).toBe(false)
+  })
+
+  test('ignores other actions even without an actor', () => {
+    expect(
+      isSystemCleanup({
+        created_at: '2026-10-17T11:27:05Z',
+        action: 'channel.enabled',
+        actor_id: null,
+      })
+    ).toBe(false)
   })
 })
