@@ -168,7 +168,7 @@ test('timezoneChangesDisplayWithoutRestart', async ({ page }) => {
 test('directoryPoolKeepsPendingZLMStatus', async ({page}) => {
   expect(process.env.ONE_NVR_E2E_POOL, 'requires isolated Docker pool fixture').toBe('yes')
   await login(page)
-  await page.goto('/storage-pools')
+  await page.goto('/storage?tab=pools')
   // The add form is collapsed behind a toggle now; open it before filling.
   await page.getByRole('button',{name:'添加存储池',exact:true}).click()
   await page.getByLabel('存储池名称',{exact:true}).fill('验证池')

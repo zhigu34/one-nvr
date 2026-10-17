@@ -50,7 +50,7 @@ async function freshPoolProof(page: Page, poolId: string) {
   // this tab's selected tested revision and plaintext-free form state.
   const poolPage = await page.context().newPage()
   try {
-    await poolPage.goto('/storage-pools')
+    await poolPage.goto('/storage?tab=pools')
     await finished(poolPage, await command(poolPage, '立即检查', '/storage-pools/' + poolId + '/test'))
   } finally {
     await poolPage.close()
@@ -135,7 +135,7 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   const channel2 = channels.find(c => c.channel_no === 2)!
   const status = () => get<Status>(page, `channels/${channel.id}/source/status`)
   const recordings = () => get<{items: {id: string; state: string; source_revision_id: string; pool_id: string; bytes: number; start: string; end: string}[]}>(page, 'recordings?' + new URLSearchParams({channel_id: channel.id, start: new Date(Date.now() - 3600000).toISOString(), end: new Date(Date.now() + 60000).toISOString()}))
-  await page.goto('/storage-pools')
+  await page.goto('/storage?tab=pools')
   // The add form is collapsed behind a toggle now; open it before filling.
   await page.getByRole('button', {name: '添加存储池', exact: true}).click()
   await page.getByLabel('存储池名称', {exact: true}).fill('真实媒体池')

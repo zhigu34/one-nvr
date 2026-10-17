@@ -210,5 +210,9 @@ test('cloud archive offers configuration even with the bundled service off', asy
   // bundled container.
   const link = screen.getByRole('link', { name: '去配置归档目标' })
   await expect.element(link).toBeVisible()
-  expect(link.element().getAttribute('href')).toContain('/archive-targets')
+  // Archive targets are a tab of the storage workspace; the link must land on
+  // that tab, not merely on the page.
+  const href = link.element().getAttribute('href') ?? ''
+  expect(href).toContain('/storage')
+  expect(href).toContain('tab=archive')
 })

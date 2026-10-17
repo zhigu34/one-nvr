@@ -310,8 +310,8 @@ export function PolicyRow({
               )}
               {boundPool && (
                 <Link
-                  to='/storage-pools'
-                  search={{ batch: '' }}
+                  to='/storage'
+                  search={{ tab: 'pools' }}
                   aria-label={`${label} 检查存储池`}
                   title='前往存储池页检查写入能力'
                   className='inline-flex h-7 items-center gap-0.5 rounded-full border px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground'

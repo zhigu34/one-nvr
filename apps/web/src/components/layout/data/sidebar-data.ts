@@ -8,7 +8,6 @@ import {
   Settings,
   Activity,
   CalendarClock,
-  CloudUpload,
   Bell,
   ScanEye,
 } from 'lucide-react'
@@ -47,8 +46,15 @@ export const sidebarData: { navGroups: NavGroup[] } = {
           icon: CalendarClock,
           everyRole: true,
         },
-        { title: '存储池', url: '/storage-pools', icon: HardDrive },
-        { title: '归档目标', url: '/archive-targets', icon: CloudUpload },
+        {
+          // One "storage" entry holding pools and archive targets: they answer
+          // one question between them ("is this recording safe, and where?"),
+          // and splitting them meant switching menus to trace a recording from
+          // the disk it landed on to the copy that protects it.
+          title: '存储',
+          url: '/storage',
+          icon: HardDrive,
+        },
       ],
     },
     {

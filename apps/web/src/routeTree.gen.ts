@@ -14,6 +14,7 @@ import { Route as SetupRouteImport } from './routes/setup'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
 import { Route as AuthenticatedUsersIndexRouteImport } from './routes/_authenticated/users/index'
+import { Route as AuthenticatedStorageIndexRouteImport } from './routes/_authenticated/storage/index'
 import { Route as AuthenticatedStoragePoolsIndexRouteImport } from './routes/_authenticated/storage-pools/index'
 import { Route as AuthenticatedSettingsIndexRouteImport } from './routes/_authenticated/settings/index'
 import { Route as AuthenticatedRecordingsIndexRouteImport } from './routes/_authenticated/recordings/index'
@@ -50,6 +51,12 @@ const AuthenticatedUsersIndexRoute = AuthenticatedUsersIndexRouteImport.update({
   path: '/users/',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedStorageIndexRoute =
+  AuthenticatedStorageIndexRouteImport.update({
+    id: '/storage/',
+    path: '/storage/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedStoragePoolsIndexRoute =
   AuthenticatedStoragePoolsIndexRouteImport.update({
     id: '/storage-pools/',
@@ -131,6 +138,7 @@ export interface FileRoutesByFullPath {
   '/recordings/': typeof AuthenticatedRecordingsIndexRoute
   '/settings/': typeof AuthenticatedSettingsIndexRoute
   '/storage-pools/': typeof AuthenticatedStoragePoolsIndexRoute
+  '/storage/': typeof AuthenticatedStorageIndexRoute
   '/users/': typeof AuthenticatedUsersIndexRoute
 }
 export interface FileRoutesByTo {
@@ -148,6 +156,7 @@ export interface FileRoutesByTo {
   '/recordings': typeof AuthenticatedRecordingsIndexRoute
   '/settings': typeof AuthenticatedSettingsIndexRoute
   '/storage-pools': typeof AuthenticatedStoragePoolsIndexRoute
+  '/storage': typeof AuthenticatedStorageIndexRoute
   '/users': typeof AuthenticatedUsersIndexRoute
 }
 export interface FileRoutesById {
@@ -167,6 +176,7 @@ export interface FileRoutesById {
   '/_authenticated/recordings/': typeof AuthenticatedRecordingsIndexRoute
   '/_authenticated/settings/': typeof AuthenticatedSettingsIndexRoute
   '/_authenticated/storage-pools/': typeof AuthenticatedStoragePoolsIndexRoute
+  '/_authenticated/storage/': typeof AuthenticatedStorageIndexRoute
   '/_authenticated/users/': typeof AuthenticatedUsersIndexRoute
 }
 export interface FileRouteTypes {
@@ -186,6 +196,7 @@ export interface FileRouteTypes {
     | '/recordings/'
     | '/settings/'
     | '/storage-pools/'
+    | '/storage/'
     | '/users/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -203,6 +214,7 @@ export interface FileRouteTypes {
     | '/recordings'
     | '/settings'
     | '/storage-pools'
+    | '/storage'
     | '/users'
   id:
     | '__root__'
@@ -221,6 +233,7 @@ export interface FileRouteTypes {
     | '/_authenticated/recordings/'
     | '/_authenticated/settings/'
     | '/_authenticated/storage-pools/'
+    | '/_authenticated/storage/'
     | '/_authenticated/users/'
   fileRoutesById: FileRoutesById
 }
@@ -265,6 +278,13 @@ declare module '@tanstack/react-router' {
       path: '/users'
       fullPath: '/users/'
       preLoaderRoute: typeof AuthenticatedUsersIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/storage/': {
+      id: '/_authenticated/storage/'
+      path: '/storage'
+      fullPath: '/storage/'
+      preLoaderRoute: typeof AuthenticatedStorageIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/storage-pools/': {
@@ -360,6 +380,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedRecordingsIndexRoute: typeof AuthenticatedRecordingsIndexRoute
   AuthenticatedSettingsIndexRoute: typeof AuthenticatedSettingsIndexRoute
   AuthenticatedStoragePoolsIndexRoute: typeof AuthenticatedStoragePoolsIndexRoute
+  AuthenticatedStorageIndexRoute: typeof AuthenticatedStorageIndexRoute
   AuthenticatedUsersIndexRoute: typeof AuthenticatedUsersIndexRoute
 }
 
@@ -376,6 +397,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedRecordingsIndexRoute: AuthenticatedRecordingsIndexRoute,
   AuthenticatedSettingsIndexRoute: AuthenticatedSettingsIndexRoute,
   AuthenticatedStoragePoolsIndexRoute: AuthenticatedStoragePoolsIndexRoute,
+  AuthenticatedStorageIndexRoute: AuthenticatedStorageIndexRoute,
   AuthenticatedUsersIndexRoute: AuthenticatedUsersIndexRoute,
 }
 

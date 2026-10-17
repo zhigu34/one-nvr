@@ -376,6 +376,6 @@ test('the bound pool shows a storage-page link and the row shows its health', as
   const link = view.getByRole('link', { name: 'CH01 检查存储池' })
   await expect
     .element(link)
-    .toHaveAttribute('href', '/storage-pools?batch=')
+    .toHaveAttribute('href', '/storage?tab=pools')
   setup.client.clear()
 })

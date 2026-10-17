@@ -285,9 +285,18 @@ const MODULE_STATES: Record<
 }
 
 /** Where a module is configured, so a pending state is actionable. */
-const MODULE_LINKS: Record<string, { to: string; label: string }> = {
+const MODULE_LINKS: Record<
+  string,
+  { to: string; label: string; search?: Record<string, string> }
+> = {
   '智能检测': { to: '/detection', label: '去配置检测' },
-  '云归档': { to: '/archive-targets', label: '去配置归档目标' },
+  // Archive targets are a tab of the storage workspace now, so the link has to
+  // land on that tab rather than on the pool list.
+  '云归档': {
+    to: '/storage',
+    label: '去配置归档目标',
+    search: { tab: 'archive' },
+  },
 }
 
 function ModuleStatus({
@@ -310,7 +319,9 @@ function ModuleStatus({
       <p className='mt-2 text-xs text-muted-foreground'>{state.hint}</p>
       {value.state === 'not_configured' && link && (
         <Button asChild size='sm' variant='outline' className='mt-2'>
-          <Link to={link.to}>{link.label}</Link>
+          <Link to={link.to} search={link.search ?? {}}>
+            {link.label}
+          </Link>
         </Button>
       )}
       {/* The raw reason code is a support handle, not an explanation: the hint
