@@ -272,7 +272,7 @@ test('select-all only checks configurable, configured channels', async () => {
     .element(view.getByRole('checkbox', { name: '选择 CH03' }))
     .not.toBeChecked()
   // CH01, CH02 and CH04 are configured and permitted; CH03 is left out.
-  await expect.element(view.getByText('已选 3 路')).toBeVisible()
+  await expect.element(view.getByText('已选 3 个通道')).toBeVisible()
   setup.client.clear()
 })
 test('the compact batch bar enables, disables and clears groups in bulk', async () => {

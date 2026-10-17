@@ -476,14 +476,25 @@ function LiveWorkspace({
           </Button>
           <Button
             variant='outline'
-            disabled={!channels.some((c) => c.enabled !== false)}
+            disabled={
+              !channels.some(
+                (c) =>
+                  c.enabled !== false &&
+                  summaries.get(c.id)?.current_revision_id != null
+              )
+            }
             onClick={() => {
-              // Auto-fill: walk the enabled channels in order into every
-              // empty slot of the current layout.
+              // Auto-fill: walk the usable channels in order into every empty
+              // slot. "Usable" means enabled *and* configured: an empty slot
+              // with no camera behind it produces a black tile and a failure
+              // message, which is worse than leaving the slot empty.
               const next = [...view.channels]
               const used = new Set(next.slice(0, view.layout))
               const queue = channels.filter(
-                (c) => c.enabled !== false && !used.has(c.id)
+                (c) =>
+                  c.enabled !== false &&
+                  !used.has(c.id) &&
+                  summaries.get(c.id)?.current_revision_id != null
               )
               for (let slot = 0; slot < view.layout && queue.length; slot++) {
                 if (next[slot]) continue

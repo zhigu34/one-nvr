@@ -6,6 +6,12 @@ import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  collapseUnconfiguredTail,
+  fullStamp,
+  shortStamp,
+  streamSummary,
+} from './list-format'
 import { Input } from '@/components/ui/input'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import {
@@ -25,7 +31,6 @@ import {
   SelectField,
 } from '@/features/foundation/ui'
 import { cn } from '@/lib/utils'
-import { formatMinute } from '@/features/playback/zone'
 import { downloadLocal, sourceCommand } from './api'
 import { StatusLabel } from './channel-status'
 import { reasonLabel } from './status-reasons'
@@ -87,6 +92,9 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
   const [group, setGroup] = useState('all')
   const [batchGroup, setBatchGroup] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  // Unconfigured slots at the bottom of the list are filler on a full site;
+  // eight of them take a third of the table. Collapsed by default, expandable.
+  const [showUnconfigured, setShowUnconfigured] = useState(false)
   const [confirmDisable, setConfirmDisable] = useState<Channel | null>(null)
   const [confirmBatchDisable, setConfirmBatchDisable] = useState(false)
   // One request for the whole page. The previous shape polled one status
@@ -133,6 +141,13 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
     if (filter === 'normal') return channel.enabled && anyHealthy(channel)
     return channel.enabled && !anyHealthy(channel)
   })
+  // Only collapse in the "all" view: a filtered view that hides rows the
+  // operator explicitly asked for would be a different, surprising behaviour.
+  const collapse = filter === 'all' && !showUnconfigured
+  const tail = collapse
+    ? collapseUnconfiguredTail(visible)
+    : { before: visible, hidden: [], rangeLabel: '', collapsed: false }
+  const rendered = tail.collapsed ? tail.before : visible
   const permitted = channels.filter((channel) =>
     channel.permissions.includes('configure')
   )
@@ -140,7 +155,7 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
   const invalidSelection = selected.size > 0 && chosen.length !== selected.size
   // Unconfigured rows stay out of every batch surface: there is nothing to
   // enable (no source to stream) and no source config to export for them.
-  const selectable = visible.filter(
+  const selectable = rendered.filter(
     (channel) =>
       channel.permissions.includes('configure') && !isUnconfigured(channel)
   )
@@ -382,10 +397,10 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
             </div>
           </div>
           {selected.size > 0 && (
-            <div className='mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card px-3.5 py-2 shadow-2xs'>
+            <div className='mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-primary/30 bg-primary/5 px-3.5 py-2 shadow-2xs'>
               <div className='flex flex-wrap items-center gap-1.5'>
                 <span className='text-sm font-medium whitespace-nowrap'>
-                  已选 {chosen.length} 路
+                  已选 {chosen.length} 个通道
                 </span>
                 <Button
                   type='button'
@@ -507,14 +522,14 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                     <TableHead className='w-20 text-center'>子流</TableHead>
                     <TableHead className='w-20 text-center'>录像</TableHead>
                     <TableHead className='min-w-36'>媒体参数</TableHead>
-                    <TableHead className='w-20 text-right'>码率</TableHead>
+                    <TableHead className='w-20 pr-6 text-right'>码率</TableHead>
                     <TableHead className='w-24'>最近错误</TableHead>
                     <TableHead className='w-32'>更新时间</TableHead>
                     <TableHead className='w-40 text-right'>操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {visible.map((channel) => {
+                  {rendered.map((channel) => {
                     const unconfigured = isUnconfigured(channel)
                     const normal = anyHealthy(channel)
                     return (
@@ -588,7 +603,7 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                           className='text-xs text-muted-foreground'
                           title={
                             channel.source_ip
-                              ? `${channel.source_ip}${channel.main_path}`
+                              ? streamSummary(channel)
                               : undefined
                           }
                         >
@@ -628,7 +643,10 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                             <MediaParamsCell channel={channel} zone={zone} />
                           )}
                         </TableCell>
-                        <TableCell className='text-right text-sm tabular-nums'>
+                        {/* The rate is right-aligned and the error text is
+                            left-aligned; without the gap "244 kbps" and "无"
+                            read as one string. */}
+                        <TableCell className='pr-6 text-right text-sm tabular-nums'>
                           {unconfigured ? (
                             <span className='text-zinc-600'>—</span>
                           ) : (
@@ -636,16 +654,32 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                           )}
                         </TableCell>
                         <TableCell className='text-sm'>
-                          {channel.last_error ? (
+                          {/* An unconfigured channel has never been observed, so
+                              "无" (no errors) would be a claim about a camera
+                              that does not exist yet; it reads "—" like the rest
+                              of its empty cells. */}
+                          {unconfigured ? (
+                            <span className='text-zinc-600'>—</span>
+                          ) : channel.last_error ? (
                             reasonLabel(channel.last_error)
                           ) : (
                             <span className='text-muted-foreground'>无</span>
                           )}
                         </TableCell>
                         <TableCell className='text-xs text-muted-foreground'>
-                          {channel.updated_at && zone
-                            ? formatMinute(Date.parse(channel.updated_at), zone)
-                            : '—'}
+                          {channel.updated_at && zone ? (
+                            <time
+                              dateTime={channel.updated_at}
+                              title={fullStamp(
+                                Date.parse(channel.updated_at),
+                                zone
+                              )}
+                            >
+                              {shortStamp(Date.parse(channel.updated_at), zone)}
+                            </time>
+                          ) : (
+                            '—'
+                          )}
                         </TableCell>
                         <TableCell className='text-right'>
                           <div className='flex items-center justify-end gap-1'>
@@ -724,6 +758,42 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                       </TableRow>
                     )
                   })}
+                  {tail.collapsed && tail.hidden.length > 0 && (
+                    <TableRow>
+                      <TableCell
+                        colSpan={admin ? 13 : 12}
+                        className='bg-muted/30 text-xs text-muted-foreground'
+                      >
+                        <button
+                          type='button'
+                          className='cursor-pointer underline-offset-2 hover:underline'
+                          aria-expanded={showUnconfigured}
+                          onClick={() => setShowUnconfigured(true)}
+                        >
+                          已折叠 {tail.hidden.length} 个未配置通道（
+                          {tail.rangeLabel}）· 点击展开
+                        </button>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {!tail.collapsed && tail.hidden.length > 0 && (
+                    <TableRow>
+                      <TableCell
+                        colSpan={admin ? 13 : 12}
+                        className='bg-muted/30 text-xs text-muted-foreground'
+                      >
+                        <button
+                          type='button'
+                          className='cursor-pointer underline-offset-2 hover:underline'
+                          aria-expanded={showUnconfigured}
+                          onClick={() => setShowUnconfigured(false)}
+                        >
+                          收起 {tail.hidden.length} 个未配置通道（
+                          {tail.rangeLabel}）
+                        </button>
+                      </TableCell>
+                    </TableRow>
+                  )}
                 </TableBody>
               </Table>
               {visible.length === 0 && (
@@ -733,9 +803,12 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
               )}
             </div>
           )}
-          {admin && (
-            <p className='mt-3 text-xs text-muted-foreground'>
-              选中通道后可批量启停、改分组或导出所选配置；未配置摄像头的通道需先完成接入。停用只停止取流与录像，不影响历史回放。
+          {/* The hint is only for the nothing-selected state: once a row is
+              ticked, the batch bar above already says how many and what can be
+              done, and repeating it here made the count appear twice. */}
+          {admin && selected.size === 0 && (
+            <p className='mt-3 text-xs text-muted-foreground/70'>
+              勾选通道后可批量启停、改分组或导出配置；未配置摄像头的通道不参与批量操作。
             </p>
           )}
         </>
