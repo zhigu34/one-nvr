@@ -190,8 +190,26 @@ func (c *Client) Inspect(ctx context.Context, key StreamKey) (StreamSnapshot, er
 		return StreamSnapshot{}, ErrMediaOperation
 	}
 	if !*presence.Online {
+		// isMediaOnline is only true while a consumer is attached. A proxy
+		// that is producing data but has no client reading from it returns
+		// online=false; tearing such a proxy down to rebuild is what produced
+		// the 40-second rebuild loop on CH08's sub stream (no consumer
+		// outside the worker). Cross-check with getMediaInfo: a proxy that
+		// still exposes tracks and a non-negative byte rate is alive, and
+		// should be observed, not declared absent.
+		snap, err := c.fetchSnapshot(ctx, key)
+		if err == nil && len(snap.Tracks) > 0 && snap.BytesPerSecond >= 0 {
+			return snap, nil
+		}
 		return StreamSnapshot{}, ErrStreamAbsent
 	}
+	return c.fetchSnapshot(ctx, key)
+}
+
+// fetchSnapshot reads the detailed media info for a key and rebuilds it as a
+// snapshot, or reports the stream absent if the proxy is gone between the
+// isMediaOnline call and the detail lookup.
+func (c *Client) fetchSnapshot(ctx context.Context, key StreamKey) (StreamSnapshot, error) {
 	var out struct {
 		VHost     string `json:"vhost"`
 		App       string `json:"app"`

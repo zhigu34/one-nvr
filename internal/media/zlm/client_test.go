@@ -185,3 +185,29 @@ func TestInspectConfirmsOfflineBeforeWaitingForMediaDetails(t *testing.T) {
 		t.Fatal("confirmed offline source stayed unknown behind a delayed detail query", err)
 	}
 }
+
+// isMediaOnline returns false for a proxy that has no consumer attached, even
+// when the proxy is still producing data. A worker that pulls the proxy purely
+// to record or sample (no clients downstream) sees isMediaOnline=false and
+// would, before this fix, tear the proxy down to rebuild on every sample —
+// which is the 40-second rebuild loop on idle sub streams. The contract is:
+// isMediaOnline=false alone is not proof of absence; the worker must look at
+// getMediaInfo too. Tracks + non-negative byte rate means the proxy is alive.
+func TestInspectTreatsIdleButProducingProxyAsPresent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/index/api/isMediaOnline" {
+			w.Write([]byte(`{"code":0,"online":false}`))
+			return
+		}
+		w.Write([]byte(`{"code":0,"vhost":"__defaultVhost__","app":"one_nvr","stream":"` + fixtureStream + `","isRecordingMP4":false,"bytesSpeed":128,"tracks":[{"codec_id_name":"h264","ready":true,"width":640,"height":480,"fps":15,"frames":900}]}`))
+	}))
+	defer server.Close()
+	client, _ := New(server.URL, "fixture", server.Client())
+	snap, err := client.Inspect(context.Background(), fixtureKey)
+	if err != nil {
+		t.Fatalf("idle-but-producing proxy was declared absent: %v", err)
+	}
+	if len(snap.Tracks) != 1 || snap.Tracks[0].Frames != 900 || snap.BytesPerSecond != 128 {
+		t.Fatalf("snapshot lost track or byte rate: %+v", snap)
+	}
+}
