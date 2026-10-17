@@ -16,6 +16,7 @@ import {
   actionLabel,
   actorLabel,
   destructiveAction,
+  groupAudits,
   objectLabel,
 } from './audit-format'
 
@@ -87,35 +88,54 @@ export function AuditTrail({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {audits.data?.items.map((item) => (
-                  <TableRow key={item.id}>
+                {groupAudits(audits.data?.items ?? []).map((group) => {
+                  const item = group.first
+                  return (
+                  <TableRow key={group.key}>
                     <TableCell className='whitespace-nowrap text-xs text-muted-foreground'>
                       {displayTime(item.created_at)}
                     </TableCell>
                     <TableCell>
-                      <span
-                        className={
-                          destructiveAction(item.action)
-                            ? 'text-amber-500'
-                            : undefined
-                        }
-                      >
-                        {actionLabel(item.action)}
-                      </span>
-                      {actionLabel(item.action) !== item.action && (
-                        <span className='ml-1.5 font-mono text-[11px] text-muted-foreground/60'>
-                          {item.action}
+                      <div className='flex flex-wrap items-baseline gap-x-2'>
+                        <span
+                          className={
+                            destructiveAction(item.action)
+                              ? 'text-amber-500'
+                              : undefined
+                          }
+                        >
+                          {actionLabel(item.action)}
                         </span>
-                      )}
+                        {/* The raw code stays for support, but at a size that
+                            does not compete with the label. A translated action
+                            is the primary information; the code is the lookup
+                            key for a log search. */}
+                        {actionLabel(item.action) !== item.action && (
+                          <span className='font-mono text-[10px] text-muted-foreground/50'>
+                            {item.action}
+                          </span>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell className='whitespace-nowrap text-sm'>
                       {actorLabel(item.actor_name, item.actor_id)}
                     </TableCell>
                     <TableCell className='text-sm text-muted-foreground'>
                       {objectLabel(item.object_label, item.object_type)}
+                      {group.count > 1 && (
+                        /* The count is the honest presentation of a batch: the
+                           sweep really did remove this many, and collapsing
+                           them into one line must not make it look like one. */
+                        <span className='ml-2 rounded-full border border-border bg-muted px-1.5 py-0.5 text-[11px] text-foreground'>
+                          × {group.count}
+                          {group.labels.length > 1 &&
+                            `（${group.labels[0]} 等）`}
+                        </span>
+                      )}
                     </TableCell>
                   </TableRow>
-                ))}
+                  )
+                })}
               </TableBody>
             </Table>
           </div>

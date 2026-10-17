@@ -125,13 +125,18 @@ export function Operations() {
                   label={c.enabled ? stateLabel(c.state) : '功能未启用'}
                 />
               </div>
-              <p className='mt-1 truncate font-mono text-[11px] text-muted-foreground/70'>
-                {c.name}
-                {c.reason ? ' · ' + c.reason : ''}
-              </p>
               <p className='mt-1 text-xs text-muted-foreground'>
                 {reasonLabel(c.reason) || '—'} ·{' '}
                 {c.observed_at ? displayTime(c.observed_at) : '尚未观测'}
+              </p>
+              {/* The probe code is the support lookup key, so it stays — but it
+                  must not be the line the eye lands on in a healthy column. */}
+              <p
+                className='mt-1 truncate font-mono text-[10px] text-muted-foreground/40'
+                title={`${c.name} · ${c.reason}`}
+              >
+                {c.name}
+                {c.reason ? ' · ' + c.reason : ''}
               </p>
             </article>
           ))}

@@ -151,3 +151,61 @@ export function destructiveAction(action: string): boolean {
     action === 'auth.session_revoked'
   )
 }
+
+/** The subset of an audit row that grouping needs. */
+export interface AuditRowLike {
+  created_at: string
+  action: string
+  actor_id?: string | null
+  object_type?: string
+  object_label?: string
+}
+
+export interface AuditGroup<T extends AuditRowLike> {
+  key: string
+  first: T
+  count: number
+  labels: string[]
+}
+
+/**
+ * A retention or pressure sweep writes one audit row per segment, so a single
+ * cleanup round appears as hundreds of identical rows sharing one timestamp.
+ * That is faithful data and stays on the server, but rendering it verbatim makes
+ * the trail unreadable: the configuration change an operator is looking for sits
+ * underneath two thousand "deleted a recording" lines.
+ *
+ * Rows sharing timestamp, action, actor and object type are therefore shown as
+ * one line carrying a count. The individual rows remain in the database and are
+ * still returned by the API; this is presentation only, and the count keeps the
+ * batch size visible rather than hiding it.
+ */
+export function groupAudits<T extends AuditRowLike>(items: T[]): AuditGroup<T>[] {
+  const groups: AuditGroup<T>[] = []
+  const index = new Map<string, AuditGroup<T>>()
+  for (const item of items) {
+    const key = [
+      item.created_at,
+      item.action,
+      item.actor_id ?? '',
+      item.object_type ?? '',
+    ].join('|')
+    const existing = index.get(key)
+    if (existing) {
+      existing.count += 1
+      if (existing.labels.length < 3 && item.object_label) {
+        existing.labels.push(item.object_label)
+      }
+      continue
+    }
+    const group: AuditGroup<T> = {
+      key,
+      first: item,
+      count: 1,
+      labels: item.object_label ? [item.object_label] : [],
+    }
+    index.set(key, group)
+    groups.push(group)
+  }
+  return groups
+}

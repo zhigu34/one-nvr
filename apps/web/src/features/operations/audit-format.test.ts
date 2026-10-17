@@ -3,6 +3,7 @@ import {
   actionLabel,
   actorLabel,
   destructiveAction,
+  groupAudits,
   objectLabel,
 } from './audit-format'
 
@@ -87,5 +88,59 @@ describe('destructiveAction', () => {
     for (const action of ['recording.streamed', 'auth.login', 'channel.enabled']) {
       expect(destructiveAction(action)).toBe(false)
     }
+  })
+})
+
+describe('groupAudits', () => {
+  const row = (overrides: Partial<Parameters<typeof groupAudits>[0][number]>) => ({
+    created_at: '2026-10-17T11:27:05.605020Z',
+    action: 'recording.deleted_local',
+    actor_id: null,
+    object_type: 'recording_segment',
+    object_label: '2026-10-11 04:49 的录像',
+    ...overrides,
+  })
+
+  // A sweep writes one row per segment. Showing 1246 identical lines makes the
+  // trail unreadable, so they collapse into one line that keeps the count.
+  test('collapses a batch into one row that still shows its size', () => {
+    const items = [
+      row({}),
+      row({}),
+      row({}),
+    ]
+    const groups = groupAudits(items)
+    expect(groups).toHaveLength(1)
+    expect(groups[0].count).toBe(3)
+    expect(groups[0].first.action).toBe('recording.deleted_local')
+  })
+
+  // Different actors are different events even at the same instant; merging them
+  // would attribute one person's action to another.
+  test('keeps different actors apart', () => {
+    const groups = groupAudits([
+      row({ actor_id: 'aaaa' }),
+      row({ actor_id: 'bbbb' }),
+    ])
+    expect(groups).toHaveLength(2)
+  })
+
+  test('keeps different actions apart', () => {
+    const groups = groupAudits([
+      row({}),
+      row({ action: 'recording.streamed' }),
+    ])
+    expect(groups).toHaveLength(2)
+  })
+
+  test('preserves input order', () => {
+    const groups = groupAudits([
+      row({ action: 'auth.login', object_type: 'user' }),
+      row({}),
+    ])
+    expect(groups.map((g) => g.first.action)).toEqual([
+      'auth.login',
+      'recording.deleted_local',
+    ])
   })
 })
