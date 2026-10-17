@@ -2,6 +2,9 @@ import { describe, expect, test } from 'vitest'
 import type { Schema } from '@/lib/types'
 import {
   EMPTY_FILTERS,
+  PAGE_SIZE,
+  clampPage,
+  slicePage,
   filterFaults,
   groupFlappingFaults,
   groupIsSevere,
@@ -247,5 +250,43 @@ describe('groupIsSevere', () => {
     const groups = groupFlappingFaults(items)
     expect(groups).toHaveLength(1)
     expect(groupIsSevere(groups[0])).toBe(true)
+  })
+})
+
+describe('slicePage', () => {
+  const rows = Array.from({ length: 25 }, (_, index) => index)
+
+  test('shows ten rows per page', () => {
+    const first = slicePage(rows, 1)
+    expect(first.rows).toHaveLength(PAGE_SIZE)
+    expect(first.rows[0]).toBe(0)
+    expect(first.pageCount).toBe(3)
+  })
+
+  test('returns the tail on the last page', () => {
+    const last = slicePage(rows, 3)
+    expect(last.rows).toEqual([20, 21, 22, 23, 24])
+    expect(last.page).toBe(3)
+  })
+
+  // Filters shrink the list underneath the current page; clamping keeps the
+  // reader on real data instead of an empty page 7 of 3.
+  test('clamps a page number past the end', () => {
+    const clamped = slicePage(rows, 99)
+    expect(clamped.page).toBe(3)
+    expect(clamped.rows).toHaveLength(5)
+  })
+
+  test('clamps nonsense input to the first page', () => {
+    expect(clampPage(0, 3)).toBe(1)
+    expect(clampPage(-5, 3)).toBe(1)
+    expect(clampPage(Number.NaN, 3)).toBe(1)
+  })
+
+  // An empty list is still "page 1 of 1", not "page 1 of 0".
+  test('reports one page for an empty list', () => {
+    const empty = slicePage([], 1)
+    expect(empty.pageCount).toBe(1)
+    expect(empty.rows).toEqual([])
   })
 })

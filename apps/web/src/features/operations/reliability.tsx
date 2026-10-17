@@ -31,14 +31,17 @@ import {
   EMPTY_FILTERS,
   MINIMUM_SAMPLE_MS,
   SEVERE_FAULT_MS,
+  slicePage,
   filterFaults,
   groupFlappingFaults,
   groupIsSevere,
+  type FaultGroup,
   isSevere,
   orderFaults,
   type FaultFilters,
   type FaultStateFilter,
 } from './operations-format'
+import { Pager } from './pager'
 import { RelativeTime } from './relative-time'
 import { Sparkbar } from './sparkbar'
 
@@ -279,6 +282,7 @@ function FaultsPanel({
   const [filters, setFilters] = useState<FaultFilters>(EMPTY_FILTERS)
   const [aggregate, setAggregate] = useState(true)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [page, setPage] = useState(1)
 
   // Channel options come from the faults themselves rather than a channels call:
   // offering a channel that has no faults in this window would produce an empty
@@ -305,7 +309,12 @@ function FaultsPanel({
   // One entry per row to render: a group when aggregating, a bare fault
   // otherwise. Carrying the group alongside the fault avoids looking it up by
   // id later, which would mis-associate if two rows shared an id.
-  const rows = useMemo(() => {
+  interface FaultRow {
+    key: string
+    fault: Schema<'ReliabilityFault'>
+    group: FaultGroup | null
+  }
+  const rows = useMemo<FaultRow[]>(() => {
     if (groups) return groups.map((group) => ({ key: group.key, fault: group.latest, group }))
     return orderFaults(filtered).map((fault) => ({ key: fault.id, fault, group: null }))
   }, [groups, filtered])
@@ -316,6 +325,11 @@ function FaultsPanel({
     ? groups.filter((group) => groupIsSevere(group)).length
     : filtered.filter((fault) => isSevere(fault.duration_ms)).length
   const open = filtered.filter((fault) => fault.state === 'open').length
+  // Ten visible rows per page, the same rhythm as the audit list. The table used
+  // to scroll inside a 384px box, which fought the page scroll and hid how much
+  // history existed; a pager shows both.
+  const paged = slicePage(rows, page)
+  const visibleRows = paged.rows
   const filteredActive =
     filters.channel !== '' ||
     filters.kind !== '' ||
@@ -325,50 +339,53 @@ function FaultsPanel({
   return (
     <Card id='faults' data-testid='reliability-operations-faults' className='scroll-mt-24'>
       <CardHeader>
-        <CardTitle className='flex flex-wrap items-center gap-2 text-base'>
-          故障
-          <span className='text-xs font-normal text-muted-foreground'>
-            {filtered.length === items.length
-              ? `共 ${items.length} 条`
-              : `${filtered.length} / ${items.length} 条`}
-            {groups && filtered.length > 0 && ` · ${groups.length} 组`}
-          </span>
-          {open > 0 && (
-            <span className='flex items-center gap-1.5 rounded-full border border-red-500/20 bg-red-500/10 px-2 py-0.5 text-xs font-normal text-red-400'>
-              <span aria-hidden className='size-1.5 rounded-full bg-red-500' />
-              {open} 条未恢复
+        <div className='flex flex-wrap items-center justify-between gap-3'>
+          <CardTitle className='flex flex-wrap items-center gap-2 text-base'>
+            故障
+            <span className='text-xs font-normal text-muted-foreground'>
+              {filtered.length === items.length
+                ? `共 ${items.length} 条`
+                : `${filtered.length} / ${items.length} 条`}
+              {groups && filtered.length > 0 && ` · ${groups.length} 组`}
             </span>
-          )}
-          {severe > 0 && (
-            <button
-              type='button'
-              aria-pressed={filters.minDurationMs >= SEVERE_FAULT_MS}
-              onClick={() =>
-                setFilters({
-                  ...filters,
-                  // Toggling off restores "all durations" rather than some
-                  // intermediate floor the operator did not ask for.
-                  minDurationMs:
-                    filters.minDurationMs >= SEVERE_FAULT_MS
-                      ? 0
-                      : SEVERE_FAULT_MS,
-                })
-              }
-              title='只看单次 ≥ 5 分钟的故障'
-              className='cursor-pointer rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-xs font-normal text-amber-400 transition-colors hover:bg-amber-500/20 aria-pressed:ring-1 aria-pressed:ring-amber-500/40'
-            >
-              {severe} 条 ≥ 5 分钟
-            </button>
-          )}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className='space-y-3'>
-        <div className='flex flex-wrap items-end gap-2'>
-          <div className='w-40'>
+            {open > 0 && (
+              <span className='flex items-center gap-1.5 rounded-full border border-red-500/20 bg-red-500/10 px-2 py-0.5 text-xs font-normal text-red-400'>
+                <span aria-hidden className='size-1.5 rounded-full bg-red-500' />
+                {open} 条未恢复
+              </span>
+            )}
+            {severe > 0 && (
+              <button
+                type='button'
+                aria-pressed={filters.minDurationMs >= SEVERE_FAULT_MS}
+                onClick={() =>
+                  setFilters({
+                    ...filters,
+                    // Toggling off restores "all durations" rather than some
+                    // intermediate floor the operator did not ask for.
+                    minDurationMs:
+                      filters.minDurationMs >= SEVERE_FAULT_MS
+                        ? 0
+                        : SEVERE_FAULT_MS,
+                  })
+                }
+                title='只看单次 ≥ 5 分钟的故障'
+                className='cursor-pointer rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-xs font-normal text-amber-400 transition-colors hover:bg-amber-500/20 aria-pressed:ring-1 aria-pressed:ring-amber-500/40'
+              >
+                {severe} 条 ≥ 5 分钟
+              </button>
+            )}
+            <InfoHint label='故障筛选与聚合说明'>
+              筛选与聚合只改变展示，不修改记录。同一通道、同一码流、同一归因且相邻时间内反复中断的条目会归为一行；
+              「≥ 5 分钟」只按单次中断判定，多次短抖动的累加不算。
+            </InfoHint>
+          </CardTitle>
+          <div className='flex flex-wrap items-center gap-2'>
             <SelectField
-              label='通道'
+              ariaLabel='通道'
               value={filters.channel}
               onValueChange={(value) => setFilters({ ...filters, channel: value })}
+              className='w-36'
               options={[
                 { value: '', label: '全部通道' },
                 ...channelOptions.map((option) => ({
@@ -377,78 +394,70 @@ function FaultsPanel({
                 })),
               ]}
             />
-          </div>
-          <div className='w-32'>
             <SelectField
-              label='码流'
+              ariaLabel='码流'
               value={filters.kind}
               onValueChange={(value) => setFilters({ ...filters, kind: value })}
+              className='w-28'
               options={[
-                { value: '', label: '全部' },
+                { value: '', label: '全部码流' },
                 { value: 'main', label: KIND_LABEL.main },
                 { value: 'sub', label: KIND_LABEL.sub },
               ]}
             />
-          </div>
-          <div className='w-36'>
             <SelectField
-              label='最短时长'
+              ariaLabel='最短时长'
               value={String(filters.minDurationMs)}
               onValueChange={(value) =>
                 setFilters({ ...filters, minDurationMs: Number(value) })
               }
+              className='w-32'
               options={DURATION_FILTERS.map((option) => ({
                 value: option.value,
-                label: option.label,
+                label: option.value === '0' ? '全部时长' : option.label,
               }))}
             />
-          </div>
-          <div className='w-32'>
             <SelectField
-              label='状态'
+              ariaLabel='状态'
               value={filters.state}
               onValueChange={(value) =>
                 setFilters({ ...filters, state: value as FaultStateFilter })
               }
+              className='w-28'
               options={[
-                { value: 'all', label: '全部' },
+                { value: 'all', label: '全部状态' },
                 { value: 'open', label: '未恢复' },
                 { value: 'resolved', label: '已恢复' },
               ]}
             />
+            <label className='flex items-center gap-2 text-xs text-muted-foreground'>
+              <Switch
+                checked={aggregate}
+                onCheckedChange={setAggregate}
+                aria-label='聚合连续抖动'
+              />
+              聚合连续抖动
+            </label>
+            {filteredActive && (
+              <Button
+                variant='ghost'
+                size='sm'
+                onClick={() => setFilters(EMPTY_FILTERS)}
+              >
+                清除
+              </Button>
+            )}
           </div>
-          <label className='flex items-center gap-2 pb-2 text-sm'>
-            <Switch
-              checked={aggregate}
-              onCheckedChange={setAggregate}
-              aria-label='聚合连续抖动'
-            />
-            聚合连续抖动
-          </label>
-          {filteredActive && (
-            <Button
-              variant='ghost'
-              size='sm'
-              onClick={() => setFilters(EMPTY_FILTERS)}
-              className='mb-1'
-            >
-              清除筛选
-            </Button>
-          )}
         </div>
-        <p className='text-xs text-muted-foreground'>
-          筛选与聚合只改变展示，不修改记录；同一通道、同一码流、同一归因且相邻时间内反复中断的条目会归为一行。
-        </p>
-
+      </CardHeader>
+      <CardContent className='space-y-3'>
         <QueryState pending={pending} error={error} />
         {!pending && !error && items.length === 0 && <Empty>该窗口没有故障。</Empty>}
         {!pending && !error && items.length > 0 && filtered.length === 0 && (
           <Empty>当前筛选条件下没有故障。</Empty>
         )}
         {rows.length > 0 && (
-          /* A flapping stream can produce hundreds of rows, which pushed every
-             other section off the page. The list scrolls instead of expanding. */
-          <div className='max-h-96 overflow-y-auto rounded-lg border'>
+          <div className='overflow-x-auto rounded-lg border'>
             <Table>
               <TableHeader>
                 <TableRow>
@@ -461,7 +470,7 @@ function FaultsPanel({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map(({ key, fault, group }) => {
+                {visibleRows.map(({ key, fault, group }) => {
                   const isOpen = group?.open || fault.state === 'open'
                   const duration = group?.totalDurationMs ?? fault.duration_ms ?? 0
                   const isExpanded = group ? expanded.has(group.key) : false
@@ -570,6 +579,24 @@ function FaultsPanel({
               </TableBody>
             </Table>
           </div>
+        )}
+        {rows.length > 0 && (
+          <Pager
+            page={paged.page}
+            pageCount={paged.pageCount}
+            rowCount={rows.length}
+            onPage={(next) => {
+              setPage(next)
+              // Collapsed detail belongs to the page it was opened on; carrying
+              // it across pages would expand a row the reader never opened.
+              setExpanded(new Set())
+            }}
+            note={
+              groups && filtered.length > rows.length
+                ? `${filtered.length} 条故障合并为 ${rows.length} 行`
+                : undefined
+            }
+          />
         )}
       </CardContent>
     </Card>

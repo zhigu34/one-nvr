@@ -18,9 +18,13 @@ import {
   actorLabel,
   destructiveAction,
   groupAudits,
+  isSystemCleanup,
   objectLabel,
 } from './audit-format'
+import { Switch } from '@/components/ui/switch'
 import { InfoHint } from './info-hint'
+import { Pager } from './pager'
+import { slicePage } from './operations-format'
 
 /** How many audit rows one page requests. Higher than the shared default because
  *  a single cleanup round collapses dozens of rows into one line, so a page of 50
@@ -56,9 +60,16 @@ const EXPAND_LIMIT = 25
  * dominated by playback audits and bulk deletions, so without it a configuration
  * change from this morning sits thousands of rows deep.
  */
-export function AuditTrail({ family }: { family: string }) {
+export function AuditTrail({
+  family,
+  hideCleanup = false,
+}: {
+  family: string
+  hideCleanup?: boolean
+}) {
   const [cursor, setCursor] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [page, setPage] = useState(1)
   // A single cleanup round can fill an entire page with rows that collapse into
   // one line, so a correct page of 200 can render as four visible rows — which
   // reads as missing data. While the visible list is thin and the server still
@@ -95,8 +106,13 @@ export function AuditTrail({ family }: { family: string }) {
   const loaded = responses
     .map((response) => response.data)
     .filter((page): page is PageData<Schema<'Audit'>> => !!page)
-  const items = loaded.flatMap((page) => page.items)
+  const all = loaded.flatMap((entry) => entry.items)
+  // Hiding routine cleanup is a view filter, not a deletion: the records stay in
+  // the log and the header still reports the full total.
+  const items = hideCleanup ? all.filter((item) => !isSystemCleanup(item)) : all
   const groups = groupAudits(items)
+  const paged = slicePage(groups, page)
+  const visible = paged.rows
 
   // A single cleanup round can fill an entire page with rows that collapse into
   // one line, so a correct page of 200 can render as four visible rows. That
@@ -135,6 +151,9 @@ export function AuditTrail({ family }: { family: string }) {
           <p className='text-xs text-muted-foreground'>
             共 {items.length} 条记录
             {groups.length < items.length && `（合并为 ${groups.length} 行）`}
+            {hideCleanup && all.length !== items.length && (
+              <span> · 已隐藏 {all.length - items.length} 条系统清理</span>
+            )}
           </p>
           <div className='overflow-x-auto rounded-lg border'>
             <Table>
@@ -148,7 +167,7 @@ export function AuditTrail({ family }: { family: string }) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {groups.map((group) => {
+                {visible.map((group) => {
                   const item = group.first
                   const isExpanded = expanded.has(group.key)
                   // A batch of automatic deletions is routine bookkeeping, not an
@@ -189,11 +208,15 @@ export function AuditTrail({ family }: { family: string }) {
                           )}
                         </TableCell>
                         <TableCell className='text-sm text-muted-foreground'>
-                          {objectLabel(
-                            item.object_label,
-                            item.object_type,
-                            item.action
-                          )}
+                          {group.systemActor &&
+                          isSystemCleanup(item) &&
+                          group.count > 1
+                            ? '批量清理历史录像'
+                            : objectLabel(
+                                item.object_label,
+                                item.object_type,
+                                item.action
+                              )}
                           {group.count > 1 && (
                             <span className='ml-2 rounded-full border border-border bg-muted px-1.5 py-0.5 text-[11px] text-foreground'>
                               × {group.count}
@@ -271,6 +294,17 @@ export function AuditTrail({ family }: { family: string }) {
               </TableBody>
             </Table>
           </div>
+          <Pager
+            page={paged.page}
+            pageCount={paged.pageCount}
+            rowCount={groups.length}
+            onPage={setPage}
+            note={
+              groups.length > 0 && groups.length < items.length
+                ? `${items.length} 条记录合并为 ${groups.length} 行`
+                : undefined
+            }
+          />
           <div className='flex items-center gap-3'>
             {nextCursor && (
               <Button
@@ -311,12 +345,16 @@ export function AuditTrail({ family }: { family: string }) {
 export function AuditFamilyFilter({
   value,
   onChange,
+  hideCleanup,
+  onHideCleanupChange,
 }: {
   value: string
   onChange: (value: string) => void
+  hideCleanup: boolean
+  onHideCleanupChange: (value: boolean) => void
 }) {
   return (
-    <div className='flex items-center gap-2'>
+    <div className='flex items-center gap-3'>
       <SelectField
         ariaLabel='操作类别'
         name='audit_family'
@@ -328,6 +366,14 @@ export function AuditFamilyFilter({
           label: item.label,
         }))}
       />
+      <label className='flex items-center gap-2 text-xs text-muted-foreground'>
+        <Switch
+          checked={hideCleanup}
+          onCheckedChange={onHideCleanupChange}
+          aria-label='隐藏系统清理'
+        />
+        隐藏系统清理
+      </label>
       <InfoHint label='审计筛选说明'>
         按类别筛选不删除任何记录：播放与批量清理条目会淹没配置变更，缩窄视图比删证据更合适。
         同一秒内、同一操作、同一操作者的批量记录会合并为一行，可展开查看原始记录。

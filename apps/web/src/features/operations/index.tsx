@@ -82,6 +82,7 @@ export function Operations() {
   const admin = useAuthStore((s) => s.user?.role === 'admin')
   const [job, setJob] = useState('')
   const [auditFamily, setAuditFamily] = useState('')
+  const [hideCleanup, setHideCleanup] = useState(false)
   const components = useAPI<Schema<'Component'>[]>(
     '/api/v1/operations/components',
     admin,
@@ -183,11 +184,13 @@ export function Operations() {
             <AuditFamilyFilter
               value={auditFamily}
               onChange={setAuditFamily}
+              hideCleanup={hideCleanup}
+              onHideCleanupChange={setHideCleanup}
             />
           </div>
         </CardHeader>
         <CardContent>
-          <AuditTrail family={auditFamily} />
+          <AuditTrail family={auditFamily} hideCleanup={hideCleanup} />
         </CardContent>
       </Card>
 

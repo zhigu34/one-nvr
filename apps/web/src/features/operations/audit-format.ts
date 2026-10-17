@@ -200,10 +200,52 @@ export interface AuditGroup<T extends AuditRowLike> {
  * still returned by the API; this is presentation only, and the count keeps the
  * batch size visible rather than hiding it.
  */
+/** Actions a sweep writes once per deleted segment. These are the rows that
+ *  dominate the log and the ones an operator almost never wants to read. */
+export const SYSTEM_CLEANUP_ACTIONS = new Set(['recording.deleted_local'])
+
+/**
+ * isSystemCleanup reports whether a row is routine automatic cleanup.
+ *
+ * The test is the action *and* the absence of an actor: an administrator deleting
+ * a recording by hand is the row an operator must not miss, and it must never be
+ * folded into the batch of automatic ones.
+ */
+export function isSystemCleanup(item: AuditRowLike): boolean {
+  return SYSTEM_CLEANUP_ACTIONS.has(item.action) && !item.actor_id
+}
+
 export function groupAudits<T extends AuditRowLike>(items: T[]): AuditGroup<T>[] {
   const groups: AuditGroup<T>[] = []
   const index = new Map<string, AuditGroup<T>>()
+  let cleanupRun: AuditGroup<T> | null = null
   for (const item of items) {
+    // Consecutive automatic cleanups merge regardless of timestamp: one sweep
+    // writes its rows across a few seconds, so keying on the second split a
+    // single 1198-row batch into eight rows that filled the first page and
+    // pushed the administrator's own actions out of view. "Consecutive" is what
+    // keeps this honest — a manual change in between ends the run.
+    if (isSystemCleanup(item)) {
+      if (cleanupRun) {
+        cleanupRun.count += 1
+        cleanupRun.items.push(item)
+        if (cleanupRun.labels.length < 3 && item.object_label) {
+          cleanupRun.labels.push(item.object_label)
+        }
+        continue
+      }
+      cleanupRun = {
+        key: 'system-cleanup|' + item.created_at,
+        first: item,
+        count: 1,
+        labels: item.object_label ? [item.object_label] : [],
+        systemActor: true,
+        items: [item],
+      }
+      groups.push(cleanupRun)
+      continue
+    }
+    cleanupRun = null
     // Truncate to the second. A sweep writes its rows inside one transaction, so
     // they differ by microseconds; keying on the raw timestamp made every row its
     // own group and left the batch uncollapsed.

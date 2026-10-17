@@ -137,13 +137,41 @@ describe('groupAudits', () => {
     expect(groups[0].count).toBe(3)
   })
 
-  // A different second is a different round, even with everything else equal.
-  test('keeps separate rounds separate', () => {
+  // One sweep writes across a few seconds. Keying on the second split a single
+  // 1198-row batch into eight rows that filled the first page and pushed the
+  // administrator's own actions out of view.
+  test('merges consecutive system cleanups across seconds', () => {
     const groups = groupAudits([
       row({ created_at: '2026-10-17T11:27:05.605020Z' }),
       row({ created_at: '2026-10-17T11:27:06.100000Z' }),
+      row({ created_at: '2026-10-17T11:27:07.400000Z' }),
     ])
-    expect(groups).toHaveLength(2)
+    expect(groups).toHaveLength(1)
+    expect(groups[0].count).toBe(3)
+    expect(groups[0].systemActor).toBe(true)
+  })
+
+  // A person's deletion is not part of the automatic run: folding it in would
+  // hide the one row an operator must be able to find.
+  test('never merges a manual deletion into the automatic batch', () => {
+    const groups = groupAudits([
+      row({ created_at: '2026-10-17T11:27:05.605020Z' }),
+      row({ created_at: '2026-10-17T11:27:06.100000Z', actor_id: 'user-1' }),
+      row({ created_at: '2026-10-17T11:27:07.400000Z' }),
+    ])
+    // cleanup, manual, cleanup — the manual row breaks the run in two.
+    expect(groups).toHaveLength(3)
+    expect(groups.map((group) => group.systemActor)).toEqual([true, false, true])
+  })
+
+  // A non-cleanup action between two sweeps also ends the run.
+  test('keeps a non-cleanup action from being absorbed', () => {
+    const groups = groupAudits([
+      row({ created_at: '2026-10-17T11:27:05.605020Z' }),
+      row({ created_at: '2026-10-17T11:27:06.100000Z', action: 'auth.login', object_type: 'user' }),
+      row({ created_at: '2026-10-17T11:27:07.400000Z' }),
+    ])
+    expect(groups).toHaveLength(3)
   })
 
   // Different actors are different events even at the same instant; merging them

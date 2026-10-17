@@ -241,6 +241,27 @@ export function spanShares(row: {
   }
 }
 
+/** How many rows one page of the fault and audit lists shows. */
+export const PAGE_SIZE = 10
+
+/** clampPage keeps a page number inside a range that shrank underneath it. */
+export function clampPage(page: number, pageCount: number): number {
+  if (!Number.isFinite(page) || page < 1) return 1
+  const last = Math.max(pageCount, 1)
+  return page > last ? last : page
+}
+
+/** slicePage returns one page of rows and the page count for the whole set. */
+export function slicePage<T>(
+  rows: T[],
+  page: number
+): { rows: T[]; pageCount: number; page: number } {
+  const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
+  const current = clampPage(page, pageCount)
+  const start = (current - 1) * PAGE_SIZE
+  return { rows: rows.slice(start, start + PAGE_SIZE), pageCount, page: current }
+}
+
 /** The minimum observation a row needs before its rates are comparable. Mirrors
  *  reliability.sampleNote so the tooltip and the per-row tag cannot disagree. */
 export const MINIMUM_SAMPLE_MS = 60 * 60 * 1000
