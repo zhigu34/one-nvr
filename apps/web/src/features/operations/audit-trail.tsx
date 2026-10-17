@@ -128,8 +128,6 @@ export function AuditTrail({
                            them into one line must not make it look like one. */
                         <span className='ml-2 rounded-full border border-border bg-muted px-1.5 py-0.5 text-[11px] text-foreground'>
                           × {group.count}
-                          {group.labels.length > 1 &&
-                            `（${group.labels[0]} 等）`}
                         </span>
                       )}
                     </TableCell>
