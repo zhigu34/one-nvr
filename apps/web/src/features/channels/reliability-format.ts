@@ -294,7 +294,10 @@ export const FAULT_CATEGORY_LABEL: Record<string, string> = {
   detection_service: '检测服务异常',
   monitoring_unknown: '监测中断',
   maintenance_or_switch: '维护或切换',
-  unknown: '未归类',
+  // "unknown" here is PRD REL-02's own category: the evidence did not support
+  // attributing the fault to any of the eight. "未归类" read like a labelling
+  // failure on our side; "原因未定" says what actually happened.
+  unknown: '原因未定',
 }
 
 export function faultCategoryLabel(category: string): string {
