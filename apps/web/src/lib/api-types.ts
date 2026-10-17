@@ -1941,9 +1941,18 @@ export interface components {
             id: components["schemas"]["UUID"];
             /** Format: uuid */
             actor_id?: string | null;
+            /** @description Username behind actor_id. Empty when the action had no user behind it (system work) or the account no longer exists; actor_id being null distinguishes the former. */
+            actor_name: string;
             action: string;
             /** Format: uuid */
             object_id?: string | null;
+            /**
+             * @description What object_id points at. Empty when the object was never recorded or no longer resolves.
+             * @enum {string}
+             */
+            object_type: "" | "channel" | "user" | "storage_pool" | "recording_segment" | "event";
+            /** @description Human-readable label for object_id, resolved at read time. Empty when object_type is empty. */
+            object_label: string;
             /** Format: date-time */
             created_at: string;
         };

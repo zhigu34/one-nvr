@@ -121,29 +121,92 @@ func (s *Service) Job(ctx context.Context, p auth.Principal, jobID id.ID) (Job, 
 }
 
 type Audit struct {
-	ID        id.ID     `json:"id"`
-	ActorID   *id.ID    `json:"actor_id"`
-	Action    string    `json:"action"`
-	ObjectID  *id.ID    `json:"object_id"`
-	CreatedAt time.Time `json:"created_at"`
+	ID      id.ID  `json:"id"`
+	ActorID *id.ID `json:"actor_id"`
+	// ActorName is the username behind ActorID. The audit trail stores the
+	// identity, not the display name, because a user can be renamed; the page
+	// still has to show a person rather than a UUID, so the join happens here.
+	// Empty means the action had no user behind it (system work) or the account
+	// no longer exists — the two are told apart by ActorID being null.
+	ActorName string `json:"actor_name"`
+	Action    string `json:"action"`
+	ObjectID  *id.ID `json:"object_id"`
+	// ObjectType and ObjectLabel describe what ObjectID points at. Without them
+	// the audit table showed bare UUIDs, which no operator can act on.
+	ObjectType  string    `json:"object_type"`
+	ObjectLabel string    `json:"object_label"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 type AuditPage struct {
 	Items      []Audit `json:"items"`
 	NextCursor *id.ID  `json:"next_cursor"`
 }
 
-func (s *Service) Audits(ctx context.Context, p auth.Principal, cursor id.ID, limit int) (AuditPage, error) {
+// auditPageQuery resolves everything the audit table shows in one pass.
+//
+// The object label is resolved with LEFT JOINs over the entities an audit row
+// can point at. LEFT, not inner: an audit row survives the thing it describes
+// (that is the point of an audit trail), and a deleted channel must still show
+// its row. When no join matches, the label falls back to the action family so
+// the operator sees "录像片段" rather than a UUID.
+const auditPageQuery = `SELECT l.id,l.actor_id,COALESCE(u.username,''),l.action,l.object_id,
+	CASE
+		WHEN c.id IS NOT NULL THEN 'channel'
+		WHEN u2.id IS NOT NULL THEN 'user'
+		WHEN p.id IS NOT NULL THEN 'storage_pool'
+		WHEN s.id IS NOT NULL THEN 'recording_segment'
+		WHEN e.id IS NOT NULL THEN 'event'
+		ELSE ''
+	END,
+	CASE
+		WHEN c.id IS NOT NULL THEN 'CH'||lpad(c.channel_no::text,2,'0')||CASE WHEN c.channel_name<>'' THEN ' '||c.channel_name ELSE '' END
+		WHEN u2.id IS NOT NULL THEN u2.username
+		WHEN p.id IS NOT NULL THEN p.name
+		WHEN s.id IS NOT NULL THEN to_char(s.start_at,'YYYY-MM-DD HH24:MI')||' 的录像'
+		WHEN e.id IS NOT NULL THEN '事件 '||left(e.id::text,8)
+		ELSE ''
+	END,
+	l.created_at
+	FROM audit_logs l
+	LEFT JOIN users u ON u.id=l.actor_id
+	LEFT JOIN users u2 ON u2.id=l.object_id
+	LEFT JOIN channels c ON c.id=l.object_id
+	LEFT JOIN storage_pools p ON p.id=l.object_id
+	LEFT JOIN recording_segments s ON s.id=l.object_id
+	LEFT JOIN events e ON e.id=l.object_id
+	WHERE ($1::text IS NULL OR l.action LIKE $1)`
+
+// validAuditPrefix accepts only the action families this application writes.
+// A free-form filter would let a caller drive a full table scan with a leading
+// wildcard, and there is no operator need for anything outside this list.
+func validAuditPrefix(prefix string) bool {
+	switch prefix {
+	case "", "auth", "channel", "recording", "source", "storage", "event", "detection", "archive", "user", "tls", "site", "onvif":
+		return true
+	}
+	return false
+}
+
+func (s *Service) Audits(ctx context.Context, p auth.Principal, prefix string, cursor id.ID, limit int) (AuditPage, error) {
 	out := AuditPage{Items: make([]Audit, 0)}
-	if limit < 1 || limit > 100 {
+	if limit < 1 || limit > 100 || !validAuditPrefix(prefix) {
 		return out, auth.ErrInvalid
 	}
 	if err := s.Auth.RequireAdmin(ctx, p); err != nil {
 		return out, err
 	}
+	// The prefix filters by action family (auth, channel, recording, ...). It is
+	// a whitelist rather than a free-form LIKE: an operator must not be able to
+	// make the database scan with a wildcard, and the set of families is fixed
+	// by the actions this application writes.
+	var family any
+	if prefix != "" {
+		family = prefix + ".%"
+	}
 	var rows pgx.Rows
 	var err error
 	if cursor == "" {
-		rows, err = s.DB.Pool.Query(ctx, "SELECT id,actor_id,action,object_id,created_at FROM audit_logs ORDER BY created_at DESC,id DESC LIMIT $1", limit+1)
+		rows, err = s.DB.Pool.Query(ctx, auditPageQuery+" ORDER BY l.created_at DESC,l.id DESC LIMIT $2", family, limit+1)
 	} else {
 		var at time.Time
 		err = s.DB.Pool.QueryRow(ctx, "SELECT created_at FROM audit_logs WHERE id=$1", cursor).Scan(&at)
@@ -153,7 +216,7 @@ func (s *Service) Audits(ctx context.Context, p auth.Principal, cursor id.ID, li
 		if err != nil {
 			return out, err
 		}
-		rows, err = s.DB.Pool.Query(ctx, "SELECT id,actor_id,action,object_id,created_at FROM audit_logs WHERE (created_at,id)<($1,$2) ORDER BY created_at DESC,id DESC LIMIT $3", at, cursor, limit+1)
+		rows, err = s.DB.Pool.Query(ctx, auditPageQuery+" AND (l.created_at,l.id)<($2,$3) ORDER BY l.created_at DESC,l.id DESC LIMIT $4", family, at, cursor, limit+1)
 	}
 	if err != nil {
 		return out, err
@@ -161,7 +224,7 @@ func (s *Service) Audits(ctx context.Context, p auth.Principal, cursor id.ID, li
 	defer rows.Close()
 	for rows.Next() {
 		var a Audit
-		if err := rows.Scan(&a.ID, &a.ActorID, &a.Action, &a.ObjectID, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.ActorID, &a.ActorName, &a.Action, &a.ObjectID, &a.ObjectType, &a.ObjectLabel, &a.CreatedAt); err != nil {
 			return out, err
 		}
 		a.CreatedAt = a.CreatedAt.UTC()

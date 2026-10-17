@@ -204,17 +204,17 @@ func TestAuditVisibilityAndPagination(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ops.Audits(ctx, viewer.Principal, "", 10); !errors.Is(err, auth.ErrForbidden) {
+	if _, err := ops.Audits(ctx, viewer.Principal, "", "", 10); !errors.Is(err, auth.ErrForbidden) {
 		t.Fatal("viewer read audit", err)
 	}
 	if _, err := ops.Components(ctx, viewer.Principal); !errors.Is(err, auth.ErrForbidden) {
 		t.Fatal("viewer read diagnostics", err)
 	}
-	first, err := ops.Audits(ctx, admin.Principal, "", 1)
+	first, err := ops.Audits(ctx, admin.Principal, "", "", 1)
 	if err != nil || len(first.Items) != 1 || first.NextCursor == nil {
 		t.Fatalf("audit page: %v %v", first, err)
 	}
-	second, err := ops.Audits(ctx, admin.Principal, *first.NextCursor, 1)
+	second, err := ops.Audits(ctx, admin.Principal, "", *first.NextCursor, 1)
 	if err != nil || len(second.Items) != 1 || second.Items[0].ID == first.Items[0].ID {
 		t.Fatalf("audit cursor: %v %v", second, err)
 	}

@@ -140,7 +140,8 @@ func (r *router) auditLogs(w http.ResponseWriter, q *http.Request, p auth.Princi
 		fail(w, q, err)
 		return
 	}
-	out, err := r.d.Operations.Audits(q.Context(), p, cursor, limit)
+	prefix := q.URL.Query().Get("action_prefix")
+	out, err := r.d.Operations.Audits(q.Context(), p, prefix, cursor, limit)
 	if err != nil {
 		fail(w, q, err)
 		return

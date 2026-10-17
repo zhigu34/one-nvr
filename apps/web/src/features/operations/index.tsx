@@ -1,15 +1,7 @@
 import { useState } from 'react'
 import { useAuthStore } from '@/stores/auth-store'
-import type { Schema, PageData } from '@/lib/types'
+import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { StatusDot } from '@/features/foundation/status-badge'
 import { useAPI, fields, text } from '@/features/foundation/hooks'
 import {
@@ -18,25 +10,67 @@ import {
   Field,
   QueryState,
   Forbidden,
-  Empty,
 } from '@/features/foundation/ui'
 import { ReliabilityOperations } from './reliability'
+import { AuditTrail } from './audit-trail'
+
+/**
+ * Component names and the reason codes the prober writes.
+ *
+ * The page used to print the raw pair ("healthy · probe_succeeded"), which is the
+ * diagnostic vocabulary of the code, not of the operator reading it. The codes
+ * stay underneath for support; the label is what the eye should land on.
+ */
+const COMPONENT_LABEL: Record<string, string> = {
+  gateway: '接入网关',
+  api: 'API 服务',
+  worker: '后台任务',
+  postgres: '数据库',
+  zlm: '流媒体服务',
+  frigate: '智能检测器',
+  mqtt: '消息队列',
+  openlist: '自带云盘',
+}
+
+const STATE_LABEL: Record<string, string> = {
+  healthy: '正常',
+  unavailable: '不可用',
+  unknown: '未知',
+  disabled: '已停用',
+}
+
+const REASON_LABEL: Record<string, string> = {
+  probe_succeeded: '探测通过',
+  sampler_running: '采样进行中',
+  feature_disabled: '功能未启用',
+  observation_expired: '观测过期',
+  not_configured: '尚未配置',
+  // A component nobody has probed yet is not a fault; saying "未观测" is more
+  // accurate than borrowing "unknown", which reads like a measurement failed.
+  not_observed: '尚未观测',
+}
+
+function componentLabel(name: string): string {
+  return COMPONENT_LABEL[name] ?? name
+}
+function stateLabel(state: string): string {
+  return STATE_LABEL[state] ?? state
+}
+function reasonLabel(reason: string): string {
+  if (reason === '') return ''
+  return REASON_LABEL[reason] ?? reason
+}
 
 export function Operations() {
   const admin = useAuthStore((s) => s.user?.role === 'admin')
-  const [job, setJob] = useState(''),
-    [cursor, setCursor] = useState('')
+  const [job, setJob] = useState('')
   const components = useAPI<Schema<'Component'>[]>(
     '/api/v1/operations/components',
     admin,
     5000
   )
-  const audits = useAPI<PageData<Schema<'Audit'>>>(
-    `/api/v1/audit-logs?limit=50${cursor ? '&cursor=' + cursor : ''}`,
-    admin
-  )
   const status = useAPI<Schema<'Job'>>(
-    `/api/v1/jobs/${job}`,
+    '/api/v1/jobs/' + job,
     admin && !!job,
     job ? 1000 : false
   )
@@ -47,115 +81,115 @@ export function Operations() {
       timeZone: site.data?.timezone || 'Asia/Shanghai',
       hour12: false,
     })
+  const unhealthy = (components.data ?? []).filter(
+    (c) => c.enabled && c.state !== 'healthy'
+  )
   return (
     <>
       <PageTitle
         title='运维与审计'
-        description='组件每 5 秒刷新；过期探测显示未知。任务摘要与审计只包含公开诊断信息。'
+        description='组件状态每 5 秒刷新；过期探测显示为未知，而不是当作正常。'
       />
-      <ReliabilityOperations />
+
       <Panel title='组件状态'>
         <QueryState
           pending={components.isPending}
           error={components.error}
           retry={() => components.refetch()}
         />
-        <div className='grid gap-3 md:grid-cols-2'>
+        {unhealthy.length > 0 && (
+          <p className='mb-3 text-sm text-amber-500'>
+            {unhealthy.length} 个组件未处于正常状态：
+            {unhealthy.map((c) => componentLabel(c.name)).join('、')}
+          </p>
+        )}
+        <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-4'>
           {components.data?.map((c) => (
-            <article key={c.name} className='rounded-lg border p-4'>
-              <h3 className='font-medium'>{c.name}</h3>
-              <p className='my-2 text-sm'>
+            <article
+              key={c.name}
+              className='rounded-lg border p-3'
+              data-testid={`component-${c.name}`}
+            >
+              <div className='flex items-center justify-between gap-2'>
+                <h3 className='font-medium'>{componentLabel(c.name)}</h3>
                 <StatusDot
-                  tone={c.enabled ? 'success' : 'neutral'}
-                  label={c.enabled ? c.state : '功能未启用'}
-                />{' '}
-                · {c.reason}
+                  tone={
+                    !c.enabled
+                      ? 'neutral'
+                      : c.state === 'healthy'
+                        ? 'success'
+                        : c.state === 'unavailable'
+                          ? 'destructive'
+                          : 'warning'
+                  }
+                  label={c.enabled ? stateLabel(c.state) : '功能未启用'}
+                />
+              </div>
+              <p className='mt-1 truncate font-mono text-[11px] text-muted-foreground/70'>
+                {c.name}
+                {c.reason ? ' · ' + c.reason : ''}
               </p>
-              <p className='text-xs text-muted-foreground'>
-                最近观测{' '}
+              <p className='mt-1 text-xs text-muted-foreground'>
+                {reasonLabel(c.reason) || '—'} ·{' '}
                 {c.observed_at ? displayTime(c.observed_at) : '尚未观测'}
               </p>
             </article>
           ))}
         </div>
       </Panel>
-      <Panel title='查询持久任务'>
-        <form
-          className='mb-4 flex items-end gap-3'
-          onSubmit={(event) => {
-            event.preventDefault()
-            setJob(text(fields(event.currentTarget), 'job_id'))
-          }}
-        >
-          <Field label='任务 ID' name='job_id' placeholder='UUID' required />
-          <Button>查询任务</Button>
-        </form>
-        {job && (
-          <>
-            <QueryState
-              pending={status.isPending}
-              error={status.error}
-              retry={() => status.refetch()}
-            />
-            {status.data && (
-              <dl className='grid gap-2 text-sm'>
-                <div>类型：{status.data.kind}</div>
-                <div>状态：{status.data.state}</div>
-                <div>尝试：{status.data.attempts}</div>
-                <div>诊断：{status.data.error_code || '无'}</div>
-              </dl>
-            )}
-          </>
-        )}
-      </Panel>
+
+      <ReliabilityOperations />
+
       <Panel title='操作审计'>
-        <QueryState
-          pending={audits.isPending}
-          error={audits.error}
-          retry={() => audits.refetch()}
-        />
-        {audits.data?.items.length === 0 && <Empty>尚无操作记录。</Empty>}
-        <div className='overflow-x-auto rounded-lg border'>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>时间</TableHead>
-                <TableHead>操作</TableHead>
-                <TableHead>操作者</TableHead>
-                <TableHead>对象</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {audits.data?.items.map((a) => (
-                <TableRow key={a.id}>
-                  <TableCell className='whitespace-nowrap'>
-                    {displayTime(a.created_at)}
-                  </TableCell>
-                  <TableCell>{a.action}</TableCell>
-                  <TableCell className='max-w-40 truncate font-mono text-xs'>
-                    {a.actor_id || '系统'}
-                  </TableCell>
-                  <TableCell className='max-w-40 truncate font-mono text-xs'>
-                    {a.object_id || '—'}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-        <div className='mt-4 flex gap-3'>
-          {audits.data?.next_cursor && (
-            <Button onClick={() => setCursor(audits.data!.next_cursor!)}>
-              更早记录
-            </Button>
-          )}
-          {cursor && (
-            <Button variant='outline' onClick={() => setCursor('')}>
-              返回最新
-            </Button>
-          )}
-        </div>
+        <AuditTrail displayTime={displayTime} />
       </Panel>
+
+      <details className='mb-6 rounded-lg border'>
+        <summary className='cursor-pointer px-4 py-3 text-lg font-medium'>
+          按任务 ID 查询
+        </summary>
+        <div className='px-4 pb-4'>
+          <p className='mb-3 text-xs text-muted-foreground'>
+            任务需要从接口或日志取得 ID 才能查询；这不是常用的运维动作，平时不需要展开。
+          </p>
+          <form
+            className='flex flex-wrap items-end gap-3'
+            onSubmit={(event) => {
+              event.preventDefault()
+              setJob(text(fields(event.currentTarget), 'job_id'))
+            }}
+          >
+            <Field
+              label='任务 ID'
+              name='job_id'
+              placeholder='例如 3f2a…'
+              required
+            />
+            <Button>查询任务</Button>
+          </form>
+          {job && (
+            <div className='mt-4'>
+              <QueryState
+                pending={status.isPending}
+                error={status.error}
+                retry={() => status.refetch()}
+              />
+              {status.data && (
+                <dl className='grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm'>
+                  <dt className='text-muted-foreground'>类型</dt>
+                  <dd>{status.data.kind}</dd>
+                  <dt className='text-muted-foreground'>状态</dt>
+                  <dd>{status.data.state}</dd>
+                  <dt className='text-muted-foreground'>尝试次数</dt>
+                  <dd>{status.data.attempts}</dd>
+                  <dt className='text-muted-foreground'>诊断</dt>
+                  <dd>{status.data.error_code || '无'}</dd>
+                </dl>
+              )}
+            </div>
+          )}
+        </div>
+      </details>
     </>
   )
 }

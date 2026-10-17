@@ -21,6 +21,7 @@ import {
   WINDOW_PRESETS,
   bandReason,
   bandTone,
+  faultCategoryLabel,
   formatDuration,
   percentage,
   precisionNote,
@@ -458,7 +459,7 @@ function FaultsPanel({
                 <TableRow key={fault.id}>
                   <TableCell>{new Date(fault.started_at).toLocaleString('zh-CN', { hour12: false })}</TableCell>
                   <TableCell>{KIND_LABEL[fault.kind] || fault.kind}</TableCell>
-                  <TableCell>{fault.category}</TableCell>
+                  <TableCell title={fault.category}>{faultCategoryLabel(fault.category)}</TableCell>
                   <TableCell className='tabular-nums'>{formatDuration(fault.duration_ms || 0)}</TableCell>
                   <TableCell>
                     {fault.state === 'open' ? '持续中' : '已恢复'}

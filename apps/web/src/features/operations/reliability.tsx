@@ -18,6 +18,7 @@ import {
   WINDOW_PRESETS,
   channelLabel,
   emptyObservationReason,
+  faultCategoryLabel,
   formatDuration,
   sampleNote,
   windowFor,
@@ -165,7 +166,17 @@ export function ReliabilityOperations() {
                       <TableCell className='tabular-nums'>{row.fault_count}</TableCell>
                       <TableCell className='text-xs'>
                         {note ? (
-                          <span className='text-amber-600 dark:text-amber-400'>{note}</span>
+                          /* The full sentence is the same on every row that has
+                             thin evidence, so it is shown once on hover and as
+                             a short tag in the cell. Repeating it per row
+                             stretched this column across the page and buried
+                             the numbers it is meant to qualify. */
+                          <span
+                            className='whitespace-nowrap text-amber-600 dark:text-amber-400'
+                            title={note}
+                          >
+                            证据不足
+                          </span>
                         ) : (
                           <Link
                             to='/channels/configure'
@@ -275,12 +286,23 @@ function FaultsPanel({
   return (
     <Card data-testid='reliability-operations-faults'>
       <CardHeader>
-        <CardTitle className='text-base'>故障</CardTitle>
+        <CardTitle className='text-base'>
+          故障
+          {items.length > 0 && (
+            <span className='ml-2 text-xs font-normal text-muted-foreground'>
+              共 {items.length} 条，按时间倒序
+            </span>
+          )}
+        </CardTitle>
       </CardHeader>
       <CardContent className='space-y-3'>
         <QueryState pending={pending} error={error} />
         {!pending && !error && items.length === 0 && <Empty>该窗口没有故障。</Empty>}
         {items.length > 0 && (
+          /* A flapping stream can produce hundreds of rows in one window, which
+             pushed every other section off the page. The list still shows all of
+             them; it scrolls instead of expanding the page. */
+          <div className='max-h-96 overflow-y-auto rounded-lg border'>
           <Table>
             <TableHeader>
               <TableRow>
@@ -299,7 +321,9 @@ function FaultsPanel({
                   <TableCell>{channelLabel(fault.channel_no)}</TableCell>
                   <TableCell>{KIND_LABEL[fault.kind] || fault.kind}</TableCell>
                   <TableCell>
-                    {fault.effective_category}
+                    <span title={fault.effective_category}>
+                      {faultCategoryLabel(fault.effective_category)}
+                    </span>
                     {fault.confirmed_category && (
                       <span className='ml-1 text-xs text-muted-foreground'>
                         （已确认，原始 {fault.initial_reason}）
@@ -315,6 +339,7 @@ function FaultsPanel({
               ))}
             </TableBody>
           </Table>
+          </div>
         )}
       </CardContent>
     </Card>

@@ -1517,6 +1517,31 @@
     "/api/v1/audit-logs": {
       "get": {
         "operationId": "auditLogs",
+        "parameters": [
+          {
+            "name": "action_prefix",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "auth",
+                "channel",
+                "recording",
+                "source",
+                "storage",
+                "event",
+                "detection",
+                "archive",
+                "user",
+                "tls",
+                "site",
+                "onvif"
+              ]
+            },
+            "description": "Restrict to one action family. A whitelist rather than a free-form filter: the families are fixed by the actions this application writes."
+          }
+        ],
         "x-one-nvr-implementation": "implemented",
         "security": [
           {
@@ -3587,6 +3612,10 @@
             ],
             "format": "uuid"
           },
+          "actor_name": {
+            "type": "string",
+            "description": "Username behind actor_id. Empty when the action had no user behind it (system work) or the account no longer exists; actor_id being null distinguishes the former."
+          },
           "action": {
             "type": "string"
           },
@@ -3597,6 +3626,22 @@
             ],
             "format": "uuid"
           },
+          "object_type": {
+            "type": "string",
+            "enum": [
+              "",
+              "channel",
+              "user",
+              "storage_pool",
+              "recording_segment",
+              "event"
+            ],
+            "description": "What object_id points at. Empty when the object was never recorded or no longer resolves."
+          },
+          "object_label": {
+            "type": "string",
+            "description": "Human-readable label for object_id, resolved at read time. Empty when object_type is empty."
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
@@ -3604,7 +3649,11 @@
         },
         "required": [
           "id",
+          "actor_name",
           "action",
+          "object_type",
+          "object_label",
+          "created_at",
           "created_at"
         ],
         "additionalProperties": false

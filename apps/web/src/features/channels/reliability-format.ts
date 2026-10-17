@@ -277,3 +277,26 @@ export function channelLabel(channelNo: number | null | undefined): string {
   }
   return `CH${String(channelNo).padStart(2, '0')}`
 }
+
+/**
+ * Fault categories from PRD REL-02. The list is closed: the backend emits an
+ * unknown category rather than inventing a ninth, so a label missing here means
+ * a category was added without a translation — visible rather than blank.
+ *
+ * Wording follows the PRD's conservatism: "upstream_unavailable" means the source
+ * or its link was unavailable, never "the camera is broken".
+ */
+export const FAULT_CATEGORY_LABEL: Record<string, string> = {
+  upstream_unavailable: '上游不可用',
+  auth_or_config: '认证或配置错误',
+  recording_service: '录像服务异常',
+  storage_directory: '存储目录异常',
+  detection_service: '检测服务异常',
+  monitoring_unknown: '监测中断',
+  maintenance_or_switch: '维护或切换',
+  unknown: '未归类',
+}
+
+export function faultCategoryLabel(category: string): string {
+  return FAULT_CATEGORY_LABEL[category] ?? category
+}
