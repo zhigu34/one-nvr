@@ -108,6 +108,11 @@ func runEventReconciliation(ctx context.Context, s *events.Service) {
 	for {
 		s.ReconcileOpenEvents(ctx)
 		s.ReconcileStaleOpen(ctx)
+		// Footage lands after the event that needs it: a detection mid-segment
+		// is stored before its segments are published, and a source switch can
+		// extend coverage later. Re-evaluating here is what turns a stored
+		// "pending" into linked without waiting for the event to change again.
+		s.ReconcileEventMedia(ctx)
 		select {
 		case <-ctx.Done():
 			return

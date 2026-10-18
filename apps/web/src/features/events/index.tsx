@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { AlertTriangle, CheckCheck, ImageOff, Play, User } from 'lucide-react'
+import { AlertTriangle, CheckCheck, Clock, ImageOff, Play, User, VideoOff } from 'lucide-react'
 import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
@@ -507,26 +507,12 @@ export function Events() {
                   {/* The reason this page exists: watch what happened. It is a
                       visible action rather than a hover affordance, because the
                       operator's job here is reviewing footage, not triage. */}
-                  <div className='border-t px-3 py-2'>
-                    <Link
-                      to='/recordings'
-                      search={{
-                        channel: item.channel_id ?? '',
-                        at: (() => {
-                          const at = new Date(Date.parse(item.started_at ?? '')).getTime() - 10_000
-                          return wallClockInput(at, zone)
-                        })(),
-                        tab: 'playback',
-                      }}
-                      aria-label={`查看事件录像 ${cardTimestamp(item.started_at, zone, now)}`}
-                      className='inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-foreground transition-colors hover:bg-accent'
-                      onClick={(e) => e.stopPropagation()}
-                      onKeyDown={(e) => e.stopPropagation()}
-                    >
-                      <Play aria-hidden className='size-3' />
-                      查看录像
-                    </Link>
-                  </div>
+                  <EventMediaAction
+                    event={item}
+                    zone={zone}
+                    now={now}
+                    canPlayback={!!channelItem?.permissions.includes('playback')}
+                  />
                 </div>
               )
             })}
@@ -867,5 +853,88 @@ function EventDetail({
         )}
       </SheetContent>
     </Sheet>
+  )
+}
+
+/**
+ * What this event has to watch (PRD REC-09).
+ *
+ * The three media states are deliberately rendered differently, because they
+ * mean different things to an operator deciding whether to investigate:
+ *
+ *   linked/partial — footage exists. The link seeks to the *available* start,
+ *     not to "event start minus ten seconds": the segment boundary lands where
+ *     the keyframe put it, and seeking into a gap produces an empty player that
+ *     reads as a broken recording.
+ *   unavailable — the channel was not recording around this event. Saying so
+ *     plainly, with the time to copy for an external NVR, is the honest answer;
+ *     a play button that opens an empty range is not.
+ *   pending — the segment containing this event has not been published yet.
+ *     Rare and short (one publish interval), but showing "no footage" during it
+ *     would be a false negative.
+ */
+function EventMediaAction({
+  event,
+  zone,
+  now,
+  canPlayback,
+}: {
+  event: Schema<'Event'>
+  zone: string
+  now: number
+  canPlayback: boolean
+}) {
+  const state = event.media_state ?? 'pending'
+  const startedAt = Date.parse(event.started_at ?? '')
+  const label = cardTimestamp(event.started_at, zone, now)
+
+  if (!canPlayback) return null
+
+  if (state === 'linked' || state === 'partial') {
+    const at = event.media_start_at ? Date.parse(event.media_start_at) : startedAt
+    return (
+      <div className='border-t px-3 py-2'>
+        <Link
+          to='/recordings'
+          search={{ channel: event.channel_id ?? '', at: wallClockInput(at, zone), tab: 'playback' }}
+          aria-label={`查看事件录像 ${label}`}
+          className='inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-foreground transition-colors hover:bg-accent'
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          <Play aria-hidden className='size-3' />
+          查看录像
+        </Link>
+        {state === 'partial' && (
+          <p className='mt-1 text-center text-[11px] text-amber-600 dark:text-amber-400'>
+            录像只覆盖事件的一部分
+          </p>
+        )}
+      </div>
+    )
+  }
+
+  if (state === 'pending') {
+    return (
+      <div className='border-t px-3 py-2'>
+        <p className='inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-border px-2 py-1 text-xs text-muted-foreground'>
+          <Clock aria-hidden className='size-3' />
+          录像待归档
+        </p>
+      </div>
+    )
+  }
+
+  // unavailable
+  return (
+    <div className='border-t px-3 py-2'>
+      <p className='inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-border px-2 py-1 text-xs text-muted-foreground'>
+        <VideoOff aria-hidden className='size-3' />
+        本机无录像
+      </p>
+      <p className='mt-1 text-center text-[11px] text-muted-foreground'>
+        {formatClock(startedAt, zone)} · 可复制时间人工查询
+      </p>
+    </div>
   )
 }

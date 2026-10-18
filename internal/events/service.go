@@ -38,23 +38,29 @@ var (
 // Event is the API view. raw stays private; zones are the normalized strings
 // Frigate reported, and the snapshot is proxied, never a direct path.
 type Event struct {
-	ID               id.ID          `json:"id"`
-	ChannelID        *id.ID         `json:"channel_id"`
-	SourceRevisionID *id.ID         `json:"source_revision_id"`
-	Source           string         `json:"source"`
-	SourceID         string         `json:"source_id"`
-	Category         string         `json:"category"`
-	Score            float64        `json:"score"`
-	Zones            []string       `json:"zones"`
-	StartedAt        time.Time      `json:"started_at"`
-	EndedAt          *time.Time     `json:"ended_at"`
-	SnapshotState    string         `json:"snapshot_state"`
-	MediaState       string         `json:"media_state"`
-	HandleState      string         `json:"handle_state"`
-	HandleNote       string         `json:"handle_note"`
-	Version          int64          `json:"version"`
-	ExpiresAt        *time.Time     `json:"expires_at"`
-	Handling         []HandleRecord `json:"handling"`
+	ID               id.ID      `json:"id"`
+	ChannelID        *id.ID     `json:"channel_id"`
+	SourceRevisionID *id.ID     `json:"source_revision_id"`
+	Source           string     `json:"source"`
+	SourceID         string     `json:"source_id"`
+	Category         string     `json:"category"`
+	Score            float64    `json:"score"`
+	Zones            []string   `json:"zones"`
+	StartedAt        time.Time  `json:"started_at"`
+	EndedAt          *time.Time `json:"ended_at"`
+	SnapshotState    string     `json:"snapshot_state"`
+	MediaState       string     `json:"media_state"`
+	// The span actually available for playback, which is not the span the
+	// window asked for: a segment boundary lands wherever the keyframe put it.
+	// Null when no footage covers the event.
+	MediaStartAt  *time.Time     `json:"media_start_at"`
+	MediaEndAt    *time.Time     `json:"media_end_at"`
+	MediaSegments int            `json:"media_segments"`
+	HandleState   string         `json:"handle_state"`
+	HandleNote    string         `json:"handle_note"`
+	Version       int64          `json:"version"`
+	ExpiresAt     *time.Time     `json:"expires_at"`
+	Handling      []HandleRecord `json:"handling"`
 	// Hits are the rules this event tripped (AI-06), carried on the detail view
 	// so the operator sees why it was flagged without a second request. The
 	// list view stays lean.
@@ -101,12 +107,12 @@ func New(db *database.DB, accounts *auth.Service, frigateURL string, siteID id.I
 	return &Service{DB: db, Auth: accounts, Frigate: strings.TrimRight(frigateURL, "/"), siteID: siteID, now: time.Now}
 }
 
-const eventColumns = `e.id,e.channel_id,e.source_revision_id,e.source,e.source_id,e.category,e.score,e.zones,e.started_at,e.ended_at,e.snapshot_state,e.media_state,e.handle_state,e.handle_note,e.version,e.expires_at`
+const eventColumns = `e.id,e.channel_id,e.source_revision_id,e.source,e.source_id,e.category,e.score,e.zones,e.started_at,e.ended_at,e.snapshot_state,e.media_state,e.media_start_at,e.media_end_at,e.media_segments,e.handle_state,e.handle_note,e.version,e.expires_at`
 
 func scanEvent(row pgx.Row) (Event, error) {
 	var out Event
 	var zones []byte
-	err := row.Scan(&out.ID, &out.ChannelID, &out.SourceRevisionID, &out.Source, &out.SourceID, &out.Category, &out.Score, &zones, &out.StartedAt, &out.EndedAt, &out.SnapshotState, &out.MediaState, &out.HandleState, &out.HandleNote, &out.Version, &out.ExpiresAt)
+	err := row.Scan(&out.ID, &out.ChannelID, &out.SourceRevisionID, &out.Source, &out.SourceID, &out.Category, &out.Score, &zones, &out.StartedAt, &out.EndedAt, &out.SnapshotState, &out.MediaState, &out.MediaStartAt, &out.MediaEndAt, &out.MediaSegments, &out.HandleState, &out.HandleNote, &out.Version, &out.ExpiresAt)
 	if err != nil {
 		return out, err
 	}

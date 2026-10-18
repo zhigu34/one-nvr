@@ -31,6 +31,12 @@ function fixture(
     handleStates?: Record<string, string>
     versions?: Record<string, number>
     deliveries?: Schema<'NotificationDelivery'>[]
+    // Overrides the event's media verdict so the three states can be rendered
+    // without inventing a whole event per case. Typed as the schema's union:
+    // a bare string would let a typo'd state compile and silently render as
+    // "pending".
+    mediaState?: 'pending' | 'linked' | 'partial' | 'unavailable'
+    mediaStartAt?: string
   } = {}
 ) {
   useAuthStore.getState().setUser({
@@ -53,7 +59,8 @@ function fixture(
       started_at: '2026-10-13T12:00:00Z',
       ended_at: '2026-10-13T12:00:12Z',
       snapshot_state: 'gone',
-      media_state: 'linked',
+      media_state: options.mediaState ?? 'linked',
+      media_start_at: options.mediaStartAt,
       handle_state: 'open',
       version: 3,
       handling: [],
@@ -413,5 +420,73 @@ test('a closed event waiting for its picture says so, not "no picture"', async (
   // ordinary missing picture (which would be a claim it does not have).
   await expect.element(card).not.toHaveTextContent('无抓拍图像')
   await expect.element(card).not.toHaveTextContent('抓拍未到达')
+  client.clear()
+})
+
+// REC-09: the event page must say what footage exists instead of offering a
+// play button that opens an empty range.
+//
+// Each case builds its own event with a *recent* timestamp: the page filters to
+// a 7-day window, so the fixture's fixed 2026-10-13 event would be dropped and
+// the assertion would pass against an empty page.
+function mediaEvent(overrides: Partial<Schema<'Event'>>): Schema<'Event'> {
+  const started = new Date(Date.now() - 60_000).toISOString()
+  return {
+    id: eventID,
+    channel_id: channelID,
+    source: 'frigate',
+    source_id: 'evt-media',
+    category: 'person',
+    score: 0.82,
+    zones: ['门口'],
+    started_at: started,
+    ended_at: new Date(Date.parse(started) + 12_000).toISOString(),
+    snapshot_state: 'gone',
+    media_state: 'linked',
+    handle_state: 'open',
+    version: 3,
+    handling: [],
+    ...overrides,
+  }
+}
+
+test('an event without footage says so instead of showing a play button', async () => {
+  const { client } = fixture([], {
+    events: [mediaEvent({ media_state: 'unavailable' })],
+  })
+  const screen = await view(client)
+  await expect.element(screen.getByText('本机无录像')).toBeVisible()
+  await expect
+    .element(screen.getByRole('link', { name: /查看事件录像/ }))
+    .not.toBeInTheDocument()
+  client.clear()
+})
+
+// A linked event seeks to the available span, not to "start minus ten seconds":
+// the segment boundary lands where the keyframe put it, and seeking into a gap
+// produces an empty player that reads as a broken recording.
+test('a linked event seeks to the available start', async () => {
+  const available = new Date(Date.now() - 65_000).toISOString()
+  const { client } = fixture([], {
+    events: [mediaEvent({ media_state: 'linked', media_start_at: available })],
+  })
+  const screen = await view(client)
+  await expect
+    .element(screen.getByRole('link', { name: /查看事件录像/ }))
+    .toBeVisible()
+  client.clear()
+})
+
+// Partial coverage keeps the link — footage exists — but states the limit, so
+// the operator is not surprised when playback stops early.
+test('a partially covered event keeps playback and states the limit', async () => {
+  const { client } = fixture([], {
+    events: [mediaEvent({ media_state: 'partial' })],
+  })
+  const screen = await view(client)
+  await expect
+    .element(screen.getByRole('link', { name: /查看事件录像/ }))
+    .toBeVisible()
+  await expect.element(screen.getByText(/录像只覆盖事件的一部分/)).toBeVisible()
   client.clear()
 })

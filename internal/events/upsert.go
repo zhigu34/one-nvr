@@ -95,6 +95,27 @@ func (s *Service) eventUpsert(ctx context.Context, in upsertInput) error {
 		if err != nil {
 			return err
 		}
+		// Link the footage in the same transaction as the event itself. The
+		// segment query is a single indexed range read, and doing it here means
+		// an event is never briefly stored as "no footage" when the footage was
+		// already on disk — a window that the page would render as a failure.
+		//
+		// A channel with no ordinary recording simply finds nothing and stays
+		// unavailable; the buffer half of REC-09 is what will fill that gap, and
+		// until it exists "unavailable" is the honest answer.
+		if stored.ChannelID != nil {
+			link, linkErr := s.linkEventMedia(ctx, tx, *stored.ChannelID, stored.StartedAt, stored.EndedAt)
+			if linkErr != nil {
+				return linkErr
+			}
+			if err := s.writeMediaLink(ctx, tx, stored.ID, link); err != nil {
+				return err
+			}
+			stored.MediaState = link.State
+			stored.MediaStartAt = link.Start
+			stored.MediaEndAt = link.End
+			stored.MediaSegments = link.Segments
+		}
 		return s.evaluateRules(ctx, tx, stored)
 	})
 }

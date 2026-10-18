@@ -2614,8 +2614,20 @@ export interface components {
             ended_at?: string | null;
             /** @enum {string} */
             snapshot_state?: "pending" | "ready" | "gone";
-            /** @enum {string} */
-            media_state?: "pending" | "linked" | "unavailable";
+            /**
+             * @description Whether ordinary recording covers this event's window (PRD REC-09). 'linked' means the whole 5s lead-in and lead-out is covered, 'partial' means footage exists but not all of it, 'unavailable' means nothing covers it.
+             * @enum {string}
+             */
+            media_state?: "pending" | "linked" | "partial" | "unavailable";
+            /**
+             * Format: date-time
+             * @description Start of the span actually available for playback. Not the requested window: a segment boundary lands where the keyframe put it.
+             */
+            media_start_at?: string | null;
+            /** Format: date-time */
+            media_end_at?: string | null;
+            /** @description How many segments cover the window. A window split by a source switch is several files that play as one stretch. */
+            media_segments?: number;
             /** @enum {string} */
             handle_state?: "open" | "acknowledged" | "closed" | "false_positive";
             handle_note?: string;

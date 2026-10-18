@@ -9404,11 +9404,28 @@
           },
           "media_state": {
             "type": "string",
+            "description": "Whether ordinary recording covers this event's window (PRD REC-09). 'linked' means the whole 5s lead-in and lead-out is covered, 'partial' means footage exists but not all of it, 'unavailable' means nothing covers it.",
             "enum": [
               "pending",
               "linked",
+              "partial",
               "unavailable"
             ]
+          },
+          "media_start_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Start of the span actually available for playback. Not the requested window: a segment boundary lands where the keyframe put it."
+          },
+          "media_end_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "media_segments": {
+            "type": "integer",
+            "description": "How many segments cover the window. A window split by a source switch is several files that play as one stretch."
           },
           "handle_state": {
             "type": "string",
