@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { Archive, HardDrive } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { StoragePools } from '@/features/storage-pools'
@@ -35,10 +34,14 @@ const TABS = [
 
 export type StorageTab = (typeof TABS)[number]['id']
 
-export function StorageWorkspace({ initialTab }: { initialTab?: string }) {
-  const [tab, setTab] = useState<StorageTab>(
-    initialTab === 'archive' ? 'archive' : 'pools'
-  )
+export function StorageWorkspace({
+  tab,
+  onTabChange,
+}: {
+  /** Which panel is showing. Owned by the route so the address bar tracks it. */
+  tab: StorageTab
+  onTabChange: (tab: StorageTab) => void
+}) {
   return (
     <>
       <div className='mb-5 flex flex-wrap items-center gap-2'>
@@ -50,7 +53,7 @@ export function StorageWorkspace({ initialTab }: { initialTab?: string }) {
               key={item.id}
               type='button'
               aria-pressed={active}
-              onClick={() => setTab(item.id)}
+              onClick={() => onTabChange(item.id)}
               className={cn(
                 'flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors',
                 active

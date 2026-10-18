@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, expect, test, vi } from 'vitest'
+import { useState } from 'react'
 import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
 import { useAuthStore } from '@/stores/auth-store'
-import { StorageWorkspace } from './index'
+import { StorageWorkspace, type StorageTab } from './index'
 import '@/styles/index.css'
 
 const calls = vi.hoisted(() => ({ request: vi.fn() }))
@@ -17,6 +18,14 @@ afterEach(() => {
 })
 
 async function setup(initialTab?: string) {
+  // The workspace is controlled now: the route owns the tab so the address bar
+  // tracks it. A small stateful harness stands in for the route.
+  function Harness() {
+    const [tab, setTab] = useState<StorageTab>(
+      initialTab === 'archive' ? 'archive' : 'pools'
+    )
+    return <StorageWorkspace tab={tab} onTabChange={setTab} />
+  }
   useAuthStore.getState().setUser({
     id: 'admin',
     username: 'admin',
@@ -41,7 +50,7 @@ async function setup(initialTab?: string) {
   })
   return render(
     <QueryClientProvider client={client}>
-      <StorageWorkspace initialTab={initialTab} />
+      <Harness />
     </QueryClientProvider>
   )
 }

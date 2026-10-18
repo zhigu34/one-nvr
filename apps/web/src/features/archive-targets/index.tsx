@@ -4,6 +4,8 @@ import { useAuthStore } from '@/stores/auth-store'
 import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
+import { Eye, EyeOff } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { useAPI } from '@/features/foundation/hooks'
@@ -40,6 +42,10 @@ export function ArchiveTargets() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [caps, setCaps] = useState<Capabilities | null>(null)
+  // Inline test feedback. The result used to be a transient notice; a capsule
+  // that stays put lets the operator compare it against the form they edited.
+  const [testState, setTestState] = useState<'idle' | 'running' | 'failed'>('idle')
+  const [showPassword, setShowPassword] = useState(false)
   const [pending, setPending] = useState(false)
   const [deleting, setDeleting] = useState<Target | null>(null)
 
@@ -78,11 +84,31 @@ export function ArchiveTargets() {
     }, editing ? '归档目标已更新' : '归档目标已登记')
   }
 
-  function test() {
-    void run(async () => {
-      const result = await apiRequest<Capabilities>('/api/v1/archive-targets/test', jsonRequest('POST', editing ? { id: editing, ...form } : form))
+  async function probe(body: Record<string, unknown>) {
+    setPending(true)
+    setError('')
+    setNotice('')
+    setTestState('running')
+    setCaps(null)
+    try {
+      const result = await apiRequest<Capabilities>('/api/v1/archive-targets/test', jsonRequest('POST', body))
       setCaps(result)
-    }, '')
+      setTestState('idle')
+    } catch (cause) {
+      setTestState('failed')
+      setError(errorText(cause))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  function test() {
+    void probe(editing ? { id: editing, ...form } : { ...form })
+  }
+
+  /** Probing a saved target needs no form state: the server has the credential. */
+  function testTarget(target: Target) {
+    void probe({ id: target.id })
   }
 
   function edit(target: Target) {
@@ -102,66 +128,157 @@ export function ArchiveTargets() {
     <div className='space-y-4'>
       <div>
         {/* h2, not h1: this panel sits under the storage workspace, whose tab
-            strip is the page-level navigation. The heading names the tab in
-            full ("归档目标") rather than abbreviating it, so the tab label and
-            the heading agree. */}
+            strip is the page-level navigation. */}
         <h2 className='text-2xl font-semibold tracking-tight'>归档目标</h2>
         <p className='mt-1 text-sm text-muted-foreground'>
-          WebDAV 归档目标是录像完成后的异步上传去处，与目录存储池互不替代；密码加密存储，测试会验证写入、读取、Range 与删除能力。
+          WebDAV 归档目标是录像完成后的异步上传去处，与目录存储池互不替代。
         </p>
       </div>
       <QueryState pending={targets.isPending} error={targets.error} retry={targets.refetch} />
       <Notices notice={notice} error={error} />
       <form
-        className='grid items-end gap-3 rounded-xl border bg-card p-4 md:grid-cols-3'
+        className='grid gap-3 rounded-xl border bg-card p-4'
         onSubmit={(event) => {
           event.preventDefault()
           submit()
         }}
       >
-        <label className='grid gap-2 text-sm'>
-          <span>名称</span>
-          <Input aria-label='归档目标名称' value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required maxLength={64} />
-        </label>
-        <label className='grid gap-2 text-sm'>
-          <span>WebDAV URL</span>
-          <Input aria-label='WebDAV URL' type='url' value={form.base_url} onChange={(event) => setForm({ ...form, base_url: event.target.value })} required placeholder='https://cloud.example.com/dav' />
-        </label>
-        <label className='grid gap-2 text-sm'>
-          <span>远端根目录</span>
-          <Input aria-label='远端根目录' value={form.remote_root} onChange={(event) => setForm({ ...form, remote_root: event.target.value })} required placeholder='/one-nvr' />
-        </label>
-        <label className='grid gap-2 text-sm'>
-          <span>账号</span>
-          <Input aria-label='WebDAV 账号' value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required autoComplete='off' />
-        </label>
-        <label className='grid gap-2 text-sm'>
-          <span>密码{editing ? '（留空保持不变）' : ''}</span>
-          <Input aria-label='WebDAV 密码' type='password' value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required={!editing} autoComplete='new-password' />
-        </label>
-        <label className='grid gap-2 text-sm'>
-          <span>云端保留天数</span>
-          <Input
-            aria-label='云端保留天数'
-            type='number'
-            min={1}
-            max={36500}
-            value={form.cloud_retention_days}
-            onChange={(event) => setForm({ ...form, cloud_retention_days: Number(event.target.value || 0) })}
-            required
-          />
-        </label>
-        <div className='flex flex-wrap items-center gap-2 md:col-span-3'>
-          <Button type='submit' disabled={pending}>{editing ? '保存修改' : '登记目标'}</Button>
-          <Button type='button' variant='outline' disabled={pending} onClick={test}>测试连接</Button>
-          {editing && (
-            <Button type='button' variant='ghost' onClick={() => { setEditing(''); setForm(EMPTY_FORM); setCaps(null) }}>取消编辑</Button>
-          )}
-          {caps && (
-            <span className='text-xs text-muted-foreground' role='status'>
-              能力：写入{caps.write ? '✓' : '✗'} · 读取{caps.read ? '✓' : '✗'} · Range{caps.range ? '✓' : '✗'} · 删除{caps.delete ? '✓' : '✗（到期清理不可用）'}
+        <div className='flex flex-wrap items-center justify-between gap-2'>
+          <h3 className='text-sm font-medium'>
+            {editing ? '编辑 WebDAV 目标' : '登记 WebDAV 目标'}
+          </h3>
+          <span className='rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-600 dark:text-emerald-400'>
+            密码加密存储
+          </span>
+        </div>
+        <div className='grid items-end gap-3 md:grid-cols-3'>
+          <label className='grid gap-2 text-sm'>
+            <span>名称</span>
+            <Input
+              aria-label='归档目标名称'
+              value={form.name}
+              onChange={(event) => setForm({ ...form, name: event.target.value })}
+              required
+              maxLength={64}
+              placeholder='例如：NAS 归档 / OpenList 云盘备份'
+            />
+          </label>
+          <label className='grid gap-2 text-sm'>
+            <span className='flex flex-wrap items-center justify-between gap-1'>
+              WebDAV URL
+              {/* OpenList is the module this deployment ships, so its address is
+                  a one-click fill rather than something to look up. */}
+              <button
+                type='button'
+                aria-label='填入 OpenList 默认地址'
+                className='rounded border px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground hover:bg-accent hover:text-foreground'
+                onClick={(event) => {
+                  // The button lives inside the field's <label>: without this the
+                  // click also focuses the input it belongs to.
+                  event.preventDefault()
+                  setForm({ ...form, base_url: OPENLIST_DAV })
+                }}
+              >
+                填入 OpenList 默认地址
+              </button>
             </span>
+            <Input
+              aria-label='WebDAV URL'
+              type='url'
+              value={form.base_url}
+              onChange={(event) => setForm({ ...form, base_url: event.target.value })}
+              required
+              placeholder='https://cloud.example.com/dav'
+            />
+          </label>
+          <label className='grid gap-2 text-sm'>
+            <span>远端根目录</span>
+            <Input
+              aria-label='远端根目录'
+              value={form.remote_root}
+              onChange={(event) => setForm({ ...form, remote_root: event.target.value })}
+              required
+              placeholder='/one-nvr'
+            />
+          </label>
+          <label className='grid gap-2 text-sm'>
+            <span>账号</span>
+            <Input
+              aria-label='WebDAV 账号'
+              value={form.username}
+              onChange={(event) => setForm({ ...form, username: event.target.value })}
+              required
+              autoComplete='off'
+            />
+          </label>
+          <label className='grid gap-2 text-sm'>
+            <span>密码{editing ? '（留空保持不变）' : ''}</span>
+            <div className='flex'>
+              <Input
+                aria-label='WebDAV 密码'
+                type={showPassword ? 'text' : 'password'}
+                value={form.password}
+                onChange={(event) => setForm({ ...form, password: event.target.value })}
+                required={!editing}
+                autoComplete='new-password'
+                className='rounded-r-none'
+              />
+              {/* WebDAV application passwords are long and easy to mistype; a
+                  reveal toggle is the difference between verifying and guessing. */}
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                aria-pressed={showPassword}
+                className='rounded-l-none border-l-0 px-2'
+                onClick={() => setShowPassword((value) => !value)}
+              >
+                {showPassword ? <EyeOff aria-hidden className='size-4' /> : <Eye aria-hidden className='size-4' />}
+              </Button>
+            </div>
+          </label>
+          <label className='grid gap-2 text-sm'>
+            <span>云端保留</span>
+            <div className='relative'>
+              <Input
+                aria-label='云端保留天数'
+                type='number'
+                min={0}
+                max={36500}
+                value={form.cloud_retention_days}
+                onChange={(event) => setForm({ ...form, cloud_retention_days: Number(event.target.value || 0) })}
+                required
+                className='pr-8'
+              />
+              <span className='pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-xs text-muted-foreground'>
+                天
+              </span>
+            </div>
+            <span className='text-[11px] text-muted-foreground'>默认 365 天，填 0 为永久保留</span>
+          </label>
+        </div>
+        <div className='flex flex-wrap items-center gap-2'>
+          <Button type='button' variant='outline' disabled={pending} onClick={test}>
+            测试连接
+          </Button>
+          <Button type='submit' disabled={pending}>
+            {editing ? '保存修改' : '登记目标'}
+          </Button>
+          {editing && (
+            <Button
+              type='button'
+              variant='ghost'
+              onClick={() => {
+                setEditing('')
+                setForm(EMPTY_FORM)
+                setCaps(null)
+              }}
+            >
+              取消编辑
+            </Button>
           )}
+          <CapabilityBadges caps={caps} state={testState} />
         </div>
       </form>
       {admin && !!targets.data?.items.length && (
@@ -173,24 +290,54 @@ export function ArchiveTargets() {
         />
       )}
       {!targets.data?.items.length && !targets.isPending ? (
-        <Empty>还没有归档目标。登记一个 WebDAV 目标后，可在录像管理页对已发布录像发起上传。</Empty>
+        /* A compact empty state: the full Empty block is a 64px dashed box, and
+           on a fresh install this is the normal state of the page. */
+        <p className='rounded-lg border border-dashed px-3 py-3.5 text-center text-sm text-muted-foreground'>
+          还没有归档目标。登记一个 WebDAV 目标后，可在录像管理页对已发布录像发起上传。
+        </p>
       ) : (
         <div className='space-y-3'>
           {(targets.data?.items || []).map((target) => (
-            <div key={target.id} className='space-y-1 rounded-xl border bg-card p-4 text-sm' data-testid='archive-target-row'>
-              <div className='flex flex-wrap items-center justify-between gap-2'>
-                <span className='font-medium'>
-                  {target.name}
-                  <span className='ml-2 text-xs text-muted-foreground'>{target.enabled ? '已启用' : '已停用'}</span>
-                </span>
-                <div className='flex items-center gap-2'>
-                  <Button size='sm' variant='outline' onClick={() => edit(target)}>编辑</Button>
+            <div
+              key={target.id}
+              className='rounded-xl border bg-card p-4 text-sm'
+              data-testid='archive-target-row'
+            >
+              <div className='flex flex-wrap items-start justify-between gap-2'>
+                <div className='min-w-0'>
+                  <p className='flex flex-wrap items-center gap-2 font-medium'>
+                    {target.name}
+                    <span
+                      className={cn(
+                        'rounded-full border px-1.5 py-0.5 text-[11px] font-normal',
+                        target.enabled
+                          ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                          : 'border-dashed text-muted-foreground'
+                      )}
+                    >
+                      {target.enabled ? '已启用' : '已停用'}
+                    </span>
+                  </p>
+                  <p className='mt-1 truncate font-mono text-xs text-muted-foreground'>
+                    {target.base_url}
+                    {target.remote_root}
+                  </p>
+                </div>
+                <div className='flex flex-wrap items-center gap-2'>
+                  <Button size='sm' variant='outline' disabled={pending} onClick={() => void testTarget(target)}>
+                    测试
+                  </Button>
+                  <Button size='sm' variant='outline' onClick={() => edit(target)}>
+                    编辑
+                  </Button>
                   <Button
                     size='sm'
                     variant='ghost'
-                    onClick={() => void run(async () => {
-                      await apiRequest(`/api/v1/archive-targets/${target.id}`, jsonRequest('PATCH', { ...target, password: '', enabled: !target.enabled }))
-                    }, target.enabled ? '目标已停用' : '目标已启用')}
+                    onClick={() =>
+                      void run(async () => {
+                        await apiRequest(`/api/v1/archive-targets/${target.id}`, jsonRequest('PATCH', { ...target, password: '', enabled: !target.enabled }))
+                      }, target.enabled ? '目标已停用' : '目标已启用')
+                    }
                   >
                     {target.enabled ? '停用' : '启用'}
                   </Button>
@@ -204,9 +351,26 @@ export function ArchiveTargets() {
                   </Button>
                 </div>
               </div>
-              <p className='text-muted-foreground'>
-                {target.base_url} · 根目录 {target.remote_root} · 账号 {target.username} · 云端保留 {target.cloud_retention_days} 天
-              </p>
+              <dl className='mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground'>
+                <div className='flex items-center gap-1'>
+                  <dt>保留</dt>
+                  <dd className='tabular-nums text-foreground'>
+                    {(target.cloud_retention_days ?? 0) > 0
+                      ? `${target.cloud_retention_days} 天`
+                      : '永久'}
+                  </dd>
+                </div>
+                <div className='flex items-center gap-1'>
+                  <dt>账号</dt>
+                  <dd className='text-foreground'>{target.username}</dd>
+                </div>
+                <div className='flex items-center gap-1'>
+                  <dt>最近测试</dt>
+                  <dd>
+                    <StoredCheck check={target.last_check} />
+                  </dd>
+                </div>
+              </dl>
             </div>
           ))}
         </div>
@@ -327,5 +491,102 @@ function PolicyTable({
         })}
       </div>
     </div>
+  )
+}
+
+/** The bundled OpenList container, reachable on the private network. */
+const OPENLIST_DAV = 'http://openlist:5244/dav'
+
+/**
+ * CapabilityBadges renders the probe result inline, next to the buttons.
+ *
+ * ARC-01's promise is that a probe verifies write, read, range and delete. A
+ * green tick with no detail would be a claim; showing the four checks
+ * individually means a target that cannot DELETE (and therefore cannot support
+ * cloud expiry) is visibly incomplete rather than quietly "OK".
+ */
+function CapabilityBadges({
+  caps,
+  state,
+}: {
+  caps: Capabilities | null
+  state: 'idle' | 'running' | 'failed'
+}) {
+  if (state === 'running') {
+    return <span className='text-xs text-muted-foreground'>测试中…</span>
+  }
+  if (state === 'failed') {
+    return (
+      <span
+        role='status'
+        className='rounded-full border border-red-500/30 bg-red-500/10 px-2 py-0.5 text-xs text-red-500'
+      >
+        连接失败
+      </span>
+    )
+  }
+  if (!caps) return null
+  const checks: [string, boolean, string][] = [
+    ['写入', !!caps.write, '无法写入'],
+    ['读取', !!caps.read, '无法读取'],
+    ['Range', !!caps.range, '不支持断点续传'],
+    ['删除', !!caps.delete, '到期清理不可用'],
+  ]
+  const all = checks.every(([, ok]) => ok)
+  return (
+    <span
+      role='status'
+      className={cn(
+        'flex flex-wrap items-center gap-1 rounded-full border px-2 py-0.5 text-xs',
+        all
+          ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+          : 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+      )}
+    >
+      {all ? '✓ 连接正常（' : '⚠ 能力不完整（'}
+      {checks.map(([label, ok, why], index) => (
+        <span key={label} title={ok ? `${label}验证通过` : why}>
+          {index > 0 && ' · '}
+          {label}
+          {ok ? '✓' : '✗'}
+        </span>
+      ))}
+      ）
+    </span>
+  )
+}
+
+/**
+ * StoredCheck renders the probe recorded on the target row.
+ *
+ * It is evidence from the last test, notLive state: a target can be enabled while
+ * its last probe failed, and showing that difference is the point.
+ */
+function StoredCheck({ check }: { check: unknown }) {
+  const value = check as
+    | { state?: string; capabilities?: Capabilities; observed_at?: string }
+    | null
+    | undefined
+  if (!value || !value.state) {
+    return <span className='text-muted-foreground'>未测试</span>
+  }
+  const capabilities = value.capabilities
+  const complete =
+    capabilities &&
+    capabilities.write &&
+    capabilities.read &&
+    capabilities.range &&
+    capabilities.delete
+  return (
+    <span
+      className={cn(
+        complete
+          ? 'text-emerald-600 dark:text-emerald-400'
+          : 'text-amber-600 dark:text-amber-400'
+      )}
+      title={value.observed_at ? new Date(value.observed_at).toLocaleString('zh-CN', { hour12: false }) : undefined}
+    >
+      {value.state === 'healthy' ? (complete ? '正常' : '能力不完整') : '不可达'}
+    </span>
   )
 }
