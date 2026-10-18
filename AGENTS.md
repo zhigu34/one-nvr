@@ -64,6 +64,17 @@ CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真�
 
 ## 当前交接快照（2026-10-09）
 
+- **2026-10-18 事件录像批次（REC-09）第一半已交付：事件关联已有录像**。用户裁决「非事件录制时产生的事件仅做关联已有录像；单独事件录制则产生事件录像」，窗口统一**前 5 秒 / 后 5 秒**。
+  - **`media_state` 从建表起就有 `linked`/`unavailable` 两个值，但全库没有任何代码写过它**——那个字段只是表达了意图。本批让它在 `eventUpsert` 的同一事务里被真正计算并写入，事件与关联一起提交。
+  - **三态而不是两态**：`linked`（窗口被完整覆盖）/ `partial`（有录像但不是全部）/ `unavailable`（没有覆盖）。合并成两态会造成两个方向的错误——把 partial 报成 linked 等于在「只录到一半」的区间上放播放按钮，报成 unavailable 则把磁盘上存在的录像藏起来。REC-09 两个都禁止。
+  - **存的是「实际可用区间」而不是「请求的窗口」**：分片边界落在关键帧处，按请求的起点跳转会落进空隙，播放器空白会被读成「录像坏了」。`media_start_at`/`media_end_at`/`media_segments` 三列就是为此加的（迁移 `0033`）。
+  - **关联判定用区间并集算覆盖率，不是「有没有分片」**：换源时分片会互相重叠，逐个累加分段长度会声称覆盖得比实际多。
+  - **补账循环**：事件落在分片中间时，事件先入库、分片后发布，首次判定必然是 unavailable。`ReconcileEventMedia` 挂在既有的 5 分钟事件对账 ticker 上（`runEventReconciliation`，不新增协程、不动 WaitGroup 计数），对 2 小时内 `media_state='pending'` 的事件重算；找不到录像时**保持 pending 而不是写成 unavailable**，否则「还没发布」会被固化成「没有」。
+  - **前端三态**：`EventMediaAction` 组件。linked/partial 显示「查看录像」且跳转目标是 `media_start_at`（服务端给的实际起点）；partial 额外提示「录像只覆盖事件的一部分」；unavailable 显示「本机无录像」+ 可复制的时间（REC-10 要求时间必须留存供外部 NVR 人工查询）；pending 显示「录像待归档」——不能显示成无录像，那是假阴性。
+  - **测试**：集成 4 个（完整覆盖 / 部分覆盖 / 无录像 / 补账把后到的分片关联上），前端 3 个（三态渲染）。**已验证禁用关联写入会让三个集成测试全部 FAIL**；前端测试也验证过去掉 unavailable 分支会 FAIL。
+  - **未做**：`event_recording` 开关仍未生效，缓冲录制（ZLM 短分片 + tmpfs + ConcatMP4 拼接）是这一批的另一半，需要先真机验证 ZLM 的 `max_second` 行为与 tmpfs 权限。
+
+
 - **2026-10-18 NAS 无法 `git pull` 部署已修（运维记录，不是代码改动）**。症状是 `git fetch` 反复失败，错误在三种之间跳：`GnuTLS recv error (-110)`、`HTTP/2 stream not closed cleanly`、`Failed to connect to github.com port 443 after 133395 ms`。**根因是 DNS 单点**：NAS 上 `github.com` 只解析到 `20.205.243.166`，而这个 IP 从该网络不可达（`curl` 卡在 `Trying` 之后，20 秒建不起连）。
   - **诊断方法（可复用）**：分别探测 `api.github.com` / `codeload.github.com` —— 两者 0.1 秒返回 200/301，只有 `github.com` 不通，说明不是整体断网而是那一个 IP 被阻断。再用 `curl --resolve github.com:443:<ip>` 试其它 GitHub IP，`140.82.112.3` 0.23 秒连通。
   - **修法**：在 NAS 仓库里 `git config http.curloptResolve github.com:443:140.82.112.3`。这把解析钉在仓库局部，不动 `/etc/hosts`、不影响整机其它程序。
