@@ -68,8 +68,10 @@ CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真�
   - **诊断方法（可复用）**：分别探测 `api.github.com` / `codeload.github.com` —— 两者 0.1 秒返回 200/301，只有 `github.com` 不通，说明不是整体断网而是那一个 IP 被阻断。再用 `curl --resolve github.com:443:<ip>` 试其它 GitHub IP，`140.82.112.3` 0.23 秒连通。
   - **修法**：在 NAS 仓库里 `git config http.curloptResolve github.com:443:140.82.112.3`。这把解析钉在仓库局部，不动 `/etc/hosts`、不影响整机其它程序。
   - **同时清掉了历史分叉**：此前几轮 NAS 连不上 GitHub 时，我是用 `git apply` 打补丁再本地提交的，于是 `main` 上积累了 5 个「(NAS apply)」提交，与远端内容相同但 SHA 不同，`pull` 因此拒绝。**对齐前先验证 `git diff --name-only HEAD origin/main | wc -l` 为 0**（确认两棵树完全一致），再 `git reset --hard origin/main`。现在 NAS 与远端是单线历史，`git pull --ff-only` 可直接用。
-  - **后续部署流程恢复为**：`ssh zhigu34@192.168.66.90` → `cd /vol1/1000/docker/one-nvr` → `git pull --ff-only` → `sudo -n bash ./deploy.sh`。注意 `deploy.sh` 没有可执行位，要用 `bash ./deploy.sh`；且必须 `sudo`，否则没有 docker socket 权限。
-  - **如果哪天又连不上**：先 `git config --get http.curloptResolve` 看钉的 IP 是否也失效了，用 `curl --resolve` 逐个试 `140.82.112.3` / `140.82.113.3` 再改配置。SSH 端口是通的（`ssh -T git@github.com` 能完成握手，只是 NAS 没有部署密钥），必要时可改用 SSH remote。
+  - **钉单个 IP 不够**：可达集合会漂移（同一小时内 `20.205.243.166` 先不通后通，`140.82.112.3` 先通后不通），钉死的配置迟早再次卡住，而且**失效的 pin 会让 `git pull` 挂两分钟以上才报错**。
+  - **最终方案是 NAS 上的 `~/deploy-one-nvr.sh`**（不在仓库里，避免污染工作区）：① 先清掉可能失效的 `http.curloptResolve`，用 `timeout 60 git pull --ff-only` 试一次普通拉取；② 失败才逐个探测 `20.205.243.166 / 140.82.112.3 / .113.3 / .114.3 / .116.3 / 20.27.177.113`，钉住第一个能通的再拉。**网络正常时它就是一次普通 pull，探测分支不会执行。**
+  - **部署命令**：`ssh zhigu34@192.168.66.90` → `~/deploy-one-nvr.sh` → `sudo -n bash ./deploy.sh`。`deploy.sh` 没有可执行位要用 `bash`，且必须 `sudo`，否则没有 docker socket 权限。
+  - **SSH 端口始终是通的**（`ssh -T git@github.com` 能完成握手，只是 NAS 没有部署密钥），必要时可改用 SSH remote 彻底绕开 HTTPS。
 
 
 - **2026-10-18 录像计划页交互重构（用户实施，提交 `6c4e9c0`）**：把「每行两个未保存草稿 + 两个按钮」改成「模式下拉即应用 + 绑定移到存储页 + 周计划胶囊摘要」。
