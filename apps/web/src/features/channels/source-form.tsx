@@ -3,6 +3,7 @@ import { apiRequest, jsonRequest, newRequestKey } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
 import {
   Field,
   SelectField,
@@ -283,11 +284,16 @@ function SourceEditor({
                     IP 地址
                   </label>
                   <div className='flex'>
-                    {/* ONVIF is HTTP/SOAP, not RTSP; showing rtsp:// in that
-                        mode described a protocol the probe never uses. */}
-                    <span className='inline-flex items-center rounded-l-md border border-r-0 bg-muted/50 px-2 font-mono text-xs text-muted-foreground'>
-                      {method === 'onvif' ? 'IP 地址' : 'rtsp://'}
-                    </span>
+                    {/* The prefix exists to show that the field is a URL in RTSP
+                        mode. ONVIF probes over HTTP/SOAP, so there the prefix
+                        both named the wrong protocol and duplicated the field
+                        label — and at that width the Chinese label wrapped into
+                        two lines. In ONVIF mode the input starts at the edge. */}
+                    {method === 'rtsp' && (
+                      <span className='inline-flex items-center rounded-l-md border border-r-0 bg-muted/50 px-2 font-mono text-xs text-muted-foreground'>
+                        rtsp://
+                      </span>
+                    )}
                     <input
                       id='source-ip'
                       name='ip'
@@ -295,7 +301,10 @@ function SourceEditor({
                       placeholder='192.168.33.20'
                       value={ip}
                       onChange={(event) => setIP(event.target.value)}
-                      className='flex h-9 w-full min-w-0 rounded-r-md border border-input bg-transparent px-3 py-1 text-base shadow-xs outline-none md:text-sm dark:bg-input/30'
+                      className={cn(
+                        'flex h-9 w-full min-w-0 border border-input bg-transparent px-3 py-1 text-base shadow-xs outline-none md:text-sm dark:bg-input/30',
+                        method === 'rtsp' ? 'rounded-r-md' : 'rounded-md'
+                      )}
                     />
                   </div>
                   <p className='text-[11px] text-muted-foreground'>

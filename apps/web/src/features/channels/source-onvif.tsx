@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Notices, SelectField } from '@/features/foundation/ui'
 import {
   cameraTypeLabel,
+  chooseDefaultStreams,
   inferredBrand,
   inferredModel,
   inferCameraType,
@@ -33,10 +34,6 @@ type Props = {
   onDevice: (device: { brand: string; model: string; cameraType: string }) => void
   /** Switches the password action to "replace" when the operator starts typing. */
   onPasswordNeeded: () => void
-}
-
-function pixels(stream: Schema<'OnvifStream'>) {
-  return stream.width * stream.height
 }
 
 function streamLabel(stream: Schema<'OnvifStream'>) {
@@ -111,15 +108,14 @@ export function SourceOnvifPanel({
       // field to the device default): saving must not silently drop the ONVIF
       // identity just because the operator trusted the default.
       onPortChange(String(value.onvif_port))
-      // Default to the largest stream as the main one and the next distinct
-      // stream as the sub stream, so the common case needs no editing.
-      const ranked = [...value.streams].sort((a, b) => pixels(b) - pixels(a))
-      const main = ranked[0]
+      // Which profile is the main stream is decided by the URI, then by the
+      // device's own order — never by resolution, because a device may report
+      // no size for the main profile and that made the two streams swap.
+      const { main, sub } = chooseDefaultStreams(value.streams)
       if (!main) {
         setError('设备未提供可用的码流，请检查摄像头配置')
         return
       }
-      const sub = ranked.find((stream) => stream.token !== main.token)
       choose(value, main.token, sub ? sub.token : '')
       setNotice(
         value.streams.length > 1
@@ -144,47 +140,43 @@ export function SourceOnvifPanel({
       <p className='text-xs text-muted-foreground'>
         探测只读取配置，不保存、不切换当前源。
       </p>
-      <div className='flex flex-wrap items-end gap-3'>
-        <label className='grid gap-2 text-sm'>
-          ONVIF 端口
-          <input
-            aria-label='ONVIF 端口'
-            /* Wide enough for the whole placeholder: at the previous width
-               "默认 80，常见 8000" was clipped to "默认 80". */
-            className='w-64 rounded-md border bg-background p-2'
-            type='number'
-            min={1}
-            max={65535}
-            placeholder='默认 80，常见 8000 / 8899'
-            value={port}
-            onChange={(event) => onPortChange(event.target.value)}
-          />
-          <span className='flex gap-1 text-[11px] text-muted-foreground'>
-            常见端口：
-            {['80', '8000', '8899'].map((value) => (
-              <button
-                key={value}
-                type='button'
-                className='rounded border px-1 hover:bg-accent'
-                onClick={() => onPortChange(value)}
-              >
-                {value}
-              </button>
-            ))}
-          </span>
-        </label>
+      {/* One row: the port, its common values and the action that uses it sit
+          on the same line. Stacking them cost two extra lines of height for
+          three controls that belong together. */}
+      <div className='flex flex-wrap items-center gap-2'>
+        <input
+          aria-label='ONVIF 端口'
+          className='h-9 w-40 rounded-md border bg-background px-3 text-sm'
+          type='number'
+          min={1}
+          max={65535}
+          placeholder='ONVIF 端口（默认 80）'
+          value={port}
+          onChange={(event) => onPortChange(event.target.value)}
+        />
+        <span className='flex items-center gap-1 text-[11px] text-muted-foreground'>
+          {['80', '8000', '8899'].map((value) => (
+            <button
+              key={value}
+              type='button'
+              className='rounded border px-1.5 py-0.5 hover:bg-accent'
+              onClick={() => onPortChange(value)}
+            >
+              {value}
+            </button>
+          ))}
+        </span>
         <Button
           type='button'
           variant='outline'
+          size='sm'
           disabled={pending || busy || ip.trim() === ''}
           onClick={() => void request()}
         >
           {pending ? '探测中…' : '探测设备与码流'}
         </Button>
         {ip.trim() === '' && (
-          <span className='pb-2 text-xs text-muted-foreground'>
-            请先填写 IP 地址
-          </span>
+          <span className='text-xs text-muted-foreground'>请先填写 IP 地址</span>
         )}
       </div>
       {savedPassword && (
@@ -204,30 +196,27 @@ export function SourceOnvifPanel({
       <Notices error={error} notice={notice} />
       {probe && (
         <div className='grid gap-3 rounded-lg border p-3 text-sm'>
-          <div className='grid gap-1'>
-            <p className='flex flex-wrap items-center gap-2'>
-              <span className='text-muted-foreground'>设备</span>
+          {/* One compact fingerprint line. The three fields below already say
+              what was recognised; repeating a badge here made four green tags
+              for the same fact. */}
+          <p className='flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground'>
+            <span className='text-foreground'>
               {[probe.device.manufacturer, probe.device.model]
                 .filter(Boolean)
                 .join(' ') || '未报告品牌与型号'}
-              <span className='rounded border border-emerald-500/30 bg-emerald-500/10 px-1 py-px text-[10px] text-emerald-500'>
-                已自动识别
-              </span>
-            </p>
+            </span>
             {probe.device.firmware_version && (
-              <p className='text-xs text-muted-foreground'>
-                固件 {probe.device.firmware_version}
-                {probe.device.serial_number
-                  ? ` · 序列号 ${probe.device.serial_number}`
-                  : ''}
-              </p>
+              <span>固件 {probe.device.firmware_version}</span>
             )}
-            <p className='text-xs text-muted-foreground'>
+            {probe.device.serial_number && (
+              <span>序列号 {probe.device.serial_number}</span>
+            )}
+            <span>
               {probe.ptz
-                ? `类型已按 PTZ 能力推断为「${cameraTypeLabel('ptz')}」，方向与变焦控制后续开放`
-                : '设备未报告 PTZ，类型需手动选择（枪机与半球无法通过 ONVIF 区分）'}
-            </p>
-          </div>
+                ? `· 已按 PTZ 推断为${cameraTypeLabel('ptz')}`
+                : '· 未报告 PTZ，类型需手选'}
+            </span>
+          </p>
           <SelectField
             label='主码流'
             className='text-sm'

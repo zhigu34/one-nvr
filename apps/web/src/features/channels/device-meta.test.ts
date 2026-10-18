@@ -3,6 +3,7 @@ import {
   BRAND_PRESETS,
   CAMERA_TYPES,
   cameraTypeLabel,
+  chooseDefaultStreams,
   inferredBrand,
   inferredModel,
   inferCameraType,
@@ -113,5 +114,70 @@ describe('presets', () => {
     for (const brand of ['海康威视', '大华', '宇视', 'TP-LINK', 'Axis']) {
       expect(BRAND_PRESETS).toContain(brand)
     }
+  })
+})
+
+describe('chooseDefaultStreams', () => {
+  // The exact case that inverted this site's Dahua camera: Profile000 is
+  // subtype=0 (main) but reports no resolution, Profile001 is subtype=1 (sub)
+  // at 704×576. Sorting by resolution picked the sub stream as main.
+  test('follows the URI when the main profile reports no size', () => {
+    const streams = [
+      {
+        token: 'Profile000',
+        name: 'Profile000',
+        path: '/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif',
+      },
+      {
+        token: 'Profile001',
+        name: 'Profile001',
+        path: '/cam/realmonitor?channel=1&subtype=1&unicast=true&proto=Onvif',
+        width: 704,
+        height: 576,
+      },
+    ]
+    const { main, sub } = chooseDefaultStreams(streams)
+    expect(main?.token).toBe('Profile000')
+    expect(sub?.token).toBe('Profile001')
+  })
+
+  test('recognises Hikvision channel numbering', () => {
+    const { main, sub } = chooseDefaultStreams([
+      { token: 'a', path: '/Streaming/Channels/102' },
+      { token: 'b', path: '/Streaming/Channels/101' },
+    ])
+    expect(main?.token).toBe('b')
+    expect(sub?.token).toBe('a')
+  })
+
+  test('recognises main and sub path words', () => {
+    const { main, sub } = chooseDefaultStreams([
+      { token: 'a', path: '/ch1/sub' },
+      { token: 'b', path: '/ch1/main' },
+    ])
+    expect(main?.token).toBe('b')
+    expect(sub?.token).toBe('a')
+  })
+
+  // ONVIF has no main-stream flag, so the device's order is the fallback when
+  // the paths carry no marker. That order is what a vendor returns.
+  test('falls back to the device order when the URI says nothing', () => {
+    const { main, sub } = chooseDefaultStreams([
+      { token: 'first', path: '/stream' },
+      { token: 'second', path: '/stream2x' },
+    ])
+    expect(main?.token).toBe('first')
+    expect(sub?.token).toBe('second')
+  })
+
+  // A single-profile device still yields a main stream and no sub.
+  test('handles a single profile', () => {
+    const { main, sub } = chooseDefaultStreams([{ token: 'only', path: '/media' }])
+    expect(main?.token).toBe('only')
+    expect(sub).toBeNull()
+  })
+
+  test('handles no profiles', () => {
+    expect(chooseDefaultStreams([])).toEqual({ main: null, sub: null })
   })
 })

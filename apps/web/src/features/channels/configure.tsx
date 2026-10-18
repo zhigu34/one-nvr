@@ -378,11 +378,20 @@ function ConfigureChannel({
               {/* What the hardware is, when it was recorded. Rendered beside the
                   connection method because the two together answer "which camera
                   is this" — the IP alone does not. */}
-              {(channel.brand || channel.camera_type) && (
-                <span className='rounded border border-border bg-muted/50 px-1.5 py-0.5 text-[11px] text-muted-foreground'>
-                  {[channel.brand, cameraTypeLabel(channel.camera_type)]
-                    .filter(Boolean)
-                    .join(' · ')}
+              {/* Brand, model and type together: "which camera is this" needs
+                  all three, and the IP alone says nothing about the hardware. */}
+              {(channel.brand || channel.model || channel.camera_type) && (
+                <span className='flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground'>
+                  {(channel.brand || channel.model) && (
+                    <span className='rounded border border-border bg-muted/50 px-1.5 py-0.5'>
+                      {[channel.brand, channel.model].filter(Boolean).join(' ')}
+                    </span>
+                  )}
+                  {channel.camera_type && (
+                    <span className='rounded border border-border bg-muted/50 px-1.5 py-0.5'>
+                      {cameraTypeLabel(channel.camera_type)}
+                    </span>
+                  )}
                 </span>
               )}
             </div>

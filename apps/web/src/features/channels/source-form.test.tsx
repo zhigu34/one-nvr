@@ -262,7 +262,7 @@ test('ONVIF asks the camera for its streams and fills the paths, never the passw
   await userEvent.click(view.getByRole('button', { name: '探测设备与码流' }))
   await expect.element(view.getByText(/Fixture Vision FX-9000/)).toBeVisible()
   // The probe now says what it inferred, not just that PTZ exists.
-  await expect.element(view.getByText(/按 PTZ 能力推断/)).toBeVisible()
+  await expect.element(view.getByText(/已按 PTZ 推断/)).toBeVisible()
   await expect
     .element(view.getByLabelText('主流路径', { exact: true }))
     .toHaveValue('/Streaming/Channels/101?transport=tcp')

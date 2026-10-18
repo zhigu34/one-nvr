@@ -131,3 +131,83 @@ export function inferredModel(model: string | undefined): string {
   if (!value) return ''
   return value.length > 128 ? value.slice(0, 128) : value
 }
+
+/**
+ * chooseDefaultStreams decides which profile is the main stream.
+ *
+ * Sorting by resolution looked reasonable and was wrong. A Dahua camera returns
+ * Profile000 (subtype=0, the main stream) with no resolution in its GetProfiles
+ * response and Profile001 (subtype=1, the sub stream) at 704×576, so "largest
+ * first" picked the sub stream as main. The paths then read subtype=1 for main
+ * and subtype=0 for sub — exactly reversed.
+ *
+ * The order of evidence is:
+ *
+ *  1. The URI. `subtype=0`, `/101`, `/main`, `stream1` are main-stream markers;
+ *     their siblings are sub. This is what the device actually serves.
+ *  2. The device's own profile order. ONVIF has no "this is the main stream"
+ *     flag, but every vendor returns the main profile first.
+ *  3. Resolution, and only as a tie-break between profiles whose URI says
+ *     nothing — never as a reason to demote a profile to sub.
+ *
+ * A profile with unparsed dimensions is therefore not "less important": it is
+ * simply a profile whose size the device did not report.
+ */
+export interface StreamLike {
+  token: string
+  name?: string
+  path?: string
+  width?: number
+  height?: number
+}
+
+const MAIN_MARKERS = [
+  /(?:^|[?&/])subtype=0(?:&|$)/i,
+  /\/10*1(?:\?|$|\/)/,
+  /\/(?:main|stream1|video1)(?:[?/]|$)/i,
+]
+const SUB_MARKERS = [
+  /(?:^|[?&/])subtype=[1-9]/i,
+  /\/10*[2-9](?:\?|$|\/)/,
+  /\/(?:sub|stream[2-9]|video[2-9])(?:[?/]|$)/i,
+]
+
+/** streamRole reads the URI, which is the only per-profile fact the device serves. */
+export function streamRole(stream: StreamLike): 'main' | 'sub' | '' {
+  const path = stream.path ?? ''
+  if (!path) return ''
+  for (const marker of SUB_MARKERS) if (marker.test(path)) return 'sub'
+  for (const marker of MAIN_MARKERS) if (marker.test(path)) return 'main'
+  return ''
+}
+
+/**
+ * chooseDefaultStreams returns [main, sub], either of which may be null.
+ *
+ * `streams` is in the device's order: ONVIF has no main flag, but vendors return
+ * the main profile first, so the order is the fallback evidence after the URI.
+ */
+export function chooseDefaultStreams<T extends StreamLike>(
+  streams: T[]
+): { main: T | null; sub: T | null } {
+  if (streams.length === 0) return { main: null, sub: null }
+
+  const byRole: Record<'main' | 'sub', T[]> = { main: [], sub: [] }
+  const unmarked: T[] = []
+  for (const stream of streams) {
+    const role = streamRole(stream)
+    if (role === '') unmarked.push(stream)
+    else byRole[role].push(stream)
+  }
+
+  // The URI decides when it can. Multiple candidates in one role keep device
+  // order; resolution only breaks the tie when a URI left it open.
+  const main =
+    byRole.main[0] ??
+    unmarked[0] ??
+    byRole.sub[0] ??
+    streams[0]
+  const sub =
+    streams.find((stream) => stream.token !== main.token) ?? null
+  return { main, sub }
+}
