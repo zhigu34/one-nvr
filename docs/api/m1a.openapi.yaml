@@ -1409,6 +1409,52 @@
         }
       }
     },
+    "/api/v1/operations/resources": {
+      "get": {
+        "operationId": "operationsResources",
+        "x-one-nvr-implementation": "implemented",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Host CPU, memory and load (DASH-02). Each figure carries its own Known flag: a failed read is reported as unknown, never as zero, because zero is indistinguishable from an idle healthy host.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/HostResources"
+                    },
+                    "request_id": {
+                      "$ref": "#/components/schemas/UUID"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "request_id"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Structured error (401/403/404)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/operations/components": {
       "get": {
         "operationId": "components",
@@ -2850,6 +2896,62 @@
         "type": "integer",
         "format": "int64",
         "minimum": 1
+      },
+      "HostResources": {
+        "type": "object",
+        "description": "Host figures for DASH-02. Each metric carries its own Known flag: unknown must be rendered as unknown, never as zero.",
+        "properties": {
+          "cpu_percent": {
+            "type": "number",
+            "description": "Busy share of all cores since the previous sample."
+          },
+          "cpu_known": {
+            "type": "boolean",
+            "description": "False on the first sample, when there is no interval to divide the /proc/stat counters by."
+          },
+          "cpu_cores": {
+            "type": "integer"
+          },
+          "memory_percent": {
+            "type": "number",
+            "description": "Used share of total memory, where used excludes reclaimable cache (MemTotal - MemAvailable)."
+          },
+          "memory_known": {
+            "type": "boolean"
+          },
+          "memory_total_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "memory_used_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "load_average": {
+            "type": "number",
+            "description": "One-minute load average. Reported separately from CPU percent: a host can be at 100% of one core with a load of 1.0."
+          },
+          "load_known": {
+            "type": "boolean"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "cpu_percent",
+          "cpu_known",
+          "cpu_cores",
+          "memory_percent",
+          "memory_known",
+          "memory_total_bytes",
+          "memory_used_bytes",
+          "load_average",
+          "load_known",
+          "observed_at"
+        ],
+        "additionalProperties": false
       },
       "Error": {
         "type": "object",

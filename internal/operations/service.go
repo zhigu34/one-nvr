@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"regexp"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -18,10 +19,27 @@ type Service struct {
 	DB                              *database.DB
 	Auth                            *auth.Service
 	FrigateEnabled, OpenListEnabled bool
+	// host is the sampler behind HostResources. It keeps the previous CPU
+	// counters, so it must survive between requests rather than being created
+	// per call — a fresh sampler has nothing to subtract from.
+	host *hostSampler
+	once sync.Once
+}
+
+// Resources reports what the machine is doing (DASH-02).
+//
+// Administrator-only: it describes the host one-nvr runs on, which is site
+// infrastructure rather than business data.
+func (s *Service) Resources(ctx context.Context, p auth.Principal) (HostResources, error) {
+	if err := s.Auth.RequireAdmin(ctx, p); err != nil {
+		return HostResources{}, err
+	}
+	s.once.Do(func() { s.host = newHostSampler() })
+	return s.host.Sample(ctx), nil
 }
 
 func New(db *database.DB, a *auth.Service, frigate, openlist bool) *Service {
-	return &Service{db, a, frigate, openlist}
+	return &Service{DB: db, Auth: a, FrigateEnabled: frigate, OpenListEnabled: openlist}
 }
 
 type Component struct {

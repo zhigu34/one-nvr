@@ -3,6 +3,7 @@ import {
   Activity,
   ArrowRight,
   Cctv,
+  Cpu,
   Database,
   HardDrive,
   Play,
@@ -110,6 +111,14 @@ export function Overview() {
   )
   const components = useAPI<Component[]>(
     '/api/v1/operations/components',
+    admin,
+    5000
+  )
+  // DASH-02 host figures. Polled on the same cadence as the component matrix:
+  // they describe the same machine, and two different refresh rates would let
+  // the card disagree with itself.
+  const resources = useAPI<Schema<'HostResources'>>(
+    '/api/v1/operations/resources',
     admin,
     5000
   )
@@ -458,6 +467,56 @@ export function Overview() {
               {site.data.timezone}
             </p>
           </div>
+          {/* DASH-02: what the host itself is doing. Unknown is shown as
+              unknown — a failed read is not an idle machine, and printing 0%
+              would say the opposite of the truth. */}
+          {admin && (
+            <div data-testid='host-resources' className='rounded-xl border bg-card p-4'>
+              <p className='flex items-center gap-1.5 text-xs text-muted-foreground'>
+                <Cpu aria-hidden className='size-3.5' />
+                主机资源
+              </p>
+              <dl className='mt-2 grid gap-1.5 text-sm'>
+                <div className='flex items-baseline justify-between gap-2'>
+                  <dt className='text-xs text-muted-foreground'>CPU</dt>
+                  <dd className='tabular-nums'>
+                    {resources.data?.cpu_known
+                      ? `${resources.data.cpu_percent}%`
+                      : resources.isPending
+                        ? '…'
+                        : '未知'}
+                  </dd>
+                </div>
+                <div className='flex items-baseline justify-between gap-2'>
+                  <dt className='text-xs text-muted-foreground'>内存</dt>
+                  <dd className='tabular-nums'>
+                    {resources.data?.memory_known
+                      ? `${resources.data.memory_percent}%`
+                      : resources.isPending
+                        ? '…'
+                        : '未知'}
+                  </dd>
+                </div>
+                <div className='flex items-baseline justify-between gap-2'>
+                  <dt className='text-xs text-muted-foreground'>负载</dt>
+                  <dd className='tabular-nums'>
+                    {resources.data?.load_known
+                      ? resources.data.load_average
+                      : resources.isPending
+                        ? '…'
+                        : '未知'}
+                  </dd>
+                </div>
+              </dl>
+              {resources.data?.memory_known && (
+                <p className='mt-2 text-xs text-muted-foreground'>
+                  {gib(resources.data.memory_used_bytes)} /{' '}
+                  {gib(resources.data.memory_total_bytes)} 已用 ·{' '}
+                  {resources.data.cpu_cores} 核
+                </p>
+              )}
+            </div>
+          )}
         </div>
       )}
       {admin && (

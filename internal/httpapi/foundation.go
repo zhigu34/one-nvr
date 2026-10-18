@@ -121,6 +121,19 @@ func (r *router) components(w http.ResponseWriter, q *http.Request, p auth.Princ
 	}
 	respond(w, q, 200, out)
 }
+
+// resources reports host CPU, memory and load (DASH-02).
+func (r *router) resources(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	out, err := r.d.Operations.Resources(q.Context(), p)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	// The figures are a snapshot of this instant; caching them would hand a
+	// later reader a number that no longer describes the machine.
+	w.Header().Set("Cache-Control", "no-store")
+	respond(w, q, 200, out)
+}
 func (r *router) job(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
 	jobID, err := pathID(q)
 	if err != nil {

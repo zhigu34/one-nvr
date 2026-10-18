@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -239,5 +240,70 @@ func TestWorkerSamplerSkipsDisabledAdapters(t *testing.T) {
 		if (c.Name == "postgres" || c.Name == "worker") && c.State != "healthy" {
 			t.Fatal("sampler failed to report real heartbeat", c)
 		}
+	}
+}
+
+// DASH-02: the host resource endpoint must report figures that came from a real
+// read, and must answer unknown rather than zero when it could not read.
+func TestOperationsResourcesReadsHost(t *testing.T) {
+	if _, err := os.Stat("/proc/meminfo"); err != nil {
+		// The collector reads Linux /proc. On a macOS development host there is
+		// nothing to read, so the behaviour under test does not exist here; the
+		// real check runs on the Linux CI image and the deployed NAS.
+		t.Skip("no /proc on this platform")
+	}
+	db, accounts, _, admin := authFixture(t)
+	ctx := context.Background()
+	ops := operations.New(db, accounts, false, false)
+
+	// The first sample has no previous CPU counters, so CPU is unknown; memory
+	// and load come from single reads and are available immediately.
+	first, err := ops.Resources(ctx, admin.Principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.CPUKnown {
+		t.Fatal("the first sample reported CPU although it had no interval to " +
+			"divide the counters by")
+	}
+	if !first.MemoryKnown || first.MemoryTotal == 0 {
+		t.Fatalf("memory was not read from the host: total=%d known=%v",
+			first.MemoryTotal, first.MemoryKnown)
+	}
+	if first.MemoryUsed > first.MemoryTotal {
+		t.Fatalf("used memory exceeds total: %d > %d", first.MemoryUsed, first.MemoryTotal)
+	}
+	if first.CPUCores < 1 {
+		t.Fatalf("cpu cores = %d", first.CPUCores)
+	}
+
+	// A second sample has an interval and must produce a percentage.
+	second, err := ops.Resources(ctx, admin.Principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.CPUKnown {
+		t.Fatal("the second sample still reported CPU unknown")
+	}
+	if second.CPUPercent < 0 || second.CPUPercent > 100 {
+		t.Fatalf("cpu percent out of range: %v", second.CPUPercent)
+	}
+}
+
+// The host figures describe the machine one-nvr runs on, which is site
+// infrastructure rather than business data.
+func TestOperationsResourcesRequiresAdmin(t *testing.T) {
+	db, accounts, _, admin := authFixture(t)
+	ctx := context.Background()
+	ops := operations.New(db, accounts, false, false)
+	if _, err := accounts.CreateUser(ctx, admin.Principal, auth.CreateUserInput{Username: "resources_viewer", Password: testPassword, Role: "viewer"}); err != nil {
+		t.Fatal(err)
+	}
+	login, err := accounts.Login(ctx, "resources_viewer", testPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ops.Resources(ctx, login.Principal); !errors.Is(err, auth.ErrForbidden) {
+		t.Fatalf("viewer read host resources: %v", err)
 	}
 }

@@ -245,6 +245,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["operationsResources"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operations/components": {
         parameters: {
             query?: never;
@@ -1752,6 +1768,26 @@ export interface components {
         UUID: string;
         /** Format: int64 */
         Version: number;
+        /** @description Host figures for DASH-02. Each metric carries its own Known flag: unknown must be rendered as unknown, never as zero. */
+        HostResources: {
+            /** @description Busy share of all cores since the previous sample. */
+            cpu_percent: number;
+            /** @description False on the first sample, when there is no interval to divide the /proc/stat counters by. */
+            cpu_known: boolean;
+            cpu_cores: number;
+            /** @description Used share of total memory, where used excludes reclaimable cache (MemTotal - MemAvailable). */
+            memory_percent: number;
+            memory_known: boolean;
+            /** Format: int64 */
+            memory_total_bytes: number;
+            /** Format: int64 */
+            memory_used_bytes: number;
+            /** @description One-minute load average. Reported separately from CPU percent: a host can be at 100% of one core with a load of 1.0. */
+            load_average: number;
+            load_known: boolean;
+            /** Format: date-time */
+            observed_at: string;
+        };
         Error: {
             error: {
                 code: string;
@@ -3640,6 +3676,38 @@ export interface operations {
                 };
             };
             /** @description Structured error (401/403/404/409/422/501/503) */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    operationsResources: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Host CPU, memory and load (DASH-02). Each figure carries its own Known flag: a failed read is reported as unknown, never as zero, because zero is indistinguishable from an idle healthy host. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["HostResources"];
+                        request_id: components["schemas"]["UUID"];
+                    };
+                };
+            };
+            /** @description Structured error (401/403/404) */
             default: {
                 headers: {
                     [name: string]: unknown;

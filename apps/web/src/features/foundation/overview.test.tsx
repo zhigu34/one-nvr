@@ -33,6 +33,7 @@ function component(
 function fixture(
   options: {
     reliability?: unknown[]
+    resources?: Record<string, unknown>
     role?: 'admin' | 'viewer'
     components?: Schema<'Component'>[]
     pools?: Schema<'Pool'>[]
@@ -134,6 +135,21 @@ function fixture(
             },
           ],
       }
+    if (path === '/api/v1/operations/resources')
+      return (
+        options.resources ?? {
+          cpu_percent: 12.5,
+          cpu_known: true,
+          cpu_cores: 8,
+          memory_percent: 34.2,
+          memory_known: true,
+          memory_total_bytes: 32 * 1024 ** 3,
+          memory_used_bytes: 11 * 1024 ** 3,
+          load_average: 1.4,
+          load_known: true,
+          observed_at: new Date().toISOString(),
+        }
+      )
     if (path.startsWith('/api/v1/reliability/summary'))
       return { items: options.reliability ?? [] }
     if (path === '/api/v1/operations/components')
@@ -298,4 +314,38 @@ test('a viewer sees no availability card', async () => {
   const setup = fixture({ role: 'viewer' })
   const view = await render(setup.view)
   expect(view.getByText('24 小时可用性').query()).toBeNull()
+})
+
+// DASH-02: the host figures are shown for an administrator.
+test('the host resource card reports cpu, memory and load', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  await expect.element(view.getByTestId('host-resources')).toBeVisible()
+  await expect.element(view.getByText('12.5%')).toBeVisible()
+  await expect.element(view.getByText('34.2%')).toBeVisible()
+  await expect.element(view.getByText('1.4')).toBeVisible()
+})
+
+// A failed read must read "未知", not "0%": zero is indistinguishable from an
+// idle healthy host, which is exactly the wrong thing to tell an operator whose
+// measurement is broken.
+test('an unmeasured host shows 未知 rather than zero', async () => {
+  const setup = fixture({
+    resources: {
+      cpu_percent: 0,
+      cpu_known: false,
+      cpu_cores: 8,
+      memory_percent: 0,
+      memory_known: false,
+      memory_total_bytes: 0,
+      memory_used_bytes: 0,
+      load_average: 0,
+      load_known: false,
+      observed_at: new Date().toISOString(),
+    },
+  })
+  const view = await render(setup.view)
+  await expect.element(view.getByTestId('host-resources')).toBeVisible()
+  expect(view.getByText('未知').elements().length).toBe(3)
+  expect(view.getByText('0%').query()).toBeNull()
 })

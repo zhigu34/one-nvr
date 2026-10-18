@@ -222,6 +222,7 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("POST /api/v1/maintenance-windows", r.protected(r.registerMaintenance))
 	r.mux.HandleFunc("GET /api/v1/capabilities", r.protected(r.capabilities))
 	r.mux.HandleFunc("GET /api/v1/operations/components", r.protected(r.components))
+	r.mux.HandleFunc("GET /api/v1/operations/resources", r.protected(r.resources))
 	r.mux.HandleFunc("GET /api/v1/jobs/{id}", r.protected(r.job))
 	r.mux.HandleFunc("GET /api/v1/audit-logs", r.protected(r.auditLogs))
 	r.mux.HandleFunc("POST /api/v1/archive-tasks", r.protected(r.futureArchive))
