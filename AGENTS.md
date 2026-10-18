@@ -72,8 +72,13 @@ CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真�
   - **权限与审计**：启动/停止要 `configure`，查询要 `playback`；`recording.manual_started` / `recording.manual_stopped` 入审计。`StopManual` 幂等（没在录也返回成功——期望状态已成立）。
   - **`GET` 无窗口时返回 404 `manual_recording_absent`，不是 `200 null`**（`ActiveManual` 透传 `ErrManualWindowMissing` 而非吞掉）。前端据此把「空闲」与「读不到」分开：只有这个 code 才渲染成未录像；其他失败显示「状态未知：…」而不是假装空闲——后者会诱使操作者对一个状态未知的通道盲写。
   - **前端**：`features/recording-plan/manual-recording.tsx`，与录像方式下拉**分开**的控件（10/30/60/120 分钟），运行中显示红色胶囊 + 剩余时间 + 停止，15 秒轮询。
-  - **测试**：`tests/integration/manual_recording_test.go` 8 个（不改策略 / mode=none 也产生应录 / continuous+manual 只开一条义务 / 连按两次只留一个活跃窗口 / 停止幂等 / 到期 sweep 记 `expired` / 分钟数边界 / **HTTP 层无窗口必须 404**）。前端 14 个（含 3 个新的控件测试）。
-  - 状态：代码完成，`verify.sh` 6/7（唯一 FAIL 是 API 类型漂移，因为生成文件尚未提交——提交后即消失）；定向集成 8 个全过。**全量集成套件与部署结果见下一轮交接。**
+  - **测试**：`tests/integration/manual_recording_test.go` 9 个（不改策略 / mode=none 也产生应录 / continuous+manual 只开一条义务 / 连按两次只留一个活跃窗口 / 停止幂等 / 到期 sweep 记 `expired` / 分钟数边界 / **HTTP 层无窗口必须 404** / **手动窗口必须让该池有资格被 probe**）。前端 14 个（含 3 个新的控件测试）。
+  - **现场验收暴露并修掉一个死锁（提交 `fbb10d6`，这是本批最重要的一条经验）**：手动录像一启动就报 `zlm_write_evidence_unavailable`，永远起不来。链条是——① 起录像要求 **zlm 写入证据新鲜**；② 这份证据只能由一次真实录像的回调或 **idle-pool probe** 产生；③ probe 的候选查询写死 `rp.mode='continuous'`（在「连续录像是唯一录像理由」的年代正确），于是**没有任何通道 continuous 的站点永远不 probe**；④ 证据永不刷新，手动录像永远被拒。这就是「新需求被旧假设锁死」——`unionMode` 只改了调度器和义务，probe 是第三个读「有没有人要录像」的地方，漏了。
+    - **修法**：抽出 `recordingDemandSQL(poolExpr)` 一处定义（continuous **或** 活跃手动窗口），候选扫描与逐池复核都用它；`unionMode` 是同一条规则在 Go 侧的表达。
+    - **顺带修可观测性**：`scheduler.go` 原先在 `Start` 返回 `ErrMediaProof` 时裸 `return err`——不写观测、不给原因，义务说「该录」而 UI 说「未知」。现在映射成 `unavailable / pool_evidence_stale`。同时给 4 个后台循环的 WARN 补上 `error`（它们此前只喊「unavailable」不带原因，这次排查就是被它卡住的）。
+    - **现场复验通过**：probe 把 zlm 证据刷成 `zlm_media_verified`；新建 run 进入 `recording`；观测从 `first_completion_pending` 转 `healthy / recent_completed_segment`；CH01 落盘 1 段；`policy_mode` 全程 `none` 未被改写；到期窗口 `ended_at` 精确等于 `expires_at`、`end_reason='expired'`。
+  - **验证**：`verify.sh` 7/7 PASS（19s）；全量 `tests/integration` **1025s 通过**；已部署 NAS（`fbb10d6`）并完成现场验收。
+  - **未做（批次 2/3）**：周计划 REC-02（`planned` 仍是占位）、事件录制 REC-09/10。
 
 - **2026-10-16 现场发现 CH08 子码流反复重建（两轮）**。第一轮（提交 `811447e`）只解决一半：把 keyframe 抖动放大成 40 秒重建循环这条"软件侧故障循环"砍掉（229/h → ~70/h），子码流仍被打掉。第二轮定位到**真正的根因不在 worker、在 ZLM 协议**：`isMediaOnline` 接口对**没有消费者在拉流**的 proxy 也会返回 `online=false`。**主流不受影响**（Frigate / 实时预览 / 回放 多个客户端持续消费字节，ZLM 持续判 online=true），**子码流周期性被判 offline**（平时没人连，只有 worker 在拉 proxy 做采集/录像，**不消费 ZLM 输出的字节**）。**修法在协议层**（`internal/media/zlm/operations.go` 的 `Inspect`）：`isMediaOnline` 报 false 时再调一次 `getMediaInfo` 验证 —— proxy 还有 tracks、`bytesSpeed >= 0` 就**别**报 `ErrStreamAbsent`。`fetchSnapshot` 提取出来供两路复用（online=true 直接走；online=false 走验证再决定；老 `getMediaInfo` 出错时仍按 isMediaOnline 判定）。`ErrStreamAbsent` 的语义从此干净：**"proxy 真的没了"** 而非 "ZLM 缓存它没在被人拉"。
   - **第一轮（`811447e`）仍然有效，不要回滚**：`videoFrames` 去 `track.Ready`（keyframe 抖动不再误判 stalled）+ `streamGapGraceSamples=3` 宽限 + `newPublicationFixture` wire 上 `reliability.Service`（之前传 `nil` 让 `observation()` 在 `reliability_intervals` 那行提前 return，掩盖了所有宽限测试）。这一轮砍的是「软件侧把单次抖动放大成 40 秒重建循环」；这一轮砍的是「软件侧信任了一个有 bug 的 ZLM 信号」。
