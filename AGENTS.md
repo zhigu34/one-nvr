@@ -64,6 +64,22 @@ CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真�
 
 ## 当前交接快照（2026-10-09）
 
+- **2026-10-18 定时/事件录制批次 2 已交付：周计划（REC-02）**。批次 1 交付手动窗口，本批让 `planned` 从占位变成真模式。
+  - **计划是规则，不是展开的时刻表**（迁移 `0031`，`recording_schedules`）。存展开后的时刻需要有个任务不断生成未来，而每次重启/停机都会在展开里留下空洞——那些空洞看起来像"计划停机"。规则可以在任意时刻求值，包括进程启动前就已经开始的窗口。
+  - **时间是站点本地墙钟，不是 UTC**。08:00 对当地人就是 08:00，含 DST 切换。求值内核 `schedule_rule.go` 是纯函数（`ScheduleActiveAt` / `SplitOvernight` / `MergeOvernightWindows` / `ScheduleWindowsOverlap`），9 个单测覆盖半开区间、跨午夜、周日→周一回绕、DST、以及「两个整天不得合并成一个无尽窗口」。
+  - **跨午夜在存储里是两行、在界面上是一段**。每行都能对单一本地日期求值，这才让「此刻是否在窗口内」是一次索引查询而不是跨日 JOIN。编辑器里输入 22:00–02:00，`SplitOvernight` 拆成周一 22:00–1440 + 周二 00:00–120，`MergeOvernightWindows` 还原成一段；**合并必须拒绝 `start=0` 的全天行**，否则每天 00:00–24:00 会塌成一段。
+  - **`unionMode` 返回的是「决定」而不是「回显存储的模式」**（本批最关键的修正）。planned 通道在窗口外必须返回 `none`；回显 `planned` 会让调度器走启动录像分支，于是**窗口外也全天录像**，而界面还显示着周计划。为此 `obligationFor` 单独保留 `PolicyMode`：`unionMode` 把「窗口外的 planned」折成 none 是对的，但义务要能区分「操作者关了录像」和「现在不在计划内」——两者都是排除，解释却不同。
+  - **`planned` 与 continuous 走同一套门禁**：需要存储池、需要新鲜写入证据、证据过期时同样自动重新验证。计划决定的是「什么时候录」，不是「字节落不落到池里」。
+  - **`source_switches.desired_mode` 的 CHECK 漏了 planned**（迁移 `0032`）。0005 里 `old_mode` 已允许 planned 而 `desired_mode` 不允许——一个能作为「旧模式」被记录、却永远不能作为「新模式」被请求的模式。点「应用」时被 CHECK 拒绝，API 把它当成未识别错误返回裸 503。**修法**：放宽约束。**发现它的方法是本轮顺带加的「未知错误记日志」**——日志里有请求路径和 SQLSTATE，而之前浏览器上只有「服务暂时不可用」。
+  - **API 构造的是一个没有 siteID 的裸 `recording.Service`**（`router.go`），所以任何依赖 `s.siteID` 的读路径都会以 `invalid input syntax for type uuid: ""` 失败并表现为 503。`siteZone` 改为**通过通道查站点时区**，两个进程共用一份实现。两个集成测试（`TestScheduleEndpointWorksWithTheAPIBareService` / `TestScheduleWriteWorksWithTheAPIBareService`）用 API 同样的构造方式钉住它——**已验证把实现改回 `s.siteID` 会 FAIL**。
+  - **新端点**：`GET/PUT /channels/{id}/recording-schedule`（GET 要 playback、PUT 要 configure），响应带站点时区与**服务端自己算的 `active`**——编辑器不重算，否则浏览器时钟会让同一时刻在两个地方显示不同答案。契约与 `api-types.ts` 已同步。
+  - **前端**：`schedule-format.ts`（纯函数，12 个单测）+ `schedule-editor.tsx`（按周日列表格、每天可加时段、可「复制到其它日期」）。编辑器**只在 `mode === 'planned'` 时出现**——在 continuous 通道上显示一个会被忽略的计划，读起来像 bug。整周一次 PUT 保存：一个被拒绝的周必须不半应用。
+  - **现场验收（NAS，`https://192.168.66.90:8443`）**：设 CH01 为定时录像 + 周日 08:00–18:00（当时 17:49）→ 策略 `planned`、切换任务 `succeeded`、义务区间 `source=planned` 无排除、录像观测 `healthy/recent_completed_segment`、实际落盘；把时段改到周一后 → 自动停录、run 变 `stopped`、义务变 `planned + disabled`、观测 `disabled`。**两个方向都对**。
+  - **验证**：`verify.sh` 7/7 PASS；全量集成见下条；已部署 NAS（约束 `desired_mode` 已含 planned，现场确认）。
+  - **REC-02 的两种复制都做了**：复制到其它日期（把一天的时段铺到全部七天）与**复制到其它通道**（编辑器底部多选目标通道，逐个 PUT 各自的整周，逐通道报告结果）。跨通道复制按顺序写，与批量绑定同理：并发写照会互踩版本，而且每写一条都有自己的审计行。
+  - **未做**：批次 3 事件录制（REC-09/10，需要 ZLM 滚动分片缓冲，参数要真机验证）。
+
+
 - **2026-10-17 定时/事件录制批次 1 已实现：调度器取并集 + 手动录像窗口（REC-03/04）**。用户要求「继续定时、事件录制功能开发」，拆三批：**① 调度器并集 + 手动录像（本批）**、② 周计划（REC-02）、③ 事件录制（REC-09/10）。
   - **手动录像不是一种 mode，而是一个有起止的窗口**（迁移 `0030`，`recording_manual_windows`）。这是本批最重要的结构决定：`recording_policies.mode` 是设置，手动录像是操作者的一次请求。把请求写进设置会让两者互相覆盖——REC-04 要求「策略编辑不得终止进行中的手动录像」，只有当它们存在不同表里时才天然成立。新表带部分唯一索引 `recording_manual_windows_one_active`（一通道一活跃窗口），重复启动把旧窗口关成 `cancelled` 再开新的，历史仍能看出操作者按过两次。
   - **`expires_at` 在 INSERT 时用 `clock_timestamp()+make_interval(mins => $3)` 算死**，不在读路径按 `now+minutes` 推导——否则一个开了一小时的窗口仍会声称自己有完整时长。`remaining_ms` 是读时算的展示值，不落库。

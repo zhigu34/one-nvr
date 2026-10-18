@@ -46,11 +46,16 @@ export function PolicyRow({
   onSelect,
   onApplied,
   onDirtyChange,
+  schedulePeers,
 }: {
   channel: Schema<'Channel'>
   summary?: Schema<'ChannelSummary'>
   admin: boolean
   pools: Schema<'Pool'>[]
+  // Other channels that may receive this channel's week (REC-02's "copy to other
+  // channels"). Passed in rather than fetched per row: every row would otherwise
+  // repeat the same channel list request.
+  schedulePeers?: { id: string; label: string }[]
   selected: boolean
   onSelect: (checked: boolean) => void
   onApplied: () => void
@@ -404,6 +409,7 @@ export function PolicyRow({
                 channelId={channel.id}
                 label={label}
                 disabled={!!pending}
+                peers={schedulePeers || []}
               />
             )}
           </div>

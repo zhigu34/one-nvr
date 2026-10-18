@@ -31,6 +31,12 @@ const channel: Schema<'Channel'> = {
   version: 4,
   permissions: ['configure'],
 }
+const peer: Schema<'Channel'> = {
+  ...channel,
+  id: '00000000-0000-4000-8000-000000000002',
+  channel_no: 2,
+  channel_name: '后门',
+}
 const healthyCheck: Schema<'PoolCheck'> = {
   service: 'zlm',
   state: 'healthy',
@@ -54,6 +60,8 @@ function fixture(
     bindReject?: boolean
     checks?: Schema<'PoolCheck'>[]
     manual?: 'idle' | 'running' | 'denied'
+    // A second channel, so "copy to other channels" has a real target.
+    peer?: boolean
   } = {}
 ) {
   useAuthStore.getState().setUser({
@@ -144,7 +152,10 @@ function fixture(
         ],
       }
     if (method === 'GET' && path.startsWith('/api/v1/channels?'))
-      return { items: [channel], next_cursor: null }
+      return {
+        items: options.peer ? [channel, peer] : [channel],
+        next_cursor: null,
+      }
     // The manual window probe answers 404 when nothing is running; the control
     // must read that as "idle" and only surface a warning for real failures.
     // Weekly schedule (REC-02). The editor is only rendered for planned
@@ -605,5 +616,52 @@ test('copying a day fills the rest of the week', async () => {
   }
   expect(body.windows).toHaveLength(7)
   expect(new Set(body.windows.map((w) => w.weekday)).size).toBe(7)
+  setup.client.clear()
+})
+
+// The copy control must appear only when there is somewhere to copy to.
+test('the copy-to-channel control is absent without peers', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  await userEvent.click(view.getByLabelText('CH01 录像方式'))
+  await userEvent.click(view.getByRole('option', { name: '定时录像', exact: true }))
+  await userEvent.click(view.getByRole('button', { name: 'CH01 编辑时段' }))
+  await expect
+    .element(view.getByText(/复制此时段到其它通道/))
+    .not.toBeInTheDocument()
+  setup.client.clear()
+})
+
+// REC-02's "copy to other channels": the week is written to each selected
+// channel, one request each, and the operator sees which ones took it.
+test('copying a week writes every selected channel', async () => {
+  const setup = fixture({ peer: true })
+  const view = await render(setup.view)
+  await userEvent.click(view.getByLabelText('CH01 录像方式'))
+  await userEvent.click(view.getByRole('option', { name: '定时录像', exact: true }))
+  await userEvent.click(view.getByRole('button', { name: 'CH01 编辑时段' }))
+  await userEvent.click(view.getByRole('button', { name: '周一 添加时段' }))
+  await userEvent.click(view.getByLabelText('复制到 CH02'))
+  await userEvent.click(
+    view.getByRole('button', { name: '复制到所选通道', exact: true })
+  )
+  await expect
+    .poll(
+      () =>
+        setup.mutations.filter(
+          (m) => m.init.method === 'PUT' && m.path.endsWith('/recording-schedule')
+        ).length
+    )
+    .toBe(1)
+  const put = setup.mutations.find(
+    (m) => m.init.method === 'PUT' && m.path.endsWith('/recording-schedule')
+  )
+  // It must target the peer, not the channel being edited.
+  expect(put?.path).toContain(peer.id)
+  const body = JSON.parse(put?.init.body as string) as {
+    windows: { weekday: number }[]
+  }
+  expect(body.windows).toHaveLength(1)
+  await expect.element(view.getByText(/已复制到 CH02/)).toBeVisible()
   setup.client.clear()
 })

@@ -3,6 +3,7 @@ import { CalendarClock, Check, Copy, Plus, Trash2 } from 'lucide-react'
 import { ApiError, apiRequest, jsonRequest } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { useAPI } from '@/features/foundation/hooks'
 import {
   WEEKDAYS,
@@ -31,16 +32,23 @@ export function ScheduleEditor({
   channelId,
   label,
   disabled,
+  peers = [],
 }: {
   channelId: string
   label: string
   disabled?: boolean
+  // Other channels this operator may configure, for "copy to other channels"
+  // (REC-02). Excluding the channel being edited is the caller's job: copying a
+  // week onto itself is a no-op that only produces a confusing confirmation.
+  peers?: { id: string; label: string }[]
 }) {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState<ScheduleWindow[] | null>(null)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [copyTargets, setCopyTargets] = useState<Set<string>>(new Set())
+  const [copyPending, setCopyPending] = useState(false)
   const schedule = useAPI<Schema<'ChannelSchedule'>>(
     `/api/v1/channels/${channelId}/recording-schedule`,
     true
@@ -136,6 +144,44 @@ export function ScheduleEditor({
       }
     } finally {
       setPending(false)
+    }
+  }
+
+  // Copy the current week onto other channels (REC-02). Sequential, like the
+  // batch binds: each write has its own audit row and parallel writes into the
+  // same worker queue is how a batch of eight becomes a pile of conflicts. Every
+  // channel reports its own result; a partial copy must not read as success.
+  async function copyToChannels() {
+    if (copyTargets.size === 0) return
+    setCopyPending(true)
+    setError('')
+    setNotice('')
+    const ok: string[] = []
+    const failed: string[] = []
+    try {
+      for (const target of copyTargets) {
+        const peer = peers.find((entry) => entry.id === target)
+        try {
+          await apiRequest(
+            `/api/v1/channels/${target}/recording-schedule`,
+            jsonRequest('PUT', { windows })
+          )
+          ok.push(peer?.label || target)
+        } catch (cause) {
+          failed.push(
+            `${peer?.label || target}: ${
+              cause instanceof Error ? cause.message : '复制失败'
+            }`
+          )
+        }
+      }
+      const parts: string[] = []
+      if (ok.length) parts.push(`已复制到 ${ok.join('、')}`)
+      if (failed.length) parts.push(`失败：${failed.join('；')}`)
+      setNotice(parts.join(' · '))
+      if (failed.length === 0) setCopyTargets(new Set())
+    } finally {
+      setCopyPending(false)
     }
   }
 
@@ -268,6 +314,51 @@ export function ScheduleEditor({
           )
         })}
       </div>
+      {peers.length > 0 && (
+        <div className='mt-2 space-y-1.5 border-t pt-2'>
+          <p className='text-xs text-muted-foreground'>
+            复制此时段到其它通道（会覆盖目标通道的整周计划）
+          </p>
+          <div className='flex flex-wrap items-center gap-2'>
+            {peers.map((peer) => (
+              <label
+                key={peer.id}
+                className='inline-flex items-center gap-1.5 text-xs'
+              >
+                <Checkbox
+                  aria-label={`复制到 ${peer.label}`}
+                  checked={copyTargets.has(peer.id)}
+                  onCheckedChange={(state) =>
+                    setCopyTargets((current) => {
+                      const next = new Set(current)
+                      if (state === true) next.add(peer.id)
+                      else next.delete(peer.id)
+                      return next
+                    })
+                  }
+                />
+                {peer.label}
+              </label>
+            ))}
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              className='h-6 px-1.5 text-xs'
+              disabled={copyPending || copyTargets.size === 0}
+              onClick={() => void copyToChannels()}
+            >
+              <Copy aria-hidden className='size-3' />
+              复制到所选通道
+            </Button>
+          </div>
+          {notice && (
+            <p role='status' className='text-xs text-muted-foreground'>
+              {notice}
+            </p>
+          )}
+        </div>
+      )}
       {conflict && (
         <p role='alert' className='mt-2 text-xs text-red-500'>
           同一星期几的时段不能重叠

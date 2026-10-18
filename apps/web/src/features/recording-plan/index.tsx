@@ -519,6 +519,12 @@ export function RecordingPlan() {
                     summary={summaryOf.get(channel.id ?? '')}
                     admin={admin}
                     pools={pools.data?.items || []}
+                    schedulePeers={permitted
+                      .filter((peer) => peer.id !== channel.id)
+                      .map((peer) => ({
+                        id: peer.id,
+                        label: `CH${String(peer.channel_no).padStart(2, '0')}`,
+                      }))}
                     selected={selected.has(channel.id)}
                     onSelect={(checked) => toggle(channel.id, checked)}
                     onApplied={() => void client.invalidateQueries()}
