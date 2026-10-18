@@ -3,6 +3,7 @@ package recording
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -99,12 +100,28 @@ func (s *Service) Reconcile(ctx context.Context, ch id.ID) error {
 			// "the media server dropped the pull". A registered proxy is still
 			// ours and comes back on its own; only a proxy the media server no
 			// longer holds means this session is finished.
+			//
+			// A failed query is NOT evidence either way, and it must not stop
+			// recovery: the media server's API can be briefly unreachable while
+			// the stream is genuinely gone, and treating "cannot tell" as
+			// "leave it alone" left the channel with no pull at all until a
+			// human noticed. Measured on the live site: one ZLM restart with an
+			// unreadable config left every channel reporting
+			// source_observation_failed indefinitely while nothing was pulled.
+			//
+			// The gap counter has passed both the grace and reconnect windows by
+			// the time this runs, so rebuilding is the safe default: a proxy that
+			// was merely slow has already had its full backoff budget.
 			registered, presenceErr := s.Media.ProxyRegistered(ctx, zlm.ProxyRef{Key: ss.Key, OpaqueKey: ss.Key.VHost + "/" + ss.Key.App + "/" + ss.Key.Stream})
-			if presenceErr != nil {
-				return s.observation(ctx, e, ss, "main", "unknown", "source_observation_failed", nil)
-			}
-			if registered && gaps < streamReconnectWaitSamples {
+			if presenceErr == nil && registered && gaps < streamReconnectWaitSamples {
 				return s.observation(ctx, e, ss, "main", "unknown", "stream_present_pending", nil)
+			}
+			if presenceErr != nil {
+				// Logged rather than swallowed: the rebuild below is still the
+				// right action, but the operator should be able to see that the
+				// media server could not be asked about the proxy.
+				slog.Warn("media proxy presence unavailable; rebuilding the session",
+					"channel", e.ChannelID, "gap_samples", gaps, "error", presenceErr)
 			}
 			if err := s.observation(ctx, e, ss, "main", "unavailable", "source_unavailable", nil); err != nil {
 				return err

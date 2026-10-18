@@ -7,6 +7,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/channel"
 	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/media/zlm"
+	"log/slog"
 	"time"
 )
 
@@ -126,12 +127,19 @@ func (s *Service) reconcileRuntimeSub(ctx context.Context, e *channel.Execution,
 		// fresh AddProxy and a fresh handshake for an interruption ZLM was
 		// already handling. Only a proxy the media server no longer holds is
 		// evidence that the session is finished.
+		//
+		// A failed query is not evidence either way. Treating it as "leave the
+		// session alone" kept a dead sub stream in place until someone noticed:
+		// the media server can be unreachable exactly when the pull is gone.
+		// This runs on every reconcile, so tearing down here is self-healing —
+		// the next pass builds a fresh session.
 		registered, presenceErr := s.Media.ProxyRegistered(ctx, zlm.ProxyRef{Key: ss.Key, OpaqueKey: ss.Key.VHost + "/" + ss.Key.App + "/" + ss.Key.Stream})
-		if presenceErr != nil {
-			return s.observation(ctx, e, ss, "sub", "unknown", "source_observation_failed", nil)
-		}
-		if registered && gaps < streamReconnectWaitSamples {
+		if presenceErr == nil && registered && gaps < streamReconnectWaitSamples {
 			return s.observation(ctx, e, ss, "sub", "unknown", "stream_present_pending", nil)
+		}
+		if presenceErr != nil {
+			slog.Warn("sub proxy presence unavailable; rebuilding the session",
+				"channel", e.ChannelID, "gap_samples", gaps, "error", presenceErr)
 		}
 		// Either the media server no longer owns the pull, or it has kept the
 		// registration far past its own retry ladder without producing frames.

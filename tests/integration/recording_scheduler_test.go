@@ -1155,3 +1155,60 @@ func TestRecordingRecoveryGivesUpOnRegisteredButSilentProxy(t *testing.T) {
 			streamReconnectWaitSamplesForTest+1)
 	}
 }
+
+// An unanswerable proxy query must not stop recovery.
+//
+// Live-site incident: one ZLM restart with an unreadable config made its API
+// reject every call. Inspect still reported the stream absent (it tolerates the
+// error), but ProxyRegistered returned an error, and the sampler treated "cannot
+// tell" as "leave it alone" — so no pull was rebuilt and every channel stayed
+// dark until a human noticed, with only source_observation_failed to show for it.
+//
+// A failed query is not evidence about the proxy. By the time this branch runs
+// the gap counter has already passed both the grace and reconnect windows, so
+// rebuilding is the safe default.
+func TestRecordingRecoveryRebuildsWhenProxyQueryFails(t *testing.T) {
+	f, media, _, _ := testedSource(t)
+	ctx := context.Background()
+	media.mu.Lock()
+	media.MediaAbsent = true
+	media.ProxyQueryFails = true
+	media.ClearAbsentOnAdd = true
+	beforeAdd := media.AddCalls
+	media.mu.Unlock()
+
+	for i := 0; i < streamGapGraceSamplesForTest+1; i++ {
+		if err := f.Service.Reconcile(ctx, f.Channel); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	media.mu.Lock()
+	afterAdd := media.AddCalls
+	media.mu.Unlock()
+	if afterAdd <= beforeAdd {
+		t.Fatal("an unanswerable proxy query blocked recovery; " +
+			"a media server API outage would leave every channel with no pull")
+	}
+}
+
+// The same query failure must not make a healthy stream look dead: while the
+// stream is present the query is never consulted.
+func TestRecordingProxyQueryFailureDoesNotDisturbAHealthyStream(t *testing.T) {
+	f, media, _, _ := testedSource(t)
+	ctx := context.Background()
+	media.mu.Lock()
+	media.ProxyQueryFails = true
+	beforeAdd := media.AddCalls
+	media.mu.Unlock()
+
+	if err := f.Service.Reconcile(ctx, f.Channel); err != nil {
+		t.Fatal(err)
+	}
+	media.mu.Lock()
+	afterAdd := media.AddCalls
+	media.mu.Unlock()
+	if afterAdd != beforeAdd {
+		t.Fatal("a healthy stream was rebuilt because a query we never needed failed")
+	}
+}

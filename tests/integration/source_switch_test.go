@@ -183,6 +183,10 @@ type controlledMedia struct {
 	// ProxyDropped makes ProxyRegistered report the media server no longer
 	// owns the pull, which is the terminal state.
 	ProxyDropped bool
+	// ProxyQueryFails makes ProxyRegistered return an error, which is what an
+	// unreachable or misconfigured media server API looks like. It is not
+	// evidence about the proxy, so the worker must still rebuild.
+	ProxyQueryFails bool
 	// ClearAbsentOnAdd makes the next AddProxy restore media flow, so a test
 	// can model the real sequence: the server dropped the pull, the worker
 	// rebuilt it, and the stream came back.
@@ -233,6 +237,9 @@ func (m *controlledMedia) ProxyRegistered(ctx context.Context, ref zlm.ProxyRef)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.ProxyQueryFails {
+		return false, zlm.ErrMediaOperation
+	}
 	if m.ProxyDropped {
 		return false, nil
 	}
