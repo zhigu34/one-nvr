@@ -167,3 +167,61 @@ func TestTimezoneDefaultsAndValidation(t *testing.T) {
 		t.Fatal("a non-IANA zone must be refused before it reaches the containers")
 	}
 }
+
+// REC-09: the event ring buffer only exists when the deployment reserved memory
+// for it. A site that did not must get no mount at all — a zero-sized tmpfs or
+// a mount into a directory nothing writes would be worse than absent, because
+// the overview page would report a cache that cannot hold anything.
+func TestEventCacheMountIsOptIn(t *testing.T) {
+	base := map[string]string{
+		"ONE_NVR_PUBLIC_URL": "https://192.168.1.10:8443",
+		"ONE_NVR_HTTPS_PORT": "8443",
+		"ONE_NVR_DATA_DIR":   "/srv/one-nvr",
+	}
+	without, err := BuildDeployment(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"api", "worker", "zlm"} {
+		for _, mount := range without.Services[name].Volumes {
+			if mount.Target == "/cache" {
+				t.Fatalf("%s mounts /cache without a configured size", name)
+			}
+		}
+	}
+
+	withSize := map[string]string{"ONE_NVR_EVENT_CACHE_MB": "512"}
+	for k, v := range base {
+		withSize[k] = v
+	}
+	with, err := BuildDeployment(withSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"api", "worker", "zlm"} {
+		var found *Mount
+		for i := range with.Services[name].Volumes {
+			if with.Services[name].Volumes[i].Target == "/cache" {
+				found = &with.Services[name].Volumes[i]
+			}
+		}
+		if found == nil {
+			t.Fatalf("%s does not mount the event cache", name)
+		}
+		if found.Type != "tmpfs" {
+			t.Fatalf("%s cache mount is %q, must be tmpfs so the contents never reach a disk", name, found.Type)
+		}
+		if found.Tmpfs == nil || found.Tmpfs.Size != 512<<20 {
+			t.Fatalf("%s cache size wrong: %+v", name, found.Tmpfs)
+		}
+		// A tmpfs mount carrying bind options is rejected by compose.
+		if found.Bind != nil {
+			t.Fatalf("%s cache mount carries bind options", name)
+		}
+	}
+	// The API must know where the mount is, or the overview cannot report its
+	// usage.
+	if with.Services["api"].Environment["ONE_NVR_EVENT_CACHE_DIR"] != "/cache" {
+		t.Fatal("api is not told where the cache is mounted")
+	}
+}

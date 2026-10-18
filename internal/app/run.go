@@ -414,7 +414,15 @@ func Run(name string) error {
 				return fmt.Errorf("detection service wiring incomplete")
 			}
 		}
-		handler = httpapi.NewHandler(httpapi.Dependencies{Events: intelligence, Detection: detectionService, Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, Sources: sources, Live: &live.Service{DB: db, Auth: accounts, Media: media}, PublicURL: c.PublicURL, TrustedProxyToken: proxyKey, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled, Archive: archive.New(db, accounts, secret, pools), Notify: notify.New(db, accounts, secret, secret.SiteID), Reliability: reliability.New(db, accounts)})
+		// Operations is constructed here rather than left to the router's
+		// fallback because it needs the event-cache path: the overview page
+		// reports how full the in-memory buffer is, and that figure only exists
+		// where the deployment mounted the tmpfs.
+		operationsService := operations.New(db, accounts, c.FrigateEnabled, c.OpenListEnabled)
+		if c.EventCacheMB > 0 {
+			operationsService.EventCacheDir = "/cache"
+		}
+		handler = httpapi.NewHandler(httpapi.Dependencies{Events: intelligence, Detection: detectionService, Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, Sources: sources, Live: &live.Service{DB: db, Auth: accounts, Media: media}, PublicURL: c.PublicURL, TrustedProxyToken: proxyKey, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled, Archive: archive.New(db, accounts, secret, pools), Notify: notify.New(db, accounts, secret, secret.SiteID), Reliability: reliability.New(db, accounts), Operations: operationsService})
 	}
 	if name == "worker" {
 		prober := &operations.Prober{Checks: map[string]func(context.Context) error{"zlm": media.Health}, Operations: operations.New(db, nil, c.FrigateEnabled, c.OpenListEnabled), Client: operations.NewProbeClient(), Targets: map[string]operations.ProbeTarget{

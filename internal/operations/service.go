@@ -23,7 +23,10 @@ type Service struct {
 	// counters, so it must survive between requests rather than being created
 	// per call — a fresh sampler has nothing to subtract from.
 	host *hostSampler
-	once sync.Once
+	// EventCacheDir is the tmpfs mount point for the event ring buffer, empty
+	// when the deployment did not reserve memory for it.
+	EventCacheDir string
+	once          sync.Once
 }
 
 // Resources reports what the machine is doing (DASH-02).
@@ -34,7 +37,7 @@ func (s *Service) Resources(ctx context.Context, p auth.Principal) (HostResource
 	if err := s.Auth.RequireAdmin(ctx, p); err != nil {
 		return HostResources{}, err
 	}
-	s.once.Do(func() { s.host = newHostSampler() })
+	s.once.Do(func() { s.host = newHostSampler(s.EventCacheDir) })
 	return s.host.Sample(ctx), nil
 }
 

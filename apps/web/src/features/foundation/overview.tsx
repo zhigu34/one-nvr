@@ -506,6 +506,25 @@ export function Overview() {
                   }
                   pending={resources.isPending}
                 />
+                {/* REC-09: the event ring buffer lives in memory, and deciding
+                    whether to enlarge it needs its fill level. A deployment
+                    that reserved no memory shows 未启用 rather than 0%, which
+                    would read as "reserved and empty". */}
+                <Meter
+                  label='缓存盘'
+                  value={
+                    resources.data?.event_cache.configured &&
+                    resources.data.event_cache.known
+                      ? resources.data.event_cache.percent
+                      : null
+                  }
+                  pending={resources.isPending}
+                  off={
+                    resources.data
+                      ? !resources.data.event_cache.configured
+                      : false
+                  }
+                />
               </div>
               <p className='mt-2 truncate text-xs text-muted-foreground tabular-nums'>
                 {resources.data?.memory_known
@@ -516,6 +535,19 @@ export function Overview() {
                   : ''}
                 {resources.data ? ` · ${resources.data.cpu_cores} 核` : ''}
               </p>
+              {resources.data?.event_cache.configured && (
+                <p
+                  data-testid='event-cache-detail'
+                  className='mt-1 text-xs text-muted-foreground tabular-nums'
+                >
+                  缓存盘 {gib(resources.data.event_cache.used_bytes)} /{' '}
+                  {gib(resources.data.event_cache.total_bytes)}
+                  {resources.data.event_cache.known &&
+                  resources.data.event_cache.percent >= 90
+                    ? ' · 接近上限，可考虑扩容'
+                    : ''}
+                </p>
+              )}
             </div>
           )}
         </div>
@@ -690,10 +722,14 @@ function Meter({
   label,
   value,
   pending,
+  off,
 }: {
   label: string
   value: number | null
   pending: boolean
+  // off means the resource does not exist on this deployment. Rendering it as
+  // "0%" would claim it is reserved and unused, which is the opposite.
+  off?: boolean
 }) {
   return (
     <div className='grid grid-cols-[auto_1fr_auto] items-center gap-2 text-xs'>
@@ -710,7 +746,7 @@ function Meter({
         )}
       </span>
       <span className='w-12 text-right tabular-nums'>
-        {value != null ? `${value}%` : pending ? '…' : '未知'}
+        {off ? '未启用' : value != null ? `${value}%` : pending ? '…' : '未知'}
       </span>
     </div>
   )

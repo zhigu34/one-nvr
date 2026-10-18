@@ -18,6 +18,13 @@ type Config struct {
 	MediaHost, DataDir, DatabaseURL, TLSDir, HardwareProfile, ListenAddress string
 	CameraCIDRs, HookSubnet, Timezone                                       string
 	FrigateEnabled, OpenListEnabled                                         bool
+	// EventCacheMB is the size of the in-memory ring buffer used for event
+	// pre-recording (REC-09). Zero means the feature is off: no tmpfs is
+	// mounted, so nothing can write there and no memory is reserved. It is a
+	// deployment-time value because a mount cannot be resized under a running
+	// container; the business decision (which channels, how long) stays in the
+	// settings.
+	EventCacheMB int
 }
 
 func Load() (Config, error) {

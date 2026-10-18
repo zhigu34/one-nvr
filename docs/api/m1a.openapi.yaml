@@ -2934,6 +2934,36 @@
           "load_known": {
             "type": "boolean"
           },
+          "event_cache": {
+            "type": "object",
+            "description": "The in-memory ring buffer used for event pre-recording (PRD REC-09). Capacity is a deployment decision because a mount cannot be resized under a running container.",
+            "properties": {
+              "configured": {
+                "type": "boolean",
+                "description": "False when this deployment reserved no memory for the buffer; the feature is off rather than empty."
+              },
+              "known": {
+                "type": "boolean",
+                "description": "False when the mount exists but could not be measured."
+              },
+              "path": {
+                "type": "string"
+              },
+              "total_bytes": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "used_bytes": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "percent": {
+                "type": "number"
+              }
+            },
+            "required": ["configured", "known", "path", "total_bytes", "used_bytes", "percent"],
+            "additionalProperties": false
+          },
           "observed_at": {
             "type": "string",
             "format": "date-time"
@@ -2949,6 +2979,7 @@
           "memory_used_bytes",
           "load_average",
           "load_known",
+          "event_cache",
           "observed_at"
         ],
         "additionalProperties": false

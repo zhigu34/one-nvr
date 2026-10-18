@@ -40,6 +40,11 @@ type HostResources struct {
 	LoadAverage float64 `json:"load_average"`
 	LoadKnown   bool    `json:"load_known"`
 
+	// EventCache is the in-memory ring buffer used for event pre-recording.
+	// It travels with the host figures because it is memory an operator
+	// allocated to this machine, and enlarging it is a host decision.
+	EventCache EventCache `json:"event_cache"`
+
 	ObservedAt time.Time `json:"observed_at"`
 }
 
@@ -50,6 +55,10 @@ type hostSampler struct {
 	prevID  string
 	prevTot cpuTimes
 	proc    string
+	// eventCachePath is empty when the deployment did not reserve memory for
+	// the buffer; the reading then reports Configured=false rather than a
+	// misleading 0%.
+	eventCachePath string
 }
 
 type cpuTimes struct {
@@ -57,8 +66,8 @@ type cpuTimes struct {
 	total uint64
 }
 
-func newHostSampler() *hostSampler {
-	return &hostSampler{proc: "/proc"}
+func newHostSampler(eventCachePath string) *hostSampler {
+	return &hostSampler{proc: "/proc", eventCachePath: eventCachePath}
 }
 
 // Sample reads the host figures. A read failure leaves the corresponding Known
@@ -96,7 +105,7 @@ func (h *hostSampler) Sample(ctx context.Context) HostResources {
 		out.LoadAverage = load
 		out.LoadKnown = true
 	}
-	return out
+	return h.withEventCache(ctx, out)
 }
 
 func (h *hostSampler) readCPU() (cpuTimes, string, bool) {

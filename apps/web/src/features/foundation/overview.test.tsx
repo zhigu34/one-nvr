@@ -147,6 +147,14 @@ function fixture(
           memory_used_bytes: 11 * 1024 ** 3,
           load_average: 1.4,
           load_known: true,
+          event_cache: {
+            configured: true,
+            known: true,
+            path: '/cache',
+            total_bytes: 512 * 1024 ** 2,
+            used_bytes: 128 * 1024 ** 2,
+            percent: 25,
+          },
           observed_at: new Date().toISOString(),
         }
       )
@@ -349,6 +357,16 @@ test('an unmeasured host shows 未知 rather than zero', async () => {
       memory_used_bytes: 0,
       load_average: 0,
       load_known: false,
+      // Not configured, so the cache reports 未启用 rather than 未知 or 0%:
+      // "this deployment did not reserve memory" is its own answer.
+      event_cache: {
+        configured: false,
+        known: false,
+        path: '',
+        total_bytes: 0,
+        used_bytes: 0,
+        percent: 0,
+      },
       observed_at: new Date().toISOString(),
     },
   })
@@ -366,4 +384,68 @@ test('the patrol has no outer title above its two column headings', async () => 
   expect(view.getByText('活跃通道与快捷巡检').query()).toBeNull()
   await expect.element(view.getByText('活跃通道巡检')).toBeVisible()
   await expect.element(view.getByText('最近 AI 事件')).toBeVisible()
+})
+
+// REC-09: the ring buffer is memory this deployment reserved, so its fill level
+// belongs with the host figures. A site that reserved none must read 未启用 —
+// showing 0% would claim memory is reserved and idle.
+test('the event cache reports its usage and warns near the limit', async () => {
+  const setup = fixture({
+    resources: {
+      cpu_percent: 10,
+      cpu_known: true,
+      cpu_cores: 8,
+      memory_percent: 20,
+      memory_known: true,
+      memory_total_bytes: 32 * 1024 ** 3,
+      memory_used_bytes: 6 * 1024 ** 3,
+      load_average: 0.5,
+      load_known: true,
+      event_cache: {
+        configured: true,
+        known: true,
+        path: '/cache',
+        total_bytes: 512 * 1024 ** 2,
+        used_bytes: 480 * 1024 ** 2,
+        percent: 93.8,
+      },
+      observed_at: new Date().toISOString(),
+    },
+  })
+  const view = await render(setup.view)
+  await expect.element(view.getByTestId('event-cache-detail')).toBeVisible()
+  await expect.element(view.getByText(/接近上限/)).toBeVisible()
+})
+
+// Not configured is not the same as unmeasured: the page must not report the
+// cache as unknown when the deployment deliberately left it off.
+test('a deployment without the event cache says 未启用', async () => {
+  const setup = fixture({
+    resources: {
+      cpu_percent: 10,
+      cpu_known: true,
+      cpu_cores: 8,
+      memory_percent: 20,
+      memory_known: true,
+      memory_total_bytes: 32 * 1024 ** 3,
+      memory_used_bytes: 6 * 1024 ** 3,
+      load_average: 0.5,
+      load_known: true,
+      event_cache: {
+        configured: false,
+        known: false,
+        path: '',
+        total_bytes: 0,
+        used_bytes: 0,
+        percent: 0,
+      },
+      observed_at: new Date().toISOString(),
+    },
+  })
+  const view = await render(setup.view)
+  const host = view.getByTestId('host-resources')
+  await expect.element(host.getByText('未启用')).toBeVisible()
+  await expect
+    .element(view.getByTestId('event-cache-detail'))
+    .not.toBeInTheDocument()
 })

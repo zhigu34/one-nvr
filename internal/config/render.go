@@ -15,11 +15,22 @@ type BindOptions struct {
 	CreateHostPath bool `json:"create_host_path"`
 }
 type Mount struct {
-	Type     string      `json:"type"`
-	Source   string      `json:"source"`
-	Target   string      `json:"target"`
-	ReadOnly bool        `json:"read_only"`
-	Bind     BindOptions `json:"bind"`
+	Type     string `json:"type"`
+	Source   string `json:"source,omitempty"`
+	Target   string `json:"target"`
+	ReadOnly bool   `json:"read_only"`
+	// Bind is only meaningful for bind mounts; a tmpfs mount that carried it
+	// would be rejected by compose.
+	Bind  *BindOptions  `json:"bind,omitempty"`
+	Tmpfs *TmpfsOptions `json:"tmpfs,omitempty"`
+}
+
+// TmpfsOptions sizes an in-memory mount. The event ring buffer lives here
+// because its contents are almost entirely discarded: writing to the pool and
+// deleting minutes later is continuous random I/O for data that will not
+// survive, and a mechanical disk never gets to spin down.
+type TmpfsOptions struct {
+	Size int64 `json:"size"`
 }
 type Service struct {
 	Image       string                       `json:"image"`
@@ -83,7 +94,16 @@ func BuildDeployment(v map[string]string) (Deployment, error) {
 		return ImagePins[name], nil
 	}
 	mount := func(source, target string, ro bool) Mount {
-		return Mount{Type: "bind", Source: source, Target: target, ReadOnly: ro}
+		return Mount{Type: "bind", Source: source, Target: target, ReadOnly: ro, Bind: &BindOptions{}}
+	}
+	// cacheMount is the event ring buffer. Size is in bytes for compose's tmpfs
+	// option, and the mount is omitted entirely when the feature is off so a
+	// site that does not use it reserves no memory.
+	cacheMount := func() []Mount {
+		if c.EventCacheMB <= 0 {
+			return nil
+		}
+		return []Mount{{Type: "tmpfs", Target: "/cache", Tmpfs: &TmpfsOptions{Size: int64(c.EventCacheMB) << 20}}}
 	}
 	root := filepath.Clean(c.DataDir)
 	switch root {
@@ -136,7 +156,13 @@ func BuildDeployment(v map[string]string) (Deployment, error) {
 			port = "8082"
 		}
 		env["ONE_NVR_LISTEN_ADDRESS"] = ":" + port
-		d.Services[name] = Service{Image: appImage, User: "10001:10001", EntryPoint: []string{"/usr/local/bin/" + name}, Environment: env, Volumes: vols, Restart: "unless-stopped", DependsOn: map[string]map[string]string{"postgres": {"condition": "service_healthy"}}, HealthCheck: map[string]any{"test": []string{"CMD", "/usr/local/bin/admin", "ready-check", "http://127.0.0.1:" + port + "/health/ready"}, "interval": "10s", "timeout": "5s", "retries": 6}}
+		serviceVolumes := append(append([]Mount{}, vols...), cacheMount()...)
+		if c.EventCacheMB > 0 {
+			// The API reports the cache's usage on the overview page, and the
+			// worker writes into it; both need the same path.
+			env["ONE_NVR_EVENT_CACHE_DIR"] = "/cache"
+		}
+		d.Services[name] = Service{Image: appImage, User: "10001:10001", EntryPoint: []string{"/usr/local/bin/" + name}, Environment: env, Volumes: serviceVolumes, Restart: "unless-stopped", DependsOn: map[string]map[string]string{"postgres": {"condition": "service_healthy"}}, HealthCheck: map[string]any{"test": []string{"CMD", "/usr/local/bin/admin", "ready-check", "http://127.0.0.1:" + port + "/health/ready"}, "interval": "10s", "timeout": "5s", "retries": 6}}
 	}
 	pg, e := image("postgres")
 	if e != nil {
@@ -152,7 +178,7 @@ func BuildDeployment(v map[string]string) (Deployment, error) {
 	if e != nil {
 		return d, e
 	}
-	d.Services["zlm"] = Service{Image: zlm, Environment: map[string]string{"TZ": c.Timezone}, EntryPoint: []string{"/usr/local/bin/media-launcher"}, Command: []string{"/opt/media/conf/egress.json", "./MediaServer", "-c", "/opt/media/conf/config.ini", "-l", "4", "--log-dir", "/tmp/one-nvr-media-log"}, CapAdd: []string{"NET_ADMIN"}, Sysctls: map[string]string{"net.ipv4.ip_unprivileged_port_start": "0"}, Volumes: []Mount{mount(filepath.Join(runtime, "zlm.ini"), "/opt/media/conf/config.ini", true), mount(filepath.Join(runtime, "zlm-egress.json"), "/opt/media/conf/egress.json", true), mount(filepath.Join(runtime, "zlm-launcher"), "/usr/local/bin/media-launcher", true), mount(poolRoot, "/storage", false)}, Ports: []string{fmt.Sprintf("%d:%d/tcp", c.RTCPort, c.RTCPort), fmt.Sprintf("%d:%d/udp", c.RTCPort, c.RTCPort)}, Restart: "unless-stopped"}
+	d.Services["zlm"] = Service{Image: zlm, Environment: map[string]string{"TZ": c.Timezone}, EntryPoint: []string{"/usr/local/bin/media-launcher"}, Command: []string{"/opt/media/conf/egress.json", "./MediaServer", "-c", "/opt/media/conf/config.ini", "-l", "4", "--log-dir", "/tmp/one-nvr-media-log"}, CapAdd: []string{"NET_ADMIN"}, Sysctls: map[string]string{"net.ipv4.ip_unprivileged_port_start": "0"}, Volumes: append([]Mount{mount(filepath.Join(runtime, "zlm.ini"), "/opt/media/conf/config.ini", true), mount(filepath.Join(runtime, "zlm-egress.json"), "/opt/media/conf/egress.json", true), mount(filepath.Join(runtime, "zlm-launcher"), "/usr/local/bin/media-launcher", true), mount(poolRoot, "/storage", false)}, cacheMount()...), Ports: []string{fmt.Sprintf("%d:%d/tcp", c.RTCPort, c.RTCPort), fmt.Sprintf("%d:%d/udp", c.RTCPort, c.RTCPort)}, Restart: "unless-stopped"}
 	// The callback peer is outside the dynamic allocation range. Ordinary
 	// addresses may change on restart without invalidating the fixed firewall.
 	worker := d.Services["worker"]

@@ -1822,6 +1822,19 @@ export interface components {
             /** @description One-minute load average. Reported separately from CPU percent: a host can be at 100% of one core with a load of 1.0. */
             load_average: number;
             load_known: boolean;
+            /** @description The in-memory ring buffer used for event pre-recording (PRD REC-09). Capacity is a deployment decision because a mount cannot be resized under a running container. */
+            event_cache: {
+                /** @description False when this deployment reserved no memory for the buffer; the feature is off rather than empty. */
+                configured: boolean;
+                /** @description False when the mount exists but could not be measured. */
+                known: boolean;
+                path: string;
+                /** Format: int64 */
+                total_bytes: number;
+                /** Format: int64 */
+                used_bytes: number;
+                percent: number;
+            };
             /** Format: date-time */
             observed_at: string;
         };
