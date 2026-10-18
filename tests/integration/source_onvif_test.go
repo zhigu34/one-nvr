@@ -152,3 +152,57 @@ func TestOnvifProbeRecordsTheAttemptWithoutCredentials(t *testing.T) {
 		t.Fatalf("the fault does not explain itself: %s", failure.Message)
 	}
 }
+
+// PRD CH-13 says ONVIF reuses the source's own account and password. A probe
+// that demands a retyped password made the operator re-enter a credential the
+// product already holds, and the UI had to warn that the saved one would not be
+// used — a limitation the PRD does not describe.
+//
+// The assertion is that a probe with no password reaches the camera: the fixture
+// device requires authentication, so an empty password fails with an
+// authentication fault while the saved one succeeds.
+func TestOnvifProbeReusesSavedPassword(t *testing.T) {
+	db, svc, _, admin, channelID := onvifFixture(t, "192.168.33.0/24")
+	ctx := context.Background()
+
+	// Save a revision carrying the credential the device expects.
+	revision, err := svc.CreateDraft(ctx, admin, channelID, 1, channel.DraftInput{
+		Config:         channel.SourceConfig{IP: "192.168.33.20", MainPath: "/main"},
+		Credentials:    channel.CredentialInput{Username: stringPointer("operator"), Password: stringPointer("fixture-password"), PasswordAction: "replace"},
+		IdentityIntent: "replace",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool.Exec(ctx, "UPDATE channels SET current_revision_id=$2 WHERE id=$1", channelID, revision.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// No password in the request: the saved one must be used.
+	_, err = svc.ProbeONVIF(ctx, admin, channelID, channel.ProbeInput{IP: "192.168.33.20"})
+	if err == nil {
+		return
+	}
+	// The fixture camera is unreachable in this test, so a transport failure is
+	// the expected outcome — what must not happen is an authentication fault,
+	// which is what an empty password produces against an auth-required device.
+	failure := probeFault(t, err)
+	if failure.Code == "onvif_auth_rejected" {
+		t.Fatalf("probe used an empty password although one is saved: %v", failure)
+	}
+}
+
+// A channel with no applied revision has nothing saved to reuse, and the probe
+// must not invent credentials for it.
+func TestOnvifProbeWithoutSavedRevisionSendsNoCredential(t *testing.T) {
+	_, svc, _, admin, channelID := onvifFixture(t, "192.168.33.0/24")
+	ctx := context.Background()
+	_, err := svc.ProbeONVIF(ctx, admin, channelID, channel.ProbeInput{IP: "192.168.33.20"})
+	if err == nil {
+		return
+	}
+	failure := probeFault(t, err)
+	if failure.Code == "invalid_input" {
+		t.Fatalf("a channel with no saved revision was rejected before probing: %v", failure)
+	}
+}

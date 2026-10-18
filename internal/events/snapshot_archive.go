@@ -87,7 +87,7 @@ type pendingSnapshot struct {
 // same row update, which is idempotent rather than exclusive. That keeps the
 // sweep safe to run in more than one process without a lease.
 func (s *Service) pendingSnapshots(ctx context.Context) ([]pendingSnapshot, error) {
-	rows, err := s.DB.Pool.Query(ctx, `SELECT e.id,e.source_id,e.channel_id,c.channel_no,c.storage_pool_id,p.path,e.started_at,si.timezone
+	rows, err := s.DB.Pool.Query(ctx, `SELECT e.id,e.source_id,e.channel_id,c.channel_no,c.storage_pool_id,p.canonical_path,e.started_at,si.timezone
 		FROM events e
 		JOIN channels c ON c.id=e.channel_id
 		JOIN storage_pools p ON p.id=c.storage_pool_id AND p.enabled

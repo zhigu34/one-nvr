@@ -179,17 +179,18 @@ export function SourceOnvifPanel({
           <span className='text-xs text-muted-foreground'>请先填写 IP 地址</span>
         )}
       </div>
+      {/* The saved password is reused, so this is no longer a warning: it only
+          says what will happen, and offers the override for the case where the
+          camera's credential changed and the stored one is now wrong. */}
       {savedPassword && (
-        /* An actionable hint instead of an instruction: the operator should not
-           have to find a dropdown after being told the probe will fail. */
-        <p className='flex flex-wrap items-center gap-2 text-xs text-amber-600'>
-          已保存的密码不会用于探测。
+        <p className='flex flex-wrap items-center gap-2 text-xs text-muted-foreground'>
+          将使用已保存的密码探测。
           <button
             type='button'
-            className='rounded border border-amber-600/40 px-1.5 py-0.5 hover:bg-amber-500/10'
+            className='rounded border px-1.5 py-0.5 hover:bg-accent'
             onClick={onPasswordNeeded}
           >
-            改为输入新密码
+            改用新密码
           </button>
         </p>
       )}

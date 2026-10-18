@@ -3,6 +3,7 @@ package channel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
 	"time"
 
@@ -174,4 +175,45 @@ func (s *SourceService) Export(ctx context.Context, p auth.Principal, channels [
 		return ExportFile{}, err
 	}
 	return out, nil
+}
+
+// savedCredentialsTx decrypts the applied revision's credentials for internal
+// use (a probe, never a response).
+//
+// It exists so the ONVIF probe can reuse the account the operator already saved
+// instead of asking for it again — PRD CH-13 says ONVIF shares the source's
+// credentials. The caller must hold a transaction that already authorized the
+// channel; this function deliberately does no authorization of its own, because
+// a second check here would suggest the first one was optional.
+//
+// A channel with no applied revision, or a revision with no password, returns
+// empty strings rather than an error: "there is nothing saved" is a normal state
+// for a channel being configured for the first time.
+func (s *SourceService) savedCredentialsTx(ctx context.Context, tx pgx.Tx, channelID id.ID) ([]byte, []byte, error) {
+	var revisionID *id.ID
+	if err := tx.QueryRow(ctx, "SELECT current_revision_id FROM channels WHERE id=$1", channelID).Scan(&revisionID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil, auth.ErrNotFound
+		}
+		return nil, nil, err
+	}
+	if revisionID == nil {
+		return nil, nil, nil
+	}
+	r, err := loadRevision(ctx, tx, channelID, *revisionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Bytes, not strings: the caller zeroes them when done, and a string cannot
+	// be cleared. This is the same reason decrypt() hands back byte slices.
+	username, err := s.secret.OpenCredential(s.secret.SiteID, r.Revision.ChannelID, r.Revision.ID, "username", r.Username)
+	if err != nil {
+		return nil, nil, err
+	}
+	password, err := s.secret.OpenCredential(s.secret.SiteID, r.Revision.ChannelID, r.Revision.ID, "password", r.Password)
+	if err != nil {
+		clear(username)
+		return nil, nil, err
+	}
+	return username, password, nil
 }

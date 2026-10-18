@@ -52,7 +52,32 @@ func (s *SourceService) ProbeONVIF(ctx context.Context, p auth.Principal, channe
 		}
 		addr, err := s.network.validateTarget(in.IP)
 		target = addr
-		return err
+		if err != nil {
+			return err
+		}
+		// PRD CH-13: ONVIF reuses the source's own account and password. When the
+		// request carries no password the saved one is decrypted here, inside the
+		// same authorized transaction, so the operator does not have to retype a
+		// credential the product already holds. The plaintext never leaves this
+		// function: it goes to the probe and nowhere else.
+		//
+		// An explicit password in the request always wins, which is what makes
+		// "type a temporary password to test a camera before saving it" work.
+		if in.Password == "" {
+			username, password, err := s.savedCredentialsTx(ctx, tx, channelID)
+			if err != nil {
+				return err
+			}
+			defer clear(username)
+			defer clear(password)
+			if len(password) > 0 {
+				if in.Username == "" {
+					in.Username = string(username)
+				}
+				in.Password = string(password)
+			}
+		}
+		return nil
 	}); err != nil {
 		return out, err
 	}
@@ -64,6 +89,10 @@ func (s *SourceService) ProbeONVIF(ctx context.Context, p auth.Principal, channe
 	}
 	bounded, cancel := context.WithTimeout(ctx, probeBudget)
 	defer cancel()
+	// Drop the credential as soon as the probe returns. It was only ever needed
+	// for the SOAP exchange, and the audit entry below records the attempt
+	// without it.
+	defer func() { in.Username, in.Password = "", "" }()
 	result, probeErr := onvif.Probe(bounded, onvif.Options{IP: target.String(), Port: port, Username: in.Username, Password: in.Password})
 	result.Streams = usableStreams(result.Streams, target)
 	if probeErr == nil && len(result.Streams) == 0 {

@@ -13,12 +13,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"golang.org/x/sys/unix"
 	"github.com/jackc/pgx/v5"
 	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/jobs"
 	"github.com/zhigu34/one-nvr/internal/media/probe"
 	"github.com/zhigu34/one-nvr/internal/storage"
+	"golang.org/x/sys/unix"
 )
 
 // Export task failure codes. Client-fixable refusals were rejected at creation;
@@ -428,8 +428,12 @@ func (s *Service) ReconcileExports(ctx context.Context) {
 	if s.DB == nil {
 		return
 	}
-	_, err := s.DB.Pool.Exec(ctx, `UPDATE recording_exports SET state='failed',progress=100,error_code=$2,message=$3 WHERE state IN ('queued','running') AND EXISTS(SELECT 1 FROM jobs j WHERE j.id=recording_exports.job_id AND j.state='failed')`, "", exportErrJobExhausted, exportFailureText[exportErrJobExhausted])
+	// Placeholders start at $1. The previous version used $2/$3 while passing a
+	// leading empty argument, so PostgreSQL could not infer a type for the
+	// unused $1 and rejected the statement — this sweep never ran, and exports
+	// whose job exhausted its attempts stayed queued forever.
+	_, err := s.DB.Pool.Exec(ctx, `UPDATE recording_exports SET state='failed',progress=100,error_code=$1,message=$2 WHERE state IN ('queued','running') AND EXISTS(SELECT 1 FROM jobs j WHERE j.id=recording_exports.job_id AND j.state='failed')`, exportErrJobExhausted, exportFailureText[exportErrJobExhausted])
 	if err != nil && ctx.Err() == nil {
-		slog.Warn("export reconciliation unavailable")
+		slog.Warn("export reconciliation unavailable", "error", err)
 	}
 }
