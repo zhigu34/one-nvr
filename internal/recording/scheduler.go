@@ -256,6 +256,14 @@ func (s *Service) Reconcile(ctx context.Context, ch id.ID) error {
 		}
 		return s.observation(ctx, e, ss, "recording", state, public.Code, nil)
 	}
+	// Missing write evidence is a blocked start, not an unexplained failure: it
+	// has a named cause and a repair path (the idle-pool probe refreshes it), so
+	// it belongs in the observation. Returning it as a bare error left the
+	// recorder silent — the obligation said "recording is owed", the UI said
+	// "unknown", and only a warning with no detail explained why.
+	if errors.Is(err, storage.ErrMediaProof) {
+		return s.observation(ctx, e, ss, "recording", "unavailable", "pool_evidence_stale", nil)
+	}
 	return err
 }
 

@@ -245,3 +245,55 @@ func TestManualRecordingHTTPReportsAbsenceAs404(t *testing.T) {
 		t.Fatalf("running window not served: %d %s", running.Code, running.Body.String())
 	}
 }
+
+// The idle-pool probe is what keeps the zlm write proof fresh, and starting any
+// recording requires that proof to be fresh. Its candidate query used to look
+// only for `mode='continuous'`, so on a site where nothing records continuously
+// a manual window could never start: the recorder refused with
+// zlm_write_evidence_unavailable and no loop would ever produce the evidence
+// that refusal demanded. This pins the union into the probe's candidates.
+func TestManualWindowKeepsPoolEvidenceEligibleForProbe(t *testing.T) {
+	f := newPublicationFixture(t)
+	ctx := context.Background()
+	if _, err := f.DB.Pool.Exec(ctx, "UPDATE sites SET require_storage_write_proof=true WHERE singleton"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.DB.Pool.Exec(ctx, "UPDATE channels SET current_revision_id=$2,storage_pool_id=$3 WHERE id=$1", f.Channel, f.Revision, f.Pool.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.DB.Pool.Exec(ctx, "UPDATE recording_policies SET mode='none' WHERE channel_id=$1", f.Channel); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.DB.Pool.Exec(ctx, "UPDATE recording_runs SET state='stopped' WHERE id=$1", f.Run); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.DB.Pool.Exec(ctx, "UPDATE storage_pool_checks SET expires_at=clock_timestamp()-interval '1 second' WHERE pool_id=$1 AND service='zlm'", f.Pool.ID); err != nil {
+		t.Fatal(err)
+	}
+	// The candidate scan is the decision point: a pool it does not name never
+	// gets probed, so the zlm write proof stays stale and every start is refused.
+	candidates, err := f.Service.IdlePoolCandidates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pool := range candidates {
+		if pool == f.Pool.ID {
+			t.Fatal("an idle pool with no recording demand must not be probed: that " +
+				"would write a probe recording to it every ten seconds forever")
+		}
+	}
+	if _, err := f.Service.StartManual(ctx, f.Admin, f.Channel, 5); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err = f.Service.IdlePoolCandidates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pool := range candidates {
+		if pool == f.Pool.ID {
+			return
+		}
+	}
+	t.Fatal("a manual window is recording demand: without a probe here the zlm " +
+		"write proof never refreshes and the recording can never start")
+}
