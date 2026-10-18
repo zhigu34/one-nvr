@@ -732,6 +732,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/channels/{id}/manual-recording": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The channel's running manual recording window (PRD REC-03), or 404 when none is open. */
+        get: operations["getManualRecording"];
+        put?: never;
+        /** @description Start a manual recording window. An omitted or zero minutes means the PRD's 30-minute default; the range is 1-120. Starting while a window is open replaces it. The channel's configured policy mode is not changed (PRD REC-03/04). */
+        post: operations["startManualRecording"];
+        /** @description End the manual window early. Ending one that is not running succeeds: the desired state already holds, and a continuous channel keeps recording. */
+        delete: operations["stopManualRecording"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recording-policies": {
         parameters: {
             query?: never;
@@ -2715,6 +2734,20 @@ export interface components {
         RecordingPage: {
             items: components["schemas"]["RecordingSegment"][];
             next_cursor: components["schemas"]["UUID"] | null;
+        };
+        /** @description A running manual recording window (PRD REC-03). Not a policy: the channel's configured mode is untouched and recording returns to it when the window ends. */
+        ManualRecording: {
+            channel_id: components["schemas"]["UUID"];
+            requested_minutes: number;
+            /** Format: date-time */
+            started_at: string;
+            /**
+             * Format: date-time
+             * @description Computed when the window opened, so a later change to the default cannot lengthen a running window.
+             */
+            expires_at: string;
+            /** Format: int64 */
+            remaining_ms: number;
         };
         SourceConfigInput: {
             ip: string;
@@ -5657,6 +5690,97 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getManualRecording: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The open window. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ManualRecording"];
+                        request_id: components["schemas"]["UUID"];
+                    };
+                };
+            };
+            /** @description No manual window is open. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    startManualRecording: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @default 30 */
+                    minutes?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description The window that is now running. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ManualRecording"];
+                        request_id: components["schemas"]["UUID"];
+                    };
+                };
+            };
+        };
+    };
+    stopManualRecording: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Stopped or already stopped. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: Record<string, never>;
+                        request_id: components["schemas"]["UUID"];
+                    };
                 };
             };
         };

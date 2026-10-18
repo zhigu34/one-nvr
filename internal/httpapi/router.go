@@ -134,6 +134,12 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("GET /api/v1/channels/{id}/recording-policy", r.protected(r.recordingPolicy))
 	r.mux.HandleFunc("PUT /api/v1/channels/{id}/recording-policy", r.protected(r.setRecordingPolicy))
 	r.mux.HandleFunc("PUT /api/v1/recording-policies", r.protected(r.setRecordingPolicies))
+	// Manual recording is a bounded window (REC-03), separate from the policy:
+	// starting one does not change the configured mode, and stopping one does
+	// not stop a continuous channel.
+	r.mux.HandleFunc("GET /api/v1/channels/{id}/manual-recording", r.protected(r.manualRecording))
+	r.mux.HandleFunc("POST /api/v1/channels/{id}/manual-recording", r.protected(r.startManualRecording))
+	r.mux.HandleFunc("DELETE /api/v1/channels/{id}/manual-recording", r.protected(r.stopManualRecording))
 	r.mux.HandleFunc("PUT /api/v1/channels/{id}/storage-pool", r.protected(r.bindChannelPool))
 	r.mux.HandleFunc("POST /api/v1/channels/{id}/source/credentials/reveal", r.protected(r.revealSourceCredentials))
 	r.mux.HandleFunc("POST /api/v1/channels/source-config-export", r.protected(r.exportSourceConfig))

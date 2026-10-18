@@ -15,8 +15,10 @@ import (
 
 type desiredRecording struct {
 	Revision, Pool *id.ID
-	Mode           string
-	Enabled        bool
+	// Mode is the effective decision for this tick, not the stored setting: the
+	// union of the policy mode and any other reason to record (REC-04).
+	Mode    string
+	Enabled bool
 }
 
 func (s *Service) Reconcile(ctx context.Context, ch id.ID) error {
@@ -31,7 +33,18 @@ func (s *Service) Reconcile(ctx context.Context, ch id.ID) error {
 	ctx = e.Context()
 	var desired desiredRecording
 	if err := e.WithinTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT c.current_revision_id,c.storage_pool_id,c.enabled,p.mode FROM channels c JOIN recording_policies p ON p.channel_id=c.id WHERE c.id=$1`, ch).Scan(&desired.Revision, &desired.Pool, &desired.Enabled, &desired.Mode)
+		var policyMode string
+		if err := tx.QueryRow(ctx, `SELECT c.current_revision_id,c.storage_pool_id,c.enabled,p.mode FROM channels c JOIN recording_policies p ON p.channel_id=c.id WHERE c.id=$1`, ch).Scan(&desired.Revision, &desired.Pool, &desired.Enabled, &policyMode); err != nil {
+			return err
+		}
+		// The union is computed here, inside the same transaction that read the
+		// policy, so the two cannot disagree about the same instant.
+		active, err := manualActiveTx(ctx, tx, ch)
+		if err != nil {
+			return err
+		}
+		desired.Mode = unionMode(policyMode, active)
+		return nil
 	}); err != nil {
 		return err
 	}
@@ -126,7 +139,11 @@ func (s *Service) Reconcile(ctx context.Context, ch id.ID) error {
 		}
 		return s.observation(ctx, e, ss, "recording", "disabled", "recording_disabled", nil)
 	}
-	if desired.Mode != "continuous" {
+	// Every reason to record lands on the same path below: capacity, pool health
+	// and the recorder start/stop are identical whether the demand came from the
+	// policy or from an operator's manual window. Only the *decision* differs,
+	// and that lives in unionMode.
+	if desired.Mode != "continuous" && desired.Mode != "manual" {
 		return nil
 	}
 	if desired.Pool == nil {
@@ -283,4 +300,23 @@ func (s *Service) runtimeFrameStatus(ctx context.Context, e *channel.Execution, 
 	}
 	_, err = s.sampleBitrate(ctx, e, ss, "", true)
 	return "unknown", "frame_progress_pending", err
+}
+
+// unionMode is the REC-04 rule in one place.
+//
+// Recording happens when *any* source of demand says so. 'none' is the absence
+// of every reason, not a mode that cancels the others: an operator who presses
+// record on a channel whose policy is none must get a recording, and a policy
+// change made while a manual window runs must not end that recording.
+//
+// The planned branch lands here in batch 2; the signature already takes the
+// inputs so that adding it cannot accidentally invert the union.
+func unionMode(policyMode string, manualActive bool) string {
+	if policyMode == "continuous" {
+		return "continuous"
+	}
+	if manualActive {
+		return "manual"
+	}
+	return policyMode
 }

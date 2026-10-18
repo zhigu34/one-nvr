@@ -53,6 +53,7 @@ function fixture(
     reject?: boolean
     bindReject?: boolean
     checks?: Schema<'PoolCheck'>[]
+    manual?: 'idle' | 'running' | 'denied'
   } = {}
 ) {
   useAuthStore.getState().setUser({
@@ -144,6 +145,21 @@ function fixture(
       }
     if (method === 'GET' && path.startsWith('/api/v1/channels?'))
       return { items: [channel], next_cursor: null }
+    // The manual window probe answers 404 when nothing is running; the control
+    // must read that as "idle" and only surface a warning for real failures.
+    if (method === 'GET' && path.endsWith('/manual-recording')) {
+      if (options.manual === 'denied')
+        throw new ApiError(500, 'service_error', '服务暂时不可用')
+      if (options.manual !== 'running')
+        throw new ApiError(404, 'manual_recording_absent', '该通道当前没有手动录像')
+      return {
+        channel_id: channel.id,
+        requested_minutes: 30,
+        started_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+        expires_at: new Date(Date.now() + 25 * 60_000).toISOString(),
+        remaining_ms: 25 * 60_000,
+      }
+    }
     if (method === 'GET' && path.endsWith('/recording-policy'))
       return {
         channel_id: channel.id,
@@ -377,5 +393,51 @@ test('the bound pool shows a storage-page link and the row shows its health', as
   await expect
     .element(link)
     .toHaveAttribute('href', '/storage?tab=pools')
+  setup.client.clear()
+})
+
+// REC-03: a manual window is a separate control from the policy select, because
+// REC-04 requires it to survive a policy edit. The row shows the countdown when
+// one is running and offers the durations when none is.
+test('a running manual window shows its remaining time', async () => {
+  const setup = fixture({ manual: 'running' })
+  const view = await render(setup.view)
+  await expect.element(view.getByTestId('manual-recording-active')).toBeVisible()
+  await expect.element(view.getByText(/手动录像 25 分钟/)).toBeVisible()
+  await expect
+    .element(view.getByRole('button', { name: 'CH01 停止手动录像' }))
+    .toBeVisible()
+  setup.client.clear()
+})
+
+test('starting a manual window posts the chosen duration', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  await userEvent.click(view.getByRole('button', { name: 'CH01 手动录像' }))
+  await userEvent.click(
+    view.getByRole('button', { name: 'CH01 录像 10 分钟' })
+  )
+  await expect
+    .poll(() =>
+      setup.mutations.filter((m) => m.path.endsWith('/manual-recording')).length
+    )
+    .toBe(1)
+  const post = setup.mutations.find((m) => m.path.endsWith('/manual-recording'))
+  expect(post?.init.method).toBe('POST')
+  expect(JSON.parse(post?.init.body as string)).toEqual({ minutes: 10 })
+  // The policy mode is untouched: the window is not a settings change.
+  expect(
+    setup.mutations.some((m) => m.path.endsWith('/recording-policy'))
+  ).toBe(false)
+  setup.client.clear()
+})
+
+// A read failure that is not the 404 "nothing running" answer must not be
+// rendered as an idle channel, and must not hide the record button — pressing it
+// would be a blind write against a channel whose state is unknown.
+test('an unreadable manual state is reported instead of assumed idle', async () => {
+  const setup = fixture({ manual: 'denied' })
+  const view = await render(setup.view)
+  await expect.element(view.getByText(/状态未知/)).toBeVisible()
   setup.client.clear()
 })

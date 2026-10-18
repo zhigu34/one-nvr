@@ -64,6 +64,17 @@ CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真�
 
 ## 当前交接快照（2026-10-09）
 
+- **2026-10-17 定时/事件录制批次 1 已实现：调度器取并集 + 手动录像窗口（REC-03/04）**。用户要求「继续定时、事件录制功能开发」，拆三批：**① 调度器并集 + 手动录像（本批）**、② 周计划（REC-02）、③ 事件录制（REC-09/10）。
+  - **手动录像不是一种 mode，而是一个有起止的窗口**（迁移 `0030`，`recording_manual_windows`）。这是本批最重要的结构决定：`recording_policies.mode` 是设置，手动录像是操作者的一次请求。把请求写进设置会让两者互相覆盖——REC-04 要求「策略编辑不得终止进行中的手动录像」，只有当它们存在不同表里时才天然成立。新表带部分唯一索引 `recording_manual_windows_one_active`（一通道一活跃窗口），重复启动把旧窗口关成 `cancelled` 再开新的，历史仍能看出操作者按过两次。
+  - **`expires_at` 在 INSERT 时用 `clock_timestamp()+make_interval(mins => $3)` 算死**，不在读路径按 `now+minutes` 推导——否则一个开了一小时的窗口仍会声称自己有完整时长。`remaining_ms` 是读时算的展示值，不落库。
+  - **`unionMode(policyMode, manualActive)` 是 REC-04 的唯一实现点**（`internal/recording/scheduler.go`）。`none` 是「没有任何理由录像」的**缺省值，不是一个会取消其他理由的 mode**：操作者在 mode=none 的通道上按录像必须真的录，运行中改策略也不得中断。调度器与义务推导（`obligations.go` 的 `loadObligationFacts`）**共用这个 helper**——两者若对「现在该不该录」有分歧，每个完整性数字都会以无人察觉的方式变错。
+  - **义务侧 `manual` 转正**：此前 `planned`/`manual` 一起被当作「未实现词汇」记为 `exclusion=disabled`。现在 `manual` 是 `source="manual"` 的**应录**区间（分母要算上），只有 `planned` 仍标记 `mode_not_implemented`。判成「不要求录像」会把一次失败的手动录像藏进排除项，并把该通道报成完全覆盖。
+  - **权限与审计**：启动/停止要 `configure`，查询要 `playback`；`recording.manual_started` / `recording.manual_stopped` 入审计。`StopManual` 幂等（没在录也返回成功——期望状态已成立）。
+  - **`GET` 无窗口时返回 404 `manual_recording_absent`，不是 `200 null`**（`ActiveManual` 透传 `ErrManualWindowMissing` 而非吞掉）。前端据此把「空闲」与「读不到」分开：只有这个 code 才渲染成未录像；其他失败显示「状态未知：…」而不是假装空闲——后者会诱使操作者对一个状态未知的通道盲写。
+  - **前端**：`features/recording-plan/manual-recording.tsx`，与录像方式下拉**分开**的控件（10/30/60/120 分钟），运行中显示红色胶囊 + 剩余时间 + 停止，15 秒轮询。
+  - **测试**：`tests/integration/manual_recording_test.go` 8 个（不改策略 / mode=none 也产生应录 / continuous+manual 只开一条义务 / 连按两次只留一个活跃窗口 / 停止幂等 / 到期 sweep 记 `expired` / 分钟数边界 / **HTTP 层无窗口必须 404**）。前端 14 个（含 3 个新的控件测试）。
+  - 状态：代码完成，`verify.sh` 6/7（唯一 FAIL 是 API 类型漂移，因为生成文件尚未提交——提交后即消失）；定向集成 8 个全过。**全量集成套件与部署结果见下一轮交接。**
+
 - **2026-10-16 现场发现 CH08 子码流反复重建（两轮）**。第一轮（提交 `811447e`）只解决一半：把 keyframe 抖动放大成 40 秒重建循环这条"软件侧故障循环"砍掉（229/h → ~70/h），子码流仍被打掉。第二轮定位到**真正的根因不在 worker、在 ZLM 协议**：`isMediaOnline` 接口对**没有消费者在拉流**的 proxy 也会返回 `online=false`。**主流不受影响**（Frigate / 实时预览 / 回放 多个客户端持续消费字节，ZLM 持续判 online=true），**子码流周期性被判 offline**（平时没人连，只有 worker 在拉 proxy 做采集/录像，**不消费 ZLM 输出的字节**）。**修法在协议层**（`internal/media/zlm/operations.go` 的 `Inspect`）：`isMediaOnline` 报 false 时再调一次 `getMediaInfo` 验证 —— proxy 还有 tracks、`bytesSpeed >= 0` 就**别**报 `ErrStreamAbsent`。`fetchSnapshot` 提取出来供两路复用（online=true 直接走；online=false 走验证再决定；老 `getMediaInfo` 出错时仍按 isMediaOnline 判定）。`ErrStreamAbsent` 的语义从此干净：**"proxy 真的没了"** 而非 "ZLM 缓存它没在被人拉"。
   - **第一轮（`811447e`）仍然有效，不要回滚**：`videoFrames` 去 `track.Ready`（keyframe 抖动不再误判 stalled）+ `streamGapGraceSamples=3` 宽限 + `newPublicationFixture` wire 上 `reliability.Service`（之前传 `nil` 让 `observation()` 在 `reliability_intervals` 那行提前 return，掩盖了所有宽限测试）。这一轮砍的是「软件侧把单次抖动放大成 40 秒重建循环」；这一轮砍的是「软件侧信任了一个有 bug 的 ZLM 信号」。
   - **新增单测** `TestInspectTreatsIdleButProducingProxyAsPresent`：mock `isMediaOnline=false` + `getMediaInfo` 返回 1 条 track + 128 字节/秒，断言 `Inspect` 不报 `ErrStreamAbsent`、正确返回 snapshot。两个老测试 `TestInspectAbsenceRequiresSuccessfulOnlineResponse` / `TestInspectConfirmsOfflineBeforeWaitingForMediaDetails` 自动通过（它们的 mock 让 `getMediaInfo` 出错/超时，走的是「`isMediaOnline` 报 false 且无法交叉验证 → `ErrStreamAbsent`」分支）。

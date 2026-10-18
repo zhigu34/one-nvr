@@ -67,6 +67,11 @@ func (s *Service) RunRetention(ctx context.Context) {
 		if s.Audits != nil {
 			s.Audits.SweepAudits(ctx)
 		}
+		// A manual window that expired without being closed would read as still
+		// running in the audit trail, and the scheduler would keep ignoring it
+		// for the same reason it ignores any expired window — so this is
+		// bookkeeping, and it belongs on the same ticker as the rest.
+		s.SweepManualWindows(ctx)
 		select {
 		case <-ctx.Done():
 			return

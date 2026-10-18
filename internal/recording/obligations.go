@@ -65,6 +65,14 @@ func (s *Service) loadObligationFacts(ctx context.Context, tx pgx.Tx, channelID 
 	if err != nil {
 		return out, err
 	}
+	// The union, read through the same helper the scheduler uses: an obligation
+	// and a recording decision that disagree about "should this be recording
+	// now" would make every completeness figure wrong in a way nobody could see.
+	active, err := manualActiveTx(ctx, tx, channelID)
+	if err != nil {
+		return out, err
+	}
+	out.Mode = unionMode(out.Mode, active)
 	// The session is what the recorder is attached to; recording it on the
 	// obligation is what lets a reader tie an owed stretch to the media session
 	// that served it.
@@ -96,7 +104,11 @@ func (s *Service) loadObligationFacts(ctx context.Context, tx pgx.Tx, channelID 
 //  4. Continuous is owed, including while the recorder is broken, the source is
 //     down or the pool is unwritable. THIS IS THE REQUIREMENT, not an oversight:
 //     PRD REL-03 says a failure must not shrink the denominator.
-//  5. Anything else (none, and the unimplemented planned/manual) is not owed.
+//  5. A manual window is owed for exactly as long as it runs (REC-03/04). It is
+//     checked after continuous because a continuous channel that is also being
+//     manually recorded owes recording once, not twice — the union is a boolean,
+//     and the obligation interval is the record of that boolean over time.
+//  6. Anything else (none, and the still-unimplemented planned) is not owed.
 func obligationFor(f obligationFacts) reliability.Obligation {
 	evidence := map[string]any{}
 	if f.SwitchID != nil {
@@ -132,10 +144,18 @@ func obligationFor(f obligationFacts) reliability.Obligation {
 			evidence["during_switch"] = true
 		}
 		return base
-	case f.Mode == "planned" || f.Mode == "manual":
-		// Reserved vocabulary. PRD REC-02/03/04 are unimplemented, so nothing
-		// writes these modes today; if one ever appears, it is reported as an
-		// unsupported source rather than silently counted either way.
+	case f.Mode == "manual":
+		// A manual recording is owed: the operator asked for footage and the
+		// completeness figure must divide by the time they asked for. Treating
+		// it as "not owed" would hide a failed manual recording inside an
+		// exclusion and report the channel as fully covered.
+		base.Source = "manual"
+		evidence["reason"] = "manual_window"
+		return base
+	case f.Mode == "planned":
+		// Reserved vocabulary. PRD REC-02 is unimplemented, so nothing writes
+		// this mode today; if one ever appears, it is reported as an unsupported
+		// source rather than silently counted either way.
 		base.Source, base.Exclusion = f.Mode, "disabled"
 		evidence["reason"] = "mode_not_implemented"
 		return base

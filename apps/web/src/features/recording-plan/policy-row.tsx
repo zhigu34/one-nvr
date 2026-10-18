@@ -11,6 +11,7 @@ import { StatusBadge } from '@/features/foundation/status-badge'
 import { sourceCommand } from '@/features/channels/api'
 import { settleJob, verifyPoolWrite } from '@/features/storage-pools/pool-check'
 import { cn } from '@/lib/utils'
+import { ManualRecordingControl } from './manual-recording'
 
 /**
  * Only the modes the control plane implements are selectable. The rest are
@@ -337,7 +338,7 @@ export function PolicyRow({
         {inert ? (
           <span className='text-xs text-zinc-600'>—</span>
         ) : (
-          <div className='flex items-center gap-2'>
+          <div className='flex flex-wrap items-center gap-2'>
             <SelectField
               ariaLabel={`${label} 录像方式`}
               className='text-sm'
@@ -379,9 +380,17 @@ export function PolicyRow({
             {errorFrom === 'policy' && !error && notice && succeeded !== 'policy' && (
               <span className='text-xs text-muted-foreground'>{notice}</span>
             )}
-        {mode === 'continuous' && !boundPool && draftPool === null && !inert && (
-          <p className='text-xs text-amber-600'>请先绑定存储池</p>
-        )}
+            {/* Manual recording is a separate request, not a mode: it runs
+                alongside whatever the policy says and expires on its own
+                (PRD REC-03/04). */}
+            <ManualRecordingControl
+              channelId={channel.id}
+              label={label}
+              disabled={!!pending}
+            />
+            {mode === 'continuous' && !boundPool && draftPool === null && !inert && (
+              <p className='text-xs text-amber-600'>请先绑定存储池</p>
+            )}
           </div>
         )}
       </TableCell>
