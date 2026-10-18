@@ -4,6 +4,7 @@ package operations
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"regexp"
 	"time"
 
@@ -239,4 +240,49 @@ func (s *Service) Audits(ctx context.Context, p auth.Principal, prefix string, c
 		out.Items = out.Items[:limit]
 	}
 	return out, nil
+}
+
+// AuditRetention is how long an audit row is kept (PRD SYS-01: 180 days).
+//
+// The audit trail is the record of who changed what, so the window is a policy
+// decision rather than a capacity one — six months is what the PRD names, and
+// deleting older rows is what keeps the table from growing without bound on a
+// site that logs every playback.
+const AuditRetention = 180 * 24 * time.Hour
+
+// auditSweepBatch bounds one delete pass. The first run after an upgrade may have
+// years of backlog, and one enormous DELETE would hold locks and write-ahead log
+// for an arbitrarily long time.
+const auditSweepBatch = 500
+
+// SweepAudits deletes audit rows past the retention window.
+//
+// Until this existed nothing ever removed an audit row: the table only grew.
+// That is a real defect on a site whose log is dominated by playback entries —
+// this deployment had 2028 rows in ten days, which is roughly 74k a year for a
+// 16-channel site that nobody watches.
+//
+// Deleting is deliberately plain: no protection, no pinning, no exception for
+// "important" actions. The retention window is the policy, and an audit row that
+// outlives it is not more valuable than the window says — inventing exceptions
+// here would make the window untrustworthy in exactly the direction that matters
+// (an operator assuming old evidence is still there).
+func (s *Service) SweepAudits(ctx context.Context) {
+	if s.DB == nil {
+		return
+	}
+	for {
+		tag, err := s.DB.Pool.Exec(ctx, `DELETE FROM audit_logs WHERE id IN (
+			SELECT id FROM audit_logs WHERE created_at < clock_timestamp() - $1::interval LIMIT $2)`,
+			AuditRetention.String(), auditSweepBatch)
+		if err != nil {
+			if ctx.Err() == nil {
+				slog.Warn("audit retention unavailable", "error", err)
+			}
+			return
+		}
+		if tag.RowsAffected() < auditSweepBatch || ctx.Err() != nil {
+			return
+		}
+	}
 }

@@ -59,6 +59,14 @@ func (s *Service) RunRetention(ctx context.Context) {
 		// first.
 		s.SweepQuotas(ctx)
 		s.SweepWatermarkEvents(ctx)
+		// The audit trail has its own 180-day window (SYS-01) and nothing else
+		// ever deletes from it. It runs on this ticker because the cadence is
+		// already right: five minutes is far below the resolution of a
+		// six-month window, and a second timer would be another thing to keep
+		// alive.
+		if s.Audits != nil {
+			s.Audits.SweepAudits(ctx)
+		}
 		select {
 		case <-ctx.Done():
 			return

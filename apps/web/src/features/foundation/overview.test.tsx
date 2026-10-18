@@ -32,6 +32,7 @@ function component(
 
 function fixture(
   options: {
+    reliability?: unknown[]
     role?: 'admin' | 'viewer'
     components?: Schema<'Component'>[]
     pools?: Schema<'Pool'>[]
@@ -133,6 +134,8 @@ function fixture(
             },
           ],
       }
+    if (path.startsWith('/api/v1/reliability/summary'))
+      return { items: options.reliability ?? [] }
     if (path === '/api/v1/operations/components')
       return (
         options.components ?? [
@@ -232,4 +235,67 @@ test('a viewer sees no component matrix and no patrol shortcuts beyond grants', 
   // viewer, and neither must a card that would leak component health.
   expect(view.getByTestId('component-card').query()).toBeNull()
   setup.client.clear()
+})
+
+// DASH-04: availability and recording coverage over the last day, read from the
+// same cross-channel summary the operations page uses so the two cannot
+// disagree about a channel.
+test('the availability card reports a rate with its own evidence', async () => {
+  const setup = fixture({
+    reliability: [
+      {
+        channel_id: 'ch-1',
+        channel_no: 1,
+        channel_name: '前门',
+        kind: 'main',
+        healthy_ms: 23 * 3600_000,
+        unavailable_ms: 3600_000,
+        unknown_ms: 0,
+        excluded_ms: 0,
+        expected_ms: 0,
+        owed_ms: 0,
+        covered_ms: 0,
+        fault_count: 2,
+        observed_ms: 24 * 3600_000,
+        sample_sufficient: true,
+      },
+      {
+        channel_id: 'ch-1',
+        channel_no: 1,
+        channel_name: '前门',
+        kind: 'recording',
+        healthy_ms: 0,
+        unavailable_ms: 0,
+        unknown_ms: 0,
+        excluded_ms: 0,
+        expected_ms: 0,
+        owed_ms: 3600_000,
+        covered_ms: 1800_000,
+        fault_count: 0,
+        observed_ms: 24 * 3600_000,
+        sample_sufficient: true,
+      },
+    ],
+  })
+  const view = await render(setup.view)
+  // 23 of 24 hours healthy is 95.8%, and one channel had an interruption.
+  await expect.element(view.getByText('95.8%')).toBeVisible()
+  await expect.element(view.getByText(/录像覆盖 50.0%/)).toBeVisible()
+  await expect.element(view.getByText(/1 路有中断/)).toBeVisible()
+})
+
+// A window with no sufficient sample must say so rather than print 0%, which
+// would read as "everything was down".
+test('the availability card shows a dash when nothing was observed', async () => {
+  const setup = fixture({ reliability: [] })
+  const view = await render(setup.view)
+  await expect.element(view.getByText('窗口内观测不足')).toBeVisible()
+})
+
+// Comparing channels is an administrator read, so a viewer gets no card at all
+// instead of an empty one.
+test('a viewer sees no availability card', async () => {
+  const setup = fixture({ role: 'viewer' })
+  const view = await render(setup.view)
+  expect(view.getByText('24 小时可用性').query()).toBeNull()
 })

@@ -126,6 +126,18 @@ export function Overview() {
       limit: '4',
     })}`
   )
+  // DASH-04: availability, recording coverage and the channels that were not
+  // available, over the last day. Administrator-only because comparing channels
+  // means reading media evidence about all of them.
+  const [reliabilityWindow] = useState(() => {
+    const to = new Date()
+    const from = new Date(to.getTime() - 24 * 3600_000)
+    return { from: from.toISOString(), to: to.toISOString() }
+  })
+  const reliability = useAPI<{ items: Schema<'ReliabilityChannelSummary'>[] }>(
+    `/api/v1/reliability/summary?from=${reliabilityWindow.from}&to=${reliabilityWindow.to}`,
+    admin
+  )
   const zone = site.data?.timezone || ''
   const channels = summaries.data?.items || []
   // Event rows name their channel via this map.
@@ -152,6 +164,45 @@ export function Overview() {
   const active = configured
     .filter((channel) => channel.main.state === 'healthy')
     .slice(0, 8)
+  // DASH-04 figures, derived from the same cross-channel summary the operations
+  // page reads, so the two views cannot disagree about a channel.
+  //
+  // Availability is reported as a duration-derived percentage with its own
+  // denominator, and only for channels whose sample is sufficient: quoting a
+  // figure from ten minutes of history as "the site's availability" is the
+  // unfounded number PRD REL-05 forbids.
+  const reliable = (reliability.data?.items || []).filter(
+    (row) => row.sample_sufficient && row.observed_ms > 0
+  )
+  const sumOf = (kind: string, field: 'healthy_ms' | 'observed_ms') =>
+    reliable
+      .filter((row) => row.kind === kind)
+      .reduce((total, row) => total + row[field], 0)
+  const mainObserved = sumOf('main', 'observed_ms')
+  const mainAvailability =
+    mainObserved > 0
+      ? {
+          percent: `${((sumOf('main', 'healthy_ms') / mainObserved) * 100).toFixed(1)}%`,
+          observed: mainObserved,
+        }
+      : null
+  const recordingOwed = reliable
+    .filter((row) => row.kind === 'recording')
+    .reduce((total, row) => total + row.owed_ms, 0)
+  const recordingCovered = reliable
+    .filter((row) => row.kind === 'recording')
+    .reduce((total, row) => total + row.covered_ms, 0)
+  const recordingCoverage =
+    recordingOwed > 0
+      ? `${((recordingCovered / recordingOwed) * 100).toFixed(1)}%`
+      : null
+  // A channel counts as abnormal when it had a real interruption in the window;
+  // unavailable time is the fact, not a threshold crossing.
+  const abnormalChannels = new Set(
+    reliable
+      .filter((row) => row.kind === 'main' && row.unavailable_ms > 0)
+      .map((row) => row.channel_id)
+  ).size
   const healthyComponents =
     components.data?.filter(
       (component) => component.enabled && component.state === 'healthy'
@@ -225,6 +276,58 @@ export function Overview() {
               </span>
             </p>
           </Link>
+          {/* DASH-04: what the last 24 hours actually looked like, per stream
+              kind. Administrator-only because comparing channels reads media
+              evidence about all of them; a viewer sees no card rather than a
+              card full of zeros. */}
+          {admin && (
+            <Link
+              to='/operations'
+              className='group rounded-xl border bg-card p-4 shadow-2xs transition-colors hover:border-zinc-300 hover:shadow-sm dark:hover:border-emerald-500/40'
+            >
+              <div className='flex items-center justify-between'>
+                <p className='flex items-center gap-1.5 text-xs text-muted-foreground'>
+                  <Activity aria-hidden className='size-3.5' />
+                  24 小时可用性
+                </p>
+                <ArrowRight
+                  aria-hidden
+                  className='size-4 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100'
+                />
+              </div>
+              {mainAvailability ? (
+                <>
+                  <p className='mt-2 text-3xl font-semibold tabular-nums'>
+                    {mainAvailability.percent}
+                    <span className='ms-1 text-sm font-normal text-muted-foreground'>
+                      主流
+                    </span>
+                  </p>
+                  <p className='mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs'>
+                    <span className='text-emerald-600 dark:text-emerald-400'>
+                      录像覆盖 {recordingCoverage ?? '—'}
+                    </span>
+                    {abnormalChannels > 0 ? (
+                      <span className='text-amber-600 dark:text-amber-400'>
+                        {abnormalChannels} 路有中断
+                      </span>
+                    ) : (
+                      <span className='text-muted-foreground'>无中断</span>
+                    )}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className='mt-2 text-3xl font-semibold text-muted-foreground'>
+                    —
+                  </p>
+                  <p className='mt-2 text-xs text-muted-foreground'>
+                    {reliability.isPending ? '统计中' : '窗口内观测不足'}
+                  </p>
+                </>
+              )}
+            </Link>
+          )}
           {/* Detection engine: live facts from the detector, never invented. */}
           <Link
             to='/detection'

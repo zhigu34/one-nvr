@@ -36,6 +36,15 @@ type Media interface {
 	StartRecord(context.Context, zlm.StreamKey, string, int) error
 	StopRecord(context.Context, zlm.StreamKey) error
 }
+
+// AuditSweeper is the retention sweep of the audit trail, injected by the
+// assembly. It lives behind an interface because the audit table belongs to the
+// operations package and recording must not import it: the dependency runs the
+// other way, and a package cycle here would be permanent.
+type AuditSweeper interface {
+	SweepAudits(context.Context)
+}
+
 type Probe interface {
 	FirstFrame(context.Context, string) (probe.VideoEvidence, error)
 	InspectMP4(context.Context, *os.File) (probe.FileEvidence, error)
@@ -47,6 +56,7 @@ type Service struct {
 	Files   FilePublisher
 	Media   Media
 	Probe   Probe
+	Audits  AuditSweeper
 	Roots   []string
 	DataDir string
 	Pools   *storage.Service

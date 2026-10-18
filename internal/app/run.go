@@ -133,6 +133,10 @@ func Run(name string) error {
 		}
 		mediaProbe := probe.Runner{FFmpeg: "/usr/bin/ffmpeg", FFprobe: "/usr/bin/ffprobe"}
 		recordings := recording.New(db, media, mediaProbe, []string{"/storage"}, c.DataDir)
+		// The audit trail's 180-day window (SYS-01) is swept on the retention
+		// ticker. Injected here rather than imported by recording, because the
+		// audit table belongs to operations and the dependency runs one way.
+		recordings.Audits = operations.New(db, nil, c.FrigateEnabled, c.OpenListEnabled)
 		baseNetwork, err := channel.ParseNetworkPolicy(c.CameraCIDRs, nil)
 		if err != nil {
 			return err
