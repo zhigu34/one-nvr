@@ -144,10 +144,23 @@ func (s *Service) ReconcileEventMedia(ctx context.Context) {
 	if s.DB == nil {
 		return
 	}
-	rows, err := s.DB.Pool.Query(ctx, `SELECT id,channel_id,started_at,ended_at FROM events
+	// Two kinds of pending share this column and need different treatment:
+	//
+	//   - recent: the segment covering the event has not been published yet.
+	//     Leave it pending and look again next pass.
+	//   - old: footage will never appear (the channel was not recording, or it
+	//     was deleted by retention). Only a positive answer used to be written,
+	//     so these rows stayed pending forever and the page said "录像待归档"
+	//     about events from a week ago.
+	//
+	// The old ones are settled below rather than filtered out here, so one query
+	// keeps both cases in view.
+	rows, err := s.DB.Pool.Query(ctx, `SELECT id,channel_id,started_at,ended_at,
+			started_at < clock_timestamp() - interval '2 hours' AS settled
+		FROM events
 		WHERE media_state='pending' AND channel_id IS NOT NULL
-		  AND started_at > clock_timestamp() - interval '2 hours'
-		ORDER BY started_at DESC LIMIT 200`)
+		ORDER BY (started_at < clock_timestamp() - interval '2 hours') DESC, started_at DESC
+		LIMIT 200`)
 	if err != nil {
 		if ctx.Err() == nil {
 			slog.Warn("event media reconciliation unavailable", "error", err)
@@ -159,11 +172,12 @@ func (s *Service) ReconcileEventMedia(ctx context.Context) {
 		channelID id.ID
 		startedAt time.Time
 		endedAt   *time.Time
+		settled   bool
 	}
 	var pending []candidate
 	for rows.Next() {
 		var item candidate
-		if err := rows.Scan(&item.id, &item.channelID, &item.startedAt, &item.endedAt); err != nil {
+		if err := rows.Scan(&item.id, &item.channelID, &item.startedAt, &item.endedAt, &item.settled); err != nil {
 			rows.Close()
 			return
 		}
@@ -182,10 +196,16 @@ func (s *Service) ReconcileEventMedia(ctx context.Context) {
 			if err != nil {
 				return err
 			}
-			// Nothing yet is not a verdict: leave it pending so the next pass
-			// looks again. Only a positive answer is written here.
+			// Nothing yet is not a verdict for a recent event: leave it pending
+			// so the next pass looks again. For an event older than the cutoff
+			// the answer is final — no segment is coming — and leaving it
+			// pending would tell the operator to wait for footage that will
+			// never arrive.
 			if link.State == "unavailable" {
-				return nil
+				if !item.settled {
+					return nil
+				}
+				return s.writeMediaLink(ctx, tx, item.id, link)
 			}
 			return s.writeMediaLink(ctx, tx, item.id, link)
 		})

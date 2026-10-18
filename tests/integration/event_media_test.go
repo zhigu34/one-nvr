@@ -158,3 +158,54 @@ func TestEventMediaReconcileLinksLateFootage(t *testing.T) {
 }
 
 func float64Of(t time.Time) float64 { return float64(t.Unix()) }
+
+// Footage that will never arrive must not stay "pending" forever. Before this,
+// only a positive answer was written, so an event from a channel that was not
+// recording sat at "录像待归档" indefinitely — the page told the operator to
+// wait for something that was never coming.
+//
+// The cutoff is two hours: an event older than that with no segments is final.
+func TestEventMediaReconcileSettlesOldPendingEvents(t *testing.T) {
+	fixture, service := newEventsFixture(t)
+	ctx := context.Background()
+	if err := service.SetMappings(ctx, fixture.Admin, map[id.ID]string{fixture.Channel: "front-door"}); err != nil {
+		t.Fatal(err)
+	}
+	// An event from five hours ago, stored as pending as if footage were coming.
+	old := time.Now().UTC().Add(-5 * time.Hour)
+	ended := old.Add(10 * time.Second)
+	endedUnix := float64(ended.Unix())
+	if err := service.Ingest(ctx, frigatePayload("new", "evt-stale", "front-door", "person", float64(old.Unix()), &endedUnix, nil, false)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, "UPDATE events SET media_state='pending' WHERE source_id='evt-stale'"); err != nil {
+		t.Fatal(err)
+	}
+	service.ReconcileEventMedia(ctx)
+	state, _ := eventMediaState(t, fixture, "evt-stale")
+	if state != "unavailable" {
+		t.Fatalf("an old event with no footage must be settled as unavailable, got %q", state)
+	}
+}
+
+// A recent event with no footage yet must stay pending: the segment may still
+// be publishing, and "no footage" would be a false negative.
+func TestEventMediaReconcileKeepsRecentPendingEventsPending(t *testing.T) {
+	fixture, service := newEventsFixture(t)
+	ctx := context.Background()
+	if err := service.SetMappings(ctx, fixture.Admin, map[id.ID]string{fixture.Channel: "front-door"}); err != nil {
+		t.Fatal(err)
+	}
+	recent := time.Now().UTC().Add(-2 * time.Minute)
+	if err := service.Ingest(ctx, frigatePayload("new", "evt-waiting", "front-door", "person", float64(recent.Unix()), nil, nil, false)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, "UPDATE events SET media_state='pending' WHERE source_id='evt-waiting'"); err != nil {
+		t.Fatal(err)
+	}
+	service.ReconcileEventMedia(ctx)
+	state, _ := eventMediaState(t, fixture, "evt-waiting")
+	if state != "pending" {
+		t.Fatalf("a recent event must stay pending while its segment may still publish, got %q", state)
+	}
+}
