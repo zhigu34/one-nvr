@@ -72,7 +72,9 @@ CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真�
   - **补账循环**：事件落在分片中间时，事件先入库、分片后发布，首次判定必然是 unavailable。`ReconcileEventMedia` 挂在既有的 5 分钟事件对账 ticker 上（`runEventReconciliation`，不新增协程、不动 WaitGroup 计数），对 2 小时内 `media_state='pending'` 的事件重算；找不到录像时**保持 pending 而不是写成 unavailable**，否则「还没发布」会被固化成「没有」。
   - **前端三态**：`EventMediaAction` 组件。linked/partial 显示「查看录像」且跳转目标是 `media_start_at`（服务端给的实际起点）；partial 额外提示「录像只覆盖事件的一部分」；unavailable 显示「本机无录像」+ 可复制的时间（REC-10 要求时间必须留存供外部 NVR 人工查询）；pending 显示「录像待归档」——不能显示成无录像，那是假阴性。
   - **测试**：集成 4 个（完整覆盖 / 部分覆盖 / 无录像 / 补账把后到的分片关联上），前端 3 个（三态渲染）。**已验证禁用关联写入会让三个集成测试全部 FAIL**；前端测试也验证过去掉 unavailable 分支会 FAIL。
-  - **未做**：`event_recording` 开关仍未生效，缓冲录制（ZLM 短分片 + tmpfs + ConcatMP4 拼接）是这一批的另一半，需要先真机验证 ZLM 的 `max_second` 行为与 tmpfs 权限。
+  - **现场部署暴露一个缺口并已修（`649058a`）**：站点上有 **2914 条历史事件永久停在 `pending`**（「录像待归档」），因为对账循环只写正面答案、从不结算负面答案。现在的规则按**年龄**分两种：2 小时内无录像仍保持 pending（分片可能还在发布），超过 2 小时判为 unavailable（分片不会来了）。**一次性把积压的 2431 条结算为 unavailable**（现场只有 7 个分片、2914 个事件，绝大多数本来就没录）。前端三态因此能给出诚实答案。
+  - **现场验证**：在分片时间窗内插入测试事件并等一轮对账 → 判为 `linked`，`media_start_at`/`media_end_at` 等于分片真实起止、`media_segments=1`；测试事件已删除。
+  - **未做**：`event_recording` 开关仍未生效，缓冲录制（ZLM 短分片 + tmpfs + ConcatMP4 拼接）是这一批的另一半，需要先真机验证 ZLM 的 `max_second` 行为与 tmpfs 权限。**注意 `events.media_state` 现在有 4 个取值**（pending/linked/partial/unavailable），契约与 `api-types.ts` 已同步。
 
 
 - **2026-10-18 NAS 无法 `git pull` 部署已修（运维记录，不是代码改动）**。症状是 `git fetch` 反复失败，错误在三种之间跳：`GnuTLS recv error (-110)`、`HTTP/2 stream not closed cleanly`、`Failed to connect to github.com port 443 after 133395 ms`。**根因是 DNS 单点**：NAS 上 `github.com` 只解析到 `20.205.243.166`，而这个 IP 从该网络不可达（`curl` 卡在 `Trying` 之后，20 秒建不起连）。
