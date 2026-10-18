@@ -3,7 +3,7 @@ import { Link } from '@tanstack/react-router'
 import { AlertTriangle, ArrowRight } from 'lucide-react'
 import type { Schema } from '@/lib/types'
 import { useAPI } from '@/features/foundation/hooks'
-import { KIND_LABEL, formatDuration, windowFor } from '@/features/channels/reliability-format'
+import { KIND_LABEL, durationLabel, windowFor } from '@/features/channels/reliability-format'
 
 /**
  * Overview card: which channels are abnormal right now (PRD REL-05).
@@ -34,7 +34,7 @@ export function AbnormalChannels() {
       .filter((row) => row.sample_sufficient)
       .filter((row) => row.unavailable_ms > 0 || row.fault_count > 0)
       .sort((a, b) => b.unavailable_ms - a.unavailable_ms)
-      .slice(0, 5)
+      .slice(0, 6)
   }, [summary.data])
 
   // Judged by the backend's own sufficiency flag rather than by re-deriving it
@@ -77,9 +77,15 @@ export function AbnormalChannels() {
           有观测的通道没有出现中断。
         </p>
       ) : (
-        <ul className='mt-2 space-y-1.5'>
+        /* Two columns: a full-width row put the channel name at the far left and
+           the outage figure at the far right, a thousand pixels apart, which is
+           the one thing a scanned list must not do. */
+        <ul className='mt-2 grid gap-1.5 md:grid-cols-2'>
           {abnormal.map((row) => (
-            <li key={row.channel_id} className='flex items-center justify-between text-sm'>
+            <li
+              key={row.channel_id}
+              className='flex items-center justify-between gap-2 rounded-lg border border-red-500/20 bg-red-500/5 px-2 py-1.5 text-sm'
+            >
               <Link
                 to='/channels/configure'
                 search={{ channel: row.channel_id }}
@@ -91,11 +97,15 @@ export function AbnormalChannels() {
                 <span>{row.channel_name}</span>
                 <ArrowRight aria-hidden className='size-3 opacity-0 group-hover:opacity-100' />
               </Link>
-              <span className='flex items-center gap-2 text-xs'>
-                <span className='text-red-600 tabular-nums dark:text-red-400'>
-                  中断 {formatDuration(row.unavailable_ms)}
+              <span className='flex shrink-0 items-center gap-1.5 text-xs'>
+                <span className='rounded-full bg-red-500/10 px-1.5 py-0.5 tabular-nums text-red-600 dark:text-red-400'>
+                  中断 {durationLabel(row.unavailable_ms)}
                 </span>
-                {row.fault_count > 0 && <span className='text-muted-foreground'>{row.fault_count} 次</span>}
+                {row.fault_count > 0 && (
+                  <span className='rounded-full bg-muted px-1.5 py-0.5 tabular-nums text-muted-foreground'>
+                    {row.fault_count} 次
+                  </span>
+                )}
               </span>
             </li>
           ))}
@@ -109,3 +119,4 @@ export function AbnormalChannels() {
     </section>
   )
 }
+

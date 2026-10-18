@@ -303,3 +303,17 @@ export const FAULT_CATEGORY_LABEL: Record<string, string> = {
 export function faultCategoryLabel(category: string): string {
   return FAULT_CATEGORY_LABEL[category] ?? category
 }
+
+/**
+ * durationLabel renders an outage length without producing "中断 0 秒".
+ *
+ * formatDuration rounds to whole seconds, so any outage under 500ms prints
+ * "0 秒" — a contradiction next to a non-zero fault count, and a false statement
+ * about a channel that really was unavailable. Below a second the honest label is
+ * "< 1 秒"; zero stays zero because then the count beside it is also zero.
+ */
+export function durationLabel(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '0 秒'
+  if (ms < 1000) return '< 1 秒'
+  return formatDuration(ms)
+}

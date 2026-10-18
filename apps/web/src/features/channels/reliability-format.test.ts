@@ -3,6 +3,7 @@ import {
   bandReason,
   bandTone,
   channelLabel,
+  durationLabel,
   emptyObservationReason,
   formatDuration,
   percentage,
@@ -203,5 +204,25 @@ describe('windowFor', () => {
     const { from, to } = windowFor(24, now)
     expect(to).toBe('2026-10-17T12:00:00.000Z')
     expect(from).toBe('2026-10-16T12:00:00.000Z')
+  })
+})
+
+describe('durationLabel', () => {
+  // formatDuration rounds to whole seconds, so a 400ms outage printed
+  // "中断 0 秒" next to a non-zero fault count — a contradiction, and a false
+  // statement about a channel that really was unavailable.
+  test('does not print 0 秒 for a sub-second outage', () => {
+    expect(durationLabel(400)).toBe('< 1 秒')
+    expect(durationLabel(1)).toBe('< 1 秒')
+    expect(durationLabel(999)).toBe('< 1 秒')
+  })
+
+  test('keeps 0 秒 only when there was no outage at all', () => {
+    expect(durationLabel(0)).toBe('0 秒')
+  })
+
+  test('defers to formatDuration at a second and above', () => {
+    expect(durationLabel(1000)).toBe('1 秒')
+    expect(durationLabel(61_000)).toBe('1 分 1 秒')
   })
 })

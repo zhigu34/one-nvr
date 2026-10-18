@@ -4,13 +4,17 @@ import {
   ArrowRight,
   Cctv,
   Cpu,
-  Database,
   HardDrive,
   Play,
   ScanEye,
   Video,
 } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth-store'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import type { Schema } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { useState } from 'react'
@@ -132,7 +136,7 @@ export function Overview() {
     `/api/v1/events?${new URLSearchParams({
       start: String(eventWindow.start),
       end: String(eventWindow.end),
-      limit: '4',
+      limit: '8',
     })}`
   )
   // DASH-04: availability, recording coverage and the channels that were not
@@ -212,12 +216,6 @@ export function Overview() {
       .filter((row) => row.kind === 'main' && row.unavailable_ms > 0)
       .map((row) => row.channel_id)
   ).size
-  const healthyComponents =
-    components.data?.filter(
-      (component) => component.enabled && component.state === 'healthy'
-    ).length ?? 0
-  const enabledComponents =
-    components.data?.filter((component) => component.enabled).length ?? 0
   const defaultPool = pools.data?.items?.find((pool) => pool.is_default) ||
     pools.data?.items?.[0]
   // Capacity facts come from the pool's own probes (total/free per service).
@@ -247,7 +245,10 @@ export function Overview() {
         }}
       />
       {site.data && (
-        <div className='grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4'>
+        // Five equal KPI columns on a wide screen. The old 4+2 layout left half
+        // of the second row empty and pushed two cards onto a row of their own,
+        // which is what made the top of the page look unfinished.
+        <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5'>
           {/* Channels: the headline number is what the operator patrols with. */}
           <Link
             to='/channels'
@@ -437,6 +438,27 @@ export function Overview() {
                     }
                   </span>
                 </div>
+                {poolTotal > 0 && (
+                  /* A 4px bar under the figure: "346 GiB free" answers "is there
+                     room", the bar answers "how full is it" without arithmetic. */
+                  <div
+                    className='mt-2 h-1 w-full overflow-hidden rounded-full bg-muted'
+                    role='img'
+                    aria-label={`已用 ${((1 - poolFree / poolTotal) * 100).toFixed(0)}%`}
+                  >
+                    <div
+                      className={cn(
+                        'h-full rounded-full',
+                        (1 - poolFree / poolTotal) * 100 >= 85
+                          ? 'bg-amber-500'
+                          : 'bg-emerald-500'
+                      )}
+                      style={{
+                        width: `${Math.max(1, (1 - poolFree / poolTotal) * 100)}%`,
+                      }}
+                    />
+                  </div>
+                )}
                 <p className='mt-2 truncate text-xs text-muted-foreground' title={defaultPool.name}>
                   {defaultPool.name}
                   {defaultPool.is_default ? ' · 默认池' : ''}
@@ -450,146 +472,55 @@ export function Overview() {
               </>
             )}
           </Link>
-          {/* Site identity and the one-number component verdict. */}
-          <div className='rounded-xl border bg-card p-4'>
-            <p className='flex items-center gap-1.5 text-xs text-muted-foreground'>
-              <Activity aria-hidden className='size-3.5' />
-              站点与系统
-            </p>
-            <p className='mt-2 text-3xl font-semibold tabular-nums'>
-              {enabledComponents > 0 ? `${healthyComponents}` : '—'}
-              <span className='ms-1 text-sm font-normal text-muted-foreground'>
-                / {enabledComponents} 核心服务正常
-              </span>
-            </p>
-            <p className='mt-2 flex items-center gap-1 text-xs text-muted-foreground'>
-              <Database aria-hidden className='size-3' />
-              {site.data.timezone}
-            </p>
-          </div>
           {/* DASH-02: what the host itself is doing. Unknown is shown as
               unknown — a failed read is not an idle machine, and printing 0%
               would say the opposite of the truth. */}
           {admin && (
             <div data-testid='host-resources' className='rounded-xl border bg-card p-4'>
-              <p className='flex items-center gap-1.5 text-xs text-muted-foreground'>
-                <Cpu aria-hidden className='size-3.5' />
-                主机资源
-              </p>
-              <dl className='mt-2 grid gap-1.5 text-sm'>
-                <div className='flex items-baseline justify-between gap-2'>
-                  <dt className='text-xs text-muted-foreground'>CPU</dt>
-                  <dd className='tabular-nums'>
-                    {resources.data?.cpu_known
-                      ? `${resources.data.cpu_percent}%`
-                      : resources.isPending
-                        ? '…'
-                        : '未知'}
-                  </dd>
-                </div>
-                <div className='flex items-baseline justify-between gap-2'>
-                  <dt className='text-xs text-muted-foreground'>内存</dt>
-                  <dd className='tabular-nums'>
-                    {resources.data?.memory_known
-                      ? `${resources.data.memory_percent}%`
-                      : resources.isPending
-                        ? '…'
-                        : '未知'}
-                  </dd>
-                </div>
-                <div className='flex items-baseline justify-between gap-2'>
-                  <dt className='text-xs text-muted-foreground'>负载</dt>
-                  <dd className='tabular-nums'>
-                    {resources.data?.load_known
-                      ? resources.data.load_average
-                      : resources.isPending
-                        ? '…'
-                        : '未知'}
-                  </dd>
-                </div>
-              </dl>
-              {resources.data?.memory_known && (
-                <p className='mt-2 text-xs text-muted-foreground'>
-                  {gib(resources.data.memory_used_bytes)} /{' '}
-                  {gib(resources.data.memory_total_bytes)} 已用 ·{' '}
-                  {resources.data.cpu_cores} 核
+              <div className='flex items-center justify-between'>
+                <p className='flex items-center gap-1.5 text-xs text-muted-foreground'>
+                  <Cpu aria-hidden className='size-3.5' />
+                  主机资源
                 </p>
-              )}
+                <ArrowRight
+                  aria-hidden
+                  className='size-4 text-muted-foreground opacity-0'
+                />
+              </div>
+              <div className='mt-2 grid gap-1.5'>
+                <Meter
+                  label='CPU'
+                  value={
+                    resources.data?.cpu_known
+                      ? resources.data.cpu_percent
+                      : null
+                  }
+                  pending={resources.isPending}
+                />
+                <Meter
+                  label='内存'
+                  value={
+                    resources.data?.memory_known
+                      ? resources.data.memory_percent
+                      : null
+                  }
+                  pending={resources.isPending}
+                />
+              </div>
+              <p className='mt-2 truncate text-xs text-muted-foreground tabular-nums'>
+                {resources.data?.memory_known
+                  ? `${gib(resources.data.memory_used_bytes)} / ${gib(resources.data.memory_total_bytes)}`
+                  : '内存未知'}
+                {resources.data?.load_known
+                  ? ` · 负载 ${resources.data.load_average}`
+                  : ''}
+                {resources.data ? ` · ${resources.data.cpu_cores} 核` : ''}
+              </p>
             </div>
           )}
         </div>
       )}
-      {admin && (
-        <Panel title='组件状态'>
-          <p className='mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground'>
-            每 5 秒刷新 · 正常 / 异常 / 未启用
-          </p>
-          <QueryState
-            pending={components.isPending}
-            error={components.error}
-            retry={() => components.refetch()}
-          />
-          <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-4'>
-            {components.data?.map((component) => {
-              const badge = componentBadge(component)
-              const meta = COMPONENT_META[component.name] || {
-                name: component.name,
-                role: '',
-              }
-              return (
-                <div
-                  key={component.name}
-                  data-testid='component-card'
-                  data-state={component.enabled ? component.state : 'disabled'}
-                  className={cn(
-                    'relative rounded-lg border p-3 bg-zinc-50/70 transition-colors hover:bg-zinc-100/80 dark:bg-zinc-900/50 dark:hover:bg-zinc-900/80',
-                    component.enabled
-                      ? component.state === 'healthy'
-                        ? 'border-emerald-500/20'
-                        : component.state === 'unavailable'
-                          ? 'border-red-500/40'
-                          : 'border-amber-500/40'
-                      : 'border-dashed opacity-60'
-                  )}
-                >
-                  <div className='flex items-start justify-between gap-2'>
-                    <div className='min-w-0'>
-                      <p className='truncate font-medium'>{meta.name}</p>
-                      <p className='truncate text-xs text-muted-foreground'>
-                        {meta.role}
-                      </p>
-                    </div>
-                    <span
-                      className={cn(
-                        'inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs',
-                        badge.badge
-                      )}
-                    >
-                      <span
-                        aria-hidden
-                        className={cn(
-                          'size-1.5 rounded-full',
-                          badge.dot,
-                          badge.pulse && 'animate-pulse'
-                        )}
-                      />
-                      {badge.label}
-                    </span>
-                  </div>
-                  {component.reason && (
-                    <p
-                      className='mt-2 truncate font-mono text-[11px] text-zinc-500'
-                      title={probeLabel(component.reason)}
-                    >
-                      {probeLabel(component.reason) || component.reason}
-                    </p>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        </Panel>
-      )}
+      {admin && <ComponentHealthBar components={components} />}
       {/* The quick patrol: live channels on the left, the latest detection
           events on the right — the bottom band stays balanced at any count. */}
       {/* Abnormal channels sit above the patrol: the operator's eye should land
@@ -675,7 +606,7 @@ export function Overview() {
                 </p>
               ) : (
                 <ul className='space-y-2'>
-                  {(recentEvents.data?.items || []).slice(0, 4).map((item) => {
+                  {(recentEvents.data?.items || []).slice(0, 8).map((item) => {
                     const channel = channelOf.get(item.channel_id ?? '')
                     const label = channel
                       ? `CH${String(channel.channel_no ?? 0).padStart(2, '0')} ${channel.channel_name}`
@@ -688,10 +619,21 @@ export function Overview() {
                         <Link
                           to='/events'
                           data-testid='overview-event-row'
-                          className='flex items-center justify-between gap-2 rounded-lg border bg-zinc-50/70 p-2 text-xs transition-colors hover:bg-zinc-100/80 dark:bg-zinc-900/50 dark:hover:bg-zinc-900/80'
+                          className='group flex items-center justify-between gap-2 rounded-lg border bg-zinc-50/70 p-2 text-xs transition-colors hover:border-zinc-300 hover:bg-zinc-100/80 dark:bg-zinc-900/50 dark:hover:border-emerald-500/30 dark:hover:bg-zinc-900/80'
                         >
                           <span className='flex min-w-0 items-center gap-2'>
-                            <span className='shrink-0 rounded bg-zinc-200/70 px-1.5 py-0.5 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300'>
+                            {/* A tinted chip rather than a word: the category is
+                                the fastest thing to scan in a list of events. */}
+                            <span
+                              className={cn(
+                                'shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium',
+                                item.category === 'person'
+                                  ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400'
+                                  : item.category === 'car'
+                                    ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                                    : 'bg-zinc-200/70 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300'
+                              )}
+                            >
                               {CATEGORY_LABELS[item.category ?? ''] || item.category}
                             </span>
                             <span className='truncate text-foreground'>
@@ -699,9 +641,17 @@ export function Overview() {
                               {item.zones?.length ? ` · ${item.zones.join('/')}` : ''}
                             </span>
                           </span>
-                          <span className='shrink-0 tabular-nums text-muted-foreground'>
-                            {formatClock(Date.parse(item.started_at ?? ''), zone).slice(5)}
-                            {seconds != null ? ` · ${seconds}s` : ''}
+                          <span className='flex shrink-0 items-center gap-2 tabular-nums text-muted-foreground'>
+                            <span>
+                              {formatClock(Date.parse(item.started_at ?? ''), zone).slice(5)}
+                              {seconds != null ? ` · ${seconds}s` : ''}
+                            </span>
+                            {/* The row is a link; this is the affordance saying so.
+                                It appears on hover to keep the row quiet at rest. */}
+                            <span className='inline-flex items-center gap-0.5 text-[11px] opacity-0 transition-opacity group-hover:opacity-100'>
+                              查看
+                              <ArrowRight aria-hidden className='size-3' />
+                            </span>
                           </span>
                         </Link>
                       </li>
@@ -714,5 +664,149 @@ export function Overview() {
         </Panel>
       )}
     </div>
+  )
+}
+
+/**
+ * Meter is one labelled percentage with a 4px bar.
+ *
+ * A null value means "not measured", which renders as 未知 and no bar — never as
+ * a zero-width bar, because an empty bar at 0% says the machine is idle, and an
+ * unmeasured machine is not an idle one.
+ */
+function Meter({
+  label,
+  value,
+  pending,
+}: {
+  label: string
+  value: number | null
+  pending: boolean
+}) {
+  return (
+    <div className='grid grid-cols-[auto_1fr_auto] items-center gap-2 text-xs'>
+      <span className='text-muted-foreground'>{label}</span>
+      <span className='h-1 overflow-hidden rounded-full bg-muted'>
+        {value != null && (
+          <span
+            className={cn(
+              'block h-full rounded-full',
+              value >= 85 ? 'bg-amber-500' : 'bg-emerald-500'
+            )}
+            style={{ width: `${Math.max(1, Math.min(100, value))}%` }}
+          />
+        )}
+      </span>
+      <span className='w-12 text-right tabular-nums'>
+        {value != null ? `${value}%` : pending ? '…' : '未知'}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * ComponentHealthBar is the one-line replacement for the eight-card matrix.
+ *
+ * The matrix repeated the operations page at four times the height, and on a
+ * healthy site it was eight identical green boxes — the least informative thing
+ * on the page taking the most space. Here the summary is one number and each
+ * component is a pill; the detail lives in a tooltip and the full view is one
+ * click away at /operations.
+ *
+ * An unhealthy component is sorted first and pulses, because the pills are
+ * scanned rather than read and the one that needs attention must not be the
+ * sixth of eight.
+ */
+function ComponentHealthBar({
+  components,
+}: {
+  components: ReturnType<typeof useAPI<Component[]>>
+}) {
+  const list = components.data ?? []
+  const enabled = list.filter((component) => component.enabled)
+  const healthy = enabled.filter((component) => component.state === 'healthy')
+  // Problems first, then healthy, then disabled: the eye lands on the left.
+  const ordered = [...list].sort((a, b) => {
+    const rank = (component: Component) =>
+      !component.enabled ? 2 : component.state === 'healthy' ? 1 : 0
+    return rank(a) - rank(b)
+  })
+  return (
+    <section
+      data-testid='component-health-bar'
+      aria-label='系统组件健康'
+      className='flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card px-4 py-2.5'
+    >
+      <div className='flex min-w-0 items-baseline gap-2'>
+        <p className='shrink-0 text-xs text-muted-foreground'>
+          站点与核心组件
+        </p>
+        <p className='shrink-0 text-sm font-medium tabular-nums'>
+          {enabled.length > 0 ? `${healthy.length} / ${enabled.length}` : '—'}
+          <span className='ms-1 text-xs font-normal text-muted-foreground'>
+            正常
+          </span>
+        </p>
+        <span className='hidden text-[11px] text-muted-foreground/70 sm:inline'>
+          每 5 秒刷新
+        </span>
+      </div>
+      <QueryState
+        pending={components.isPending}
+        error={components.error}
+        retry={() => void components.refetch()}
+      />
+      <ul className='flex flex-wrap items-center gap-1.5'>
+        {ordered.map((component) => {
+          const badge = componentBadge(component)
+          const meta = COMPONENT_META[component.name] || {
+            name: component.name,
+            role: '',
+          }
+          const unhealthy = component.enabled && component.state !== 'healthy'
+          return (
+            <li key={component.name}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Link
+                    to='/operations'
+                    data-testid='component-pill'
+                    data-state={component.enabled ? component.state : 'disabled'}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs transition-colors',
+                      component.enabled
+                        ? unhealthy
+                          ? 'border-red-500/40 bg-red-500/10 text-red-500 hover:bg-red-500/20'
+                          : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400'
+                        : 'border-dashed text-muted-foreground hover:bg-accent'
+                    )}
+                  >
+                    <span
+                      aria-hidden
+                      className={cn(
+                        'size-1.5 rounded-full',
+                        badge.dot,
+                        unhealthy && 'animate-pulse'
+                      )}
+                    />
+                    {meta.name}
+                    {!component.enabled && ' 未启用'}
+                  </Link>
+                </TooltipTrigger>
+                <TooltipContent side='bottom' className='max-w-xs text-xs'>
+                  <p className='font-medium'>{meta.name}</p>
+                  <p className='text-muted-foreground'>{meta.role}</p>
+                  <p className='mt-1'>
+                    {component.enabled
+                      ? `${badge.label} · ${probeLabel(component.reason) || component.reason || '无详情'}`
+                      : '功能未启用（部署配置关闭）'}
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </li>
+          )
+        })}
+      </ul>
+    </section>
   )
 }

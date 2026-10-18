@@ -178,7 +178,7 @@ function fixture(
   return { client, view: <RouterProvider router={router} /> }
 }
 
-test('the four metric cards read live channel, detection and storage facts', async () => {
+test('the five KPI cards read live channel, detection, storage and host facts', async () => {
   const setup = fixture()
   const view = await render(setup.view)
   // Channels card: one healthy main stream of two rows, with the breakdown.
@@ -192,30 +192,38 @@ test('the four metric cards read live channel, detection and storage facts', asy
   await expect.element(view.getByText(/301\.3 GiB/)).toBeVisible()
   await expect.element(view.getByText(/共 401\.6 GiB/)).toBeVisible()
   await expect.element(view.getByText('就绪').nth(0)).toBeVisible()
-  // Site card aggregates enabled/healthy components.
-  await expect.element(view.getByText('3/ 3 核心服务正常')).toBeVisible()
+  // The host card is the fifth KPI: CPU and memory with their bars.
+  await expect.element(view.getByTestId('host-resources')).toBeVisible()
   setup.client.clear()
 })
 
-test('the component matrix names components and marks disabled cards', async () => {
+test('the component health bar summarises state in one line', async () => {
   const setup = fixture()
   const view = await render(setup.view)
-  const cards = view.getByTestId('component-card')
-  await expect.element(cards).toHaveLength(4)
-  // Chinese roles replace raw English state codes.
-  await expect.element(view.getByText('流媒体服务')).toBeVisible()
-  await expect.element(view.getByText('AI 视觉检测')).toBeVisible()
-  await expect.element(view.getByText('外部归档挂载')).toBeVisible()
-  // Healthy cards pulse; the disabled one reads 未启用 on a dashed card.
-  const zlm = cards.nth(1)
-  await expect.element(zlm).toHaveAttribute('data-state', 'healthy')
-  await expect.element(zlm.getByText('正常')).toBeVisible()
-  const openlist = cards.nth(3)
-  await expect.element(openlist).toHaveAttribute('data-state', 'disabled')
-  await expect.element(openlist.getByText('未启用')).toBeVisible()
-  // Probe reasons render as Chinese facts in mono, not raw codes.
-  await expect.element(view.getByText('探测成功 · 采样运行中')).toBeVisible()
+  const bar = view.getByTestId('component-health-bar')
+  await expect.element(bar).toBeVisible()
+  // A summary number rather than eight boxes: the count is what an operator
+  // reads, and three of four enabled components are healthy here.
+  await expect.element(bar).toHaveTextContent('3 / 3')
+  await expect.element(bar).toHaveTextContent('正常')
+  // Every component keeps a pill; the disabled one says so.
+  const pills = bar.getByTestId('component-pill')
+  await expect.element(pills).toHaveLength(4)
+  const disabled = [...document.querySelectorAll('[data-state="disabled"]')]
+  expect(disabled.length).toBeGreaterThan(0)
+  expect(disabled[0].textContent).toContain('未启用')
+  // The detail moved into the tooltip, which is why the bar is one line tall.
+  expect(document.querySelectorAll('[data-state="healthy"]').length).toBeGreaterThan(0)
   setup.client.clear()
+})
+
+// The old matrix was eight cards tall and repeated the operations page; a
+// healthy site should not spend a fifth of the screen saying so.
+test('the component matrix is gone, replaced by the bar', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  expect(view.getByTestId('component-card').query()).toBeNull()
+  await expect.element(view.getByTestId('component-health-bar')).toBeVisible()
 })
 
 test('the active channel patrol lists live channels with shortcuts', async () => {
