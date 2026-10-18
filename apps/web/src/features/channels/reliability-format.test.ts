@@ -217,8 +217,17 @@ describe('durationLabel', () => {
     expect(durationLabel(999)).toBe('< 1 秒')
   })
 
+  // Zero accumulated time with a recorded fault is not "no outage": the fold
+  // saw a state change the rollup measured as zero milliseconds. Reporting
+  // "中断 0 秒 · 1 次" is a contradiction.
+  test('does not print 0 秒 when a fault was recorded', () => {
+    expect(durationLabel(0, 1)).toBe('< 1 秒')
+    expect(durationLabel(0, 16)).toBe('< 1 秒')
+  })
+
   test('keeps 0 秒 only when there was no outage at all', () => {
     expect(durationLabel(0)).toBe('0 秒')
+    expect(durationLabel(0, 0)).toBe('0 秒')
   })
 
   test('defers to formatDuration at a second and above', () => {

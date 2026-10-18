@@ -19,7 +19,7 @@ import type { Schema } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { useState } from 'react'
 import { useAPI } from './hooks'
-import { Panel, QueryState, PageTitle } from './ui'
+import { QueryState, PageTitle } from './ui'
 import { formatClock } from '@/features/playback/zone'
 import { AbnormalChannels } from './abnormal-channels'
 
@@ -527,12 +527,13 @@ export function Overview() {
           on what needs attention before the list of healthy channels. */}
       {site.data && <AbnormalChannels />}
       {site.data && (
-        <Panel title='活跃通道与快捷巡检'>
+        // No panel title: the two column headings are the titles. An outer
+        // "活跃通道与快捷巡检" over a left heading "活跃通道巡检" said the same
+        // thing twice and pushed both columns down.
+        <div className='rounded-xl border bg-card p-4'>
           <div className='grid gap-6 lg:grid-cols-2'>
             <section>
-              <p className='mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground'>
-                活跃通道巡检
-              </p>
+              <p className='mb-3 text-sm font-medium'>活跃通道巡检</p>
               {active.length === 0 ? (
                 <p className='text-sm text-muted-foreground'>
                   暂无在线通道。接入摄像头后，这里会显示每一路的状态与快捷入口。
@@ -591,7 +592,7 @@ export function Overview() {
               )}
             </section>
             <section>
-              <p className='mb-3 flex items-center justify-between text-xs font-medium uppercase tracking-wide text-muted-foreground'>
+              <p className='mb-3 flex items-center justify-between text-sm font-medium'>
                 最近 AI 事件
                 <Link
                   to='/events'
@@ -611,9 +612,20 @@ export function Overview() {
                     const label = channel
                       ? `CH${String(channel.channel_no ?? 0).padStart(2, '0')} ${channel.channel_name}`
                       : '未知通道'
-                    const seconds = item.ended_at
-                      ? Math.max(1, Math.round((Date.parse(item.ended_at) - Date.parse(item.started_at ?? '')) / 1000))
+                    // Three states, not two. "No end time" means the event is
+                    // still running; an end time a fraction of a second after
+                    // the start is a finished event shorter than the display
+                    // resolution. The old Math.max(1, ...) reported both as
+                    // "1s", which claimed a duration for an ongoing event.
+                    const elapsedMs = item.ended_at
+                      ? Date.parse(item.ended_at) - Date.parse(item.started_at ?? '')
                       : null
+                    const durationLabel =
+                      elapsedMs == null
+                        ? '进行中'
+                        : elapsedMs < 1000
+                          ? '<1s'
+                          : `${Math.round(elapsedMs / 1000)}s`
                     return (
                       <li key={item.id}>
                         <Link
@@ -644,7 +656,7 @@ export function Overview() {
                           <span className='flex shrink-0 items-center gap-2 tabular-nums text-muted-foreground'>
                             <span>
                               {formatClock(Date.parse(item.started_at ?? ''), zone).slice(5)}
-                              {seconds != null ? ` · ${seconds}s` : ''}
+                              {` · ${durationLabel}`}
                             </span>
                             {/* The row is a link; this is the affordance saying so.
                                 It appears on hover to keep the row quiet at rest. */}
@@ -661,7 +673,7 @@ export function Overview() {
               )}
             </section>
           </div>
-        </Panel>
+        </div>
       )}
     </div>
   )

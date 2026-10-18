@@ -312,8 +312,15 @@ export function faultCategoryLabel(category: string): string {
  * about a channel that really was unavailable. Below a second the honest label is
  * "< 1 秒"; zero stays zero because then the count beside it is also zero.
  */
-export function durationLabel(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) return '0 秒'
+export function durationLabel(ms: number, faultCount = 0): string {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    // A recorded fault with zero accumulated unavailable time is not "no
+    // outage": the observation folded a state change that the daily rollup
+    // measured as zero milliseconds. Reporting "0 秒" beside a non-zero count
+    // is a contradiction; the honest label says the interruption was shorter
+    // than the resolution of the figure.
+    return faultCount > 0 ? '< 1 秒' : '0 秒'
+  }
   if (ms < 1000) return '< 1 秒'
   return formatDuration(ms)
 }

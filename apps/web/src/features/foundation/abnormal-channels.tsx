@@ -99,7 +99,7 @@ export function AbnormalChannels() {
               </Link>
               <span className='flex shrink-0 items-center gap-1.5 text-xs'>
                 <span className='rounded-full bg-red-500/10 px-1.5 py-0.5 tabular-nums text-red-600 dark:text-red-400'>
-                  中断 {durationLabel(row.unavailable_ms)}
+                  中断 {durationLabel(row.unavailable_ms, row.fault_count)}
                 </span>
                 {row.fault_count > 0 && (
                   <span className='rounded-full bg-muted px-1.5 py-0.5 tabular-nums text-muted-foreground'>

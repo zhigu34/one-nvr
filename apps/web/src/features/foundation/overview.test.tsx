@@ -357,3 +357,13 @@ test('an unmeasured host shows 未知 rather than zero', async () => {
   expect(view.getByText('未知').elements().length).toBe(3)
   expect(view.getByText('0%').query()).toBeNull()
 })
+
+// The patrol's two columns carry their own headings; an outer title saying the
+// same thing pushed both down and read as a duplicate.
+test('the patrol has no outer title above its two column headings', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  expect(view.getByText('活跃通道与快捷巡检').query()).toBeNull()
+  await expect.element(view.getByText('活跃通道巡检')).toBeVisible()
+  await expect.element(view.getByText('最近 AI 事件')).toBeVisible()
+})
