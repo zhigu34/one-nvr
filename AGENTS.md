@@ -64,6 +64,14 @@ CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真�
 
 ## 当前交接快照（2026-10-09）
 
+- **2026-10-18 NAS 无法 `git pull` 部署已修（运维记录，不是代码改动）**。症状是 `git fetch` 反复失败，错误在三种之间跳：`GnuTLS recv error (-110)`、`HTTP/2 stream not closed cleanly`、`Failed to connect to github.com port 443 after 133395 ms`。**根因是 DNS 单点**：NAS 上 `github.com` 只解析到 `20.205.243.166`，而这个 IP 从该网络不可达（`curl` 卡在 `Trying` 之后，20 秒建不起连）。
+  - **诊断方法（可复用）**：分别探测 `api.github.com` / `codeload.github.com` —— 两者 0.1 秒返回 200/301，只有 `github.com` 不通，说明不是整体断网而是那一个 IP 被阻断。再用 `curl --resolve github.com:443:<ip>` 试其它 GitHub IP，`140.82.112.3` 0.23 秒连通。
+  - **修法**：在 NAS 仓库里 `git config http.curloptResolve github.com:443:140.82.112.3`。这把解析钉在仓库局部，不动 `/etc/hosts`、不影响整机其它程序。
+  - **同时清掉了历史分叉**：此前几轮 NAS 连不上 GitHub 时，我是用 `git apply` 打补丁再本地提交的，于是 `main` 上积累了 5 个「(NAS apply)」提交，与远端内容相同但 SHA 不同，`pull` 因此拒绝。**对齐前先验证 `git diff --name-only HEAD origin/main | wc -l` 为 0**（确认两棵树完全一致），再 `git reset --hard origin/main`。现在 NAS 与远端是单线历史，`git pull --ff-only` 可直接用。
+  - **后续部署流程恢复为**：`ssh zhigu34@192.168.66.90` → `cd /vol1/1000/docker/one-nvr` → `git pull --ff-only` → `sudo -n bash ./deploy.sh`。注意 `deploy.sh` 没有可执行位，要用 `bash ./deploy.sh`；且必须 `sudo`，否则没有 docker socket 权限。
+  - **如果哪天又连不上**：先 `git config --get http.curloptResolve` 看钉的 IP 是否也失效了，用 `curl --resolve` 逐个试 `140.82.112.3` / `140.82.113.3` 再改配置。SSH 端口是通的（`ssh -T git@github.com` 能完成握手，只是 NAS 没有部署密钥），必要时可改用 SSH remote。
+
+
 - **2026-10-18 录像计划页交互重构（用户实施，提交 `6c4e9c0`）**：把「每行两个未保存草稿 + 两个按钮」改成「模式下拉即应用 + 绑定移到存储页 + 周计划胶囊摘要」。
   - **存储池绑定从行内移走**（新 `storage-pools/pool-binding.tsx`）：每行原本有一个池下拉和「绑定」按钮，与模式下拉并列，操作者要自己判断「我要改的是哪一个」。池的问题是**每个池问一次**（这些字节去哪），不是每通道问一次。行内现在是只读胶囊（池名 + ↗ 链接）；绑定在存储页按池管理，列出该池服务的通道，逐通道顺序 PUT（同批量约定：并发会互踩版本），`zlm_write_evidence_unavailable` 时自动补一次真实检查再重试。**没有新端点、没有新服务端状态**——只是同一个房间的另一道门。
   - **`none`/`continuous` 由下拉直接应用**，不再有「应用」按钮：一个可见的模式切换还要再点一次确认，读起来像两个控件在争同一件事。**`planned` 是例外**：选中即展开编辑器，编辑器里的「保存并启用定时录像」把**整周计划与模式切换一次提交**（先 PUT 计划、再走切换任务），所以通道不会处于「有计划但没人读」的半配置态。
