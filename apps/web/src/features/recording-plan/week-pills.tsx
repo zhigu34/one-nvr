@@ -8,8 +8,9 @@ import { cn } from '@/lib/utils'
  * when it does not. Hover names the day's windows ("周日 08:00 – 09:00"), so the
  * compact form never costs the actual times.
  *
- * The optional `text` beside the pills is the caller's pre-computed uniform
- * range; mixed weeks render no text and rely on the hover titles.
+ * `text` is the caller's pre-computed uniform time range ("08:00 – 19:00") or
+ * "多时段" when the days disagree — the weekday names live in the squares
+ * themselves, never repeated as prose beside them.
  */
 export function WeekPills({
   windows,
@@ -22,7 +23,7 @@ export function WeekPills({
 }) {
   const planned = new Set(windows.map((window) => window.weekday))
   return (
-    <span className='inline-flex flex-wrap items-center gap-1.5'>
+    <span className='inline-flex items-center gap-1.5 whitespace-nowrap'>
       <span
         className='inline-flex items-center gap-0.5'
         role='img'
@@ -42,7 +43,7 @@ export function WeekPills({
               key={day.value}
               title={dayWindowsLabel(windows, day.value)}
               className={cn(
-                'grid h-4 w-4 place-items-center rounded-[3px] text-[9px] leading-none',
+                'grid size-4 place-items-center rounded-[3px] text-[9px] leading-none',
                 active
                   ? 'bg-emerald-500/90 font-medium text-zinc-950'
                   : 'bg-zinc-800 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-600'

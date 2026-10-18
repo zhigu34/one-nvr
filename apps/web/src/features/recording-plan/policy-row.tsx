@@ -49,6 +49,8 @@ export function PolicyRow({
   onApplied,
   onDirtyChange,
   schedulePeers,
+  editorOpen = false,
+  onEditorOpenChange,
 }: {
   channel: Schema<'Channel'>
   summary?: Schema<'ChannelSummary'>
@@ -63,6 +65,13 @@ export function PolicyRow({
   onSelect: (checked: boolean) => void
   onApplied: () => void
   onDirtyChange: (dirty: boolean) => void
+  // Panel-open state from the page's accordion: true only for the one row
+  // whose editor is currently open. All opening and closing flows through the
+  // page's id, which is what makes one-open-panel-at-a-time enforceable.
+  editorOpen?: boolean
+  // The page's accordion: called with this row's channel id when its editor
+  // opens, so the page can collapse the other rows' panels.
+  onEditorOpenChange?: (channelId: string) => void
 }) {
   const client = useQueryClient()
   // The recording plan reads mode, pool and health from the one summary
@@ -239,11 +248,20 @@ export function PolicyRow({
     setNotice('')
     setSucceeded('')
     if (next === 'planned') {
-      // No write yet: the editor that opens owns the save ("保存并启用定时录像"
-      // commits windows and mode as one act). The draft marks the row dirty so
-      // navigating away with the counter still showing is an honest signal.
+      // No write yet, and the panel opens with the pick: an editor you still
+      // have to find contradicts the single "保存并启用" story. Cancelling the
+      // panel reverts the whole pick. The open state lives with the page's
+      // accordion id, so one open panel at a time is enforced in one place.
       setDraftMode(next)
+      setScheduleOverride(null)
+      onEditorOpenChange?.(channel.id ?? '')
       return
+    }
+    // Leaving planned closes this row's panel (the page flips the id away);
+    // its draft is dropped unsaved.
+    if (mode === 'planned') {
+      setScheduleOverride(null)
+      onEditorOpenChange?.('')
     }
     // none/continuous are one value with one meaning; the select IS the apply.
     setDraftMode(next)
@@ -383,10 +401,13 @@ export function PolicyRow({
           <span className='text-xs text-zinc-600'>—</span>
         ) : (
           <div className='flex flex-col gap-1.5'>
-            <div className='flex flex-wrap items-center gap-2'>
+            {/* One horizontal control row: mode select, the week pills, the
+                summary time, the editor toggle, manual recording — never two
+                stacked lines for what is one decision. */}
+            <div className='flex flex-nowrap items-center gap-2.5 overflow-x-auto'>
               <SelectField
                 ariaLabel={`${label} 录像方式`}
-                className='text-sm'
+                className='shrink-0 text-sm'
                 value={mode}
                 disabled={!!pending}
                 onValueChange={pickMode}
@@ -401,30 +422,44 @@ export function PolicyRow({
                   })),
                 ]}
               />
+              {/* The mini week sits right beside the select for a planned
+                  channel; hidden while its editor is open, where the same
+                  seven days appear at full size. */}
+              {mode === 'planned' && !editorOpen && (
+                <>
+                  <WeekPills windows={storedWindows} text={pill.text} label={label} />
+                  {schedule.data?.active && (
+                    <span className='inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-600 dark:text-emerald-400'>
+                      <span aria-hidden className='size-1.5 rounded-full bg-emerald-500' />
+                      时段内
+                    </span>
+                  )}
+                </>
+              )}
               {/* The apply button lives only where a single select change is
                   not the whole story: planned keeps its commit inside the
                   editor, so the row never carries a second ambiguous button. */}
               {pending === 'policy' && (
-                <span className='text-xs text-muted-foreground'>应用中…</span>
+                <span className='shrink-0 text-xs text-muted-foreground'>应用中…</span>
               )}
               {succeeded === 'policy' && pending !== 'policy' && (
                 <span
                   data-testid='applied-policy'
-                  className='inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-400'
+                  className='inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-400'
                 >
                   ✓ 已生效
                 </span>
               )}
               {error && (
-                <span className='text-xs text-red-500' role='alert'>
+                <span className='shrink-0 text-xs text-red-500' role='alert'>
                   ✕ {error}
                 </span>
               )}
               {!error && notice && succeeded !== 'policy' && (
-                <span className='text-xs text-muted-foreground'>{notice}</span>
+                <span className='shrink-0 text-xs text-muted-foreground'>{notice}</span>
               )}
               {mode !== 'planned' && !pending && (
-                <span className='text-xs text-muted-foreground'>
+                <span className='shrink-0 text-xs text-muted-foreground'>
                   {modeLabel(mode)}
                 </span>
               )}
@@ -440,38 +475,35 @@ export function PolicyRow({
                 <Link
                   to='/storage'
                   search={{ tab: 'pools' }}
-                  className='text-xs text-amber-600 hover:underline dark:text-amber-400'
+                  className='shrink-0 text-xs text-amber-600 hover:underline dark:text-amber-400'
                 >
                   请先在「存储」页绑定存储池 ↗
                 </Link>
               )}
             </div>
-            {/* The mini week lives directly in the row for a planned channel:
-                which days record is the answer the list view owes at a glance.
-                The editor only appears when the operator asks to edit. */}
+            {/* The editor panel: full-size schedule editing under the control
+                row. Opened by picking 定时录像 (the mode pick IS the open) or
+                by the row's 编辑时段 toggle. */}
             {mode === 'planned' && (
-              <div className='flex flex-wrap items-center gap-2'>
-                <WeekPills windows={storedWindows} text={pill.text} label={label} />
-                {schedule.data?.active && (
-                  <span className='inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-600 dark:text-emerald-400'>
-                    <span aria-hidden className='size-1.5 rounded-full bg-emerald-500' />
-                    时段内
-                  </span>
-                )}
-                <ScheduleEditor
-                  label={label}
-                  disabled={!!pending}
-                  peers={schedulePeers || []}
-                  windows={storedWindows}
-                  onWindowsChange={setScheduleOverride}
-                  timezone={schedule.data?.timezone || ''}
-                  schedulePending={schedule.isPending}
-                  scheduleError={!!schedule.error}
-                  autoOpen={modeDirty}
-                  onCancel={() => setDraftMode(null)}
-                  onCommitPlanned={() => commitPlanned(editorWindowsRef.current)}
-                />
-              </div>
+              <ScheduleEditor
+                label={label}
+                disabled={!!pending}
+                peers={schedulePeers || []}
+                windows={storedWindows}
+                onWindowsChange={setScheduleOverride}
+                timezone={schedule.data?.timezone || ''}
+                schedulePending={schedule.isPending}
+                scheduleError={!!schedule.error}
+                open={editorOpen}
+                onOpenChange={(next) => {
+                  // Opening reports this row to the page's accordion; closing
+                  // reports the empty id so another row may take the panel.
+                  onEditorOpenChange?.(next ? (channel.id ?? '') : '')
+                  if (!next) setScheduleOverride(null)
+                }}
+                onCancel={() => setDraftMode(null)}
+                onCommitPlanned={() => commitPlanned(editorWindowsRef.current)}
+              />
             )}
           </div>
         )}

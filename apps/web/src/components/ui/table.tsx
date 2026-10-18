@@ -80,7 +80,10 @@ function TableCell({ className, ...props }: React.ComponentProps<'td'>) {
     <td
       data-slot='table-cell'
       className={cn(
-        'p-2 align-middle whitespace-nowrap *:[[role=checkbox]]:translate-y-0.5',
+        // Top-aligned, not middle: any row that can expand an editor beneath
+        // its controls (recording plan schedules) must keep the leading cells
+        // on the row's first line instead of floating mid-height.
+        'p-2 align-top whitespace-nowrap *:[[role=checkbox]]:translate-y-0.5',
         className
       )}
       {...props}

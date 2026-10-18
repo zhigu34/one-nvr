@@ -19,12 +19,12 @@ export function modeLabel(mode: string | undefined | null): string {
 
 /**
  * Weekday-pill summary for one channel's planned week: which of the seven days
- * carry windows, and a compact time range when every planned day shares one.
+ * carry windows, and the compact time text shown beside the pills.
  *
- * The pills always render (a day with no plan is a deliberate dimmed square, not
- * a blank); `text` is empty unless every window in the week is the same range —
- * in that case the one range is the whole story and repeating it per day is
- * noise. Mixed ranges leave the text out; the pills and hover titles carry it.
+ * The pills carry the weekday names themselves, so `text` is only the time
+ * range: one uniform range when every planned day shares it, "多时段" when they
+ * disagree, and empty for a week with no windows (the row says 未设置时段
+ * elsewhere).
  */
 export function weekPill(
   windows: ScheduleWindow[]
@@ -34,24 +34,10 @@ export function weekPill(
   for (const day of WEEKDAYS) {
     if ((grouped.get(day.value) || []).length > 0) days.add(day.value)
   }
-  // One compact label only when every planned day shares the same ranges. The
-  // comparison is on the sorted label list per day, so a week where Saturday
-  // also records 08:00–18:00 collapses to "周一至周日 08:00–18:00" style text.
   const ranges = [...new Set(windows.map(windowLabel))]
   let text = ''
-  if (windows.length > 0 && ranges.length === 1) {
-    const planned = WEEKDAYS.filter((day) => days.has(day.value))
-    const sameEveryDay = planned.every(
-      (day) =>
-        (grouped.get(day.value) || []).length === 1 &&
-        windowLabel((grouped.get(day.value) || [])[0]) === ranges[0]
-    )
-    if (sameEveryDay) {
-      text =
-        days.size === 7
-          ? `每天 ${ranges[0]}`
-          : `${planned.map((day) => day.label).join('、')} ${ranges[0]}`
-    }
+  if (windows.length > 0) {
+    text = ranges.length === 1 ? ranges[0] : '多时段'
   }
   return { days, text }
 }

@@ -9,29 +9,29 @@ const window = (weekday: number, start: number, end: number): ScheduleWindow => 
 })
 
 describe('weekPill', () => {
-  it('marks only the planned days and omits text when ranges differ', () => {
+  it('marks the planned days and says 多时段 when ranges differ', () => {
     const result = weekPill([window(1, 480, 1080), window(7, 600, 660)])
     expect([...result.days]).toEqual([1, 7])
-    expect(result.text).toBe('')
+    expect(result.text).toBe('多时段')
   })
 
-  it('collapses a single uniform range into one text label', () => {
+  it('shows the bare time range for a single uniform window', () => {
     const result = weekPill([window(7, 480, 540)])
     expect([...result.days]).toEqual([7])
-    expect(result.text).toBe('周日 08:00 – 09:00')
+    expect(result.text).toBe('08:00 – 09:00')
   })
 
-  it('collapses the same range on every day to 每天', () => {
+  it('shows the bare range when every day records the same window', () => {
     const week = [1, 2, 3, 4, 5, 6, 7].map((day) => window(day, 0, 1440))
     const result = weekPill(week)
     expect(result.days.size).toBe(7)
-    expect(result.text).toBe('每天 00:00 – 00:00')
+    expect(result.text).toBe('00:00 – 00:00')
   })
 
-  it('lists weekday ranges for a working-day week', () => {
+  it('shows the range for a working-day week without weekday names', () => {
     const week = [1, 2, 3, 4, 5].map((day) => window(day, 480, 1080))
     const result = weekPill(week)
-    expect(result.text).toBe('周一、周二、周三、周四、周五 08:00 – 18:00')
+    expect(result.text).toBe('08:00 – 18:00')
   })
 
   it('keeps text empty for an empty week', () => {
@@ -40,9 +40,9 @@ describe('weekPill', () => {
     expect(result.text).toBe('')
   })
 
-  it('keeps text empty when one day carries two windows', () => {
+  it('says 多时段 when one day carries two different windows', () => {
     const result = weekPill([window(1, 480, 720), window(1, 780, 1080)])
-    expect(result.text).toBe('')
+    expect(result.text).toBe('多时段')
   })
 })
 

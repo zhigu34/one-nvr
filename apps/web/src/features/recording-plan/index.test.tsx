@@ -365,11 +365,18 @@ test('switching to planned opens the editor instead of writing', async () => {
   expect(
     setup.mutations.filter((m) => m.path.endsWith('/recording-policy')).length
   ).toBe(0)
+  // While the editor is open, the mini pills hide (the panel shows the same
+  // days at full size) and the panel's own close button reads 收起.
+  expect(view.getByRole('img', { name: /周计划/ }).query()).toBeNull()
+  await expect
+    .element(view.getByRole('button', { name: '收起', exact: true }))
+    .toBeVisible()
   setup.client.clear()
 })
 
 // The mini week renders in the collapsed row for a planned channel: which days
-// record is the answer the list owes without expanding anything.
+// record is the answer the list owes without expanding anything. The weekday
+// names live in the squares; only the time range is spelled out beside them.
 test('a planned row shows the weekday mini pills from the stored schedule', async () => {
   const setup = fixture({
     pool: true,
@@ -379,7 +386,7 @@ test('a planned row shows the weekday mini pills from the stored schedule', asyn
   const pills = view.getByRole('img', { name: /周计划/ })
   await expect.element(pills).toBeVisible()
   // The uniform single range is spelled out beside the pills.
-  await expect.element(view.getByText('周日 08:00 – 09:00')).toBeVisible()
+  await expect.element(view.getByText('08:00 – 09:00')).toBeVisible()
   setup.client.clear()
 })
 
@@ -428,16 +435,16 @@ test('the quick bar fills several days and one save commits week plus mode', asy
   setup.client.clear()
 })
 
-// Copying a day is how REC-02's "copy to other days" is expressed: one click
-// fills the other six rows rather than opening a separate dialog.
-test('copying a day fills the rest of the week', async () => {
+// Filling the whole week is the quick bar's 全周 shortcut: one pick, one apply,
+// and the seven rows all carry the range — no per-day copy button to press.
+test('the quick bar fills the whole week in one gesture', async () => {
   const setup = fixture({ pool: true })
   const view = await render(setup.view)
   await userEvent.click(view.getByLabelText('CH01 录像方式'))
   await userEvent.click(view.getByRole('option', { name: '定时录像', exact: true }))
-  await userEvent.click(view.getByRole('button', { name: '周一 添加时段' }))
+  await userEvent.click(view.getByRole('button', { name: '全周' }))
   await userEvent.click(
-    view.getByRole('button', { name: '周一 复制到其它日期' })
+    view.getByRole('button', { name: /应用到所选星期/ })
   )
   await userEvent.click(
     view.getByRole('button', { name: /保存并启用定时录像/ })

@@ -56,6 +56,10 @@ export function RecordingPlan() {
   const [outcome, setOutcome] = useState('')
   const [manualMinutes, setManualMinutes] = useState(30)
   const [dirtyRows, setDirtyRows] = useState<Set<string>>(new Set())
+  // Accordion for schedule panels: one open editor at a time. A row reports its
+  // channel id when its editor opens; each other row's open state is derived
+  // from this id, so opening CH02 collapses CH01's panel in the same render.
+  const [openEditorId, setOpenEditorId] = useState('')
   // Unconfigured rows collapse behind one line by default: sixteen mostly-empty
   // slots are setup context, not per-channel work, and they pushed the rows an
   // operator came for below the fold.
@@ -439,6 +443,13 @@ export function RecordingPlan() {
                         id: peer.id,
                         label: `CH${String(peer.channel_no).padStart(2, '0')}`,
                       }))}
+                    editorOpen={openEditorId === channel.id}
+                    onEditorOpenChange={(id) =>
+                      // Accordion: the id replaces whatever was open. Clicking
+                      // the same row's own open notification keeps it open;
+                      // closing is the row's own state.
+                      setOpenEditorId((current) => (current === id ? current : id))
+                    }
                     selected={selected.has(channel.id)}
                     onSelect={(checked) => toggle(channel.id, checked)}
                     onApplied={() => void client.invalidateQueries()}
