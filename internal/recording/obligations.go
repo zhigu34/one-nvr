@@ -84,7 +84,7 @@ func (s *Service) loadObligationFacts(ctx context.Context, tx pgx.Tx, channelID 
 	}
 	scheduled := false
 	if out.Mode == "planned" {
-		zone, _, zoneErr := s.siteZone(ctx)
+		zone, _, zoneErr := s.siteZone(ctx, channelID)
 		if zoneErr != nil {
 			return out, zoneErr
 		}

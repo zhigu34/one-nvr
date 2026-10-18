@@ -27,12 +27,20 @@ type ChannelSchedule struct {
 	Active bool `json:"active"`
 }
 
-// siteZone loads the site's timezone once per call. A schedule is meaningless
-// without it, so a missing or invalid zone is an error rather than a silent UTC
-// fallback — recording at the wrong wall clock is worse than not recording.
-func (s *Service) siteZone(ctx context.Context) (*time.Location, string, error) {
+// siteZone loads the timezone of the site a channel belongs to. A schedule is
+// meaningless without it, so a missing or invalid zone is an error rather than a
+// silent UTC fallback — recording at the wrong wall clock is worse than not
+// recording.
+//
+// It reads the zone through the channel rather than from s.siteID because the
+// API constructs a bare recording.Service (no site id) for the read endpoints:
+// going through the channel keeps one implementation for both processes instead
+// of a second lookup shape that only the API needs.
+func (s *Service) siteZone(ctx context.Context, channelID id.ID) (*time.Location, string, error) {
 	var name string
-	if err := s.DB.Pool.QueryRow(ctx, "SELECT timezone FROM sites WHERE id=$1", s.siteID).Scan(&name); err != nil {
+	if err := s.DB.Pool.QueryRow(ctx,
+		"SELECT s.timezone FROM channels c JOIN sites s ON s.id=c.site_id WHERE c.id=$1",
+		channelID).Scan(&name); err != nil {
 		return nil, "", err
 	}
 	zone, err := time.LoadLocation(name)
@@ -48,7 +56,7 @@ func (s *Service) GetSchedule(ctx context.Context, p auth.Principal, channelID i
 	if err != nil {
 		return ChannelSchedule{}, err
 	}
-	_, zoneName, err := s.siteZone(ctx)
+	_, zoneName, err := s.siteZone(ctx, channelID)
 	if err != nil {
 		return ChannelSchedule{}, err
 	}
@@ -98,7 +106,7 @@ func (s *Service) scheduleRows(ctx context.Context, channelID id.ID, p auth.Prin
 // scheduled window right now? It deliberately takes no principal — it runs in
 // the worker, whose authority is the site, not a user.
 func (s *Service) ScheduleActiveForChannel(ctx context.Context, channelID id.ID) (bool, error) {
-	zone, _, err := s.siteZone(ctx)
+	zone, _, err := s.siteZone(ctx, channelID)
 	if err != nil {
 		return false, err
 	}
@@ -222,7 +230,7 @@ func (s *Service) PutSchedule(ctx context.Context, p auth.Principal, channelID i
 		return ChannelSchedule{}, err
 	}
 	out = ChannelSchedule{ChannelID: channelID, Windows: MergeOvernightWindows(stored)}
-	if zone, zoneName, err := s.siteZone(ctx); err == nil {
+	if zone, zoneName, err := s.siteZone(ctx, channelID); err == nil {
 		out.Timezone = zoneName
 		out.Active = ScheduleActiveAt(stored, zone, time.Now())
 	}

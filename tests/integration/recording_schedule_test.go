@@ -237,3 +237,48 @@ func TestEmptyScheduleIsValidAndNeverOwed(t *testing.T) {
 		t.Fatal("an empty schedule must not owe recording")
 	}
 }
+
+// The API constructs a bare recording.Service for its read endpoints (no site id
+// private field), so any schedule read that depended on that field returned an
+// unexplained 503. This pins the endpoint through the same construction the API
+// uses, which is the only way that regression is visible from a test.
+func TestScheduleEndpointWorksWithTheAPIBareService(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, []recording.ScheduleWindow{
+		{Weekday: 1, StartMinute: 8 * 60, EndMinute: 12 * 60},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	bare := &recording.Service{DB: fixture.DB, Auth: fixture.Auth, Pools: fixture.Service.Pools}
+	schedule, err := bare.GetSchedule(ctx, fixture.Admin, fixture.Channel)
+	if err != nil {
+		t.Fatalf("the API's bare service cannot read a schedule: %v", err)
+	}
+	if schedule.Timezone == "" {
+		t.Fatal("schedule returned without the site timezone")
+	}
+	if len(schedule.Windows) != 1 {
+		t.Fatalf("schedule lost its windows: %+v", schedule.Windows)
+	}
+}
+
+// Writing a schedule through the bare service needs the same shape to keep
+// working; the overlap check and the audit entry both live on that path.
+func TestScheduleWriteWorksWithTheAPIBareService(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	bare := &recording.Service{DB: fixture.DB, Auth: fixture.Auth, Pools: fixture.Service.Pools}
+	if _, err := bare.PutSchedule(ctx, fixture.Admin, fixture.Channel, []recording.ScheduleWindow{
+		{Weekday: 2, StartMinute: 22 * 60, EndMinute: 2*60 + 1440},
+	}); err != nil {
+		t.Fatalf("the API's bare service cannot write a schedule: %v", err)
+	}
+	var rows int
+	if err := fixture.DB.Pool.QueryRow(ctx, "SELECT count(*) FROM recording_schedules WHERE channel_id=$1", fixture.Channel).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 2 {
+		t.Fatalf("overnight window was not split into two rows, got %d", rows)
+	}
+}

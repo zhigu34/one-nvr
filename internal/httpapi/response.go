@@ -9,6 +9,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/secrets"
 	"github.com/zhigu34/one-nvr/internal/storage"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 )
@@ -37,6 +38,11 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 		err = fault.New(409, "zlm_write_evidence_unavailable", "存储池检查未通过，请先运行存储池检查")
 	}
 	if !errors.As(err, &f) {
+		// An unrecognised error becomes a generic 503, which tells the operator
+		// nothing and leaves no trace of the cause. Log it with the request path
+		// so the next "503 with no explanation" can be diagnosed from the server
+		// log instead of from a browser network panel.
+		slog.Error("request failed", "method", r.Method, "path", r.URL.Path, "error", err)
 		f = fault.New(503, "dependency_unavailable", "服务暂时不可用，请稍后重试")
 	}
 	fields := f.Fields

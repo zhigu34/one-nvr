@@ -35,7 +35,7 @@ func (s *Service) Reconcile(ctx context.Context, ch id.ID) error {
 	// The zone is loaded before the transaction because a schedule is only
 	// meaningful in site-local wall clock, and a failed load must not silently
 	// fall back to UTC — recording at the wrong hour is worse than not recording.
-	zone, _, err := s.siteZone(ctx)
+	zone, _, err := s.siteZone(ctx, ch)
 	if err != nil {
 		return err
 	}
