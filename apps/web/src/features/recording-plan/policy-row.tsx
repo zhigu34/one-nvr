@@ -12,6 +12,7 @@ import { sourceCommand } from '@/features/channels/api'
 import { settleJob, verifyPoolWrite } from '@/features/storage-pools/pool-check'
 import { cn } from '@/lib/utils'
 import { ManualRecordingControl } from './manual-recording'
+import { EventRecordingToggle } from './event-recording-toggle'
 import {
   ScheduleEditor,
   ScheduleEditorToggle,
@@ -477,6 +478,17 @@ export function PolicyRow({
                 label={label}
                 disabled={!!pending}
               />
+              {/* REC-09: the buffer switch is offered only where it does
+                  something — a channel with ordinary recording links to those
+                  segments and has no need to buffer. */}
+              {mode === 'none' && (
+                <EventRecordingToggle
+                  channelId={channel.id}
+                  label={label}
+                  enabled={!!summary?.event_recording_enabled}
+                  disabled={!!pending}
+                />
+              )}
               {/* The schedule toggle belongs beside the mode select and 限时录像,
                   not on a line of its own: a collapsed planned row is one row. */}
               {mode === 'planned' && (

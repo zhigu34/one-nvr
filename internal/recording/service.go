@@ -51,16 +51,21 @@ type Probe interface {
 	ConcatMP4(context.Context, []probe.ConcatPart, string, func(float64)) (probe.FileEvidence, error)
 }
 type Service struct {
-	DB      *database.DB
-	Auth    *auth.Service
-	Files   FilePublisher
-	Media   Media
-	Probe   Probe
-	Audits  AuditSweeper
-	Roots   []string
-	DataDir string
-	Pools   *storage.Service
-	Sources *channel.SourceService
+	DB     *database.DB
+	Auth   *auth.Service
+	Files  FilePublisher
+	Media  Media
+	Probe  Probe
+	Audits AuditSweeper
+	// EventCacheDir is the tmpfs mount for the pre-event ring buffer, empty when
+	// the deployment reserved no memory. EventCacheBytes is its capacity, used to
+	// divide the cache between the channels currently buffering.
+	EventCacheDir   string
+	EventCacheBytes int64
+	Roots           []string
+	DataDir         string
+	Pools           *storage.Service
+	Sources         *channel.SourceService
 	// Reliability folds each sample into state history (M4 REL-01). Optional:
 	// with it nil the sample is still recorded as current state, which is all a
 	// unit test or a status-only assembly needs.

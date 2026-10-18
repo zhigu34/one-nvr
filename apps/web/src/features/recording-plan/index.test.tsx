@@ -691,3 +691,16 @@ test('picking planned opens the panel and collapsing it removes the panel', asyn
   expect(controls.contains(toggle)).toBe(true)
   setup.client.clear()
 })
+
+// REC-09: the buffer switch appears on a channel with no ordinary recording —
+// the only place it does anything. A channel that is recording already links to
+// those segments, and offering the switch there would imply it affects recording,
+// which REC-10 forbids.
+test('a closed channel offers the event recording switch', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  await expect
+    .element(view.getByRole('button', { name: 'CH01 事件录像' }))
+    .toBeVisible()
+  setup.client.clear()
+})

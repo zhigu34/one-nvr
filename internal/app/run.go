@@ -133,6 +133,14 @@ func Run(name string) error {
 		}
 		mediaProbe := probe.Runner{FFmpeg: "/usr/bin/ffmpeg", FFprobe: "/usr/bin/ffprobe"}
 		recordings := recording.New(db, media, mediaProbe, []string{"/storage"}, c.DataDir)
+		// The event ring buffer (PRD REC-09) lives in a tmpfs mounted only when
+		// the deployment reserved memory for it. An empty directory means the
+		// feature is off, which is reported as "not configured" rather than as
+		// missing footage.
+		if c.EventCacheMB > 0 {
+			recordings.EventCacheDir = "/cache"
+			recordings.EventCacheBytes = int64(c.EventCacheMB) << 20
+		}
 		// The audit trail's 180-day window (SYS-01) is swept on the retention
 		// ticker. Injected here rather than imported by recording, because the
 		// audit table belongs to operations and the dependency runs one way.
@@ -289,12 +297,12 @@ func Run(name string) error {
 		// answer readiness never starts at all), and a failure to settle old
 		// history must not stop recording — reliability is an observation of the
 		// media pipeline, never a precondition for it.
-		// Seven goroutines follow, and the count is stated once so an eighth
+		// Nine goroutines follow, and the count is stated once so a tenth
 		// cannot be added without the Add moving with it. (It was wrong here
 		// twice already: an Add(2) covering one goroutine hangs shutdown, an
 		// Add(1) covering two panics it with a negative counter. The guard test
 		// in run_waitgroup_test.go is what keeps this honest.)
-		background.Add(7)
+		background.Add(9)
 		go func() { defer background.Done(); runReliabilityRetention(ctx, db) }()
 		// The summary tiers (REL-06). Derived data: if this loop never runs, the
 		// reports read intervals directly and stay correct.
@@ -317,6 +325,12 @@ func Run(name string) error {
 		// unconfigured channels the sampler never visits.
 		go func() { defer background.Done(); runObligationReconciliation(ctx, recordings) }()
 		go func() { defer background.Done(); recordings.MonitorIdlePools(ctx) }()
+		// The event ring buffer (PRD REC-09) needs two loops of its own: one keeps
+		// the tmpfs inside its window and byte budget, the other turns a queued
+		// detection window into a published clip. Both are inert on a deployment
+		// that reserved no memory for the cache, which is the default.
+		go func() { defer background.Done(); recordings.RunBufferSweeper(ctx) }()
+		go func() { defer background.Done(); runClipAssembly(ctx, recordings) }()
 		// Retention runs with the recorder loops because it touches pool files
 		// and publishes into the same index. It stays inert until a site sets a
 		// period, so an upgraded site keeps M1's never-delete behaviour.

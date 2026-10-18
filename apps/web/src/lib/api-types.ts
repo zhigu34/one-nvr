@@ -769,6 +769,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/channels/{id}/event-recording": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Toggle a channel's event-recording buffer (PRD REC-09). Takes effect immediately rather than queueing a switch job: no stream, pool or mode changes. Turning it off never stops continuous, scheduled or manual recording (PRD REC-10); it only removes the pre-event buffer on a channel that has no ordinary recording. */
+        put: operations["setEventRecording"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recording-policies": {
         parameters: {
             query?: never;
@@ -2301,6 +2318,8 @@ export interface components {
              * @enum {string}
              */
             recording_mode?: "none" | "continuous" | "planned";
+            /** @description The channel's pre-event buffer switch (PRD REC-09). Rides with the mode so the recording plan renders the row's switch without a second request. */
+            event_recording_enabled?: boolean;
             /** @description Per-channel recording quota in bytes; 0 means no quota. Carried so the configure page edits it without a second request. */
             recording_quota_bytes?: number;
             /** @description Empty when no source revision is applied. Never carries credentials or a full URL. */
@@ -5899,6 +5918,48 @@ export interface operations {
                 };
             };
             /** @description Two windows on the same weekday overlap. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    setEventRecording: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": components["schemas"]["Version"];
+            };
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    enabled: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The switch now holds the requested value. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: Record<string, never>;
+                        request_id: components["schemas"]["UUID"];
+                    };
+                };
+            };
+            /** @description The policy version moved (someone else edited the channel). */
             409: {
                 headers: {
                     [name: string]: unknown;

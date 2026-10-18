@@ -362,3 +362,74 @@ func validRecordingMode(mode string) bool {
 func recordsInPool(mode string) bool {
 	return mode == "continuous" || mode == "planned"
 }
+
+// SetEventRecording flips a channel's event-recording switch (PRD REC-09).
+//
+// It is deliberately not a source change: nothing about the stream, the pool or
+// the recording mode moves, so queueing a switch job would make the operator wait
+// on a rollout to toggle a preference. The version check and the audit entry are
+// the same ones a policy write uses, because both edit the same row.
+//
+// REC-10 requires this switch to leave continuous, scheduled and manual recording
+// untouched; it decides only whether a pre-event buffer runs on a channel that has
+// no ordinary recording.
+func (s *SourceService) SetEventRecording(ctx context.Context, p auth.Principal, ch id.ID, enabled bool, expected int64) error {
+	if expected < 1 {
+		return auth.ErrInvalid
+	}
+	return s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
+		if err := s.Auth.RequireChannelTx(ctx, p, ch, auth.Configure, tx); err != nil {
+			return err
+		}
+		var current bool
+		var version int64
+		if err := tx.QueryRow(ctx, `SELECT event_recording,version FROM recording_policies WHERE channel_id=$1 FOR UPDATE`, ch).Scan(&current, &version); err != nil {
+			return err
+		}
+		if version != expected {
+			return auth.ErrConflict
+		}
+		if current == enabled {
+			// Idempotent: a repeated click is not an error, and returning early
+			// keeps the audit trail from filling with no-op entries.
+			return nil
+		}
+		// The policy version advances with the flag: recording_policy_versions
+		// records event_recording as part of what a version meant, so a change
+		// without a version bump would make history claim the old value.
+		next := version + 1
+		if _, err := tx.Exec(ctx, `UPDATE recording_policies SET event_recording=$2,version=$3 WHERE channel_id=$1`, ch, enabled, next); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO recording_policy_versions(id,channel_id,version,mode,event_recording,effective_at,reason,actor_id)
+			SELECT $1,$2,$3,p.mode,p.event_recording,clock_timestamp(),'policy_apply',$4 FROM recording_policies p WHERE p.channel_id=$2`,
+			mustNewID(), ch, next, p.UserID); err != nil {
+			return err
+		}
+		return audit.Append(ctx, tx, audit.Entry{
+			ActorID:  p.UserID,
+			Action:   "channel.event_recording_changed",
+			ObjectID: ch,
+			Details:  mustJSON(map[string]any{"enabled": enabled}),
+		})
+	})
+}
+
+func mustNewID() id.ID {
+	value, err := id.New()
+	if err != nil {
+		// An id generator failure is a programming error, not a runtime
+		// condition the caller can handle: fail loudly rather than writing a
+		// row with an empty primary key.
+		panic(err)
+	}
+	return value
+}
+
+func mustJSON(value any) []byte {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return []byte("{}")
+	}
+	return raw
+}

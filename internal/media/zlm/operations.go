@@ -311,17 +311,32 @@ func (c *Client) fetchSnapshot(ctx context.Context, key StreamKey) (StreamSnapsh
 	}
 	return snapshot, nil
 }
+
+// StartRecord begins a rolling MP4 recording into workDir.
+//
+// maxSeconds is the fragment length ZLM aims for, not a promise: the recorder
+// cuts at keyframes, so the files come out at the camera's GOP. Measured on the
+// live site, max_second=3 against a 3.3-second GOP produced 3.3-4.0 second
+// fragments. Callers that need a specific granularity must therefore check the
+// actual fragment length rather than assume the request was honoured.
+//
+// Two workDir roots are accepted, and the distinction is a security boundary:
+//   - /storage/.../.work/... for ordinary recording, which is published;
+//   - /cache/... for the event ring buffer, which lives in a tmpfs and is
+//     never published — it exists only to be read back within seconds.
 func (c *Client) StartRecord(ctx context.Context, key StreamKey, workDir string, maxSeconds int) error {
 	if err := key.Validate(); err != nil {
 		return err
 	}
-	if maxSeconds != 60 || !filepath.IsAbs(workDir) || filepath.Clean(workDir) != workDir || !strings.HasPrefix(workDir, "/storage/") || !strings.Contains(workDir, "/.work/") || strings.ContainsAny(workDir, "\x00\r\n") {
+	if maxSeconds < 1 || maxSeconds > 600 || !filepath.IsAbs(workDir) || filepath.Clean(workDir) != workDir ||
+		strings.ContainsAny(workDir, "\x00\r\n") ||
+		!(strings.HasPrefix(workDir, "/storage/") && strings.Contains(workDir, "/.work/") || strings.HasPrefix(workDir, "/cache/")) {
 		return ErrInvalidMediaInput
 	}
 	args := key.values()
 	args.Set("type", "1")
 	args.Set("customized_path", workDir)
-	args.Set("max_second", "60")
+	args.Set("max_second", strconv.Itoa(maxSeconds))
 	var out struct {
 		Result *bool `json:"result"`
 	}

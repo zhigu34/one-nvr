@@ -134,6 +134,9 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("GET /api/v1/channels/{id}/recording-policy", r.protected(r.recordingPolicy))
 	r.mux.HandleFunc("PUT /api/v1/channels/{id}/recording-policy", r.protected(r.setRecordingPolicy))
 	r.mux.HandleFunc("PUT /api/v1/recording-policies", r.protected(r.setRecordingPolicies))
+	// The event-recording switch (REC-09) is a toggle, not a switch job: nothing
+	// about the stream moves, so the operator should not wait for a rollout.
+	r.mux.HandleFunc("PUT /api/v1/channels/{id}/event-recording", r.protected(r.setEventRecording))
 	// Manual recording is a bounded window (REC-03), separate from the policy:
 	// starting one does not change the configured mode, and stopping one does
 	// not stop a continuous channel.

@@ -2120,6 +2120,86 @@
         }
       }
     },
+    "/api/v1/channels/{id}/event-recording": {
+      "put": {
+        "operationId": "setEventRecording",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "description": "Toggle a channel's event-recording buffer (PRD REC-09). Takes effect immediately rather than queueing a switch job: no stream, pool or mode changes. Turning it off never stops continuous, scheduled or manual recording (PRD REC-10); it only removes the pre-event buffer on a channel that has no ordinary recording.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/Version"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["enabled"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The switch now holds the requested value.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object"
+                    },
+                    "request_id": {
+                      "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+                    }
+                  },
+                  "required": ["data", "request_id"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The policy version moved (someone else edited the channel).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/recording-policies": {
       "put": {
         "operationId": "setRecordingPolicies",
@@ -8410,6 +8490,10 @@
               "planned"
             ],
             "description": "The stored recording policy mode; 'none' until a mode was applied. Carried with storage_pool_id so the recording plan renders every row from one request."
+          },
+          "event_recording_enabled": {
+            "type": "boolean",
+            "description": "The channel's pre-event buffer switch (PRD REC-09). Rides with the mode so the recording plan renders the row's switch without a second request."
           },
           "recording_quota_bytes": {
             "type": "integer",

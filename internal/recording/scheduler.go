@@ -20,6 +20,10 @@ type desiredRecording struct {
 	// union of the policy mode and any other reason to record (REC-04).
 	Mode    string
 	Enabled bool
+	// EventRecording is the channel's own switch (REC-09). It decides the buffer,
+	// never ordinary recording: REC-10 requires the switch to leave continuous
+	// and scheduled recording untouched.
+	EventRecording bool
 }
 
 func (s *Service) Reconcile(ctx context.Context, ch id.ID) error {
@@ -42,7 +46,7 @@ func (s *Service) Reconcile(ctx context.Context, ch id.ID) error {
 	}
 	if err := e.WithinTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		var policyMode string
-		if err := tx.QueryRow(ctx, `SELECT c.current_revision_id,c.storage_pool_id,c.enabled,p.mode FROM channels c JOIN recording_policies p ON p.channel_id=c.id WHERE c.id=$1`, ch).Scan(&desired.Revision, &desired.Pool, &desired.Enabled, &policyMode); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT c.current_revision_id,c.storage_pool_id,c.enabled,p.mode,p.event_recording FROM channels c JOIN recording_policies p ON p.channel_id=c.id WHERE c.id=$1`, ch).Scan(&desired.Revision, &desired.Pool, &desired.Enabled, &policyMode, &desired.EventRecording); err != nil {
 			return err
 		}
 		// The union is computed here, inside the same transaction that read the
@@ -166,6 +170,36 @@ func (s *Service) Reconcile(ctx context.Context, ch id.ID) error {
 			return err
 		}
 		actual.Recording = false
+	}
+	// REC-09/10: the event buffer exists only where ordinary recording does not.
+	// When a channel is inside a continuous, scheduled or manual window its
+	// footage is already being written, so an event links to those segments and a
+	// second recorder would duplicate every byte. When the switch is off, no
+	// buffer runs at all — that is the whole promise of the switch.
+	//
+	// This is evaluated before the recorder branch because the two are mutually
+	// exclusive: a channel that just left continuous recording must stop its
+	// buffer's absence matter, and one that is buffering must stop as soon as
+	// ordinary recording starts.
+	buffering := false
+	if desired.Mode == "none" {
+		if desired.EventRecording {
+			started, bufferErr := s.EnsureBuffer(ctx, e, *desired.Revision)
+			if bufferErr != nil {
+				// The buffer is an enhancement, never a reason to fail the tick:
+				// a channel with no cache, a full tmpfs or a media server that
+				// refused the call still records normally when its policy says so.
+				slog.Warn("event buffer unavailable", "channel", e.ChannelID, "reason", bufferUnavailableCode(bufferErr), "error", bufferErr)
+			}
+			buffering = started
+		}
+		// The buffer is stopped below, in the same place the recording decision is
+		// made, so an off switch and a mode change share one path.
+	}
+	if !buffering {
+		if err := s.StopBuffer(ctx, e.ChannelID); err != nil {
+			slog.Warn("event buffer stop failed", "channel", e.ChannelID, "error", err)
+		}
 	}
 	if desired.Mode == "none" {
 		if actual.Recording {

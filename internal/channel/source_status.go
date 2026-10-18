@@ -30,7 +30,7 @@ func (s *SourceService) GetStatus(ctx context.Context, p auth.Principal, ch id.I
 func (s *SourceService) statusTx(ctx context.Context, tx pgx.Tx, ch id.ID) (Status, error) {
 	out := Status{ChannelID: ch}
 	var mode, subPath string
-	if err := tx.QueryRow(ctx, `SELECT c.current_revision_id,c.desired_revision_id,c.storage_pool_id,c.enabled,c.version,p.mode,coalesce(r.sub_path,'') FROM channels c JOIN recording_policies p ON p.channel_id=c.id LEFT JOIN source_revisions r ON r.id=c.current_revision_id WHERE c.id=$1`, ch).Scan(&out.CurrentRevisionID, &out.DesiredRevisionID, &out.StoragePoolID, &out.Enabled, &out.Version, &mode, &subPath); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT c.current_revision_id,c.desired_revision_id,c.storage_pool_id,c.enabled,c.version,p.mode,p.event_recording,coalesce(r.sub_path,'') FROM channels c JOIN recording_policies p ON p.channel_id=c.id LEFT JOIN source_revisions r ON r.id=c.current_revision_id WHERE c.id=$1`, ch).Scan(&out.CurrentRevisionID, &out.DesiredRevisionID, &out.StoragePoolID, &out.Enabled, &out.Version, &mode, &out.EventRecording, &subPath); err != nil {
 		return out, err
 	}
 	if err := tx.QueryRow(ctx, "SELECT $2::uuid IS NULL AND NOT EXISTS(SELECT 1 FROM source_switches WHERE channel_id=$1 AND kind='apply' AND state='succeeded')", ch, out.CurrentRevisionID).Scan(&out.RequiresInitialRecordingMode); err != nil {
@@ -140,6 +140,7 @@ func (s *SourceService) Summaries(ctx context.Context, p auth.Principal) (Summar
 			out.Items[i].CurrentRevisionID = status.CurrentRevisionID
 			out.Items[i].StoragePoolID = status.StoragePoolID
 			out.Items[i].RecordingMode = status.Mode
+			out.Items[i].EventRecording = status.EventRecording
 			out.Items[i].Main = status.Main
 			out.Items[i].Sub = status.Sub
 			out.Items[i].Recording = status.Recording

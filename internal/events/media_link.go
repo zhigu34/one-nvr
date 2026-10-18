@@ -214,3 +214,25 @@ func (s *Service) ReconcileEventMedia(ctx context.Context) {
 		}
 	}
 }
+
+// queueClipJob records that a buffered clip should be assembled for this event.
+//
+// Written here rather than by calling the recording package: events must not
+// import recording (the dependency runs recording → events for nothing, but
+// events → recording would create a cycle the moment the buffer needs to read an
+// event). One INSERT is cheaper than the cycle.
+//
+// The window is the same lead and trail used for linking, so the clip covers the
+// span the page promises. ON CONFLICT keeps the stream and the reconciliation
+// read from queueing the same window twice.
+func (s *Service) queueClipJob(ctx context.Context, tx pgx.Tx, eventID, channelID id.ID, startedAt time.Time, endedAt *time.Time) error {
+	from := startedAt.Add(-PreEventWindow)
+	to := startedAt.Add(PostEventWindow)
+	if endedAt != nil {
+		to = endedAt.Add(PostEventWindow)
+	}
+	_, err := tx.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end)
+		VALUES($1,$2,$3,$4) ON CONFLICT(event_id) DO NOTHING`,
+		eventID, channelID, from.UTC(), to.UTC())
+	return err
+}

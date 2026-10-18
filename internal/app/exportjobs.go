@@ -183,3 +183,23 @@ func runDeliveryReconciliation(ctx context.Context, s *notify.Service) {
 		}
 	}
 }
+
+// runClipAssembly turns buffered fragments into published clips (PRD REC-09).
+//
+// A separate loop from the sweeper because the two have different natural
+// cadences: eviction must keep up with the writers (seconds), while assembly runs
+// once an event's window has closed (tens of seconds). Sharing one ticker would
+// make either the sweeper too slow to protect the tmpfs or the assembler too busy.
+func runClipAssembly(ctx context.Context, s *recording.Service) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		s.AssembleClips(ctx)
+		s.TouchBuffers(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}

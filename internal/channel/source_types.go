@@ -119,7 +119,11 @@ type Status struct {
 	ChannelID                    id.ID `json:"channel_id"`
 	// The stored recording policy mode; the recording plan renders it straight
 	// from the summary so a 32-row page stays one request.
-	Mode              string         `json:"mode"`
+	Mode string `json:"mode"`
+	// EventRecording is the channel's pre-event buffer switch (PRD REC-09).
+	// Carried with the mode because the recording plan shows both and both come
+	// from the same policy row.
+	EventRecording    bool           `json:"event_recording_enabled"`
 	CurrentRevisionID *id.ID         `json:"current_revision_id"`
 	DesiredRevisionID *id.ID         `json:"desired_revision_id"`
 	StoragePoolID     *id.ID         `json:"storage_pool_id"`
@@ -163,6 +167,9 @@ type SummaryItem struct {
 	// The stored recording policy mode ('none' until first applied). Carried
 	// with the pool so the recording plan renders every row from one request.
 	RecordingMode string `json:"recording_mode"`
+	// EventRecording rides with the mode for the same reason: one request
+	// renders the row, including its buffer switch.
+	EventRecording bool `json:"event_recording_enabled"`
 	// Quota rides along for the same reason as the pool binding: the configure
 	// page must render and edit it without a second request per channel.
 	RecordingQuotaBytes int64  `json:"recording_quota_bytes"`

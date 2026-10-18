@@ -215,3 +215,39 @@ func (r *router) setChannelSchedule(w http.ResponseWriter, q *http.Request, p au
 	}
 	respond(w, q, 200, out)
 }
+
+// setEventRecording flips the channel's event-recording switch (REC-09).
+//
+// Not a source change: the switch decides whether a pre-event buffer runs, so it
+// takes effect immediately instead of queueing a switch job. REC-10 makes the
+// consequence explicit — turning it off must leave continuous, scheduled and
+// manual recording untouched — which is why it lives beside the policy rather
+// than inside it.
+func (r *router) setEventRecording(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	ch, err := pathID(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	version, err := expectedVersion(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	var in struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := decode(w, q, &in); err != nil {
+		fail(w, q, err)
+		return
+	}
+	if in.Enabled == nil {
+		fail(w, q, fault.New(422, "invalid_input", "enabled 必须为布尔值"))
+		return
+	}
+	if err := r.d.Sources.SetEventRecording(q.Context(), p, ch, *in.Enabled, version); err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, struct{}{})
+}

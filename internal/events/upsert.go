@@ -115,6 +115,20 @@ func (s *Service) eventUpsert(ctx context.Context, in upsertInput) error {
 			stored.MediaStartAt = link.Start
 			stored.MediaEndAt = link.End
 			stored.MediaSegments = link.Segments
+			// No ordinary recording covers this event, so the only possible
+			// footage is the pre-event ring buffer. Queue the extraction here,
+			// in the same transaction: the job is a durable request that survives
+			// a worker restart between the detection and the assembly.
+			//
+			// The job is queued even when no buffer is running — the assembler
+			// reports "window empty" and the event keeps its honest verdict. Only
+			// queueing when a buffer looks active would race the heartbeat and
+			// silently drop footage the buffer actually holds.
+			if link.State == "unavailable" {
+				if err := s.queueClipJob(ctx, tx, stored.ID, *stored.ChannelID, stored.StartedAt, stored.EndedAt); err != nil {
+					return err
+				}
+			}
 		}
 		return s.evaluateRules(ctx, tx, stored)
 	})
