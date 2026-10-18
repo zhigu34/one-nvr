@@ -282,3 +282,29 @@ func TestScheduleWriteWorksWithTheAPIBareService(t *testing.T) {
 		t.Fatalf("overnight window was not split into two rows, got %d", rows)
 	}
 }
+
+// Applying 'planned' must reach the switch machinery. source_switches.desired_mode
+// declared only ('none','continuous') while old_mode already accepted 'planned',
+// so a mode that could be recorded as *old* could never be requested as *new* —
+// the insert was rejected before any work happened.
+func TestPlannedModeCanBeAppliedThroughTheSwitch(t *testing.T) {
+	// testedSource wires Sources; the shorter fixture does not, and this test is
+	// about the switch path rather than about reading a schedule.
+	fixture, _, _, _ := testedSource(t)
+	ctx := context.Background()
+	// Back to none so the planned apply is a real change.
+	if _, err := fixture.DB.Pool.Exec(ctx, "UPDATE recording_policies SET mode='none' WHERE channel_id=$1", fixture.Channel); err != nil {
+		t.Fatal(err)
+	}
+	change, err := fixture.Service.Sources.SetPolicy(ctx, fixture.Admin, fixture.Channel, 3, "planned", "plan-apply")
+	if err != nil {
+		t.Fatalf("applying 'planned' was rejected before reaching the switch: %v", err)
+	}
+	var desired string
+	if err := fixture.DB.Pool.QueryRow(ctx, "SELECT desired_mode FROM source_switches WHERE job_id=$1", change.JobID).Scan(&desired); err != nil {
+		t.Fatal(err)
+	}
+	if desired != "planned" {
+		t.Fatalf("switch recorded %q, want planned", desired)
+	}
+}
