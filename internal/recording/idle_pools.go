@@ -58,11 +58,11 @@ func (s *Service) MonitorIdlePools(ctx context.Context) {
 				}
 				cancel()
 				if err != nil && ctx.Err() == nil {
-					slog.Warn("idle pool media check unavailable")
+					slog.Warn("idle pool media check unavailable", "pool", pool, "error", err)
 				}
 			}
 		} else if ctx.Err() == nil {
-			slog.Warn("idle pool checks unavailable")
+			slog.Warn("idle pool checks unavailable", "error", err)
 		}
 		select {
 		case <-ctx.Done():

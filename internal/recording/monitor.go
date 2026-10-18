@@ -37,7 +37,9 @@ func (s *Service) Monitor(ctx context.Context) error {
 					delete(active, ch)
 					mu.Unlock()
 					if err != nil && !errors.Is(err, channel.ErrExecutionBusy) && work.Err() == nil {
-						slog.Warn("recording reconciliation unavailable")
+						// The error is the only thing that explains the warning; a bare
+						// "unavailable" turns a real failure into an unactionable log line.
+						slog.Warn("recording reconciliation unavailable", "channel", ch, "error", err)
 					}
 				}
 			}

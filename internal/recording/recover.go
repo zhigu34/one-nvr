@@ -52,7 +52,7 @@ func (s *Service) RunPublisher(ctx context.Context) {
 	defer ticker.Stop()
 	for {
 		if err := s.Recover(ctx); err != nil && !errors.Is(err, context.Canceled) && ctx.Err() == nil {
-			slog.Warn("recording publication requires retry")
+			slog.Warn("recording publication requires retry", "error", err)
 		}
 		select {
 		case <-ctx.Done():

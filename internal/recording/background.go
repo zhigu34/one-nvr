@@ -14,7 +14,7 @@ func (s *Service) Replay(ctx context.Context) {
 		err := s.DrainSpool(bounded)
 		cancel()
 		if err != nil && ctx.Err() == nil {
-			slog.Warn("recording callback replay unavailable")
+			slog.Warn("recording callback replay unavailable", "error", err)
 		}
 		select {
 		case <-ctx.Done():
