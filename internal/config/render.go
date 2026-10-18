@@ -14,6 +14,18 @@ import (
 type BindOptions struct {
 	CreateHostPath bool `json:"create_host_path"`
 }
+
+// VolumeOptions sizes a named volume backed by tmpfs.
+//
+// A per-container tmpfs cannot be shared: Docker gives each container its own,
+// so the media server writes fragments into one and the worker reads an empty
+// one. Measured on the live site: ZLM held 143 fragments while the worker saw
+// zero, and the sweeper dutifully reported nothing to evict. A named volume with
+// a tmpfs driver is the one shape that gives both containers the same in-memory
+// directory.
+type VolumeOptions struct {
+	Tmpfs *TmpfsOptions `json:"tmpfs,omitempty"`
+}
 type Mount struct {
 	Type     string `json:"type"`
 	Source   string `json:"source,omitempty"`
@@ -21,8 +33,9 @@ type Mount struct {
 	ReadOnly bool   `json:"read_only"`
 	// Bind is only meaningful for bind mounts; a tmpfs mount that carried it
 	// would be rejected by compose.
-	Bind  *BindOptions  `json:"bind,omitempty"`
-	Tmpfs *TmpfsOptions `json:"tmpfs,omitempty"`
+	Bind   *BindOptions   `json:"bind,omitempty"`
+	Tmpfs  *TmpfsOptions  `json:"tmpfs,omitempty"`
+	Volume *VolumeOptions `json:"volume,omitempty"`
 }
 
 // TmpfsOptions sizes an in-memory mount. The event ring buffer lives here
@@ -59,6 +72,10 @@ type Service struct {
 type Deployment struct {
 	Services map[string]Service `json:"services"`
 	Networks map[string]any     `json:"networks,omitempty"`
+	// Volumes are the named volumes the services share. The event cache is the
+	// only one: it exists so the media server and the worker see the same
+	// in-memory directory.
+	Volumes map[string]map[string]any `json:"volumes,omitempty"`
 }
 
 var imagePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/:-]*@sha256:[a-f0-9]{64}$`)
@@ -110,12 +127,14 @@ func BuildDeployment(v map[string]string) (Deployment, error) {
 		if c.EventCacheMB <= 0 {
 			return nil
 		}
-		return []Mount{{Type: "tmpfs", Target: "/cache", Tmpfs: &TmpfsOptions{
-			Size: int64(c.EventCacheMB) << 20,
-			// 1777: both the root-owned media server and the uid 10001 worker
-			// must be able to create subdirectories here.
-			Mode: 0o1777,
-		}}}
+		// A named volume, not a bare tmpfs: the media server writes the fragments
+		// and the worker reads and evicts them, and per-container tmpfs gives each
+		// its own empty directory.
+		//
+		// The size and mode live on the volume's driver_opts, not here: declaring
+		// tmpfs options on the mount as well would state the same thing twice, and
+		// compose resolves the two independently.
+		return []Mount{{Type: "volume", Source: "event-cache", Target: "/cache"}}
 	}
 	root := filepath.Clean(c.DataDir)
 	switch root {
@@ -145,6 +164,20 @@ func BuildDeployment(v map[string]string) (Deployment, error) {
 		"default":        map[string]any{},
 		"recording-hook": map[string]any{"internal": true, "ipam": map[string]any{"config": []map[string]string{{"subnet": subnet.String(), "ip_range": netip.PrefixFrom(subnet.Addr().Next().Next().Next().Next(), 30).String()}}}},
 	}}
+	if c.EventCacheMB > 0 {
+		// driver_opts on the volume is what makes it tmpfs: compose has no
+		// top-level tmpfs for named volumes.
+		d.Volumes = map[string]map[string]any{
+			"event-cache": {
+				"driver": "local",
+				"driver_opts": map[string]string{
+					"type":   "tmpfs",
+					"device": "tmpfs",
+					"o":      fmt.Sprintf("size=%dm,mode=1777", c.EventCacheMB),
+				},
+			},
+		}
+	}
 	appImage := v["ONE_NVR_APP_IMAGE"]
 	if appImage == "" {
 		appImage = "one-nvr/app:m1a"

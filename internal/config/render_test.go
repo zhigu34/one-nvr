@@ -189,6 +189,9 @@ func TestEventCacheMountIsOptIn(t *testing.T) {
 			}
 		}
 	}
+	if without.Volumes != nil {
+		t.Fatal("a deployment without the cache must not declare the volume")
+	}
 
 	withSize := map[string]string{"ONE_NVR_EVENT_CACHE_MB": "512"}
 	for k, v := range base {
@@ -208,23 +211,31 @@ func TestEventCacheMountIsOptIn(t *testing.T) {
 		if found == nil {
 			t.Fatalf("%s does not mount the event cache", name)
 		}
-		if found.Type != "tmpfs" {
-			t.Fatalf("%s cache mount is %q, must be tmpfs so the contents never reach a disk", name, found.Type)
+		// A named volume, not a per-container tmpfs: the media server writes the
+		// fragments and the worker reads and evicts them, and Docker gives each
+		// container its own tmpfs. Measured on the live site: ZLM held 143
+		// fragments while the worker saw zero.
+		if found.Type != "volume" || found.Source != "event-cache" {
+			t.Fatalf("%s cache mount is %q/%q, must be the shared event-cache volume", name, found.Type, found.Source)
 		}
-		if found.Tmpfs == nil || found.Tmpfs.Size != 512<<20 {
-			t.Fatalf("%s cache size wrong: %+v", name, found.Tmpfs)
+		if found.Bind != nil || found.Tmpfs != nil || found.Volume != nil {
+			t.Fatalf("%s cache mount repeats options that belong on the volume: %+v", name, found)
 		}
-		// Docker's default tmpfs mode is 0755 root-owned, which locks out the
-		// non-root worker. Measured on the live site: ZLM (root) wrote fine and
-		// uid 10001 got EACCES. The sticky world-writable mode is what makes
-		// both containers able to create directories there.
-		if found.Tmpfs.Mode != 0o1777 {
-			t.Fatalf("%s cache mode is %o, must be 1777 so the non-root worker can write: %+v", name, found.Tmpfs.Mode, found.Tmpfs)
-		}
-		// A tmpfs mount carrying bind options is rejected by compose.
-		if found.Bind != nil {
-			t.Fatalf("%s cache mount carries bind options", name)
-		}
+	}
+	// The volume must be declared once, so every service references the same one
+	// rather than each getting its own. tmpfs is what keeps the fragments off a
+	// disk; 1777 is what lets the non-root worker create directories beside the
+	// media server's.
+	volume := with.Volumes["event-cache"]
+	if volume == nil {
+		t.Fatal("the event-cache volume is not declared")
+	}
+	opts, _ := volume["driver_opts"].(map[string]string)
+	if opts["type"] != "tmpfs" || opts["device"] != "tmpfs" {
+		t.Fatalf("event-cache volume is not backed by tmpfs: %+v", opts)
+	}
+	if opts["o"] != "size=512m,mode=1777" {
+		t.Fatalf("event-cache volume options are %q, want size and mode", opts["o"])
 	}
 	// The API must know where the mount is, or the overview cannot report its
 	// usage.
