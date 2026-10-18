@@ -38,20 +38,28 @@ func (s *Service) verifyRecordingTarget(ctx context.Context, e *channel.Executio
 	if rollback {
 		revision, pool, mode = w.OldRevision, w.OldPool, w.OldMode
 	}
+	// A planned channel outside its windows behaves like 'none' for this phase:
+	// there is nothing to start or verify. Asking the schedule here rather than
+	// starting unconditionally is what keeps applying a schedule at 20:00 from
+	// beginning a recording the operator asked for at 08:00.
+	recording, err := s.modeRecordsNow(ctx, e.ChannelID, mode)
+	if err != nil {
+		return physicalSession{}, err
+	}
 	ss, err := s.currentMain(ctx, e, revision)
-	if mode == "none" && errors.Is(err, pgx.ErrNoRows) {
+	if !recording && errors.Is(err, pgx.ErrNoRows) {
 		return physicalSession{}, nil
 	}
 	if err != nil {
 		return ss, err
 	}
 	if ss.ID == "" {
-		if mode == "none" {
+		if !recording {
 			return ss, nil
 		}
 		return ss, zlm.ErrStreamAbsent
 	}
-	if mode == "none" {
+	if !recording {
 		if err := e.Check(ctx); err != nil {
 			return ss, err
 		}
@@ -89,8 +97,20 @@ func (s *Service) observeRecordingChange(ctx context.Context, e *channel.Executi
 		mode = w.OldMode
 		revision = w.OldRevision
 	}
-	if mode == "none" {
-		state, reason = "disabled", "recording_disabled"
+	// The observation records what actually happened, so a planned channel that
+	// was applied outside its windows must not claim "recorder verified" when no
+	// recorder was started. Its reason distinguishes "no recording because the
+	// schedule is closed" from "no recording because the operator turned it off".
+	records, err := s.modeRecordsNow(ctx, e.ChannelID, mode)
+	if err != nil {
+		return err
+	}
+	if !records {
+		if mode == "planned" {
+			state, reason = "disabled", "outside_schedule"
+		} else {
+			state, reason = "disabled", "recording_disabled"
+		}
 	}
 	return e.WithinTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		observation, err := id.New()

@@ -30,10 +30,7 @@ import {
   type PoolCheckOutcome,
 } from '@/features/storage-pools/pool-check'
 
-const PLANNED_MODES = [
-  { label: '定时录像（后续开放）', value: 'scheduled' },
-  { label: '事件录像（后续开放）', value: 'event' },
-]
+const PLACEHOLDER_MODES = [{ label: '事件录像（后续开放）', value: 'event' }]
 
 
 
@@ -112,7 +109,7 @@ export function RecordingPlan() {
         return {
           channel_id: channelID,
           expected_version: policy.version,
-          mode: mode as 'none' | 'continuous',
+          mode: mode as 'none' | 'continuous' | 'planned',
         }
       })
     )
@@ -136,7 +133,9 @@ export function RecordingPlan() {
         row.error_code === 'zlm_write_evidence_unavailable'
     )
     const reasons = new Map<string, string>()
-    if (stale.length === 0 || mode !== 'continuous')
+    // A planned batch records inside its windows, so it needs the same write
+    // evidence recovery as continuous; only 'none' has nothing to prove.
+    if (stale.length === 0 || mode === 'none')
       return { items, recovered: 0, reasons }
     const poolByChannel = new Map<string, string>()
     for (const row of stale) {
@@ -416,7 +415,8 @@ export function RecordingPlan() {
                   options={[
                     { value: 'none', label: '关闭录像' },
                     { value: 'continuous', label: '连续录像' },
-                    ...PLANNED_MODES.map((entry) => ({
+                    { value: 'planned', label: '定时录像' },
+                    ...PLACEHOLDER_MODES.map((entry) => ({
                       value: entry.value,
                       label: entry.label,
                       disabled: true,

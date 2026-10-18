@@ -166,3 +166,52 @@ func (r *router) manualRecording(w http.ResponseWriter, q *http.Request, p auth.
 	}
 	respond(w, q, 200, out)
 }
+
+// channelSchedule reads one channel's weekly recording schedule (REC-02).
+//
+// The response carries the site timezone and an "active" flag computed on the
+// server. Both are there so the editor and the recorder cannot disagree: a
+// client that evaluated the schedule itself would use the browser's clock and,
+// on a laptop in another timezone, show 08:00 as a different instant from the
+// one being recorded.
+func (r *router) channelSchedule(w http.ResponseWriter, q *http.Request, p auth.Principal, rest string) {
+	ch, err := pathID(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	out, err := r.d.Recordings.GetSchedule(q.Context(), p, ch)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, out)
+}
+
+// setChannelSchedule replaces one channel's whole week. Replacement rather than
+// per-window edits because the operator's model is "this is my week"; a rejected
+// week leaves the stored one untouched.
+func (r *router) setChannelSchedule(w http.ResponseWriter, q *http.Request, p auth.Principal, rest string) {
+	ch, err := pathID(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	var in struct {
+		Windows []recording.ScheduleWindow `json:"windows"`
+	}
+	if err := decode(w, q, &in); err != nil {
+		fail(w, q, err)
+		return
+	}
+	out, err := r.d.Recordings.PutSchedule(q.Context(), p, ch, in.Windows)
+	if err != nil {
+		if errors.Is(err, recording.ErrScheduleOverlap) {
+			fail(w, q, fault.New(409, "schedule_overlap", "同一星期几的时段不能重叠"))
+			return
+		}
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, out)
+}

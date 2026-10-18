@@ -140,6 +140,10 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("GET /api/v1/channels/{id}/manual-recording", r.protected(r.manualRecording))
 	r.mux.HandleFunc("POST /api/v1/channels/{id}/manual-recording", r.protected(r.startManualRecording))
 	r.mux.HandleFunc("DELETE /api/v1/channels/{id}/manual-recording", r.protected(r.stopManualRecording))
+	// A weekly schedule is a rule in site-local wall clock (REC-02), evaluated by
+	// the scheduler on every tick rather than expanded into future instants.
+	r.mux.HandleFunc("GET /api/v1/channels/{id}/recording-schedule", r.protected(r.channelSchedule))
+	r.mux.HandleFunc("PUT /api/v1/channels/{id}/recording-schedule", r.protected(r.setChannelSchedule))
 	r.mux.HandleFunc("PUT /api/v1/channels/{id}/storage-pool", r.protected(r.bindChannelPool))
 	r.mux.HandleFunc("POST /api/v1/channels/{id}/source/credentials/reveal", r.protected(r.revealSourceCredentials))
 	r.mux.HandleFunc("POST /api/v1/channels/source-config-export", r.protected(r.exportSourceConfig))

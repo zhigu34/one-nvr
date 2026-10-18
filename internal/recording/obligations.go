@@ -36,12 +36,22 @@ import (
 
 // obligationFacts is everything the derivation reads for one channel.
 type obligationFacts struct {
-	ChannelID   id.ID
-	Enabled     bool
-	Revision    *id.ID
-	SessionID   *id.ID
-	Mode        string
-	PolicyVer   int64
+	ChannelID id.ID
+	Enabled   bool
+	Revision  *id.ID
+	SessionID *id.ID
+	Mode      string
+	PolicyVer int64
+	// PolicyMode is the stored mode, before the union decision folded other
+	// demands into it. 'planned' outside its windows folds to "none" for the
+	// scheduler; the obligation still needs to know it was planned.
+	PolicyMode string
+	// Scheduled is set when the channel's own weekly schedule covers this
+	// instant. It is separate from Mode because Mode is the union verdict: a
+	// planned channel outside its windows and a planned channel inside one both
+	// report "planned", and the obligation must distinguish "the operator asked
+	// for this hour" from "the operator asked for a different hour".
+	Scheduled   bool
 	InMaintenan bool
 	// SwitchID is set while a source switch owns the channel. REL-03: the old
 	// policy still applies during the switch, so the obligation continues and
@@ -65,14 +75,32 @@ func (s *Service) loadObligationFacts(ctx context.Context, tx pgx.Tx, channelID 
 	if err != nil {
 		return out, err
 	}
-	// The union, read through the same helper the scheduler uses: an obligation
+	// The union, read through the same helpers the scheduler uses: an obligation
 	// and a recording decision that disagree about "should this be recording
 	// now" would make every completeness figure wrong in a way nobody could see.
 	active, err := manualActiveTx(ctx, tx, channelID)
 	if err != nil {
 		return out, err
 	}
-	out.Mode = unionMode(out.Mode, active)
+	scheduled := false
+	if out.Mode == "planned" {
+		zone, _, zoneErr := s.siteZone(ctx)
+		if zoneErr != nil {
+			return out, zoneErr
+		}
+		scheduled, err = s.scheduleActiveTx(ctx, tx, channelID, zone, time.Now())
+		if err != nil {
+			return out, err
+		}
+	}
+	// The derivation needs the stored mode and the window state separately: the
+	// union decision folds "planned outside its window" down to "none", which is
+	// right for the recorder and wrong for the obligation, where the difference
+	// between "the operator turned recording off" and "it is outside the
+	// schedule" is the whole explanation shown to a reader.
+	out.Scheduled = scheduled
+	out.PolicyMode = out.Mode
+	out.Mode = unionMode(out.Mode, active, scheduled)
 	// The session is what the recorder is attached to; recording it on the
 	// obligation is what lets a reader tie an owed stretch to the media session
 	// that served it.
@@ -152,12 +180,20 @@ func obligationFor(f obligationFacts) reliability.Obligation {
 		base.Source = "manual"
 		evidence["reason"] = "manual_window"
 		return base
-	case f.Mode == "planned":
-		// Reserved vocabulary. PRD REC-02 is unimplemented, so nothing writes
-		// this mode today; if one ever appears, it is reported as an unsupported
-		// source rather than silently counted either way.
-		base.Source, base.Exclusion = f.Mode, "disabled"
-		evidence["reason"] = "mode_not_implemented"
+	case f.PolicyMode == "planned":
+		if f.Scheduled {
+			// Inside a scheduled window, recording is owed for exactly that
+			// window (REC-02). This is a real obligation, not an exclusion: a
+			// scheduled recording that failed must show as a gap.
+			base.Source = "planned"
+			evidence["reason"] = "scheduled_window"
+			return base
+		}
+		// Outside every window the operator did not ask for recording, and the
+		// time is an exclusion rather than a gap. It must not be counted as
+		// downtime either — nothing was supposed to be recorded.
+		base.Source, base.Exclusion = "planned", "disabled"
+		evidence["reason"] = "outside_schedule"
 		return base
 	default:
 		base.Source, base.Exclusion = "continuous", "disabled"

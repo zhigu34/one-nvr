@@ -2002,6 +2002,124 @@
         }
       }
     },
+    "/api/v1/channels/{id}/recording-schedule": {
+      "get": {
+        "operationId": "getChannelSchedule",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "playback",
+        "description": "The channel's weekly recording schedule (PRD REC-02), in the site's timezone. Overnight windows come back as the operator entered them (end after midnight), not as the two stored rows.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The schedule, with the server's own view of whether it is active now.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ChannelSchedule"
+                    },
+                    "request_id": {
+                      "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+                    }
+                  },
+                  "required": ["data", "request_id"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "setChannelSchedule",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "description": "Replace the channel's whole week. Overlapping windows on the same weekday are rejected with 409 schedule_overlap; a rejected week leaves the stored one unchanged. A window ending after midnight is sent with an end above 1440 and stored as two rows.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "windows": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/ScheduleWindow"
+                    }
+                  }
+                },
+                "required": ["windows"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The stored schedule.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ChannelSchedule"
+                    },
+                    "request_id": {
+                      "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+                    }
+                  },
+                  "required": ["data", "request_id"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Two windows on the same weekday overlap.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/recording-policies": {
       "put": {
         "operationId": "setRecordingPolicies",
@@ -8421,7 +8539,8 @@
             "type": "string",
             "enum": [
               "none",
-              "continuous"
+              "continuous",
+              "planned"
             ]
           }
         },
@@ -9765,6 +9884,55 @@
           "items",
           "next_cursor"
         ],
+        "additionalProperties": false
+      },
+      "ScheduleWindow": {
+        "type": "object",
+        "properties": {
+          "weekday": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 7,
+            "description": "ISO-8601 weekday: 1=Monday .. 7=Sunday."
+          },
+          "start_minute": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1439,
+            "description": "Minutes since site-local midnight."
+          },
+          "end_minute": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2880,
+            "description": "Exclusive end in minutes since local midnight. 1440 means midnight at the end of the weekday; a value above 1440 means the window wraps into the next day and is stored as two rows."
+          }
+        },
+        "required": ["weekday", "start_minute", "end_minute"],
+        "additionalProperties": false
+      },
+      "ChannelSchedule": {
+        "type": "object",
+        "properties": {
+          "channel_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "windows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScheduleWindow"
+            }
+          },
+          "timezone": {
+            "type": "string",
+            "description": "The site's IANA timezone; the schedule is interpreted in it."
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Evaluated by the server so the editor and the recorder cannot disagree about this instant."
+          }
+        },
+        "required": ["channel_id", "windows", "timezone", "active"],
         "additionalProperties": false
       },
       "ManualRecording": {

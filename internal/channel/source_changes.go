@@ -43,7 +43,7 @@ func (s *SourceService) RequestClear(ctx context.Context, p auth.Principal, ch i
 }
 
 func (s *SourceService) SetPolicy(ctx context.Context, p auth.Principal, ch id.ID, expected int64, mode, key string) (Change, error) {
-	if expected < 1 || mode != "none" && mode != "continuous" {
+	if expected < 1 || !validRecordingMode(mode) {
 		return Change{}, auth.ErrInvalid
 	}
 	return s.requestChange(ctx, p, SourceTask{ChannelID: ch, ActorID: p.UserID, AuthVersion: p.AuthVersion, ExpectedVersion: expected, RecordingMode: &mode}, "policy_apply", key)
@@ -71,7 +71,7 @@ func (s *SourceService) SetPolicies(ctx context.Context, p auth.Principal, items
 	err := s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
 		for _, item := range items {
 			row := PolicyOutcome{ChannelID: item.ChannelID}
-			if item.ExpectedVersion < 1 || item.Mode != "none" && item.Mode != "continuous" {
+			if item.ExpectedVersion < 1 || !validRecordingMode(item.Mode) {
 				row.State, row.ErrorCode = "rejected", publicCode(auth.ErrInvalid)
 				out.Items = append(out.Items, row)
 				continue
@@ -191,10 +191,10 @@ func (s *SourceService) requestChangeTx(tx pgx.Tx, worker bool, ctx context.Cont
 			if task.PoolID != nil {
 				pool = task.PoolID
 			}
-			if desired == "continuous" && (current == nil || !enabled) {
+			if recordsInPool(desired) && (current == nil || !enabled) {
 				return auth.ErrConflict
 			}
-			if pool == nil && desired == "continuous" {
+			if pool == nil && recordsInPool(desired) {
 				var value id.ID
 				if err := tx.QueryRow(ctx, "SELECT id FROM storage_pools WHERE site_id=$1 AND is_default AND enabled", site).Scan(&value); err != nil {
 					if errors.Is(err, pgx.ErrNoRows) {
@@ -210,7 +210,7 @@ func (s *SourceService) requestChangeTx(tx pgx.Tx, worker bool, ctx context.Cont
 			// a live probe, or a pool whose 30-second zlm evidence lapsed could
 			// never be selected ahead of recording, which is exactly the
 			// pre-configuration flow the recording plan page sells.
-			if desired == "continuous" && pool != nil {
+			if recordsInPool(desired) && pool != nil {
 				ready, err := storage.PoolHasFreshEvidence(ctx, tx, site, *pool)
 				if err != nil {
 					return err
@@ -344,4 +344,21 @@ func (s *SourceService) PrepareChange(ctx context.Context, e *Execution) (Switch
 		return nil
 	})
 	return out, err
+}
+
+// validRecordingMode is the set of modes an operator may apply to a channel.
+//
+// 'planned' joined the set when weekly schedules became real (REC-02). It is
+// accepted here and gated below like continuous, because inside a scheduled
+// window a planned channel records exactly the way a continuous one does.
+func validRecordingMode(mode string) bool {
+	return mode == "none" || mode == "continuous" || mode == "planned"
+}
+
+// recordsInPool reports whether this mode needs a storage pool and fresh write
+// evidence. 'planned' does: the schedule decides *when*, not *whether* the
+// bytes land on a pool. Treating it as pool-free would let an operator schedule
+// recording that could never start.
+func recordsInPool(mode string) bool {
+	return mode == "continuous" || mode == "planned"
 }

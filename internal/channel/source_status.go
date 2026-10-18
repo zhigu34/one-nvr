@@ -273,7 +273,11 @@ func (s *SourceService) GetPolicy(ctx context.Context, p auth.Principal, ch id.I
 		if err := tx.QueryRow(ctx, "SELECT p.mode,c.version FROM recording_policies p JOIN channels c ON c.id=p.channel_id WHERE c.id=$1", ch).Scan(&out.Mode, &out.Version); err != nil {
 			return err
 		}
-		if out.Mode != "none" && out.Mode != "continuous" {
+		// Anything the schema allows is reported as-is, including 'planned'.
+		// Rejecting a mode this build did not recognise would turn a read
+		// endpoint into a 409 and hide the channel's whole status instead of
+		// just its mode.
+		if !validRecordingMode(out.Mode) {
 			return auth.ErrConflict
 		}
 		return nil

@@ -1,0 +1,239 @@
+package integration
+
+// PRD REC-02: weekly recording schedules, and REC-04's union for 'planned'.
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/zhigu34/one-nvr/internal/recording"
+)
+
+// isoToday is the current weekday in the ISO numbering the schedule uses
+// (1=Monday .. 7=Sunday). Go's time.Weekday() puts Sunday at 0, so using it
+// directly would produce an invalid schedule every Sunday.
+func isoToday() int {
+	weekday := int(time.Now().UTC().Weekday())
+	if weekday == 0 {
+		return 7
+	}
+	return weekday
+}
+
+// scheduledFixture binds a channel, sets it to planned and pins the site zone to
+// UTC so the test can compute "the current window" without depending on where
+// the machine happens to be.
+func scheduledFixture(t *testing.T) publishFixture {
+	t.Helper()
+	fixture := newPublicationFixture(t)
+	ctx := context.Background()
+	if _, err := fixture.DB.Pool.Exec(ctx, "UPDATE sites SET timezone='UTC' WHERE singleton"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, "UPDATE channels SET current_revision_id=$2,storage_pool_id=$3 WHERE id=$1", fixture.Channel, fixture.Revision, fixture.Pool.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, "UPDATE recording_policies SET mode='planned' WHERE channel_id=$1", fixture.Channel); err != nil {
+		t.Fatal(err)
+	}
+	return fixture
+}
+
+// A planned channel covers its scheduled window as owed recording; outside every
+// window the time is an exclusion, not downtime. Both halves matter: reporting
+// the unscheduled part as owed would make every planned channel look permanent
+// broken, and reporting the scheduled part as an exclusion would hide a real
+// recording failure.
+func TestPlannedChannelOwesOnlyInsideItsWindow(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	// Window today, 00:00-24:00, in UTC (the site zone the fixture set).
+	today := isoToday()
+	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, []recording.ScheduleWindow{
+		{Weekday: today, StartMinute: 0, EndMinute: 1440},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.Service.ReconcileObligation(ctx, fixture.Channel); err != nil {
+		t.Fatal(err)
+	}
+	var source string
+	var exclusion *string
+	if err := fixture.DB.Pool.QueryRow(ctx,
+		`SELECT source,exclusion FROM recording_obligations WHERE channel_id=$1 AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1`,
+		fixture.Channel).Scan(&source, &exclusion); err != nil {
+		t.Fatal(err)
+	}
+	if source != "planned" || exclusion != nil {
+		t.Fatalf("inside a scheduled window recording must be owed: source=%q exclusion=%v", source, exclusion)
+	}
+
+	// Now move the schedule one day away: nothing is scheduled right now.
+	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, []recording.ScheduleWindow{
+		{Weekday: today%7 + 1, StartMinute: 0, EndMinute: 1440},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.Service.ReconcileObligation(ctx, fixture.Channel); err != nil {
+		t.Fatal(err)
+	}
+	exclusion = nil
+	if err := fixture.DB.Pool.QueryRow(ctx,
+		`SELECT source,exclusion FROM recording_obligations WHERE channel_id=$1 AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1`,
+		fixture.Channel).Scan(&source, &exclusion); err != nil {
+		t.Fatal(err)
+	}
+	if source != "planned" || exclusion == nil || *exclusion != "disabled" {
+		t.Fatalf("outside every window the time must be excluded, not owed: source=%q exclusion=%v", source, exclusion)
+	}
+}
+
+// REC-04: a manual window keeps recording even when the schedule is closed. The
+// union must not let one source of demand cancel another.
+func TestManualWindowOverridesAClosedSchedule(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	// The schedule is on the *next* day, so this instant is unscheduled.
+	today := isoToday()
+	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, []recording.ScheduleWindow{
+		{Weekday: today%7 + 1, StartMinute: 0, EndMinute: 1440},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.Service.StartManual(ctx, fixture.Admin, fixture.Channel, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.Service.ReconcileObligation(ctx, fixture.Channel); err != nil {
+		t.Fatal(err)
+	}
+	var source string
+	var exclusion *string
+	if err := fixture.DB.Pool.QueryRow(ctx,
+		`SELECT source,exclusion FROM recording_obligations WHERE channel_id=$1 AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1`,
+		fixture.Channel).Scan(&source, &exclusion); err != nil {
+		t.Fatal(err)
+	}
+	if source != "manual" || exclusion != nil {
+		t.Fatalf("a manual window must keep recording owed outside the schedule: source=%q exclusion=%v", source, exclusion)
+	}
+}
+
+// Overlapping windows inside one submitted week are rejected, and the stored
+// schedule is left untouched: a rejected week must not half-apply.
+//
+// The overlap lives inside a single PUT because the endpoint replaces the whole
+// week — two separate calls could never overlap, since the second replaces the
+// first.
+func TestOverlappingWindowsAreRejected(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, []recording.ScheduleWindow{
+		{Weekday: 1, StartMinute: 8 * 60, EndMinute: 12 * 60},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, []recording.ScheduleWindow{
+		{Weekday: 1, StartMinute: 8 * 60, EndMinute: 12 * 60},
+		{Weekday: 1, StartMinute: 11 * 60, EndMinute: 13 * 60},
+	})
+	if err == nil {
+		t.Fatal("overlapping windows accepted")
+	}
+	schedule, err := fixture.Service.GetSchedule(ctx, fixture.Admin, fixture.Channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(schedule.Windows) != 1 || schedule.Windows[0].EndMinute != 12*60 {
+		t.Fatalf("a rejected week changed the stored schedule: %+v", schedule.Windows)
+	}
+}
+
+// An overnight window round-trips as one operator-facing window even though it is
+// stored as two rows, and it covers both halves of the night.
+func TestOvernightWindowRoundTrips(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	entered := []recording.ScheduleWindow{
+		{Weekday: 1, StartMinute: 22 * 60, EndMinute: 2*60 + 1440},
+	}
+	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, entered); err != nil {
+		t.Fatal(err)
+	}
+	var rows int
+	if err := fixture.DB.Pool.QueryRow(ctx, "SELECT count(*) FROM recording_schedules WHERE channel_id=$1", fixture.Channel).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 2 {
+		t.Fatalf("overnight window must be stored as two rows, got %d", rows)
+	}
+	schedule, err := fixture.Service.GetSchedule(ctx, fixture.Admin, fixture.Channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(schedule.Windows) != 1 {
+		t.Fatalf("overnight window must come back as one window, got %+v", schedule.Windows)
+	}
+	if schedule.Windows[0].Weekday != 1 || schedule.Windows[0].StartMinute != 22*60 || schedule.Windows[0].EndMinute != 2*60+1440 {
+		t.Fatalf("overnight window changed shape: %+v", schedule.Windows[0])
+	}
+}
+
+// A schedule on a channel whose mode is not planned must not make it record: the
+// schedule decides *when* an already-planned channel records, not whether it
+// records at all.
+func TestScheduleDoesNotRecordForANonPlannedChannel(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	if _, err := fixture.DB.Pool.Exec(ctx, "UPDATE recording_policies SET mode='none' WHERE channel_id=$1", fixture.Channel); err != nil {
+		t.Fatal(err)
+	}
+	today := isoToday()
+	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, []recording.ScheduleWindow{
+		{Weekday: today, StartMinute: 0, EndMinute: 1440},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.Service.ReconcileObligation(ctx, fixture.Channel); err != nil {
+		t.Fatal(err)
+	}
+	var exclusion *string
+	if err := fixture.DB.Pool.QueryRow(ctx,
+		`SELECT exclusion FROM recording_obligations WHERE channel_id=$1 AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1`,
+		fixture.Channel).Scan(&exclusion); err != nil {
+		t.Fatal(err)
+	}
+	if exclusion == nil {
+		t.Fatal("a schedule on a 'none' channel made recording owed")
+	}
+}
+
+// An empty week is a valid answer: the channel is planned but never records. It
+// must be distinguishable from "no schedule was ever saved" only by intent, not
+// by an error.
+func TestEmptyScheduleIsValidAndNeverOwed(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, nil); err != nil {
+		t.Fatal(err)
+	}
+	schedule, err := fixture.Service.GetSchedule(ctx, fixture.Admin, fixture.Channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(schedule.Windows) != 0 || schedule.Active {
+		t.Fatalf("empty schedule must be inert: %+v", schedule)
+	}
+	if err := fixture.Service.ReconcileObligation(ctx, fixture.Channel); err != nil {
+		t.Fatal(err)
+	}
+	var exclusion *string
+	if err := fixture.DB.Pool.QueryRow(ctx,
+		`SELECT exclusion FROM recording_obligations WHERE channel_id=$1 AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1`,
+		fixture.Channel).Scan(&exclusion); err != nil {
+		t.Fatal(err)
+	}
+	if exclusion == nil {
+		t.Fatal("an empty schedule must not owe recording")
+	}
+}

@@ -32,6 +32,13 @@ func (s *Service) Reconcile(ctx context.Context, ch id.ID) error {
 	defer e.Close()
 	ctx = e.Context()
 	var desired desiredRecording
+	// The zone is loaded before the transaction because a schedule is only
+	// meaningful in site-local wall clock, and a failed load must not silently
+	// fall back to UTC — recording at the wrong hour is worse than not recording.
+	zone, _, err := s.siteZone(ctx)
+	if err != nil {
+		return err
+	}
 	if err := e.WithinTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		var policyMode string
 		if err := tx.QueryRow(ctx, `SELECT c.current_revision_id,c.storage_pool_id,c.enabled,p.mode FROM channels c JOIN recording_policies p ON p.channel_id=c.id WHERE c.id=$1`, ch).Scan(&desired.Revision, &desired.Pool, &desired.Enabled, &policyMode); err != nil {
@@ -43,7 +50,17 @@ func (s *Service) Reconcile(ctx context.Context, ch id.ID) error {
 		if err != nil {
 			return err
 		}
-		desired.Mode = unionMode(policyMode, active)
+		// Only a planned channel has a reason to read its schedule: an operator
+		// who set continuous or none did not ask for a weekly rule, and an
+		// orphaned schedule from a previous mode must not resurrect recording.
+		scheduled := false
+		if policyMode == "planned" {
+			scheduled, err = s.scheduleActiveTx(ctx, tx, ch, zone, time.Now())
+			if err != nil {
+				return err
+			}
+		}
+		desired.Mode = unionMode(policyMode, active, scheduled)
 		return nil
 	}); err != nil {
 		return err
@@ -141,9 +158,9 @@ func (s *Service) Reconcile(ctx context.Context, ch id.ID) error {
 	}
 	// Every reason to record lands on the same path below: capacity, pool health
 	// and the recorder start/stop are identical whether the demand came from the
-	// policy or from an operator's manual window. Only the *decision* differs,
-	// and that lives in unionMode.
-	if desired.Mode != "continuous" && desired.Mode != "manual" {
+	// policy, a schedule or an operator's manual window. Only the *decision*
+	// differs, and that lives in unionMode.
+	if desired.Mode != "continuous" && desired.Mode != "planned" && desired.Mode != "manual" {
 		return nil
 	}
 	if desired.Pool == nil {
@@ -317,11 +334,26 @@ func (s *Service) runtimeFrameStatus(ctx context.Context, e *channel.Execution, 
 // record on a channel whose policy is none must get a recording, and a policy
 // change made while a manual window runs must not end that recording.
 //
-// The planned branch lands here in batch 2; the signature already takes the
-// inputs so that adding it cannot accidentally invert the union.
-func unionMode(policyMode string, manualActive bool) string {
+// The return value is a *decision*, not an echo of the stored mode. A planned
+// channel outside its windows therefore returns "none": echoing "planned" back
+// would send it down the recorder-start path and record around the clock, which
+// is the opposite of what a schedule means. This is why the function cannot be
+// replaced by reading recording_policies.mode in the caller.
+func unionMode(policyMode string, manualActive, scheduleActive bool) string {
 	if policyMode == "continuous" {
 		return "continuous"
+	}
+	if policyMode == "planned" {
+		if scheduleActive {
+			return "planned"
+		}
+		// Scheduled but closed: nothing is owed by the policy right now. Fall
+		// through as if the mode were 'none' so a manual window can still win.
+		policyMode = "none"
+	} else if policyMode != "none" {
+		// An unknown stored value records nothing; do not treat it as "some
+		// reason" just because it is not the string 'none'.
+		policyMode = "none"
 	}
 	if manualActive {
 		return "manual"

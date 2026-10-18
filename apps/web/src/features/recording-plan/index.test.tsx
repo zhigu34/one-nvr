@@ -147,6 +147,22 @@ function fixture(
       return { items: [channel], next_cursor: null }
     // The manual window probe answers 404 when nothing is running; the control
     // must read that as "idle" and only surface a warning for real failures.
+    // Weekly schedule (REC-02). The editor is only rendered for planned
+    // channels, so this answers for the mode-change cases as well.
+    if (method === 'GET' && path.endsWith('/recording-schedule')) {
+      return { channel_id: channel.id, windows: [], timezone: 'Asia/Shanghai', active: false }
+    }
+    if (method === 'PUT' && path.endsWith('/recording-schedule')) {
+      const body = JSON.parse(init?.body as string) as {
+        windows: { weekday: number; start_minute: number; end_minute: number }[]
+      }
+      return {
+        channel_id: channel.id,
+        windows: body.windows,
+        timezone: 'Asia/Shanghai',
+        active: false,
+      }
+    }
     if (method === 'POST' && path.endsWith('/manual-recording')) {
       return {
         channel_id: channel.id,
@@ -212,17 +228,17 @@ function fixture(
     view: <RouterProvider router={router} />,
   }
 }
-test('unsupported recording modes are listed but cannot be chosen', async () => {
+test('planned recording is offered and event recording is still a placeholder', async () => {
   const setup = fixture()
   const view = await render(setup.view)
   const select = view.getByLabelText('CH01 录像方式')
   await expect.element(select).toBeVisible()
   await userEvent.click(select)
+  // REC-02 is delivered: '定时录像' selects a real mode whose windows come from
+  // the schedule editor. Event recording stays disabled until batch 3.
   await expect
-    .element(
-      view.getByRole('option', { name: '定时录像（后续开放）', exact: true })
-    )
-    .toHaveAttribute('data-disabled')
+    .element(view.getByRole('option', { name: '定时录像', exact: true }))
+    .not.toHaveAttribute('data-disabled')
   await expect
     .element(
       view.getByRole('option', { name: '事件录像（后续开放）', exact: true })
@@ -511,5 +527,83 @@ test('batch manual buttons stay disabled with nothing selected', async () => {
     .element(view.getByRole('button', { name: '停止', exact: true }))
     .toBeDisabled()
   expect(setup.mutations).toHaveLength(0)
+  setup.client.clear()
+})
+
+// The schedule editor appears only for a planned channel; on any other mode it
+// would offer a control whose value recording never reads.
+test('the schedule editor is offered only for planned channels', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  await expect
+    .element(view.getByRole('button', { name: 'CH01 编辑时段' }))
+    .not.toBeInTheDocument()
+  await userEvent.click(view.getByLabelText('CH01 录像方式'))
+  await userEvent.click(view.getByRole('option', { name: '定时录像', exact: true }))
+  await expect
+    .element(view.getByRole('button', { name: 'CH01 编辑时段' }))
+    .toBeVisible()
+  setup.client.clear()
+})
+
+// A planned week is saved as one value: every window goes out in a single PUT,
+// which is what makes a rejected week leave the stored one untouched.
+test('saving a schedule sends the whole week in one request', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  await userEvent.click(view.getByLabelText('CH01 录像方式'))
+  await userEvent.click(view.getByRole('option', { name: '定时录像', exact: true }))
+  await userEvent.click(view.getByRole('button', { name: 'CH01 编辑时段' }))
+  await userEvent.click(view.getByRole('button', { name: '周一 添加时段' }))
+  await userEvent.click(view.getByRole('button', { name: '周二 添加时段' }))
+  await userEvent.click(view.getByRole('button', { name: '保存时段', exact: true }))
+  await expect
+    .poll(
+      () =>
+        setup.mutations.filter(
+          (m) => m.init.method === 'PUT' && m.path.endsWith('/recording-schedule')
+        ).length
+    )
+    .toBe(1)
+  const put = setup.mutations.find(
+    (m) => m.init.method === 'PUT' && m.path.endsWith('/recording-schedule')
+  )
+  const body = JSON.parse(put?.init.body as string) as {
+    windows: { weekday: number; start_minute: number; end_minute: number }[]
+  }
+  expect(body.windows).toHaveLength(2)
+  expect(body.windows.map((w) => w.weekday).sort()).toEqual([1, 2])
+  setup.client.clear()
+})
+
+// Copying a day is how REC-02's "copy to other days" is expressed: one click
+// fills the other six rows rather than opening a separate dialog.
+test('copying a day fills the rest of the week', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  await userEvent.click(view.getByLabelText('CH01 录像方式'))
+  await userEvent.click(view.getByRole('option', { name: '定时录像', exact: true }))
+  await userEvent.click(view.getByRole('button', { name: 'CH01 编辑时段' }))
+  await userEvent.click(view.getByRole('button', { name: '周一 添加时段' }))
+  await userEvent.click(
+    view.getByRole('button', { name: '周一 复制到其它日期' })
+  )
+  await userEvent.click(view.getByRole('button', { name: '保存时段', exact: true }))
+  await expect
+    .poll(
+      () =>
+        setup.mutations.filter(
+          (m) => m.init.method === 'PUT' && m.path.endsWith('/recording-schedule')
+        ).length
+    )
+    .toBe(1)
+  const put = setup.mutations.find(
+    (m) => m.init.method === 'PUT' && m.path.endsWith('/recording-schedule')
+  )
+  const body = JSON.parse(put?.init.body as string) as {
+    windows: { weekday: number }[]
+  }
+  expect(body.windows).toHaveLength(7)
+  expect(new Set(body.windows.map((w) => w.weekday)).size).toBe(7)
   setup.client.clear()
 })

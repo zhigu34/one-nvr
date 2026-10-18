@@ -751,6 +751,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/channels/{id}/recording-schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The channel's weekly recording schedule (PRD REC-02), in the site's timezone. Overnight windows come back as the operator entered them (end after midnight), not as the two stored rows. */
+        get: operations["getChannelSchedule"];
+        /** @description Replace the channel's whole week. Overlapping windows on the same weekday are rejected with 409 schedule_overlap; a rejected week leaves the stored one unchanged. A window ending after midnight is sent with an end above 1440 and stored as two rows. */
+        put: operations["setChannelSchedule"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recording-policies": {
         parameters: {
             query?: never;
@@ -2311,7 +2329,7 @@ export interface components {
             channel_id: components["schemas"]["UUID"];
             expected_version: components["schemas"]["Version"];
             /** @enum {string} */
-            mode: "none" | "continuous";
+            mode: "none" | "continuous" | "planned";
         };
         RecordingPolicyOutcome: {
             channel_id: components["schemas"]["UUID"];
@@ -2734,6 +2752,22 @@ export interface components {
         RecordingPage: {
             items: components["schemas"]["RecordingSegment"][];
             next_cursor: components["schemas"]["UUID"] | null;
+        };
+        ScheduleWindow: {
+            /** @description ISO-8601 weekday: 1=Monday .. 7=Sunday. */
+            weekday: number;
+            /** @description Minutes since site-local midnight. */
+            start_minute: number;
+            /** @description Exclusive end in minutes since local midnight. 1440 means midnight at the end of the weekday; a value above 1440 means the window wraps into the next day and is stored as two rows. */
+            end_minute: number;
+        };
+        ChannelSchedule: {
+            channel_id: components["schemas"]["UUID"];
+            windows: components["schemas"]["ScheduleWindow"][];
+            /** @description The site's IANA timezone; the schedule is interpreted in it. */
+            timezone: string;
+            /** @description Evaluated by the server so the editor and the recorder cannot disagree about this instant. */
+            active: boolean;
         };
         /** @description A running manual recording window (PRD REC-03). Not a policy: the channel's configured mode is untouched and recording returns to it when the window ends. */
         ManualRecording: {
@@ -5781,6 +5815,71 @@ export interface operations {
                         data: Record<string, never>;
                         request_id: components["schemas"]["UUID"];
                     };
+                };
+            };
+        };
+    };
+    getChannelSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The schedule, with the server's own view of whether it is active now. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ChannelSchedule"];
+                        request_id: components["schemas"]["UUID"];
+                    };
+                };
+            };
+        };
+    };
+    setChannelSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    windows: components["schemas"]["ScheduleWindow"][];
+                };
+            };
+        };
+        responses: {
+            /** @description The stored schedule. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ChannelSchedule"];
+                        request_id: components["schemas"]["UUID"];
+                    };
+                };
+            };
+            /** @description Two windows on the same weekday overlap. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
         };

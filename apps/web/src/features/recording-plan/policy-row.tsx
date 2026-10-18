@@ -12,16 +12,20 @@ import { sourceCommand } from '@/features/channels/api'
 import { settleJob, verifyPoolWrite } from '@/features/storage-pools/pool-check'
 import { cn } from '@/lib/utils'
 import { ManualRecordingControl } from './manual-recording'
+import { ScheduleEditor } from './schedule-editor'
 
 /**
- * Only the modes the control plane implements are selectable. The rest are
- * listed so the operator can see the direction of travel without being offered
- * capability that does not exist yet.
+ * Only the modes the control plane implements are selectable. Event recording is
+ * still a placeholder: it needs the rolling ZLM buffer that batch 3 delivers.
  */
-const PLANNED_MODES = [
-  { label: '定时录像（后续开放）', value: 'scheduled' },
-  { label: '事件录像（后续开放）', value: 'event' },
-]
+const PLACEHOLDER_MODES = [{ label: '事件录像（后续开放）', value: 'event' }]
+
+/**
+ * Modes that record into a storage pool. 'planned' does — the schedule decides
+ * when, not whether bytes land — so it carries the same pool requirement and the
+ * same write-evidence recovery as continuous.
+ */
+const RECORDING_MODES = new Set(['continuous', 'planned'])
 
 function channelLabel(channel: Schema<'Channel'>) {
   return `CH${String(channel.channel_no).padStart(2, '0')}`
@@ -348,7 +352,8 @@ export function PolicyRow({
               options={[
                 { value: 'none', label: '关闭录像' },
                 { value: 'continuous', label: '连续录像' },
-                ...PLANNED_MODES.map((entry) => ({
+                { value: 'planned', label: '定时录像' },
+                ...PLACEHOLDER_MODES.map((entry) => ({
                   value: entry.value,
                   label: entry.label,
                   disabled: true,
@@ -359,7 +364,7 @@ export function PolicyRow({
               type='button'
               size='sm'
               className={cn(modeDirty && 'bg-emerald-500 text-zinc-950 font-medium hover:bg-emerald-400')}
-              disabled={!!pending || !modeDirty || mode === 'continuous' && !boundPool && draftPool === null}
+              disabled={!!pending || !modeDirty || RECORDING_MODES.has(mode) && !boundPool && draftPool === null}
               onClick={() => void run('policy')}
             >
               应用
@@ -388,8 +393,18 @@ export function PolicyRow({
               label={label}
               disabled={!!pending}
             />
-            {mode === 'continuous' && !boundPool && draftPool === null && !inert && (
+            {RECORDING_MODES.has(mode) && !boundPool && draftPool === null && !inert && (
               <p className='text-xs text-amber-600'>请先绑定存储池</p>
+            )}
+            {/* The editor only appears for a planned channel: a schedule on a
+                continuous channel would be silently ignored, which reads as a
+                bug to whoever set it. */}
+            {mode === 'planned' && (
+              <ScheduleEditor
+                channelId={channel.id}
+                label={label}
+                disabled={!!pending}
+              />
             )}
           </div>
         )}
