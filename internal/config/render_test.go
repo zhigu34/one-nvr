@@ -214,6 +214,13 @@ func TestEventCacheMountIsOptIn(t *testing.T) {
 		if found.Tmpfs == nil || found.Tmpfs.Size != 512<<20 {
 			t.Fatalf("%s cache size wrong: %+v", name, found.Tmpfs)
 		}
+		// Docker's default tmpfs mode is 0755 root-owned, which locks out the
+		// non-root worker. Measured on the live site: ZLM (root) wrote fine and
+		// uid 10001 got EACCES. The sticky world-writable mode is what makes
+		// both containers able to create directories there.
+		if found.Tmpfs.Mode != 0o1777 {
+			t.Fatalf("%s cache mode is %o, must be 1777 so the non-root worker can write: %+v", name, found.Tmpfs.Mode, found.Tmpfs)
+		}
 		// A tmpfs mount carrying bind options is rejected by compose.
 		if found.Bind != nil {
 			t.Fatalf("%s cache mount carries bind options", name)

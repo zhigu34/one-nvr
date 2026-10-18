@@ -29,8 +29,15 @@ type Mount struct {
 // because its contents are almost entirely discarded: writing to the pool and
 // deleting minutes later is continuous random I/O for data that will not
 // survive, and a mechanical disk never gets to spin down.
+//
+// Mode is explicit because Docker's default (0755, root-owned) locks out the
+// non-root worker: measured on the live site, ZLM runs as root and can write,
+// while the worker (uid 10001) gets EACCES. 1777 with the sticky bit is what
+// /tmp uses — both the root-owned writer and the unprivileged reader can work
+// in it, and one container cannot delete another's files by name.
 type TmpfsOptions struct {
 	Size int64 `json:"size"`
+	Mode int64 `json:"mode"`
 }
 type Service struct {
 	Image       string                       `json:"image"`
@@ -103,7 +110,12 @@ func BuildDeployment(v map[string]string) (Deployment, error) {
 		if c.EventCacheMB <= 0 {
 			return nil
 		}
-		return []Mount{{Type: "tmpfs", Target: "/cache", Tmpfs: &TmpfsOptions{Size: int64(c.EventCacheMB) << 20}}}
+		return []Mount{{Type: "tmpfs", Target: "/cache", Tmpfs: &TmpfsOptions{
+			Size: int64(c.EventCacheMB) << 20,
+			// 1777: both the root-owned media server and the uid 10001 worker
+			// must be able to create subdirectories here.
+			Mode: 0o1777,
+		}}}
 	}
 	root := filepath.Clean(c.DataDir)
 	switch root {
