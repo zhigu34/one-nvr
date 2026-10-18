@@ -230,7 +230,7 @@ test('unsupported recording modes are listed but cannot be chosen', async () => 
     .toHaveAttribute('data-disabled')
   await expect
     .element(
-      view.getByRole('option', { name: '手动（连续录像）', exact: true })
+      view.getByRole('option', { name: '连续录像', exact: true })
     )
     .not.toHaveAttribute('data-disabled')
 })
@@ -239,7 +239,7 @@ test('continuous recording without a bound pool is refused before it reaches the
   const view = await render(setup.view)
   await userEvent.click(view.getByLabelText('CH01 录像方式'))
   await userEvent.click(
-    view.getByRole('option', { name: '手动（连续录像）', exact: true })
+    view.getByRole('option', { name: '连续录像', exact: true })
   )
   await expect.element(view.getByText('请先绑定存储池')).toBeVisible()
   await expect
@@ -273,7 +273,7 @@ test('a batch recovers rows rejected for a stale write proof', async () => {
   await userEvent.click(view.getByLabelText('选择 CH01'))
   await userEvent.click(view.getByLabelText('批量录像方式'))
   await userEvent.click(
-    view.getByRole('option', { name: '手动（连续录像）', exact: true })
+    view.getByRole('option', { name: '连续录像', exact: true })
   )
   await userEvent.click(
     view.getByRole('button', { name: '批量应用', exact: true })
@@ -302,7 +302,7 @@ test('a batch reports the pool reason when recovery cannot verify the write', as
   await userEvent.click(view.getByLabelText('选择 CH01'))
   await userEvent.click(view.getByLabelText('批量录像方式'))
   await userEvent.click(
-    view.getByRole('option', { name: '手动（连续录像）', exact: true })
+    view.getByRole('option', { name: '连续录像', exact: true })
   )
   await userEvent.click(
     view.getByRole('button', { name: '批量应用', exact: true })
@@ -329,7 +329,7 @@ test('untouched rows keep dimmed actions that light up on edit', async () => {
   // forgotten-bind guard even after the mode edit.
   await userEvent.click(view.getByLabelText('CH01 录像方式'))
   await userEvent.click(
-    view.getByRole('option', { name: '手动（连续录像）', exact: true })
+    view.getByRole('option', { name: '连续录像', exact: true })
   )
   await expect.element(apply).toBeDisabled()
   await userEvent.click(view.getByLabelText('CH01 存储池'))
@@ -349,7 +349,7 @@ test('applying a mode chains the unsaved pool bind before the policy', async () 
   await userEvent.click(view.getByRole('option', { name: 'disk1', exact: true }))
   await userEvent.click(view.getByLabelText('CH01 录像方式'))
   await userEvent.click(
-    view.getByRole('option', { name: '手动（连续录像）', exact: true })
+    view.getByRole('option', { name: '连续录像', exact: true })
   )
   await userEvent.click(
     view.getByRole('button', { name: '应用', exact: true })

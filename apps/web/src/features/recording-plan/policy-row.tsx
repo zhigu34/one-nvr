@@ -347,7 +347,7 @@ export function PolicyRow({
               onValueChange={setDraftMode}
               options={[
                 { value: 'none', label: '关闭录像' },
-                { value: 'continuous', label: '手动（连续录像）' },
+                { value: 'continuous', label: '连续录像' },
                 ...PLANNED_MODES.map((entry) => ({
                   value: entry.value,
                   label: entry.label,

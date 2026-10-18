@@ -217,7 +217,7 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   await page.reload()
   const rolling = page.getByTestId('policy-row').filter({hasText: 'CH01'})
   await rolling.getByLabel('CH01 录像方式', {exact: true}).click()
-  await page.getByRole('option', {name: '手动（连续录像）', exact: true}).click()
+  await page.getByRole('option', {name: '连续录像', exact: true}).click()
   await expect(rolling.getByRole('button', {name: '应用', exact: true})).toBeEnabled({timeout: 15000})
   await finished(page, await rowCommand(page, rolling, '应用', '/recording-policy'))
   await expect.poll(async () => (await physical()).filter(s => s.isRecordingMP4).length, {timeout: 30000}).toBe(1)

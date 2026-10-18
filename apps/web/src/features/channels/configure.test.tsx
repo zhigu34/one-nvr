@@ -334,7 +334,7 @@ test('the header shows the recording mode read-only and links to the plan page',
   const setup = fixture({ continuous: true }),
     view = await render(setup.view)
   await expect
-    .element(view.getByText('手动（连续录像）', { exact: true }))
+    .element(view.getByText('连续录像', { exact: true }))
     .toBeVisible()
   await expect
     .element(view.getByRole('link', { name: '在录像计划页修改' }))

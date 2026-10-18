@@ -29,7 +29,6 @@ import {
   verifyPoolWrite,
   type PoolCheckOutcome,
 } from '@/features/storage-pools/pool-check'
-import { cn } from '@/lib/utils'
 
 const PLANNED_MODES = [
   { label: '定时录像（后续开放）', value: 'scheduled' },
@@ -37,8 +36,6 @@ const PLANNED_MODES = [
 ]
 
 
-
-type RowFilter = 'all' | 'recording' | 'off' | 'unconfigured'
 
 export function RecordingPlan() {
   const admin = useAuthStore((state) => state.user?.role === 'admin')
@@ -61,7 +58,6 @@ export function RecordingPlan() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [mode, setMode] = useState('continuous')
   const [poolID, setPoolID] = useState('')
-  const [filter, setFilter] = useState<RowFilter>('all')
   const [outcome, setOutcome] = useState('')
   const [manualMinutes, setManualMinutes] = useState(30)
   const [dirtyRows, setDirtyRows] = useState<Set<string>>(new Set())
@@ -84,25 +80,6 @@ export function RecordingPlan() {
   const permitted = configured.filter((channel) =>
     channel.permissions.includes('configure')
   )
-  const counts = {
-    all: items.length,
-    recording: configured.filter(
-      (channel) => summaryOf.get(channel.id ?? '')?.recording.state === 'healthy'
-    ).length,
-    off: configured.filter(
-      (channel) => summaryOf.get(channel.id ?? '')?.recording.state !== 'healthy'
-    ).length,
-    unconfigured: items.length - configured.length,
-  }
-  const visibleRows = items.filter((channel) => {
-    if (filter === 'all') return true
-    if (filter === 'unconfigured') return unconfigured(channel)
-    if (!unconfigured(channel)) return false
-    const summary = summaryOf.get(channel.id ?? '')
-    return filter === 'recording'
-      ? summary?.recording.state === 'healthy'
-      : summary?.recording.state !== 'healthy'
-  })
   const chosen = permitted.filter((channel) => selected.has(channel.id))
 
   // Stable per-channel callbacks keep the row's dirty-report effect from
@@ -366,7 +343,7 @@ export function RecordingPlan() {
     <>
       <PageTitle
         title='录像计划'
-        description='按通道设置录像方式。手动即连续录像；定时与事件后续开放。'
+        description='按通道设置录像方式。连续录像全天录制；定时与事件后续开放。'
       />
       <QueryState
         pending={channels.isPending}
@@ -438,7 +415,7 @@ export function RecordingPlan() {
                   onValueChange={setMode}
                   options={[
                     { value: 'none', label: '关闭录像' },
-                    { value: 'continuous', label: '手动（连续录像）' },
+                    { value: 'continuous', label: '连续录像' },
                     ...PLANNED_MODES.map((entry) => ({
                       value: entry.value,
                       label: entry.label,
@@ -457,19 +434,17 @@ export function RecordingPlan() {
               </div>
               {/* Manual recording is a request rather than a stored mode, so
                   it cannot ride the batch mode select above: start and stop
-                  are different verbs and one select cannot express both.
-                  Labelled 限时录像 rather than 手动录像 because the mode select
-                  beside it already reads 手动（连续录像）— two controls both
-                  saying "manual" for different actions is how an operator
-                  starts continuous recording when they meant a 30-minute
-                  window. */}
+                  are different verbs and one select cannot express both. It is
+                  labelled 限时录像 so the two controls beside each other say
+                  different things — the mode select sets a policy, this one
+                  opens a window that expires on its own (REC-03/04). */}
               <div className='flex items-center gap-2 border-s ps-4'>
                 <span className='text-xs text-muted-foreground'>
                   批量限时录像:
                 </span>
                 <SelectField
                   ariaLabel='批量限时录像时长'
-                  className='w-24'
+                  className='w-fit'
                   triggerClassName='min-w-0 [&>span[data-slot=select-value]]:truncate'
                   value={String(manualMinutes)}
                   onValueChange={(value) => setManualMinutes(Number(value))}
@@ -507,46 +482,6 @@ export function RecordingPlan() {
                 </Button>
               )}
             </div>
-            <div
-              role='group'
-              aria-label='录像方式筛选'
-              className='flex flex-wrap items-center gap-1'
-            >
-              {(
-                [
-                  { value: 'all', label: '全部' },
-                  { value: 'recording', label: '🟢 已启用录像' },
-                  { value: 'off', label: '⚪ 关闭录像' },
-                  { value: 'unconfigured', label: '⚫ 未配置源' },
-                ] as const
-              ).map(({ value, label }) => {
-                const active = filter === value
-                return (
-                  <button
-                    key={value}
-                    type='button'
-                    aria-pressed={active}
-                    onClick={() => setFilter(value)}
-                    className={cn(
-                      'inline-flex h-7 items-center gap-1 rounded-full border px-2.5 text-xs transition-colors',
-                      active
-                        ? 'border-primary bg-primary/10 font-medium text-primary'
-                        : 'border-border text-muted-foreground hover:bg-accent hover:text-foreground'
-                    )}
-                  >
-                    {label}
-                    <span
-                      className={cn(
-                        'tabular-nums',
-                        active ? '' : 'opacity-70'
-                      )}
-                    >
-                      {counts[value]}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
           </div>
           <div className='overflow-hidden rounded-xl border bg-card'>
             <Table>
@@ -577,7 +512,7 @@ export function RecordingPlan() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {visibleRows.map((channel) => (
+                {items.map((channel) => (
                   <PolicyRow
                     key={channel.id}
                     channel={channel}
@@ -592,7 +527,7 @@ export function RecordingPlan() {
                 ))}
               </TableBody>
             </Table>
-            {visibleRows.length === 0 && (
+            {items.length === 0 && (
               <div className='p-8 text-center text-sm text-muted-foreground'>
                 没有匹配的通道
               </div>
