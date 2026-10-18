@@ -2287,7 +2287,7 @@ export interface components {
              * @description The stored recording policy mode; 'none' until a mode was applied. Carried with storage_pool_id so the recording plan renders every row from one request.
              * @enum {string}
              */
-            recording_mode?: "none" | "continuous";
+            recording_mode?: "none" | "continuous" | "planned";
             /** @description Per-channel recording quota in bytes; 0 means no quota. Carried so the configure page edits it without a second request. */
             recording_quota_bytes?: number;
             /** @description Empty when no source revision is applied. Never carries credentials or a full URL. */

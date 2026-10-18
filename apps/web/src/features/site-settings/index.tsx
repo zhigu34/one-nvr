@@ -197,8 +197,8 @@ function StorageProofSetting({ site }: { site: Schema<'Site'> }) {
           <p className='text-sm font-medium'>存储写入检查</p>
           <p className='mt-1 text-sm text-muted-foreground'>
             {site.require_storage_write_proof
-              ? '已开启：绑定存储池或开启连续录像前，先真实写入并校验一段录像，确保录像能落盘。'
-              : '已关闭：不再写入校验，绑定与开启连续录像立即生效；若存储实际写不进去，最多约 3 分钟后停止录像并在通道上报告。'}
+              ? '已开启：绑定存储池或开启全天录像前，先真实写入并校验一段录像，确保录像能落盘。'
+              : '已关闭：不再写入校验，绑定与开启全天录像立即生效；若存储实际写不进去，最多约 3 分钟后停止录像并在通道上报告。'}
           </p>
           <p className='mt-1 text-xs text-muted-foreground'>
             两种情况都会继续检查磁盘容量，写满时照常停止录像。

@@ -23,16 +23,12 @@ import { useAPI, useAction } from '@/features/foundation/hooks'
 import { sourceCommand } from '@/features/channels/api'
 import { PolicyRow } from './policy-row'
 import { MANUAL_DURATIONS } from './durations'
-import {
-  boundOrDefaultPool,
-  failureText,
-  verifyPoolWrite,
-  type PoolCheckOutcome,
-} from '@/features/storage-pools/pool-check'
+import { MODE_LABELS, channelConfigured } from './mode-format'
 
-const PLACEHOLDER_MODES = [{ label: '事件录像（后续开放）', value: 'event' }]
-
-
+// The placeholder vocabulary stays server-shaped: 'event' is a real mode value
+// the API accepts syntactically, so offering it disabled is honest about what
+// is coming without inventing a client-only value.
+const PLACEHOLDER_MODES = ['event']
 
 export function RecordingPlan() {
   const admin = useAuthStore((state) => state.user?.role === 'admin')
@@ -44,6 +40,9 @@ export function RecordingPlan() {
     true,
     10000
   )
+  // Pool names for the read-only pill. Admin-only: an operator without storage
+  // grants still sees which pool id is bound? No — the pill falls back to
+  // "已绑定" and the ↗ link stays, so the row never blocks on permissions.
   const pools = useAPI<PageData<Schema<'Pool'>>>(
     '/api/v1/storage-pools?limit=100',
     admin,
@@ -54,30 +53,32 @@ export function RecordingPlan() {
   )
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [mode, setMode] = useState('continuous')
-  const [poolID, setPoolID] = useState('')
   const [outcome, setOutcome] = useState('')
   const [manualMinutes, setManualMinutes] = useState(30)
   const [dirtyRows, setDirtyRows] = useState<Set<string>>(new Set())
+  // Unconfigured rows collapse behind one line by default: sixteen mostly-empty
+  // slots are setup context, not per-channel work, and they pushed the rows an
+  // operator came for below the fold.
+  const [showUnconfigured, setShowUnconfigured] = useState(false)
 
   const items = channels.data?.items || []
   const summaryOf = new Map(
     (summaries.data?.items || []).map((item) => [item.channel_id, item])
   )
-  // Same rule as the channels and detection pages: no applied camera source
-  // means the row cannot record, so it stays out of every batch surface.
-  const unconfigured = (channel: Schema<'Channel'>) => {
-    const summary = summaryOf.get(channel.id ?? '')
-    return (
-      !summary?.source_ip &&
-      !summary?.current_revision_id &&
-      summary?.main.state === 'not_configured'
-    )
-  }
-  const configured = items.filter((channel) => !unconfigured(channel))
+  const configured = items.filter((channel) =>
+    channelConfigured(summaryOf.get(channel.id ?? ''))
+  )
+  const unconfigured = items.filter(
+    (channel) => !channelConfigured(summaryOf.get(channel.id ?? ''))
+  )
   const permitted = configured.filter((channel) =>
     channel.permissions.includes('configure')
   )
   const chosen = permitted.filter((channel) => selected.has(channel.id))
+  // A collapse that hides selected channels would silently drop them from the
+  // next batch: expanding on selection keeps "what I see" equal to "what runs".
+  const unconfiguredShown = showUnconfigured || unconfigured.some((channel) => selected.has(channel.id))
+  const visibleRows = unconfiguredShown ? items : configured
 
   // Stable per-channel callbacks keep the row's dirty-report effect from
   // re-running on every parent render.
@@ -139,44 +140,58 @@ export function RecordingPlan() {
       return { items, recovered: 0, reasons }
     const poolByChannel = new Map<string, string>()
     for (const row of stale) {
+      const status = await apiRequest<Schema<'ChannelSourceStatus'>>(
+        `/api/v1/channels/${row.channel_id}/source/status`
+      ).catch(() => null)
+      // The channel's own binding, or the default pool the server falls
+      // back to when applying the mode.
+      const poolID = status?.storage_pool_id || ''
+      if (poolID) poolByChannel.set(row.channel_id, poolID)
+    }
+    const reasonsByPool = new Map<string, string>()
+    for (const [channelID] of poolByChannel) {
+      if (reasonsByPool.has(poolByChannel.get(channelID)!)) continue
+      // One real check per distinct pool; the reason the check fails is shared
+      // by every channel bound to that pool.
+      const poolID = poolByChannel.get(channelID)!
       try {
-        // The channel's own binding, or the default pool the server falls
-        // back to when applying the mode.
-        const poolID = await boundOrDefaultPool(row.channel_id)
-        if (poolID) poolByChannel.set(row.channel_id, poolID)
-      } catch {
-        // The row keeps its original rejection reason.
+        await sourceCommand<Schema<'SourceChange'>>(
+          `/api/v1/storage-pools/${poolID}/test`,
+          {},
+          undefined,
+          undefined,
+          'POST'
+        )
+      } catch (cause) {
+        reasonsByPool.set(
+          poolID,
+          cause instanceof Error ? cause.message : '检查失败'
+        )
       }
     }
-    const verified = new Map<string, PoolCheckOutcome>()
-    for (const poolID of new Set(poolByChannel.values())) {
-      try {
-        verified.set(poolID, await verifyPoolWrite(poolID))
-      } catch {
-        verified.set(poolID, { ok: false, message: '' })
-      }
-    }
-    const retryable = stale.filter((row) => {
-      const poolID = poolByChannel.get(row.channel_id)
-      return poolID !== undefined && verified.get(poolID)?.ok === true
-    })
+    const retriable = new Map<string, string>()
     for (const row of stale) {
-      if (retryable.includes(row)) continue
       const poolID = poolByChannel.get(row.channel_id)
       if (!poolID) {
-        reasons.set(row.channel_id, '未绑定存储池，请先在「存储池」列绑定')
+        reasons.set(row.channel_id, '未绑定存储池，请先在「存储」页绑定')
         continue
       }
-      const result = verified.get(poolID)
-      reasons.set(
-        row.channel_id,
-        result && !result.ok && result.message
-          ? result.message
-          : '存储池写入检查未通过或已过期'
-      )
+      if (reasonsByPool.has(poolID)) {
+        reasons.set(row.channel_id, reasonsByPool.get(poolID)!)
+        continue
+      }
+      // The check was queued successfully; wait for it to finish and read the
+      // verdict from the pool row itself before retrying the policy write.
+      const verified = await pollPoolCheck(poolID)
+      if (verified.ok) retriable.set(row.channel_id, poolID)
+      else
+        reasons.set(
+          row.channel_id,
+          verified.message || '存储池写入检查未通过或已过期'
+        )
     }
-    if (retryable.length === 0) return { items, recovered: 0, reasons }
-    const retried = await submitPolicies(retryable.map((row) => row.channel_id))
+    if (retriable.size === 0) return { items, recovered: 0, reasons }
+    const retried = await submitPolicies([...retriable.keys()])
     const merged = items.map(
       (row) =>
         retried.items.find((next) => next.channel_id === row.channel_id) || row
@@ -193,24 +208,6 @@ export function RecordingPlan() {
     setOutcome('')
     await batch.run(
       async () => {
-        // A picked pool binds first, sequentially, so enabling recording
-        // cannot fail on a forgotten bind; the mode batch then walks the rows.
-        if (admin && poolID) {
-          for (const channel of chosen) {
-            const status = await apiRequest<Schema<'ChannelSourceStatus'>>(
-              `/api/v1/channels/${channel.id}/source/status`
-            )
-            if (status.storage_pool_id === poolID) continue
-            await sourceCommand<Schema<'SourceChange'>>(
-              `/api/v1/channels/${channel.id}/storage-pool`,
-              { pool_id: poolID },
-              status.version,
-              undefined,
-              'PUT'
-            )
-          }
-          await client.invalidateQueries()
-        }
         const first = await submitPolicies(chosen.map((channel) => channel.id))
         const { items, recovered, reasons } = await recoverRejected(first.items)
         const queued = items.filter((row) => row.state === 'queued')
@@ -237,64 +234,14 @@ export function RecordingPlan() {
     )
   }
 
-  // One channel at a time: parallel binds race each other's version checks
-  // and pile into the same worker queue, which is how a batch of 8 turned
-  // into a pile of conflicts. Rows already on the target pool are skipped and
-  // reported as such; every row gets its own result, never a blanket verdict.
-  async function bindBatch() {
-    if (chosen.length === 0 || !poolID) return
-    const poolName =
-      (pools.data?.items || []).find((entry) => entry.id === poolID)?.name ||
-      '所选存储池'
-    setOutcome('')
-    await batch.run(
-      async () => {
-        const skipped: string[] = []
-        const ok: string[] = []
-        const failed: string[] = []
-        for (const channel of chosen) {
-          const label = `CH${String(channel.channel_no).padStart(2, '0')}`
-          try {
-            const status = await apiRequest<Schema<'ChannelSourceStatus'>>(
-              `/api/v1/channels/${channel.id}/source/status`
-            )
-            if (status.storage_pool_id === poolID) {
-              skipped.push(label)
-              continue
-            }
-            await sourceCommand<Schema<'SourceChange'>>(
-              `/api/v1/channels/${channel.id}/storage-pool`,
-              { pool_id: poolID },
-              status.version,
-              undefined,
-              'PUT'
-            )
-            ok.push(label)
-          } catch (e) {
-            failed.push(
-              `${label}: ${
-                e instanceof Error && e.message ? e.message : '操作失败'
-              }`
-            )
-          }
-        }
-        const parts: string[] = []
-        if (ok.length) parts.push(`${ok.length} 路已绑定 ${poolName}`)
-        if (skipped.length) parts.push(`${skipped.length} 路已在该池，跳过`)
-        if (failed.length) parts.push(`失败：${failed.join('；')}`)
-        setOutcome(parts.join(' · ') || '没有需要绑定的通道')
-        if (failed.length === 0) setSelected(new Set())
-      }, '批量绑定已执行')
-  }
-
   // Manual recording is a request, not a mode, so it cannot ride the batch
   // mode select: "start" and "stop" are different verbs and a select can only
   // express one value. It gets its own duration control and its own buttons.
   //
-  // Sequential like the bind batch, for the same reason: each start opens a
-  // window with its own audit row, and a burst of parallel writes into the
-  // same worker queue is how a batch of eight becomes a pile of conflicts.
-  // Every row gets its own result — a partial batch must not read as success.
+  // Sequential: each start opens a window with its own audit row, and a burst
+  // of parallel writes into the same worker queue is how a batch of eight
+  // becomes a pile of conflicts. Every row gets its own result — a partial
+  // batch must not read as success.
   async function batchManual(action: 'start' | 'stop') {
     if (chosen.length === 0) return
     setOutcome('')
@@ -342,7 +289,7 @@ export function RecordingPlan() {
     <>
       <PageTitle
         title='录像计划'
-        description='按通道设置录像方式。连续录像全天录制；定时与事件后续开放。'
+        description='按通道设置录像计划，支持全天录像（7×24 小时）、按周定时录像及临时限时录像。'
       />
       <QueryState
         pending={channels.isPending}
@@ -370,38 +317,6 @@ export function RecordingPlan() {
                   </span>
                 )}
               </span>
-              {admin && (
-                <>
-                  <div className='flex items-center gap-2'>
-                    <span className='text-xs text-muted-foreground'>
-                      批量存储池:
-                    </span>
-                    <SelectField
-                      ariaLabel='批量存储池'
-                      className='w-36'
-                      triggerClassName='min-w-0 [&>span[data-slot=select-value]]:truncate'
-                      value={poolID}
-                      onValueChange={setPoolID}
-                      options={[
-                        { value: '', label: '选择存储池' },
-                        ...(pools.data?.items || []).map((entry) => ({
-                          value: entry.id,
-                          label: `${entry.name}${entry.enabled ? '' : ' · 已停用'}`,
-                          disabled: !entry.enabled,
-                        })),
-                      ]}
-                    />
-                    <Button
-                      type='button'
-                      size='sm'
-                      disabled={batch.pending || chosen.length === 0 || !poolID}
-                      onClick={() => void bindBatch()}
-                    >
-                      批量绑定
-                    </Button>
-                  </div>
-                </>
-              )}
               <div className='flex items-center gap-2'>
                 <span className='text-xs text-muted-foreground'>
                   批量录像方式:
@@ -413,12 +328,12 @@ export function RecordingPlan() {
                   value={mode}
                   onValueChange={setMode}
                   options={[
-                    { value: 'none', label: '关闭录像' },
-                    { value: 'continuous', label: '连续录像' },
-                    { value: 'planned', label: '定时录像' },
-                    ...PLACEHOLDER_MODES.map((entry) => ({
-                      value: entry.value,
-                      label: entry.label,
+                    { value: 'none', label: MODE_LABELS.none },
+                    { value: 'continuous', label: MODE_LABELS.continuous },
+                    { value: 'planned', label: MODE_LABELS.planned },
+                    ...PLACEHOLDER_MODES.map((value) => ({
+                      value,
+                      label: MODE_LABELS[value],
                       disabled: true,
                     })),
                   ]}
@@ -512,13 +427,12 @@ export function RecordingPlan() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {items.map((channel) => (
+                {visibleRows.map((channel) => (
                   <PolicyRow
                     key={channel.id}
                     channel={channel}
                     summary={summaryOf.get(channel.id ?? '')}
-                    admin={admin}
-                    pools={pools.data?.items || []}
+                    pools={admin ? pools.data?.items || [] : []}
                     schedulePeers={permitted
                       .filter((peer) => peer.id !== channel.id)
                       .map((peer) => ({
@@ -533,14 +447,64 @@ export function RecordingPlan() {
                 ))}
               </TableBody>
             </Table>
-            {items.length === 0 && (
+            {visibleRows.length === 0 && (
               <div className='p-8 text-center text-sm text-muted-foreground'>
                 没有匹配的通道
               </div>
             )}
           </div>
+          {unconfigured.length > 0 && (
+            <button
+              type='button'
+              className='mt-2 w-full rounded-xl border border-dashed border-border px-4 py-2.5 text-sm text-muted-foreground hover:bg-accent/40'
+              aria-expanded={unconfiguredShown}
+              onClick={() => setShowUnconfigured((value) => !value)}
+            >
+              {unconfiguredShown
+                ? '收起未配置源通道'
+                : `已隐藏 ${unconfigured.length} 个未配置源通道（${unconfigured
+                    .map((channel) => `CH${String(channel.channel_no).padStart(2, '0')}`)
+                    .join('、')}）· 点击展开`}
+            </button>
+          )}
         </>
       )}
     </>
   )
+}
+
+/** The API's rejection reason, phrased for an operator. Kept from the old page. */
+function failureText(code: string): string {
+  const REASONS: Record<string, string> = {
+    zlm_write_evidence_unavailable:
+      '存储池写入检查不可用，需要先完成一路摄像头的连接测试或启用一个池检查',
+    version_conflict: '配置已被其他人修改，请刷新后重试',
+  }
+  return REASONS[code] || code
+}
+
+/** Wait for a queued pool check job to settle, then read the fresh verdict. */
+async function pollPoolCheck(
+  poolID: string
+): Promise<{ ok: boolean; message: string }> {
+  // The check itself is a queued job; a bounded poll keeps a stuck worker from
+  // hanging the batch forever. 90 seconds matches the e2e job-settling budget.
+  for (let attempt = 0; attempt < 90; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+    try {
+      const pools = await apiRequest<{ items: Schema<'Pool'>[] }>(
+        '/api/v1/storage-pools?limit=100'
+      )
+      const pool = (pools.items || []).find((entry) => entry.id === poolID)
+      if (!pool) return { ok: false, message: '存储池不存在' }
+      const zlm = pool.checks.find((check) => check.service === 'zlm')
+      if (zlm?.state === 'healthy') return { ok: true, message: '' }
+      if (zlm?.state === 'unavailable')
+        return { ok: false, message: '存储池写入检查未通过' }
+      // pending/expired keep polling; the job may still be running.
+    } catch {
+      // Transient read failures keep polling; the worker may be busy.
+    }
+  }
+  return { ok: false, message: '存储池检查超时，请稍后重试' }
 }

@@ -17,6 +17,7 @@ import {
   Forbidden,
   Empty,
 } from '@/features/foundation/ui'
+import { PoolBinding } from './pool-binding'
 import { cn } from '@/lib/utils'
 
 type Pools = PageData<Schema<'Pool'>> & { capacity: Schema<'StorageCapacity'> }
@@ -80,7 +81,7 @@ export function StoragePools() {
       <div className='mb-6 flex flex-wrap items-start justify-between gap-4'>
         <PageTitle
           title='存储池'
-          description='添加已挂载的目录作为录像存储池，再在通道中选择使用。'
+          description='添加已挂载的目录作为录像存储池，并在这里把存储池分配给通道（录像计划页只读展示绑定结果）。'
         />
         <Button
           type='button'
@@ -361,6 +362,7 @@ function PoolRow({ pool }: { pool: Schema<'Pool'> }) {
       </div>
       <Notices {...action} />
       <div className='space-y-3 pt-3'>
+        <PoolBinding pool={pool} enabled={pool.enabled} />
         <CapacityBar pool={pool} />
         <details
           open={checksOpen}

@@ -37,7 +37,7 @@ function numberLabel(channel: { channel_no: number }) {
 
 const MODE_LABELS: Record<string, string> = {
   none: '关闭录像',
-  continuous: '连续录像',
+  continuous: '全天录像',
 }
 
 // The picker answers "which channel am I editing" from the same summary

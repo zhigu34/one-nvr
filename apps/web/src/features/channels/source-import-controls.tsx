@@ -383,7 +383,7 @@ export function SourceImportControls({
                     options={[
                       {
                         value: 'continuous',
-                        label: '开启连续录像（需已绑定存储池）',
+                        label: '开启全天录像（需已绑定存储池）',
                       },
                       { value: 'none', label: '关闭录像，仅取流' },
                     ]}

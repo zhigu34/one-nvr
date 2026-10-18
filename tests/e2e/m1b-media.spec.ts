@@ -204,22 +204,19 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   // write proof exists yet, and the page recovers that by running the actual
   // check inside the same click instead of asking the operator to pre-check.
   // Seeded proof rows are still never used.
-  // Pool binding and the recording mode are recording-plan concerns, not part of
-  // configuring the camera.
-  await page.goto('/recording-plan')
-  const plan = page.getByTestId('policy-row').filter({hasText: 'CH01'})
-  await expect(plan).toHaveCount(1)
-  await plan.getByLabel('CH01 存储池', {exact: true}).click()
-  await page.getByRole('option', {name: '真实媒体池', exact: true}).click()
-  await expect(plan.getByRole('button', {name: '绑定', exact: true})).toBeEnabled({timeout: 15000})
-  await finished(page, await rowCommand(page, plan, '绑定', '/storage-pool'))
+  // Pool binding lives on the storage page (the recording plan only shows the
+  // binding read-only), and the recording mode applies directly from its select.
+  await page.goto('/storage?tab=pools')
+  const poolRow = page.locator('div', {has: page.getByRole('button', {name: '管理绑定通道', exact: true})}).filter({hasText: '真实媒体池'}).last()
+  await poolRow.getByRole('button', {name: '管理绑定通道', exact: true}).click()
+  await poolRow.getByRole('button', {name: '全选已配置通道', exact: true}).click()
+  await finished(page, await acceptedCommand(page, '/storage-pool', () => poolRow.getByRole('button', {name: /^绑定所选/}).click()))
   await expect.poll(async () => (await status()).storage_pool_id, {timeout: 30000}).toBe(pool.id)
-  await page.reload()
+  await page.goto('/recording-plan')
   const rolling = page.getByTestId('policy-row').filter({hasText: 'CH01'})
   await rolling.getByLabel('CH01 录像方式', {exact: true}).click()
-  await page.getByRole('option', {name: '连续录像', exact: true}).click()
-  await expect(rolling.getByRole('button', {name: '应用', exact: true})).toBeEnabled({timeout: 15000})
-  await finished(page, await rowCommand(page, rolling, '应用', '/recording-policy'))
+  await page.getByRole('option', {name: '全天录像', exact: true}).click()
+  await finished(page, await acceptedCommand(page, '/recording-policy', () => page.getByRole('option', {name: '全天录像', exact: true}).click()))
   await expect.poll(async () => (await physical()).filter(s => s.isRecordingMP4).length, {timeout: 30000}).toBe(1)
   await expect.poll(async () => (await recordings()).items.filter(s => s.state === 'ready' && s.bytes > 0).length, {timeout: 90000}).toBeGreaterThan(0)
   const historical = (await recordings()).items.find(s => s.state === 'ready')!
@@ -256,13 +253,11 @@ test('real media UI keeps channel history through no-recording, recording, sourc
   // visible degradation. Establish both readable streams before testing off.
   await expect.poll(async () => (await physical()).filter(s => s.tracks.some(t => t.ready && t.frames > 0)).length, {timeout: 30000}).toBe(2)
   // Turning recording off is a recording-plan action, not part of configuring
-  // the camera.
+  // the camera. The select itself applies: no separate apply button remains.
   await page.goto('/recording-plan')
   const stop = page.getByTestId('policy-row').filter({hasText: 'CH01'})
   await stop.getByLabel('CH01 录像方式', {exact: true}).click()
-  await page.getByRole('option', {name: '关闭录像', exact: true}).click()
-  await expect(stop.getByRole('button', {name: '应用', exact: true})).toBeEnabled({timeout: 15000})
-  await finished(page, await rowCommand(page, stop, '应用', '/recording-policy'))
+  await finished(page, await acceptedCommand(page, '/recording-policy', () => page.getByRole('option', {name: '关闭录像', exact: true}).click()))
   await expect.poll(async () => (await physical()).some(s => s.isRecordingMP4), {timeout: 20000}).toBe(false)
   await expect.poll(async () => (await physical()).filter(s => s.tracks.some(t => t.ready && t.frames > 0)).length, {timeout: 30000}).toBe(2)
   expect((await recordings()).items.find(s => s.id === historical.id)?.state).toBe('ready')

@@ -45,23 +45,18 @@ const healthyCheck: Schema<'PoolCheck'> = {
   free_bytes: 0,
   filesystem_id: '',
 }
-const awaitingSource: Schema<'PoolCheck'> = {
-  service: 'zlm',
-  state: 'pending',
-  reason: 'test_source_required',
-  total_bytes: 0,
-  free_bytes: 0,
-  filesystem_id: '',
-}
 function fixture(
   options: {
     pool?: boolean
     reject?: boolean
-    bindReject?: boolean
     checks?: Schema<'PoolCheck'>[]
     manual?: 'idle' | 'running' | 'denied'
     // A second channel, so "copy to other channels" has a real target.
     peer?: boolean
+    // An unconfigured channel, so the collapsed row group has a member.
+    unconfigured?: boolean
+    // A stored planned mode, so the mini week renders from the server answer.
+    planned?: { windows: { weekday: number; start_minute: number; end_minute: number }[] }
   } = {}
 ) {
   useAuthStore.getState().setUser({
@@ -87,7 +82,7 @@ function fixture(
     critical_percent: 95,
   }
   const mutations: { path: string; init: RequestInit }[] = []
-  const attempts = { batch: 0, bind: 0 }
+  const attempts = { batch: 0 }
   calls.request.mockImplementation(async (path: string, init?: RequestInit) => {
     const method = init?.method && init.method !== 'GET' ? init.method : 'GET'
     if (method !== 'GET') mutations.push({ path, init: init as RequestInit })
@@ -110,17 +105,6 @@ function fixture(
     }
     if (method === 'PUT' && path.endsWith('/recording-policy'))
       return { job_id: 'job-policy', state: 'queued' }
-    if (method === 'PUT' && path.endsWith('/storage-pool')) {
-      attempts.bind++
-      if (options.bindReject && attempts.bind === 1) {
-        throw new ApiError(
-          409,
-          'zlm_write_evidence_unavailable',
-          '存储池检查未通过，请先运行存储池检查'
-        )
-      }
-      return { job_id: 'job-bind', state: 'queued' }
-    }
     if (method === 'POST' && path.endsWith('/test'))
       return { job_id: 'job-check' }
     if (method === 'GET' && path.startsWith('/api/v1/jobs/'))
@@ -143,17 +127,64 @@ function fixture(
             permissions: ['configure'],
             current_revision_id: 'rev',
             storage_pool_id: options.pool ? pool.id : null,
-            recording_mode: 'none',
+            recording_mode: options.planned ? 'planned' : 'none',
             source_ip: '192.168.66.114',
             main: { state: 'healthy', reason: '', observed_at: null, expires_at: null },
             sub: { state: 'unknown', reason: 'observation_missing', observed_at: null, expires_at: null },
             recording: { state: 'disabled', reason: 'recording_disabled', observed_at: null, expires_at: null },
           },
+          ...(options.unconfigured
+            ? [
+                {
+                  channel_id: '00000000-0000-4000-8000-000000000009',
+                  channel_no: 9,
+                  channel_name: '通道 09',
+                  channel_group: '',
+                  enabled: true,
+                  version: 1,
+                  permissions: ['configure'],
+                  current_revision_id: null,
+                  storage_pool_id: null,
+                  recording_mode: 'none',
+                  source_ip: '',
+                  main: { state: 'not_configured', reason: 'source_not_configured', observed_at: null, expires_at: null },
+                  sub: { state: 'not_configured', reason: 'source_not_configured', observed_at: null, expires_at: null },
+                  recording: { state: 'disabled', reason: 'source_not_configured', observed_at: null, expires_at: null },
+                },
+              ]
+            : []),
+          // The peer must appear in the summary too: schedulePeers (the copy
+          // targets) come from configured channels, and configuration is judged
+          // from the summary, not the channel list alone.
+          ...(options.peer
+            ? [
+                {
+                  channel_id: peer.id,
+                  channel_no: 2,
+                  channel_name: '后门',
+                  channel_group: '',
+                  enabled: true,
+                  version: 4,
+                  permissions: ['configure'],
+                  current_revision_id: 'rev',
+                  storage_pool_id: options.pool ? pool.id : null,
+                  recording_mode: 'none',
+                  source_ip: '192.168.66.115',
+                  main: { state: 'healthy', reason: '', observed_at: null, expires_at: null },
+                  sub: { state: 'unknown', reason: 'observation_missing', observed_at: null, expires_at: null },
+                  recording: { state: 'disabled', reason: 'recording_disabled', observed_at: null, expires_at: null },
+                },
+              ]
+            : []),
         ],
       }
     if (method === 'GET' && path.startsWith('/api/v1/channels?'))
       return {
-        items: options.peer ? [channel, peer] : [channel],
+        items: options.unconfigured
+          ? [channel, { ...channel, id: '00000000-0000-4000-8000-000000000009', channel_no: 9, channel_name: '通道 09' }]
+          : options.peer
+            ? [channel, peer]
+            : [channel],
         next_cursor: null,
       }
     // The manual window probe answers 404 when nothing is running; the control
@@ -161,7 +192,12 @@ function fixture(
     // Weekly schedule (REC-02). The editor is only rendered for planned
     // channels, so this answers for the mode-change cases as well.
     if (method === 'GET' && path.endsWith('/recording-schedule')) {
-      return { channel_id: channel.id, windows: [], timezone: 'Asia/Shanghai', active: false }
+      return {
+        channel_id: channel.id,
+        windows: options.planned?.windows || [],
+        timezone: 'Asia/Shanghai',
+        active: false,
+      }
     }
     if (method === 'PUT' && path.endsWith('/recording-schedule')) {
       const body = JSON.parse(init?.body as string) as {
@@ -239,16 +275,15 @@ function fixture(
     view: <RouterProvider router={router} />,
   }
 }
-test('planned recording is offered and event recording is still a placeholder', async () => {
+
+test('modes keep the product vocabulary and event recording stays a placeholder', async () => {
   const setup = fixture()
   const view = await render(setup.view)
   const select = view.getByLabelText('CH01 录像方式')
   await expect.element(select).toBeVisible()
   await userEvent.click(select)
-  // REC-02 is delivered: '定时录像' selects a real mode whose windows come from
-  // the schedule editor. Event recording stays disabled until batch 3.
   await expect
-    .element(view.getByRole('option', { name: '定时录像', exact: true }))
+    .element(view.getByRole('option', { name: '全天录像', exact: true }))
     .not.toHaveAttribute('data-disabled')
   await expect
     .element(
@@ -256,51 +291,231 @@ test('planned recording is offered and event recording is still a placeholder', 
     )
     .toHaveAttribute('data-disabled')
   await expect
-    .element(
-      view.getByRole('option', { name: '连续录像', exact: true })
-    )
+    .element(view.getByRole('option', { name: '定时录像', exact: true }))
     .not.toHaveAttribute('data-disabled')
 })
-test('continuous recording without a bound pool is refused before it reaches the API', async () => {
+
+// Binding moved to the storage page: the pool column is read-only there, so a
+// bound channel shows the pool name and an unbound one links over to /storage.
+test('the pool column is read-only with a link to storage for unbound rows', async () => {
   const setup = fixture({ pool: false })
+  const view = await render(setup.view)
+  const link = view.getByRole('link', { name: /未绑定 · 去分配/ })
+  await expect.element(link).toBeVisible()
+  await expect
+    .element(link)
+    .toHaveAttribute('href', '/storage?tab=pools')
+  // No per-row pool select and no bind button: the controls that moved away.
+  expect(view.getByLabelText('CH01 存储池').query()).toBeNull()
+  expect(
+    view.getByRole('button', { name: '绑定', exact: true }).query()
+  ).toBeNull()
+  setup.client.clear()
+})
+
+test('a bound row shows the pool as a static pill with a storage link', async () => {
+  const setup = fixture({ pool: true })
+  const view = await render(setup.view)
+  await expect.element(view.getByText('disk1')).toBeVisible()
+  const link = view.getByRole('link', { name: /前往存储页管理 disk1/ })
+  await expect
+    .element(link)
+    .toHaveAttribute('href', '/storage?tab=pools')
+  setup.client.clear()
+})
+
+// none/continuous apply straight from the select: a visible flip that still
+// needs a second confirm click reads as two controls fighting over one value.
+test('switching to continuous applies immediately without an apply button', async () => {
+  const setup = fixture({ pool: true })
   const view = await render(setup.view)
   await userEvent.click(view.getByLabelText('CH01 录像方式'))
   await userEvent.click(
-    view.getByRole('option', { name: '连续录像', exact: true })
+    view.getByRole('option', { name: '全天录像', exact: true })
   )
-  await expect.element(view.getByText('请先绑定存储池')).toBeVisible()
   await expect
-    .element(view.getByRole('button', { name: '应用', exact: true }))
-    .toBeDisabled()
-})
-test('binding recovers from an expired write proof by re-verifying and retrying', async () => {
-  const setup = fixture({ bindReject: true, checks: [healthyCheck] })
-  const view = await render(setup.view)
-  await userEvent.click(view.getByLabelText('CH01 存储池'))
-  await userEvent.click(view.getByRole('option', { name: 'disk1', exact: true }))
-  const bind = view.getByRole('button', { name: '绑定', exact: true })
-  await expect.element(bind).toBeEnabled()
-  await userEvent.click(bind)
-  // The rejected attempt is invisible to the operator: a real check runs and
-  // the bind is retried within the same action.
-  await expect
-    .poll(() => setup.mutations.filter((m) => m.path.endsWith('/storage-pool')).length)
-    .toBe(2)
-  expect(
-    setup.mutations.some(
-      (m) => m.path.endsWith('/test') && m.init.method === 'POST'
+    .poll(
+      () =>
+        setup.mutations.filter((m) => m.path.endsWith('/recording-policy'))
+          .length
     )
-  ).toBe(true)
-  // Settlement reads as the inline ✓ badge; a bind shows the bound variant.
-  await expect.element(view.getByText('✓ 已绑定')).toBeVisible()
+    .toBe(1)
+  const put = setup.mutations.find((m) => m.path.endsWith('/recording-policy'))
+  expect(JSON.parse(put?.init.body as string)).toEqual({ mode: 'continuous' })
+  // The row shows the settlement badge; there is no 应用 button anywhere.
+  await expect.element(view.getByTestId('applied-policy')).toBeVisible()
+  expect(
+    view.getByRole('button', { name: '应用', exact: true }).query()
+  ).toBeNull()
+  setup.client.clear()
 })
+
+test('switching to planned opens the editor instead of writing', async () => {
+  const setup = fixture({ pool: true })
+  const view = await render(setup.view)
+  await userEvent.click(view.getByLabelText('CH01 录像方式'))
+  await userEvent.click(view.getByRole('option', { name: '定时录像', exact: true }))
+  // The editor is open (single save button) and no policy write happened yet:
+  // the editor's save is the only path that commits a planned switch.
+  await expect
+    .element(
+      view.getByRole('button', { name: /保存并启用定时录像/ })
+    )
+    .toBeVisible()
+  expect(
+    setup.mutations.filter((m) => m.path.endsWith('/recording-policy')).length
+  ).toBe(0)
+  setup.client.clear()
+})
+
+// The mini week renders in the collapsed row for a planned channel: which days
+// record is the answer the list owes without expanding anything.
+test('a planned row shows the weekday mini pills from the stored schedule', async () => {
+  const setup = fixture({
+    pool: true,
+    planned: { windows: [{ weekday: 7, start_minute: 480, end_minute: 540 }] },
+  })
+  const view = await render(setup.view)
+  const pills = view.getByRole('img', { name: /周计划/ })
+  await expect.element(pills).toBeVisible()
+  // The uniform single range is spelled out beside the pills.
+  await expect.element(view.getByText('周日 08:00 – 09:00')).toBeVisible()
+  setup.client.clear()
+})
+
+// The quick bar applies one range to several days in one gesture; the single
+// save button then writes the week and switches the mode together.
+test('the quick bar fills several days and one save commits week plus mode', async () => {
+  const setup = fixture({ pool: true })
+  const view = await render(setup.view)
+  await userEvent.click(view.getByLabelText('CH01 录像方式'))
+  await userEvent.click(view.getByRole('option', { name: '定时录像', exact: true }))
+  await userEvent.click(view.getByRole('button', { name: '选择 周一' }))
+  await userEvent.click(view.getByRole('button', { name: '选择 周二' }))
+  await userEvent.click(
+    view.getByRole('button', { name: /应用到所选星期/ })
+  )
+  await userEvent.click(
+    view.getByRole('button', { name: /保存并启用定时录像/ })
+  )
+  await expect
+    .poll(
+      () =>
+        setup.mutations.filter(
+          (m) => m.init.method === 'PUT' && m.path.endsWith('/recording-schedule')
+        ).length
+    )
+    .toBe(1)
+  const schedule = setup.mutations.find(
+    (m) => m.init.method === 'PUT' && m.path.endsWith('/recording-schedule')
+  )
+  const body = JSON.parse(schedule?.init.body as string) as {
+    windows: { weekday: number; start_minute: number; end_minute: number }[]
+  }
+  expect(body.windows).toHaveLength(2)
+  expect(new Set(body.windows.map((w) => w.weekday))).toEqual(new Set([1, 2]))
+  expect(body.windows.every((w) => w.start_minute === 480 && w.end_minute === 1080)).toBe(true)
+  // The mode write follows in the same act.
+  await expect
+    .poll(
+      () =>
+        setup.mutations.filter((m) => m.path.endsWith('/recording-policy'))
+          .length
+    )
+    .toBe(1)
+  const policy = setup.mutations.find((m) => m.path.endsWith('/recording-policy'))
+  expect(JSON.parse(policy?.init.body as string)).toEqual({ mode: 'planned' })
+  setup.client.clear()
+})
+
+// Copying a day is how REC-02's "copy to other days" is expressed: one click
+// fills the other six rows rather than opening a separate dialog.
+test('copying a day fills the rest of the week', async () => {
+  const setup = fixture({ pool: true })
+  const view = await render(setup.view)
+  await userEvent.click(view.getByLabelText('CH01 录像方式'))
+  await userEvent.click(view.getByRole('option', { name: '定时录像', exact: true }))
+  await userEvent.click(view.getByRole('button', { name: '周一 添加时段' }))
+  await userEvent.click(
+    view.getByRole('button', { name: '周一 复制到其它日期' })
+  )
+  await userEvent.click(
+    view.getByRole('button', { name: /保存并启用定时录像/ })
+  )
+  await expect
+    .poll(
+      () =>
+        setup.mutations.filter(
+          (m) => m.init.method === 'PUT' && m.path.endsWith('/recording-schedule')
+        ).length
+    )
+    .toBe(1)
+  const put = setup.mutations.find(
+    (m) => m.init.method === 'PUT' && m.path.endsWith('/recording-schedule')
+  )
+  const body = JSON.parse(put?.init.body as string) as {
+    windows: { weekday: number }[]
+  }
+  expect(body.windows).toHaveLength(7)
+  expect(new Set(body.windows.map((w) => w.weekday)).size).toBe(7)
+  setup.client.clear()
+})
+
+// The copy control must appear only when there is somewhere to copy to.
+test('the copy-to-channel control is absent without peers', async () => {
+  const setup = fixture({ pool: true })
+  const view = await render(setup.view)
+  await userEvent.click(view.getByLabelText('CH01 录像方式'))
+  await userEvent.click(view.getByRole('option', { name: '定时录像', exact: true }))
+  await expect
+    .element(view.getByText(/复制此时段到其它通道/))
+    .not.toBeInTheDocument()
+  setup.client.clear()
+})
+
+// REC-02's "copy to other channels": the week is written to each selected
+// channel, one request each, and the operator sees which ones took it.
+test('copying a week writes every selected channel', async () => {
+  const setup = fixture({ pool: true, peer: true })
+  const view = await render(setup.view)
+  await userEvent.click(view.getByLabelText('CH01 录像方式'))
+  await userEvent.click(view.getByRole('option', { name: '定时录像', exact: true }))
+  // Picking the mode auto-opens the editor; the day rows are already there.
+  await userEvent.click(view.getByRole('button', { name: '周一 添加时段' }))
+  await userEvent.click(view.getByRole('button', { name: '复制到 CH02' }))
+  await userEvent.click(
+    view.getByRole('button', { name: '复制到所选通道', exact: true })
+  )
+  await expect
+    .poll(
+      () =>
+        setup.mutations.filter(
+          (m) => m.init.method === 'PUT' && m.path.endsWith('/recording-schedule')
+        ).length
+    )
+    .toBe(1)
+  const put = setup.mutations.find(
+    (m) => m.init.method === 'PUT' && m.path.endsWith('/recording-schedule')
+  )
+  // It must target the peer, not the channel being edited.
+  expect(put?.path).toContain(peer.id)
+  const body = JSON.parse(put?.init.body as string) as {
+    windows: { weekday: number }[]
+  }
+  expect(body.windows).toHaveLength(1)
+  await expect.element(view.getByText(/已复制到 CH02/)).toBeVisible()
+  setup.client.clear()
+})
+
+// A batch recovers rows rejected for a stale write proof by re-running the
+// real pool check and retrying just those rows.
 test('a batch recovers rows rejected for a stale write proof', async () => {
   const setup = fixture({ pool: true, reject: true, checks: [healthyCheck] })
   const view = await render(setup.view)
   await userEvent.click(view.getByLabelText('选择 CH01'))
   await userEvent.click(view.getByLabelText('批量录像方式'))
   await userEvent.click(
-    view.getByRole('option', { name: '连续录像', exact: true })
+    view.getByRole('option', { name: '全天录像', exact: true })
   )
   await userEvent.click(
     view.getByRole('button', { name: '批量应用', exact: true })
@@ -323,113 +538,17 @@ test('a batch recovers rows rejected for a stale write proof', async () => {
     .element(view.getByText(/经自动重新验证存储池写入/))
     .toBeVisible()
 })
-test('a batch reports the pool reason when recovery cannot verify the write', async () => {
-  const setup = fixture({ pool: true, reject: true, checks: [awaitingSource] })
-  const view = await render(setup.view)
-  await userEvent.click(view.getByLabelText('选择 CH01'))
-  await userEvent.click(view.getByLabelText('批量录像方式'))
-  await userEvent.click(
-    view.getByRole('option', { name: '连续录像', exact: true })
-  )
-  await userEvent.click(
-    view.getByRole('button', { name: '批量应用', exact: true })
-  )
-  await expect
-    .element(view.getByText(/需要先完成一路摄像头的连接测试或启用/))
-    .toBeVisible()
-  // No retry without fresh evidence: the gate was not bypassed.
-  expect(
-    setup.mutations.filter((m) => m.path.endsWith('/recording-policies')).length
-  ).toBe(1)
-})
 
-// Dirty-state gating: untouched rows carry dimmed buttons instead of thirty-two
-// standing invites; only a real edit lights the action up.
-test('untouched rows keep dimmed actions that light up on edit', async () => {
-  const setup = fixture()
+// Unconfigured rows collapse behind one line: sixteen empty slots must not
+// push the rows an operator came for below the fold.
+test('unconfigured channels collapse behind one expandable line', async () => {
+  const setup = fixture({ unconfigured: true })
   const view = await render(setup.view)
-  const bind = view.getByRole('button', { name: '绑定', exact: true })
-  await expect.element(bind).toBeDisabled()
-  const apply = view.getByRole('button', { name: '应用', exact: true })
-  await expect.element(apply).toBeDisabled()
-  // No pool is bound in this fixture: continuous stays blocked by the
-  // forgotten-bind guard even after the mode edit.
-  await userEvent.click(view.getByLabelText('CH01 录像方式'))
-  await userEvent.click(
-    view.getByRole('option', { name: '连续录像', exact: true })
-  )
-  await expect.element(apply).toBeDisabled()
-  await userEvent.click(view.getByLabelText('CH01 存储池'))
-  await userEvent.click(view.getByRole('option', { name: 'disk1', exact: true }))
-  await expect.element(bind).toBeEnabled()
-  // With the pool drafted, the chain clears the guard and apply lights up.
-  await expect.element(apply).toBeEnabled()
-  setup.client.clear()
-})
-
-// Applying a mode on a row with an unsaved pool edit chains the bind first, so
-// enabling recording cannot fail on a forgotten bind.
-test('applying a mode chains the unsaved pool bind before the policy', async () => {
-  const setup = fixture()
-  const view = await render(setup.view)
-  await userEvent.click(view.getByLabelText('CH01 存储池'))
-  await userEvent.click(view.getByRole('option', { name: 'disk1', exact: true }))
-  await userEvent.click(view.getByLabelText('CH01 录像方式'))
-  await userEvent.click(
-    view.getByRole('option', { name: '连续录像', exact: true })
-  )
-  await userEvent.click(
-    view.getByRole('button', { name: '应用', exact: true })
-  )
-  // One click, two writes in order: the pool bind, then the policy.
-  await expect
-    .poll(
-      () =>
-        setup.mutations.filter((m) => m.path.endsWith('/storage-pool')).length
-    )
-    .toBe(1)
-  await expect
-    .poll(
-      () =>
-        setup.mutations.filter((m) => m.path.endsWith('/recording-policy'))
-          .length
-    )
-    .toBe(1)
-  const poolIndex = setup.mutations.findIndex((m) =>
-    m.path.endsWith('/storage-pool')
-  )
-  const policyIndex = setup.mutations.findIndex((m) =>
-    m.path.endsWith('/recording-policy')
-  )
-  expect(poolIndex).toBeLessThan(policyIndex)
-  expect(JSON.parse(setup.mutations[poolIndex].init.body as string)).toEqual({
-    pool_id: '00000000-0000-4000-8000-000000000020',
-  })
-  // Settlement reads as the inline ✓ badge on the action that ran last.
-  await expect
-    .poll(
-      () =>
-        (document.querySelector('[data-testid="policy-row"]')?.textContent || '').includes(
-          '已生效'
-        )
-    )
-    .toBe(true)
-  setup.client.clear()
-})
-
-// The bound pool links to the storage page instead of carrying a second
-// standing button, and the row reads the channel's live state.
-test('the bound pool shows a storage-page link and the row shows its health', async () => {
-  const setup = fixture({ pool: true })
-  const view = await render(setup.view)
-  await expect.element(view.getByText('大门')).toBeVisible()
-  // healthy main + recording disabled → 在线; the recording-disabled pill on
-  // the status payload drives it.
-  await expect.element(view.getByText('在线')).toBeVisible()
-  const link = view.getByRole('link', { name: 'CH01 检查存储池' })
-  await expect
-    .element(link)
-    .toHaveAttribute('href', '/storage?tab=pools')
+  const toggle = view.getByRole('button', { name: /已隐藏 1 个未配置源通道/ })
+  await expect.element(toggle).toBeVisible()
+  expect(view.getByText('通道 09').query()).toBeNull()
+  await userEvent.click(toggle)
+  await expect.element(view.getByText('通道 09')).toBeVisible()
   setup.client.clear()
 })
 
@@ -538,130 +657,5 @@ test('batch manual buttons stay disabled with nothing selected', async () => {
     .element(view.getByRole('button', { name: '停止', exact: true }))
     .toBeDisabled()
   expect(setup.mutations).toHaveLength(0)
-  setup.client.clear()
-})
-
-// The schedule editor appears only for a planned channel; on any other mode it
-// would offer a control whose value recording never reads.
-test('the schedule editor is offered only for planned channels', async () => {
-  const setup = fixture()
-  const view = await render(setup.view)
-  await expect
-    .element(view.getByRole('button', { name: 'CH01 编辑时段' }))
-    .not.toBeInTheDocument()
-  await userEvent.click(view.getByLabelText('CH01 录像方式'))
-  await userEvent.click(view.getByRole('option', { name: '定时录像', exact: true }))
-  await expect
-    .element(view.getByRole('button', { name: 'CH01 编辑时段' }))
-    .toBeVisible()
-  setup.client.clear()
-})
-
-// A planned week is saved as one value: every window goes out in a single PUT,
-// which is what makes a rejected week leave the stored one untouched.
-test('saving a schedule sends the whole week in one request', async () => {
-  const setup = fixture()
-  const view = await render(setup.view)
-  await userEvent.click(view.getByLabelText('CH01 录像方式'))
-  await userEvent.click(view.getByRole('option', { name: '定时录像', exact: true }))
-  await userEvent.click(view.getByRole('button', { name: 'CH01 编辑时段' }))
-  await userEvent.click(view.getByRole('button', { name: '周一 添加时段' }))
-  await userEvent.click(view.getByRole('button', { name: '周二 添加时段' }))
-  await userEvent.click(view.getByRole('button', { name: '保存时段', exact: true }))
-  await expect
-    .poll(
-      () =>
-        setup.mutations.filter(
-          (m) => m.init.method === 'PUT' && m.path.endsWith('/recording-schedule')
-        ).length
-    )
-    .toBe(1)
-  const put = setup.mutations.find(
-    (m) => m.init.method === 'PUT' && m.path.endsWith('/recording-schedule')
-  )
-  const body = JSON.parse(put?.init.body as string) as {
-    windows: { weekday: number; start_minute: number; end_minute: number }[]
-  }
-  expect(body.windows).toHaveLength(2)
-  expect(body.windows.map((w) => w.weekday).sort()).toEqual([1, 2])
-  setup.client.clear()
-})
-
-// Copying a day is how REC-02's "copy to other days" is expressed: one click
-// fills the other six rows rather than opening a separate dialog.
-test('copying a day fills the rest of the week', async () => {
-  const setup = fixture()
-  const view = await render(setup.view)
-  await userEvent.click(view.getByLabelText('CH01 录像方式'))
-  await userEvent.click(view.getByRole('option', { name: '定时录像', exact: true }))
-  await userEvent.click(view.getByRole('button', { name: 'CH01 编辑时段' }))
-  await userEvent.click(view.getByRole('button', { name: '周一 添加时段' }))
-  await userEvent.click(
-    view.getByRole('button', { name: '周一 复制到其它日期' })
-  )
-  await userEvent.click(view.getByRole('button', { name: '保存时段', exact: true }))
-  await expect
-    .poll(
-      () =>
-        setup.mutations.filter(
-          (m) => m.init.method === 'PUT' && m.path.endsWith('/recording-schedule')
-        ).length
-    )
-    .toBe(1)
-  const put = setup.mutations.find(
-    (m) => m.init.method === 'PUT' && m.path.endsWith('/recording-schedule')
-  )
-  const body = JSON.parse(put?.init.body as string) as {
-    windows: { weekday: number }[]
-  }
-  expect(body.windows).toHaveLength(7)
-  expect(new Set(body.windows.map((w) => w.weekday)).size).toBe(7)
-  setup.client.clear()
-})
-
-// The copy control must appear only when there is somewhere to copy to.
-test('the copy-to-channel control is absent without peers', async () => {
-  const setup = fixture()
-  const view = await render(setup.view)
-  await userEvent.click(view.getByLabelText('CH01 录像方式'))
-  await userEvent.click(view.getByRole('option', { name: '定时录像', exact: true }))
-  await userEvent.click(view.getByRole('button', { name: 'CH01 编辑时段' }))
-  await expect
-    .element(view.getByText(/复制此时段到其它通道/))
-    .not.toBeInTheDocument()
-  setup.client.clear()
-})
-
-// REC-02's "copy to other channels": the week is written to each selected
-// channel, one request each, and the operator sees which ones took it.
-test('copying a week writes every selected channel', async () => {
-  const setup = fixture({ peer: true })
-  const view = await render(setup.view)
-  await userEvent.click(view.getByLabelText('CH01 录像方式'))
-  await userEvent.click(view.getByRole('option', { name: '定时录像', exact: true }))
-  await userEvent.click(view.getByRole('button', { name: 'CH01 编辑时段' }))
-  await userEvent.click(view.getByRole('button', { name: '周一 添加时段' }))
-  await userEvent.click(view.getByLabelText('复制到 CH02'))
-  await userEvent.click(
-    view.getByRole('button', { name: '复制到所选通道', exact: true })
-  )
-  await expect
-    .poll(
-      () =>
-        setup.mutations.filter(
-          (m) => m.init.method === 'PUT' && m.path.endsWith('/recording-schedule')
-        ).length
-    )
-    .toBe(1)
-  const put = setup.mutations.find(
-    (m) => m.init.method === 'PUT' && m.path.endsWith('/recording-schedule')
-  )
-  // It must target the peer, not the channel being edited.
-  expect(put?.path).toContain(peer.id)
-  const body = JSON.parse(put?.init.body as string) as {
-    windows: { weekday: number }[]
-  }
-  expect(body.windows).toHaveLength(1)
-  await expect.element(view.getByText(/已复制到 CH02/)).toBeVisible()
   setup.client.clear()
 })

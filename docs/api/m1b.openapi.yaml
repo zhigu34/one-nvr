@@ -8406,7 +8406,8 @@
             "type": "string",
             "enum": [
               "none",
-              "continuous"
+              "continuous",
+              "planned"
             ],
             "description": "The stored recording policy mode; 'none' until a mode was applied. Carried with storage_pool_id so the recording plan renders every row from one request."
           },

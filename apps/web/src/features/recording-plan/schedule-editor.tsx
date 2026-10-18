@@ -1,19 +1,15 @@
 import { useMemo, useState } from 'react'
-import { CalendarClock, Check, Copy, Plus, Trash2 } from 'lucide-react'
-import { ApiError, apiRequest, jsonRequest } from '@/lib/api-client'
-import type { Schema } from '@/lib/types'
+import { Check, Copy, Plus, Trash2 } from 'lucide-react'
+import { apiRequest, jsonRequest } from '@/lib/api-client'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
-import { useAPI } from '@/features/foundation/hooks'
 import {
   WEEKDAYS,
-  byWeekday,
   overlaps,
   parseClock,
-  scheduleSummary,
   windowLabel,
   type ScheduleWindow,
 } from './schedule-format'
+import { cn } from '@/lib/utils'
 
 /**
  * Weekly recording schedule editor (PRD REC-02).
@@ -22,40 +18,74 @@ import {
  * server replaces the week atomically: a per-window save would leave the schedule
  * in states the operator never chose, and a rejected week would half-apply.
  *
- * The vertical day list rather than a 7-column grid: on a 16-channel page each
- * row has one schedule, and a grid inside a table cell is unreadable at any
- * column width. Each day shows its windows and a "+" that adds a window to that
- * day, which is also how "copy to other days" is expressed — the copy targets are
- * the same seven rows.
+ * Two ways in, one way out. The quick bar answers "give these days 08:00–18:00"
+ * in one gesture (the shape almost every site actually wants); the per-day rows
+ * answer "I need to fine-tune one morning". Both edit the same draft; the single
+ * "保存并启用定时录像" button is the only path to the server, so windows and the
+ * mode switch land together and never leave the channel half-configured.
  */
 export function ScheduleEditor({
-  channelId,
   label,
   disabled,
   peers = [],
+  windows: windowsProp,
+  onWindowsChange,
+  timezone,
+  schedulePending,
+  scheduleError,
+  autoOpen = false,
+  onCancel,
+  onCommitPlanned,
 }: {
-  channelId: string
   label: string
   disabled?: boolean
   // Other channels this operator may configure, for "copy to other channels"
   // (REC-02). Excluding the channel being edited is the caller's job: copying a
   // week onto itself is a no-op that only produces a confusing confirmation.
   peers?: { id: string; label: string }[]
+  // The row owns the schedule read so its mini pills and this editor render
+  // one answer. The editor edits a draft on top and reports back through
+  // onWindowsChange; it never writes the schedule alone.
+  windows: ScheduleWindow[]
+  onWindowsChange: (windows: ScheduleWindow[] | null) => void
+  timezone?: string
+  schedulePending?: boolean
+  scheduleError?: boolean
+  // True when the mode itself is an unsaved draft: picking 定时录像 opens the
+  // panel immediately, because an editor you still have to find contradicts the
+  // single "保存并启用" story. A stored planned row starts collapsed.
+  autoOpen?: boolean
+  // Cancel when the mode is a draft reverts the whole pick (mode included);
+  // cancel on a stored planned row only closes the panel.
+  onCancel?: () => void
+  // The row's single commit: windows to the schedule endpoint, then the mode
+  // switch to 'planned'. Returning a truthy value means the mode change also
+  // settled successfully.
+  onCommitPlanned: () => Promise<boolean | null>
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(autoOpen)
   const [draft, setDraft] = useState<ScheduleWindow[] | null>(null)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [copyTargets, setCopyTargets] = useState<Set<string>>(new Set())
   const [copyPending, setCopyPending] = useState(false)
-  const schedule = useAPI<Schema<'ChannelSchedule'>>(
-    `/api/v1/channels/${channelId}/recording-schedule`,
-    true
-  )
-  const stored = schedule.data?.windows
-  const windows = useMemo(() => draft ?? stored ?? [], [draft, stored])
-  const grouped = useMemo(() => byWeekday(windows), [windows])
+  // Quick-bar state: a day selection plus one time range, applied in one go.
+  const [pickedDays, setPickedDays] = useState<Set<number>>(new Set())
+  const [quickStart, setQuickStart] = useState('08:00')
+  const [quickEnd, setQuickEnd] = useState('18:00')
+  const windows = draft ?? windowsProp
+  const grouped = useMemo(() => {
+    const map = new Map<number, ScheduleWindow[]>()
+    for (const day of WEEKDAYS) map.set(day.value, [])
+    for (const window of windows) {
+      map.get(window.weekday)?.push(window)
+    }
+    for (const bucket of map.values()) {
+      bucket.sort((a, b) => a.start_minute - b.start_minute)
+    }
+    return map
+  }, [windows])
   const conflict = useMemo(() => {
     for (let i = 0; i < windows.length; i++) {
       for (let j = i + 1; j < windows.length; j++) {
@@ -67,8 +97,56 @@ export function ScheduleEditor({
 
   function edit(next: ScheduleWindow[]) {
     setDraft(next)
+    onWindowsChange(next)
     setError('')
     setNotice('')
+  }
+
+  function togglePicked(weekday: number, checked: boolean) {
+    setPickedDays((current) => {
+      const next = new Set(current)
+      if (checked) next.add(weekday)
+      else next.delete(weekday)
+      return next
+    })
+  }
+
+  function pickShortcut(days: number[]) {
+    setPickedDays(new Set(days))
+  }
+
+  /**
+   * Apply the quick range to every picked day at once. Existing windows on a
+   * picked day are replaced rather than merged: re-applying a range to days it
+   * already covers must stay a no-op in effect, and a merged week would grow a
+   * second overlapping window the server then rejects.
+   */
+  function applyQuickRange() {
+    const start = parseClock(quickStart)
+    const end = parseClock(quickEnd)
+    if (start === null || end === null) {
+      setError('时间格式应为 HH:MM')
+      return
+    }
+    if (pickedDays.size === 0) {
+      setError('请先选择要应用的星期')
+      return
+    }
+    if (start === end) {
+      setError('开始与结束相同，这个时段不包含任何时间')
+      return
+    }
+    const kept = windows.filter((window) => !pickedDays.has(window.weekday))
+    const built: ScheduleWindow[] = []
+    for (const weekday of pickedDays) {
+      // 24:00 arrives from the time input as 00:00; stored as 1440 it stays an
+      // end-of-day exclusive bound, matching the server's split semantics.
+      const endMinute = end <= start ? end + 1440 : end
+      built.push({ weekday, start_minute: start, end_minute: endMinute })
+    }
+    edit([...kept, ...built])
+    setError('')
+    setNotice(`已应用到 ${pickedDays.size} 天，记得保存`)
   }
 
   function addWindow(weekday: number) {
@@ -119,7 +197,14 @@ export function ScheduleEditor({
     edit([...keep, ...copies])
   }
 
-  async function save() {
+  /**
+   * The editor's only save path. It hands the draft to the row's commit, which
+   * owns both writes in order — the schedule PUT, then the mode switch — with
+   * recovery, settlement and error display shared with every other row action.
+   * The editor itself never talks to the server, so there is exactly one place
+   * a planned switch can land and one place its failures surface.
+   */
+  async function saveAndEnable() {
     if (conflict) {
       setError('同一星期几的时段不能重叠')
       return
@@ -128,19 +213,10 @@ export function ScheduleEditor({
     setError('')
     setNotice('')
     try {
-      const saved = await apiRequest<Schema<'ChannelSchedule'>>(
-        `/api/v1/channels/${channelId}/recording-schedule`,
-        jsonRequest('PUT', { windows })
-      )
-      setDraft(null)
-      setNotice(`已保存 · ${scheduleSummary(saved.windows)}`)
-      await schedule.refetch()
-      setOpen(false)
-    } catch (cause) {
-      if (cause instanceof ApiError && cause.code === 'schedule_overlap') {
-        setError('同一星期几的时段不能重叠')
-      } else {
-        setError(cause instanceof Error ? cause.message : '保存失败')
+      const settled = await onCommitPlanned()
+      if (settled) {
+        setNotice(`已保存并启用 · ${windowLabel(windows[0])}${windows.length > 1 ? ` 等 ${windows.length} 段` : ''}`)
+        setOpen(false)
       }
     } finally {
       setPending(false)
@@ -185,43 +261,37 @@ export function ScheduleEditor({
     }
   }
 
+  function close() {
+    // Closing without saving drops the draft back to the stored week: an
+    // editor that kept unsaved edits across opens would silently re-apply old
+    // windows to a schedule someone else changed in the meantime.
+    setDraft(null)
+    onWindowsChange(null)
+    setError('')
+    setOpen(false)
+    // An auto-opened editor was the mode pick itself; cancelling it reverts
+    // the pick instead of leaving a half-made decision on the row.
+    if (onCancel) onCancel()
+  }
+
   if (!open) {
     return (
-      <div className='flex flex-wrap items-center gap-2'>
-        <Button
-          type='button'
-          variant='outline'
-          size='sm'
-          className='h-7 px-2 text-xs'
-          disabled={disabled}
-          aria-label={`${label} 编辑时段`}
-          aria-expanded={false}
-          onClick={() => {
-            // Every open starts from the server's answer: an editor that kept
-            // unsaved edits across opens would silently re-apply old windows to
-            // a schedule someone else changed in the meantime.
-            setDraft(null)
-            setOpen(true)
-          }}
-        >
-          <CalendarClock aria-hidden className='size-3' />
-          时段
-        </Button>
-        <span className='text-xs text-muted-foreground'>
-          {schedule.isPending
-            ? '…'
-            : schedule.error
-              ? '时段未知'
-              : scheduleSummary(stored || [])}
-        </span>
-        {schedule.data?.active && (
-          <span className='inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-600 dark:text-emerald-400'>
-            <span aria-hidden className='size-1.5 rounded-full bg-emerald-500' />
-            时段内
-          </span>
-        )}
-        {notice && <span className='text-xs text-emerald-600 dark:text-emerald-400'>{notice}</span>}
-      </div>
+      <Button
+        type='button'
+        variant='outline'
+        size='sm'
+        className='h-7 px-2 text-xs'
+        disabled={disabled || schedulePending || scheduleError}
+        aria-label={`${label} 编辑时段`}
+        aria-expanded={false}
+        onClick={() => {
+          setDraft(null)
+          onWindowsChange(null)
+          setOpen(true)
+        }}
+      >
+        编辑时段
+      </Button>
     )
   }
 
@@ -229,7 +299,7 @@ export function ScheduleEditor({
     <div className='w-full rounded-lg border bg-zinc-50/70 p-3 dark:bg-zinc-900/40'>
       <div className='mb-2 flex flex-wrap items-center justify-between gap-2'>
         <p className='text-xs text-muted-foreground'>
-          仅「定时录像」使用此时段；时区 {schedule.data?.timezone || '—'}
+          整周一次保存 · 时区 {timezone || '—'}
         </p>
         <div className='flex items-center gap-2'>
           <Button
@@ -237,26 +307,95 @@ export function ScheduleEditor({
             variant='ghost'
             size='sm'
             className='h-7 px-2 text-xs'
-            onClick={() => {
-              setDraft(null)
-              setError('')
-              setOpen(false)
-            }}
+            disabled={pending}
+            onClick={close}
           >
             取消
           </Button>
           <Button
             type='button'
             size='sm'
-            className='h-7 px-2 text-xs'
+            className='h-7 px-2.5 text-xs'
             disabled={pending || conflict}
-            onClick={() => void save()}
+            onClick={() => void saveAndEnable()}
           >
             <Check aria-hidden className='size-3' />
-            保存时段
+            ✓ 保存并启用定时录像
           </Button>
         </div>
       </div>
+
+      {/* Quick bar: several days plus one range in a single gesture. It edits
+          the same draft as the rows below — nothing here saves on its own. */}
+      <div className='mb-3 rounded-md border bg-background p-2'>
+        <div className='flex flex-wrap items-center gap-1.5'>
+          {WEEKDAYS.map((day) => {
+            const picked = pickedDays.has(day.value)
+            return (
+              <button
+                key={day.value}
+                type='button'
+                aria-pressed={picked}
+                aria-label={`选择 ${day.label}`}
+                onClick={() => togglePicked(day.value, !picked)}
+                className={cn(
+                  'h-6 rounded-md border px-2 text-xs transition-colors',
+                  picked
+                    ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
+                    : 'text-muted-foreground hover:bg-accent'
+                )}
+              >
+                {day.label}
+              </button>
+            )
+          })}
+          <span className='mx-1 h-4 w-px bg-border' aria-hidden />
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            className='h-6 px-2 text-xs'
+            onClick={() => pickShortcut([1, 2, 3, 4, 5])}
+          >
+            工作日
+          </Button>
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            className='h-6 px-2 text-xs'
+            onClick={() => pickShortcut([6, 7])}
+          >
+            周末
+          </Button>
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            className='h-6 px-2 text-xs'
+            onClick={() => pickShortcut([1, 2, 3, 4, 5, 6, 7])}
+          >
+            全周
+          </Button>
+          <span className='mx-1 h-4 w-px bg-border' aria-hidden />
+          <TimeInput value={quickStart} onChange={setQuickStart} label='快捷开始' />
+          <span className='text-xs text-muted-foreground'>–</span>
+          <TimeInput value={quickEnd} onChange={setQuickEnd} label='快捷结束' />
+          <Button
+            type='button'
+            size='sm'
+            variant='outline'
+            className='h-6 px-2 text-xs'
+            onClick={applyQuickRange}
+          >
+            <Plus aria-hidden className='size-3' />
+            应用到所选星期
+          </Button>
+        </div>
+      </div>
+
+      {/* Seven compact rows: badge + 24h timeline strip + editable tags. The
+          strip is the at-a-glance shape of the day; the tags are the editor. */}
       <div className='space-y-1'>
         {WEEKDAYS.map((day) => {
           const dayWindows = grouped.get(day.value) || []
@@ -266,11 +405,26 @@ export function ScheduleEditor({
               className='flex flex-wrap items-center gap-2 rounded-md px-1 py-0.5'
               data-testid={`schedule-day-${day.value}`}
             >
-              <span className='w-10 shrink-0 text-xs text-muted-foreground'>
+              <span
+                className={cn(
+                  'inline-flex w-14 shrink-0 items-center gap-1 text-xs',
+                  dayWindows.length > 0
+                    ? 'font-medium text-foreground'
+                    : 'text-zinc-500 dark:text-zinc-600'
+                )}
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    'size-1.5 rounded-full',
+                    dayWindows.length > 0 ? 'bg-emerald-500' : 'bg-zinc-700 dark:bg-zinc-700'
+                  )}
+                />
                 {day.label}
               </span>
+              <DayStrip windows={dayWindows} />
               {dayWindows.length === 0 ? (
-                <span className='text-xs text-zinc-500'>不录</span>
+                <span className='text-xs text-zinc-500 dark:text-zinc-600'>不录</span>
               ) : (
                 dayWindows.map((window) => (
                   <DayWindow
@@ -310,6 +464,20 @@ export function ScheduleEditor({
                   复制到其它日期
                 </Button>
               )}
+              {dayWindows.length > 0 && (
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='sm'
+                  className='h-6 px-1.5 text-xs text-muted-foreground'
+                  aria-label={`${day.label} 清空`}
+                  onClick={() =>
+                    edit(windows.filter((window) => window.weekday !== day.value))
+                  }
+                >
+                  清空
+                </Button>
+              )}
             </div>
           )
         })}
@@ -319,27 +487,34 @@ export function ScheduleEditor({
           <p className='text-xs text-muted-foreground'>
             复制此时段到其它通道（会覆盖目标通道的整周计划）
           </p>
-          <div className='flex flex-wrap items-center gap-2'>
-            {peers.map((peer) => (
-              <label
-                key={peer.id}
-                className='inline-flex items-center gap-1.5 text-xs'
-              >
-                <Checkbox
+          <div className='flex flex-wrap items-center gap-1.5'>
+            {peers.map((peer) => {
+              const picked = copyTargets.has(peer.id)
+              return (
+                <button
+                  key={peer.id}
+                  type='button'
+                  aria-pressed={picked}
                   aria-label={`复制到 ${peer.label}`}
-                  checked={copyTargets.has(peer.id)}
-                  onCheckedChange={(state) =>
+                  onClick={() =>
                     setCopyTargets((current) => {
                       const next = new Set(current)
-                      if (state === true) next.add(peer.id)
-                      else next.delete(peer.id)
+                      if (picked) next.delete(peer.id)
+                      else next.add(peer.id)
                       return next
                     })
                   }
-                />
-                {peer.label}
-              </label>
-            ))}
+                  className={cn(
+                    'h-6 rounded-md border px-2 text-xs transition-colors',
+                    picked
+                      ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
+                      : 'text-muted-foreground hover:bg-accent'
+                  )}
+                >
+                  {peer.label}
+                </button>
+              )
+            })}
             <Button
               type='button'
               variant='outline'
@@ -370,6 +545,59 @@ export function ScheduleEditor({
         </p>
       )}
     </div>
+  )
+}
+
+/** One editable HH:MM field bound to the quick bar. */
+function TimeInput({
+  value,
+  onChange,
+  label,
+}: {
+  value: string
+  onChange: (value: string) => void
+  label: string
+}) {
+  return (
+    <input
+      type='time'
+      aria-label={label}
+      className='w-20 rounded-md border bg-transparent px-1.5 py-0.5 text-xs tabular-nums outline-none'
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  )
+}
+
+/**
+ * The 24-hour shape of one day: a thin track with an emerald band per window.
+ * Clicking a band does nothing — editing happens in the tags beside it — so the
+ * strip stays a display, never a second competing input.
+ */
+function DayStrip({ windows }: { windows: ScheduleWindow[] }) {
+  return (
+    <span
+      aria-hidden
+      className='relative h-2.5 w-40 shrink-0 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800'
+    >
+      {windows.map((window) => {
+        // A window past 24:00 draws only its first-day tail here; the wrap is
+        // visible on the next day's strip, which is where the server splits it.
+        const start = Math.min(window.start_minute, 1440)
+        const end = Math.min(window.end_minute, 1440)
+        if (end <= start) return null
+        return (
+          <span
+            key={`${window.start_minute}-${window.end_minute}`}
+            className='absolute inset-y-0 bg-emerald-500/80'
+            style={{
+              left: `${(start / 1440) * 100}%`,
+              width: `${((end - start) / 1440) * 100}%`,
+            }}
+          />
+        )
+      })}
+    </span>
   )
 }
 

@@ -93,6 +93,60 @@ function fixture(pools: Schema<'Pool'>[] = [poolFixture()]) {
       } as unknown as PageData<Schema<'Pool'>> & {
         capacity: Schema<'StorageCapacity'>
       }
+    // The binding panel reads the channel list and its per-channel summary.
+    if (path === '/api/v1/channels?limit=100')
+      return {
+        items: [
+          {
+            id: '00000000-0000-4000-8000-000000000001',
+            channel_no: 1,
+            channel_name: '大门',
+            channel_group: '',
+            enabled: true,
+            version: 3,
+            permissions: ['configure'],
+          },
+        ],
+        next_cursor: null,
+      }
+    if (path === '/api/v1/channels/summary')
+      return {
+        items: [
+          {
+            channel_id: '00000000-0000-4000-8000-000000000001',
+            channel_no: 1,
+            channel_name: '大门',
+            channel_group: '',
+            enabled: true,
+            version: 3,
+            permissions: ['configure'],
+            current_revision_id: 'rev',
+            storage_pool_id: null,
+            recording_mode: 'none',
+            source_ip: '192.168.66.110',
+            main: { state: 'healthy', reason: '', observed_at: null, expires_at: null },
+            sub: { state: 'unknown', reason: 'observation_missing', observed_at: null, expires_at: null },
+            recording: { state: 'disabled', reason: 'recording_disabled', observed_at: null, expires_at: null },
+            last_error: '',
+            updated_at: null,
+          },
+        ],
+      }
+    if (path.endsWith('/source/status'))
+      return {
+        channel_id: '00000000-0000-4000-8000-000000000001',
+        current_revision_id: 'rev',
+        desired_revision_id: 'rev',
+        storage_pool_id: null,
+        enabled: true,
+        version: 3,
+        main: { state: 'healthy', reason: '' },
+        sub: { state: 'unhealthy', reason: '' },
+        recording: { state: 'disabled', reason: 'recording_disabled' },
+        requires_initial_recording_mode: false,
+      }
+    if (init?.method === 'PUT' && path.endsWith('/storage-pool'))
+      return { job_id: 'job-bind', state: 'queued' }
     throw new Error('unexpected path ' + path)
   })
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -200,5 +254,86 @@ test('check facts live inside their probe cards, not in a bare list', async () =
   // exactly once per card footer, never repeated below the grid.
   const text = document.body.textContent || ''
   expect(text.split('read_write_delete_verified').length - 1).toBe(2)
+  client.clear()
+})
+
+// Binding moved here from the recording plan: the pool card names its channels
+// and offers the multi-select panel. The writes are the same per-channel PUT.
+test('the pool card lists bound channels and binds a picked channel', async () => {
+  const client = fixture()
+  const screen = await render(view(client))
+  // The summary line renders before any panel is opened.
+  await expect
+    .element(screen.getByText('未绑定通道'))
+    .toBeVisible()
+  await screen.getByRole('button', { name: '管理绑定通道' }).click()
+  const pick = screen.getByRole('button', { name: '绑定 CH01 大门' })
+  await expect.element(pick).toBeVisible()
+  await pick.click()
+  const bind = screen.getByRole('button', { name: /绑定所选/ })
+  await expect.element(bind).toBeVisible()
+  await bind.click()
+  await vi.waitFor(() => {
+    const put = calls.request.mock.calls.find(
+      ([path, init]) => init?.method === 'PUT' && String(path).endsWith('/storage-pool')
+    )
+    expect(put).toBeTruthy()
+    expect(JSON.parse((put?.[1] as RequestInit).body as string)).toEqual({
+      pool_id: '00000000-0000-4000-8000-000000000001',
+    })
+  })
+  await expect.element(screen.getByText(/1 路已绑定 pool-1/)).toBeVisible()
+  client.clear()
+})
+
+// The read-only summary names the channels a pool already serves, without
+// opening anything.
+test('a pool with bound channels says so in one line', async () => {
+  const client = fixture([poolFixture()])
+  // Point the summary at the pool the fixture binds: CH01 already on pool-1.
+  calls.request.mockImplementation(async (path: string, init?: RequestInit) => {
+    void init
+    if (path.startsWith('/api/v1/storage-pools?'))
+      return {
+        items: [poolFixture()],
+        next_cursor: null,
+        capacity: {
+          filesystem_count: 1,
+          total_bytes: 401.6 * GiB,
+          free_bytes: 301.3 * GiB,
+        },
+      } as unknown as PageData<Schema<'Pool'>> & {
+        capacity: Schema<'StorageCapacity'>
+      }
+    if (path === '/api/v1/channels/summary')
+      return {
+        items: [
+          {
+            channel_id: '00000000-0000-4000-8000-000000000001',
+            channel_no: 1,
+            channel_name: '大门',
+            channel_group: '',
+            enabled: true,
+            version: 3,
+            permissions: ['configure'],
+            current_revision_id: 'rev',
+            storage_pool_id: '00000000-0000-4000-8000-000000000001',
+            recording_mode: 'none',
+            source_ip: '192.168.66.110',
+            main: { state: 'healthy', reason: '', observed_at: null, expires_at: null },
+            sub: { state: 'unknown', reason: 'observation_missing', observed_at: null, expires_at: null },
+            recording: { state: 'disabled', reason: 'recording_disabled', observed_at: null, expires_at: null },
+            last_error: '',
+            updated_at: null,
+          },
+        ],
+      }
+    if (path === '/api/v1/channels?limit=100') return { items: [], next_cursor: null }
+    throw new Error('unexpected path ' + path)
+  })
+  const screen = await render(view(client))
+  await expect
+    .element(screen.getByText('已绑定 1 路通道：CH01'))
+    .toBeVisible()
   client.clear()
 })
