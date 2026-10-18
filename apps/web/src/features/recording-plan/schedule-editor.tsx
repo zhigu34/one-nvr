@@ -25,14 +25,10 @@ import { cn } from '@/lib/utils'
  * mode switch land together and never leave the channel half-configured.
  */
 export function ScheduleEditor({
-  label,
-  disabled,
   peers = [],
   windows: windowsProp,
   onWindowsChange,
   timezone,
-  schedulePending,
-  scheduleError,
   // The row owns the open state so the top control row can flip between
   // 编辑时段 and 收起, and so the page can run an accordion (opening one
   // channel's editor collapses the others' unsaved panels).
@@ -41,8 +37,6 @@ export function ScheduleEditor({
   onCancel,
   onCommitPlanned,
 }: {
-  label: string
-  disabled?: boolean
   // Other channels this operator may configure, for "copy to other channels"
   // (REC-02). Excluding the channel being edited is the caller's job: copying a
   // week onto itself is a no-op that only produces a confusing confirmation.
@@ -53,8 +47,6 @@ export function ScheduleEditor({
   windows: ScheduleWindow[]
   onWindowsChange: (windows: ScheduleWindow[] | null) => void
   timezone?: string
-  schedulePending?: boolean
-  scheduleError?: boolean
   open: boolean
   onOpenChange: (open: boolean) => void
   // Cancel when the mode is a draft reverts the whole pick (mode included);
@@ -250,29 +242,17 @@ export function ScheduleEditor({
     if (onCancel) onCancel()
   }
 
-  if (!open) {
-    return (
-      <Button
-        type='button'
-        variant='outline'
-        size='sm'
-        className='h-7 shrink-0 px-2 text-xs'
-        disabled={disabled || schedulePending || scheduleError}
-        aria-label={`${label} 编辑时段`}
-        aria-expanded={false}
-        onClick={() => {
-          setDraft(null)
-          onWindowsChange(null)
-          setOpen(true)
-        }}
-      >
-        编辑时段
-      </Button>
-    )
-  }
+  // The panel renders only while open. The collapsed state is the toggle
+  // button, which the caller places in its control row — rendering it here
+  // would put a second block under that row and give every collapsed channel a
+  // two-line height.
+  if (!open) return null
 
   return (
-    <div className='w-full rounded-lg border bg-zinc-50/70 p-3 dark:bg-zinc-900/40'>
+    <div
+      data-testid='schedule-panel'
+      className='w-full rounded-lg border bg-zinc-50/70 p-3 dark:bg-zinc-900/40'
+    >
       <div className='mb-2 flex flex-wrap items-center justify-between gap-2'>
         <p className='text-xs text-muted-foreground'>
           整周一次保存 · 时区 {timezone || '—'}
@@ -645,4 +625,41 @@ function rebuild(
   if (end === start) return null
   if (endMinute > 2880) return null
   return { weekday: current.weekday, start_minute: start, end_minute: endMinute }
+}
+
+/**
+ * The collapsed affordance for the schedule panel: one compact outline button
+ * sized like 限时录像, so the row's control strip stays a single line.
+ *
+ * It is separate from ScheduleEditor because the button belongs *in* the
+ * control row while the panel belongs *under* it: keeping them in one component
+ * forced the panel's container into the row's flex line.
+ */
+export function ScheduleEditorToggle({
+  label,
+  open,
+  disabled,
+  onOpen,
+  onClose,
+}: {
+  label: string
+  open: boolean
+  disabled?: boolean
+  onOpen: () => void
+  onClose: () => void
+}) {
+  return (
+    <Button
+      type='button'
+      variant='outline'
+      size='sm'
+      className='h-7 shrink-0 px-2 text-xs'
+      disabled={disabled}
+      aria-label={`${label} ${open ? '收起时段' : '编辑时段'}`}
+      aria-expanded={open}
+      onClick={() => (open ? onClose() : onOpen())}
+    >
+      {open ? '收起时段' : '编辑时段'}
+    </Button>
+  )
 }

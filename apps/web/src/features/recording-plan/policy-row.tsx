@@ -12,7 +12,10 @@ import { sourceCommand } from '@/features/channels/api'
 import { settleJob, verifyPoolWrite } from '@/features/storage-pools/pool-check'
 import { cn } from '@/lib/utils'
 import { ManualRecordingControl } from './manual-recording'
-import { ScheduleEditor } from './schedule-editor'
+import {
+  ScheduleEditor,
+  ScheduleEditorToggle,
+} from './schedule-editor'
 import { WeekPills } from './week-pills'
 import { MODE_LABELS, modeLabel, weekPill } from './mode-format'
 import type { ScheduleWindow } from './schedule-format'
@@ -404,7 +407,10 @@ export function PolicyRow({
             {/* One horizontal control row: mode select, the week pills, the
                 summary time, the editor toggle, manual recording — never two
                 stacked lines for what is one decision. */}
-            <div className='flex flex-nowrap items-center gap-2.5 overflow-x-auto'>
+            <div
+              data-testid='policy-controls'
+              className='flex flex-nowrap items-center gap-2.5 overflow-x-auto'
+            >
               <SelectField
                 ariaLabel={`${label} 录像方式`}
                 className='shrink-0 text-sm'
@@ -471,6 +477,20 @@ export function PolicyRow({
                 label={label}
                 disabled={!!pending}
               />
+              {/* The schedule toggle belongs beside the mode select and 限时录像,
+                  not on a line of its own: a collapsed planned row is one row. */}
+              {mode === 'planned' && (
+                <ScheduleEditorToggle
+                  label={label}
+                  open={editorOpen}
+                  disabled={!!pending || schedule.isPending}
+                  onOpen={() => {
+                    setScheduleOverride(null)
+                    onEditorOpenChange?.(channel.id ?? '')
+                  }}
+                  onClose={() => onEditorOpenChange?.('')}
+                />
+              )}
               {RECORDING_MODES.has(mode) && !boundPool && (
                 <Link
                   to='/storage'
@@ -483,17 +503,14 @@ export function PolicyRow({
             </div>
             {/* The editor panel: full-size schedule editing under the control
                 row. Opened by picking 定时录像 (the mode pick IS the open) or
-                by the row's 编辑时段 toggle. */}
-            {mode === 'planned' && (
+                by the row's 编辑时段 toggle; rendered only while open, so a
+                collapsed planned row stays exactly one line tall. */}
+            {mode === 'planned' && editorOpen && (
               <ScheduleEditor
-                label={label}
-                disabled={!!pending}
                 peers={schedulePeers || []}
                 windows={storedWindows}
                 onWindowsChange={setScheduleOverride}
                 timezone={schedule.data?.timezone || ''}
-                schedulePending={schedule.isPending}
-                scheduleError={!!schedule.error}
                 open={editorOpen}
                 onOpenChange={(next) => {
                   // Opening reports this row to the page's accordion; closing

@@ -666,3 +666,28 @@ test('batch manual buttons stay disabled with nothing selected', async () => {
   expect(setup.mutations).toHaveLength(0)
   setup.client.clear()
 })
+
+// A collapsed planned row must be one line: the editor toggle sits in the
+// control strip beside 限时录像, and no panel container renders until the panel
+// is opened. The previous layout placed the toggle in its own block below the
+// controls, which stretched every planned row to two lines even when closed.
+test('picking planned opens the panel and collapsing it removes the panel', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  await userEvent.click(view.getByLabelText('CH01 录像方式'))
+  await userEvent.click(view.getByRole('option', { name: '定时录像', exact: true }))
+  // Picking planned opens the editor immediately: an editor you still have to
+  // find contradicts the single "保存并启用" story.
+  await expect.element(view.getByTestId('schedule-panel')).toBeVisible()
+  await userEvent.click(view.getByRole('button', { name: 'CH01 收起时段' }))
+  // The panel container itself is gone, not merely hidden: that is what keeps
+  // the collapsed row at one line.
+  await expect
+    .element(view.getByTestId('schedule-panel'))
+    .not.toBeInTheDocument()
+  // And the toggle that opened it lives inside the control strip.
+  const controls = await view.getByTestId('policy-controls').element()
+  const toggle = await view.getByRole('button', { name: 'CH01 编辑时段' }).element()
+  expect(controls.contains(toggle)).toBe(true)
+  setup.client.clear()
+})
