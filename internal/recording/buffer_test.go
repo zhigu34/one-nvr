@@ -34,7 +34,7 @@ func TestParseBufferFragmentReadsTheRecordedStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, ok := ParseBufferFragment(path, info)
+	got, ok := ParseBufferFragment(path, info, time.UTC)
 	if !ok {
 		t.Fatal("a well-formed ZLM fragment name was rejected")
 	}
@@ -58,7 +58,7 @@ func TestParseBufferFragmentSkipsIncompleteFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 		info, _ := os.Stat(path)
-		if _, ok := ParseBufferFragment(path, info); ok {
+		if _, ok := ParseBufferFragment(path, info, time.UTC); ok {
 			t.Fatalf("%s was accepted as a fragment", name)
 		}
 	}
@@ -157,5 +157,35 @@ func TestBufferWindowReportsEmptyWhenNothingCovers(t *testing.T) {
 	picked, start, end := BufferWindow([]BufferFragment{fragment(90, 94, 10)}, bufAt(10), bufAt(20))
 	if len(picked) != 0 || !start.IsZero() || !end.IsZero() {
 		t.Fatalf("expected an empty result, got %d fragments %v..%v", len(picked), start, end)
+	}
+}
+
+// The fragment name is in the container's LOCAL time, not UTC. Measured on the
+// live site: the media server runs with TZ=Asia/Shanghai and named a fragment
+// 01:08 while UTC was 17:12 the previous day. Parsing that as UTC put every
+// fragment eight hours in the future, so nothing ever looked expired and the ring
+// grew until it would have filled the tmpfs.
+func TestParseBufferFragmentUsesTheContainerZone(t *testing.T) {
+	zone, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Skip("zone database unavailable")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "2026-10-19-01-08-49-0.mp4")
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := ParseBufferFragment(path, info, zone)
+	if !ok {
+		t.Fatal("fragment rejected")
+	}
+	// 01:08 in Shanghai is 17:08 UTC the previous day.
+	want := time.Date(2026, 10, 18, 17, 8, 49, 0, time.UTC)
+	if !got.Start.Equal(want) {
+		t.Fatalf("start = %v, want %v (parsing the name as UTC would put it eight hours ahead)", got.Start, want)
 	}
 }

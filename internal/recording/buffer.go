@@ -42,7 +42,14 @@ type BufferFragment struct {
 // callback for these files because they are not published recordings — so the
 // parser is deliberately strict: a name it cannot read is skipped rather than
 // guessed at, because a wrong start time would place footage in the wrong window.
-func ParseBufferFragment(path string, info os.FileInfo) (BufferFragment, bool) {
+//
+// The name is in the container's LOCAL time, not UTC. Measured on the live site:
+// the media server runs with TZ=Asia/Shanghai and named a fragment 01:08 while
+// UTC was 17:12 the previous day. Parsing that as UTC put every fragment eight
+// hours in the future, so nothing ever looked expired and the ring grew without
+// bound until it would have filled the tmpfs. The zone is therefore passed in and
+// applied to both the name and the mtime.
+func ParseBufferFragment(path string, info os.FileInfo, zone *time.Location) (BufferFragment, bool) {
 	// A file ZLM is still writing carries a leading dot and has no moov yet.
 	base := filepath.Base(path)
 	if strings.HasPrefix(base, ".") || !strings.HasSuffix(base, ".mp4") {
@@ -55,16 +62,19 @@ func ParseBufferFragment(path string, info os.FileInfo) (BufferFragment, bool) {
 		return BufferFragment{}, false
 	}
 	seqSeparated := strings.Join(parts[:6], "-")
-	start, err := time.ParseInLocation("2006-01-02-15-04-05", seqSeparated, time.UTC)
+	if zone == nil {
+		zone = time.Local
+	}
+	local, err := time.ParseInLocation("2006-01-02-15-04-05", seqSeparated, zone)
 	if err != nil {
 		return BufferFragment{}, false
 	}
 	return BufferFragment{
 		Path:  path,
-		Start: start,
-		// The end is filled in by the caller from the file's mtime, which is the
-		// instant ZLM closed it. Using a nominal duration here would misreport a
-		// fragment that was cut short by a stream restart.
+		Start: local.UTC(),
+		// The end is the instant ZLM closed the file. mtime is reported in the
+		// process's location, and converting it to UTC keeps every comparison in
+		// this package on one clock.
 		End:  info.ModTime().UTC(),
 		Size: info.Size(),
 	}, true
@@ -160,7 +170,7 @@ func ScanBufferFragments(root string) ([]BufferFragment, error) {
 		if err != nil {
 			return nil
 		}
-		if fragment, ok := ParseBufferFragment(path, info); ok {
+		if fragment, ok := ParseBufferFragment(path, info, time.Local); ok {
 			out = append(out, fragment)
 		}
 		return nil
