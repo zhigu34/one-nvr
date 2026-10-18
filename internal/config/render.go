@@ -173,6 +173,11 @@ func BuildDeployment(v map[string]string) (Deployment, error) {
 			// The API reports the cache's usage on the overview page, and the
 			// worker writes into it; both need the same path.
 			env["ONE_NVR_EVENT_CACHE_DIR"] = "/cache"
+			// The size travels too. The process decides whether the feature is
+			// enabled from this value, and a container that can see the mount but
+			// not the size reports "not configured" while a tmpfs sits empty
+			// beside it — which is exactly what happened on the live site.
+			env["ONE_NVR_EVENT_CACHE_MB"] = fmt.Sprint(c.EventCacheMB)
 		}
 		d.Services[name] = Service{Image: appImage, User: "10001:10001", EntryPoint: []string{"/usr/local/bin/" + name}, Environment: env, Volumes: serviceVolumes, Restart: "unless-stopped", DependsOn: map[string]map[string]string{"postgres": {"condition": "service_healthy"}}, HealthCheck: map[string]any{"test": []string{"CMD", "/usr/local/bin/admin", "ready-check", "http://127.0.0.1:" + port + "/health/ready"}, "interval": "10s", "timeout": "5s", "retries": 6}}
 	}

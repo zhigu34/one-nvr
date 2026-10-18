@@ -231,4 +231,13 @@ func TestEventCacheMountIsOptIn(t *testing.T) {
 	if with.Services["api"].Environment["ONE_NVR_EVENT_CACHE_DIR"] != "/cache" {
 		t.Fatal("api is not told where the cache is mounted")
 	}
+	// The size must travel as well as the path: the process decides whether the
+	// feature is on from the size, so a container that can see the mount but not
+	// the size reports "not configured" while an empty tmpfs sits beside it.
+	// Measured on the live site exactly that way.
+	for _, name := range []string{"api", "worker"} {
+		if got := with.Services[name].Environment["ONE_NVR_EVENT_CACHE_MB"]; got != "512" {
+			t.Fatalf("%s is not told the cache size (got %q); the buffer would report not configured", name, got)
+		}
+	}
 }
