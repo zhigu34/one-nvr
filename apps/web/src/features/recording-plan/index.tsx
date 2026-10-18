@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '@/stores/auth-store'
-import { apiRequest } from '@/lib/api-client'
+import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -22,6 +22,7 @@ import {
 import { useAPI, useAction } from '@/features/foundation/hooks'
 import { sourceCommand } from '@/features/channels/api'
 import { PolicyRow } from './policy-row'
+import { MANUAL_DURATIONS } from './durations'
 import {
   boundOrDefaultPool,
   failureText,
@@ -35,12 +36,15 @@ const PLANNED_MODES = [
   { label: '事件录像（后续开放）', value: 'event' },
 ]
 
+
+
 type RowFilter = 'all' | 'recording' | 'off' | 'unconfigured'
 
 export function RecordingPlan() {
   const admin = useAuthStore((state) => state.user?.role === 'admin')
   const client = useQueryClient()
   const batch = useAction()
+  const manualBatch = useAction()
   const channels = useAPI<PageData<Schema<'Channel'>>>(
     '/api/v1/channels?limit=100',
     true,
@@ -59,6 +63,7 @@ export function RecordingPlan() {
   const [poolID, setPoolID] = useState('')
   const [filter, setFilter] = useState<RowFilter>('all')
   const [outcome, setOutcome] = useState('')
+  const [manualMinutes, setManualMinutes] = useState(30)
   const [dirtyRows, setDirtyRows] = useState<Set<string>>(new Set())
 
   const items = channels.data?.items || []
@@ -306,6 +311,57 @@ export function RecordingPlan() {
       }, '批量绑定已执行')
   }
 
+  // Manual recording is a request, not a mode, so it cannot ride the batch
+  // mode select: "start" and "stop" are different verbs and a select can only
+  // express one value. It gets its own duration control and its own buttons.
+  //
+  // Sequential like the bind batch, for the same reason: each start opens a
+  // window with its own audit row, and a burst of parallel writes into the
+  // same worker queue is how a batch of eight becomes a pile of conflicts.
+  // Every row gets its own result — a partial batch must not read as success.
+  async function batchManual(action: 'start' | 'stop') {
+    if (chosen.length === 0) return
+    setOutcome('')
+    await manualBatch.run(
+      async () => {
+        const ok: string[] = []
+        const failed: string[] = []
+        for (const channel of chosen) {
+          const label = `CH${String(channel.channel_no).padStart(2, '0')}`
+          try {
+            if (action === 'start') {
+              await apiRequest(
+                `/api/v1/channels/${channel.id}/manual-recording`,
+                jsonRequest('POST', { minutes: manualMinutes })
+              )
+            } else {
+              await apiRequest(
+                `/api/v1/channels/${channel.id}/manual-recording`,
+                { method: 'DELETE' }
+              )
+            }
+            ok.push(label)
+          } catch (e) {
+            failed.push(
+              `${label}: ${
+                e instanceof Error && e.message ? e.message : '操作失败'
+              }`
+            )
+          }
+        }
+        const verb = action === 'start' ? '已开始手动录像' : '已停止手动录像'
+        const parts: string[] = []
+        if (ok.length) parts.push(`${ok.length} 路${verb}`)
+        if (failed.length) parts.push(`失败：${failed.join('；')}`)
+        setOutcome(parts.join(' · '))
+        if (failed.length === 0) setSelected(new Set())
+        await client.invalidateQueries()
+      },
+      action === 'start' ? '批量手动录像已提交' : '批量停止已提交',
+      false
+    )
+  }
+
   return (
     <>
       <PageTitle
@@ -397,6 +453,47 @@ export function RecordingPlan() {
                   onClick={() => void applyBatch()}
                 >
                   批量应用
+                </Button>
+              </div>
+              {/* Manual recording is a request rather than a stored mode, so
+                  it cannot ride the batch mode select above: start and stop
+                  are different verbs and one select cannot express both.
+                  Labelled 限时录像 rather than 手动录像 because the mode select
+                  beside it already reads 手动（连续录像）— two controls both
+                  saying "manual" for different actions is how an operator
+                  starts continuous recording when they meant a 30-minute
+                  window. */}
+              <div className='flex items-center gap-2 border-s ps-4'>
+                <span className='text-xs text-muted-foreground'>
+                  批量限时录像:
+                </span>
+                <SelectField
+                  ariaLabel='批量限时录像时长'
+                  className='w-24'
+                  triggerClassName='min-w-0 [&>span[data-slot=select-value]]:truncate'
+                  value={String(manualMinutes)}
+                  onValueChange={(value) => setManualMinutes(Number(value))}
+                  options={MANUAL_DURATIONS.map((minutes) => ({
+                    value: String(minutes),
+                    label: `${minutes} 分钟`,
+                  }))}
+                />
+                <Button
+                  type='button'
+                  size='sm'
+                  disabled={manualBatch.pending || chosen.length === 0}
+                  onClick={() => void batchManual('start')}
+                >
+                  开始录像
+                </Button>
+                <Button
+                  type='button'
+                  variant='outline'
+                  size='sm'
+                  disabled={manualBatch.pending || chosen.length === 0}
+                  onClick={() => void batchManual('stop')}
+                >
+                  停止
                 </Button>
               </div>
               {chosen.length > 0 && (

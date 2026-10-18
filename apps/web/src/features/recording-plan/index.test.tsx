@@ -147,6 +147,16 @@ function fixture(
       return { items: [channel], next_cursor: null }
     // The manual window probe answers 404 when nothing is running; the control
     // must read that as "idle" and only surface a warning for real failures.
+    if (method === 'POST' && path.endsWith('/manual-recording')) {
+      return {
+        channel_id: channel.id,
+        requested_minutes: 30,
+        started_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+        remaining_ms: 30 * 60_000,
+      }
+    }
+    if (method === 'DELETE' && path.endsWith('/manual-recording')) return {}
     if (method === 'GET' && path.endsWith('/manual-recording')) {
       if (options.manual === 'denied')
         throw new ApiError(500, 'service_error', '服务暂时不可用')
@@ -403,9 +413,9 @@ test('a running manual window shows its remaining time', async () => {
   const setup = fixture({ manual: 'running' })
   const view = await render(setup.view)
   await expect.element(view.getByTestId('manual-recording-active')).toBeVisible()
-  await expect.element(view.getByText(/手动录像 25 分钟/)).toBeVisible()
+  await expect.element(view.getByText(/限时录像 25 分钟/)).toBeVisible()
   await expect
-    .element(view.getByRole('button', { name: 'CH01 停止手动录像' }))
+    .element(view.getByRole('button', { name: 'CH01 停止限时录像' }))
     .toBeVisible()
   setup.client.clear()
 })
@@ -413,7 +423,7 @@ test('a running manual window shows its remaining time', async () => {
 test('starting a manual window posts the chosen duration', async () => {
   const setup = fixture()
   const view = await render(setup.view)
-  await userEvent.click(view.getByRole('button', { name: 'CH01 手动录像' }))
+  await userEvent.click(view.getByRole('button', { name: 'CH01 限时录像' }))
   await userEvent.click(
     view.getByRole('button', { name: 'CH01 录像 10 分钟' })
   )
@@ -439,5 +449,67 @@ test('an unreadable manual state is reported instead of assumed idle', async () 
   const setup = fixture({ manual: 'denied' })
   const view = await render(setup.view)
   await expect.element(view.getByText(/状态未知/)).toBeVisible()
+  setup.client.clear()
+})
+
+// Batch manual recording: the mode select cannot carry it (start and stop are
+// different verbs), so it has its own control. Every selected channel must
+// receive its own request, and a selection of two must produce two calls.
+test('batch manual recording starts a window on every selected channel', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  await userEvent.click(view.getByLabelText('选择 CH01'))
+  await userEvent.click(
+    view.getByRole('button', { name: '开始录像', exact: true })
+  )
+  await expect
+    .poll(
+      () =>
+        setup.mutations.filter(
+          (m) => m.init.method === 'POST' && m.path.endsWith('/manual-recording')
+        ).length
+    )
+    .toBe(1)
+  const post = setup.mutations.find(
+    (m) => m.init.method === 'POST' && m.path.endsWith('/manual-recording')
+  )
+  expect(JSON.parse(post?.init.body as string)).toEqual({ minutes: 30 })
+  // The stored policy is untouched: a manual window is a request, not a mode.
+  expect(setup.mutations.some((m) => m.path.endsWith('/recording-policy'))).toBe(
+    false
+  )
+  await expect.element(view.getByText(/1 路已开始手动录像/)).toBeVisible()
+  setup.client.clear()
+})
+
+test('batch manual recording stops the selected channels', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  await userEvent.click(view.getByLabelText('选择 CH01'))
+  await userEvent.click(view.getByRole('button', { name: '停止', exact: true }))
+  await expect
+    .poll(
+      () =>
+        setup.mutations.filter(
+          (m) => m.init.method === 'DELETE' && m.path.endsWith('/manual-recording')
+        ).length
+    )
+    .toBe(1)
+  await expect.element(view.getByText(/1 路已停止手动录像/)).toBeVisible()
+  setup.client.clear()
+})
+
+// The batch buttons require a selection; without one they must not fire a
+// request against every channel on the page.
+test('batch manual buttons stay disabled with nothing selected', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  await expect
+    .element(view.getByRole('button', { name: '开始录像', exact: true }))
+    .toBeDisabled()
+  await expect
+    .element(view.getByRole('button', { name: '停止', exact: true }))
+    .toBeDisabled()
+  expect(setup.mutations).toHaveLength(0)
   setup.client.clear()
 })

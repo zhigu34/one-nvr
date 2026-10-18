@@ -6,6 +6,7 @@ import { ApiError, apiRequest, jsonRequest } from '@/lib/api-client'
 import { Button } from '@/components/ui/button'
 import { useAPI } from '@/features/foundation/hooks'
 import { cn } from '@/lib/utils'
+import { MANUAL_DURATIONS } from './durations'
 import { remainingLabel } from './manual-format'
 
 /**
@@ -21,8 +22,6 @@ import { remainingLabel } from './manual-format'
  * an operator what is left, while "30 分钟" would be equally true at minute 1 and
  * minute 29.
  */
-const DURATIONS = [10, 30, 60, 120] as const
-
 export function ManualRecordingControl({
   channelId,
   label,
@@ -95,7 +94,7 @@ export function ManualRecordingControl({
           title={`开始于 ${new Date(window.started_at).toLocaleTimeString('zh-CN', { hour12: false })}，共 ${window.requested_minutes} 分钟`}
         >
           <span aria-hidden className='size-1.5 animate-pulse rounded-full bg-red-500' />
-          手动录像 {remainingLabel(window.remaining_ms)}
+          限时录像 {remainingLabel(window.remaining_ms)}
         </span>
         <Button
           type='button'
@@ -103,7 +102,7 @@ export function ManualRecordingControl({
           size='sm'
           className='h-7 px-2 text-xs'
           disabled={pending || disabled}
-          aria-label={`${label} 停止手动录像`}
+          aria-label={`${label} 停止限时录像`}
           onClick={() => void stop()}
         >
           <Square aria-hidden className='size-3' />
@@ -126,16 +125,16 @@ export function ManualRecordingControl({
         size='sm'
         className='h-7 px-2 text-xs'
         disabled={pending || disabled}
-        aria-label={`${label} 手动录像`}
+        aria-label={`${label} 限时录像`}
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
       >
         <Circle aria-hidden className='size-3 text-red-500' />
-        手动录像
+        限时录像
       </Button>
       {open && (
         <span className='inline-flex items-center gap-1 rounded-md border px-1 py-0.5'>
-          {DURATIONS.map((minutes) => (
+          {MANUAL_DURATIONS.map((minutes) => (
             <button
               key={minutes}
               type='button'
