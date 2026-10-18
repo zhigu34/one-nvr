@@ -379,3 +379,33 @@ test('a known brand offers its RTSP path template', async () => {
     .element(view.getByLabelText('子流路径（可留空）'))
     .toHaveValue('/Streaming/Channels/102')
 })
+
+// The RTSP port field must be a sibling of the IP column inside the same
+// two-column grid, not nested in it: nesting it under the IP column made the
+// grid stretch the shorter column, which floated the port label down beside the
+// IP input.
+//
+// This asserts structure rather than pixel geometry on purpose — the test
+// browser does not load the application stylesheet, so a geometric assertion
+// here would measure unstyled DOM and prove nothing.
+test('the RTSP port field shares the IP row grid', async () => {
+  const view = await render(wrapper(channel, revision, vi.fn()))
+  const ipLabel = view.getByText('IP 地址', { exact: true }).element()
+  const portInput = view.getByLabelText('RTSP 端口').element()
+
+  // Walk up from the IP label to the first ancestor that also contains the port
+  // input: that is the shared row grid. The old markup put the port field inside
+  // the IP column, so this ancestor did not exist.
+  let node: HTMLElement | null = ipLabel.parentElement
+  let grid: HTMLElement | null = null
+  while (node) {
+    if (node.contains(portInput)) {
+      grid = node
+      break
+    }
+    node = node.parentElement
+  }
+  expect(grid).not.toBeNull()
+  // The IP column itself must not contain the port field.
+  expect(ipLabel.parentElement!.contains(portInput)).toBe(false)
+})

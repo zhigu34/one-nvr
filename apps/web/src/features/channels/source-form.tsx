@@ -275,7 +275,12 @@ function SourceEditor({
                   </p>
                 )}
               </div>
-              <div className='grid gap-4 sm:grid-cols-[minmax(0,1fr)_110px]'>
+              {/* items-start keeps the two labels on one line. The IP column is
+                  taller than the port column (it may carry a prefix and always
+                  carries help text), and with the default stretch the port block
+                  floated down to the vertical centre of its neighbour — its label
+                  landed beside the IP input instead of above its own. */}
+              <div className='grid items-start gap-4 sm:grid-cols-[minmax(0,1fr)_140px]'>
                 <div className='grid gap-2'>
                   <label
                     htmlFor='source-ip'
@@ -307,11 +312,6 @@ function SourceEditor({
                       )}
                     />
                   </div>
-                  <p className='text-[11px] text-muted-foreground'>
-                    {method === 'onvif'
-                      ? '地址与凭据会用于探测，不保存凭据。'
-                      : '填写摄像头地址，路径在下方「码流路径」。'}
-                  </p>
                 </div>
                 {(method === 'rtsp' || probed) && (
                   <Field
@@ -325,6 +325,14 @@ function SourceEditor({
                     required
                   />
                 )}
+                {/* Spans both columns: as a child of the IP column it added
+                    height that the port column did not have, which is what made
+                    the two rows disagree. */}
+                <p className='text-[11px] text-muted-foreground sm:col-span-2'>
+                  {method === 'onvif'
+                    ? '地址与凭据会用于探测，不保存凭据。'
+                    : '填写摄像头地址，路径在下方「码流路径」。'}
+                </p>
               </div>
               <div className='grid gap-4 sm:grid-cols-2'>
                 <Field
