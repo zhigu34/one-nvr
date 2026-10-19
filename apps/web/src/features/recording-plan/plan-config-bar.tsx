@@ -316,6 +316,14 @@ export function PlanConfigBar({
             CH{String(solo.channel_no).padStart(2, '0')}
           </span>
         )}
+        {/* Nothing selected: every control on this bar is disabled, and without
+            a word of explanation the page reads as broken. Say what to do
+            instead of leaving an operator to guess why the buttons are dead. */}
+        {chosenCount === 0 && (
+          <span className='rounded-md border border-dashed border-border px-2 py-0.5 text-xs text-muted-foreground'>
+            先在下方勾选要改的通道
+          </span>
+        )}
 
         {/* Mode as segmented buttons: three values with one meaning each, and a
             select hides two of them behind a click. */}

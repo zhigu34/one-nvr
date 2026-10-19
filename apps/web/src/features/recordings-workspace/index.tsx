@@ -428,7 +428,7 @@ function ChannelRow({
         // tabular-nums keeps the column from shifting as the counts change.
         <span
           title={`当前时段 ${segments} 段录像`}
-          className='rounded bg-zinc-700/50 px-1 py-0.5 text-[10px] font-normal tabular-nums text-zinc-400'
+          className='rounded px-1 py-0.5 text-[10px] font-normal tabular-nums text-zinc-500'
         >
           {segments > 999 ? '999+' : segments}
         </span>
@@ -436,7 +436,7 @@ function ChannelRow({
       {group && (
         <span
           title={`分组 · ${group}`}
-          className='rounded bg-emerald-400/15 px-1 py-0.5 text-[10px] text-emerald-300'
+          className='rounded border border-video-border px-1 py-0.5 text-[10px] text-video-chrome-foreground/70'
         >
           {group}
         </span>

@@ -253,8 +253,9 @@ test('cards show channel and zone, and the filter bar counts and batch-marks', a
   await expect.element(cards.nth(0)).toHaveTextContent('12s')
   await expect.element(cards.nth(1)).toHaveTextContent('结束未知')
   await expect.element(cards.nth(1)).toHaveTextContent('抓拍未到达')
-  // The compact bar counts what is loaded.
-  await expect.element(screen.getByText('已加载 2 条')).toBeVisible()
+  // The bar counts what has been FETCHED, not what exists — "已加载" beside a
+  // "全部…" button read as "these are all of them".
+  await expect.element(screen.getByText(/已取 2 条/)).toBeVisible()
   // One click retires both open events; the PATCHes carry per-row versions.
   await screen.getByRole('button', { name: /全部标为已处理/ }).click()
   await vi.waitFor(() => expect(mutations.length).toBe(2))

@@ -348,8 +348,15 @@ export function Events() {
                   {markAllError}
                 </span>
               )}
-              <span className='text-xs tabular-nums text-muted-foreground'>
-                已加载 {items.length} 条
+              {/* "已加载" beside a "全部…" button read as "these are all of
+                  them". The count is the first page, and saying so is what
+                  stops an operator from believing the index holds 50 events. */}
+              <span
+                className='text-xs tabular-nums text-muted-foreground'
+                title='列表按时间倒序分页加载，这里只统计已取到的部分'
+              >
+                已取 {items.length} 条
+                {hasMore ? '（还有更早的）' : ''}
               </span>
               <Button
                 type='button'

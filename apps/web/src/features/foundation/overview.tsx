@@ -314,8 +314,17 @@ export function Overview() {
                     </span>
                   </p>
                   <p className='mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs'>
-                    <span className='text-emerald-600 dark:text-emerald-400'>
+                    {/* Coverage is a ratio against OWED time, not against the
+                        clock. A site where most channels record only on events
+                        owes little, so a low percentage is not a fault — but
+                        painted green beside "无中断" it read as a contradiction.
+                        Neutral colour plus the denominator says what it means. */}
+                    <span
+                      className='text-muted-foreground'
+                      title='已覆盖时长 ÷ 应录时长。只在计划或连续录像的通道计入分母，因此事件录像为主的站点数值天然偏低。'
+                    >
                       录像覆盖 {recordingCoverage ?? '—'}
+                      <span className='text-muted-foreground/60'>（按应录时长）</span>
                     </span>
                     {abnormalChannels > 0 ? (
                       <span className='text-amber-600 dark:text-amber-400'>

@@ -30,11 +30,16 @@ import {
  * seamless so only true dropouts read as gaps.
  */
 
-const HEIGHT = 76
+// The segment band is what an operator drags, scrubs and reads gaps from, so it
+// gets the room. At 30px a 1-hour window compressed 231 segments into a band
+// where a 30-second dropout was a single unclickable pixel; the band is now
+// tall enough to aim at, and the whole strip grew with it rather than stealing
+// the space from the ticks and the event track.
+const HEIGHT = 148
 const DENSITY_H = 8
-const TICKS_H = 12
-const SEGMENTS_H = 30
-const EVENTS_H = 12
+const TICKS_H = 14
+const SEGMENTS_H = 96
+const EVENTS_H = 16
 // Ticks sit between the density bar and the segment bar; 1px of headroom on
 // both sides keeps the density inset from the rounded frame. The event track
 // keeps a 4px bottom inset so amber marks never touch the canvas edge.
