@@ -70,6 +70,10 @@ CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真�
   - **现场复验**：部署后同步循环自动跑了一轮 → 新 `published` 记录（01:24:41）→ **3 分钟内 0 条 ffmpeg 错误**、Frigate healthy。配置里的 5 个摄像头与数据库的 5 个启用通道一致。
   - **测试**：`detection/reload_test.go` 3 个（重启后不回来必须失败、回来了必须成功且容忍中途拒绝、请求被拒立即失败）；集成 1 个（`TestSessionSyncSurvivesAFailedPublication`：失败发布后 session 漂移仍必须能被同步）。**两个修复都验证过「改回旧实现会 FAIL」**。
   - **「会话泄漏」是我的误判，已核实并撤回**：CH01 的两条 active 会话是 **main（generation 5743）与 sub（5744）各一条**，属于正常设计。`detection_configs.stream='sub'`，所以检测配置指向 sub 会话是**正确的**。核实方式：`SELECT stream,purpose,state FROM stream_sessions` —— 我最初漏了 `purpose` 列，把两个不同用途的会话当成了同一个的重复。**教训**：判断「重复会话」必须同时看 `purpose`。
+  - **NAS 的 git 代理：配在 root 的 `--global`，我查的是 `zhigu34` 所以看成了「没有代理」**。用户的 `root` 全局配置是 `http.proxy` / `https.proxy` = `http://192.168.66.90:7890`；`zhigu34` 的全局配置**原本是空的**（只有一条 `safe.directory`），所以 `git pull` 全程走直连，而直连的 DNS 只给一个时通时断的地址。**这是排查方向的错误，不是配置错误**：我先查 `env | grep proxy`、`~/.bashrc`、`/etc/docker/daemon.json`，看到 Docker 有代理就以为 shell 也有——**但 Docker daemon 的 `proxies` 只服务 `docker pull`，与 git 无关**。
+    - **已在 `zhigu34` 的 `--global` 补上同一份代理**（`.90:7890`，不是我从 `daemon.json` 里抄错的 `.142`），仓库局部不再设 proxy，直接继承全局。
+    - **`~/deploy-one-nvr.sh` 不再硬编码代理地址**：先按全局配置普通 pull，失败才临时禁用代理直连，最后才逐个探测 IP。**硬编码的地址迟早过期，而不存在的地址比没有更糟**——我这轮就先把 `.142` 写进仓库局部，还因为「碰巧能通」误判成修好了。
+    - **以后查代理要同时看三处**：`git config --global --list`（注意 `sudo -n` 与当前账号是两份）、`git config --local`、以及 Docker 的 `daemon.json`（只影响镜像拉取）。
 
 
 - **2026-10-19 定时/事件录制批次 3 已实现：事件前录缓冲（REC-09/10）**。这是三个批次的最后一块。
