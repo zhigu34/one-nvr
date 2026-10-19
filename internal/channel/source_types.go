@@ -97,7 +97,18 @@ type StreamTest struct {
 	// capture existed, "" when the stream carries no audio, otherwise the
 	// ffmpeg codec name (pcm_alaw, aac, ...).
 	AudioCodec *string `json:"audio_codec,omitempty"`
-	Reason     string  `json:"reason,omitempty"`
+	// The extended technical facts, all optional: results written before they
+	// were captured simply omit them, and the UI prints absence rather than a
+	// guess.
+	Profile          string `json:"profile,omitempty"`
+	Level            string `json:"level,omitempty"`
+	BitrateKbps      int    `json:"bitrate_kbps,omitempty"`
+	PixelFormat      string `json:"pixel_format,omitempty"`
+	SampleAspect     string `json:"sample_aspect,omitempty"`
+	AudioSampleRate  int    `json:"audio_sample_rate,omitempty"`
+	AudioChannels    int    `json:"audio_channels,omitempty"`
+	AudioBitrateKbps int    `json:"audio_bitrate_kbps,omitempty"`
+	Reason           string `json:"reason,omitempty"`
 }
 type SourceTestResult struct {
 	ID         id.ID      `json:"id"`
@@ -139,12 +150,20 @@ type Status struct {
 // current connection state, so it survives an unreachable camera; nil means
 // the applied revision has no successful test on record.
 type MediaParams struct {
-	Codec      string     `json:"codec,omitempty"`
-	Width      int        `json:"width,omitempty"`
-	Height     int        `json:"height,omitempty"`
-	FPS        float64    `json:"fps,omitempty"`
-	AudioCodec *string    `json:"audio_codec,omitempty"`
-	ObservedAt *time.Time `json:"observed_at,omitempty"`
+	Codec            string     `json:"codec,omitempty"`
+	Width            int        `json:"width,omitempty"`
+	Height           int        `json:"height,omitempty"`
+	FPS              float64    `json:"fps,omitempty"`
+	Profile          string     `json:"profile,omitempty"`
+	Level            string     `json:"level,omitempty"`
+	BitrateKbps      int        `json:"bitrate_kbps,omitempty"`
+	PixelFormat      string     `json:"pixel_format,omitempty"`
+	SampleAspect     string     `json:"sample_aspect,omitempty"`
+	AudioCodec       *string    `json:"audio_codec,omitempty"`
+	AudioSampleRate  int        `json:"audio_sample_rate,omitempty"`
+	AudioChannels    int        `json:"audio_channels,omitempty"`
+	AudioBitrateKbps int        `json:"audio_bitrate_kbps,omitempty"`
+	ObservedAt       *time.Time `json:"observed_at,omitempty"`
 }
 
 // SummaryItem is one row of the channel list: the business attributes plus the

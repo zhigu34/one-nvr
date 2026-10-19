@@ -33,11 +33,37 @@ type Runner struct{ FFmpeg, FFprobe string }
 func (Runner) String() string { return "<bounded media probe>" }
 
 type VideoEvidence struct {
-	FirstFrame bool      `json:"first_frame"`
-	Codec      string    `json:"codec"`
-	Width      int       `json:"width"`
-	Height     int       `json:"height"`
-	FPS        float64   `json:"fps"`
+	FirstFrame bool    `json:"first_frame"`
+	Codec      string  `json:"codec"`
+	Width      int     `json:"width"`
+	Height     int     `json:"height"`
+	FPS        float64 `json:"fps"`
+	// Profile is the codec profile the camera actually encodes with ("Main",
+	// "High", "Baseline"). It decides what a decoder can do with the stream and
+	// is the first thing to check when a camera's picture is unexpectedly soft:
+	// a "Baseline" H.264 stream has no B-frames and no CABAC.
+	Profile string `json:"profile,omitempty"`
+	// Level is the codec level ("4.1", "5.1"). It caps resolution and frame rate;
+	// a stream whose level is too low for its resolution is the reason some
+	// decoders refuse it outright.
+	Level string `json:"level,omitempty"`
+	// BitrateKbps is the encoder's declared video bit rate. Zero means the stream
+	// does not declare one (many encoders omit it), not that it is zero.
+	BitrateKbps int `json:"bitrate_kbps,omitempty"`
+	// PixelFormat is the raw pixel layout ("yuvj420p", "yuv420p10le", ...). The
+	// full-range "j" variants and 10-bit formats matter: browsers and the WebRTC
+	// path do not all accept them.
+	PixelFormat string `json:"pixel_format,omitempty"`
+	// SampleAspect is the stream's sample aspect ratio when it is not 1:1 — a
+	// camera encoding anamorphic video stores a different display width than its
+	// pixel width, and "704x576" alone then misdescribes the picture.
+	SampleAspect string `json:"sample_aspect,omitempty"`
+	// AudioSampleRate and AudioChannels describe the audio track the same way the
+	// video fields describe the picture.
+	AudioSampleRate int `json:"audio_sample_rate,omitempty"`
+	AudioChannels   int `json:"audio_channels,omitempty"`
+	// AudioBitrateKbps is the declared audio bit rate, zero when undeclared.
+	AudioBitrateKbps int `json:"audio_bitrate_kbps,omitempty"`
 	// AudioCodec is the first input audio stream's codec as printed by ffmpeg
 	// ("pcm_alaw", "aac", ...). A non-nil empty string means the stream
 	// genuinely carries no audio; nil means the evidence predates this capture
@@ -128,6 +154,22 @@ var codec = regexp.MustCompile(`Video: ([a-zA-Z0-9_]+)`)
 var audio = regexp.MustCompile(`Audio: ([a-zA-Z0-9_]+)`)
 var rate = regexp.MustCompile(`([0-9.]+) fps`)
 
+// The remaining fields come from the same "Stream #0:0" line, whose shape ffmpeg
+// keeps stable: codec, then the profile in brackets, the container tag, the
+// pixel format and dimensions in brackets, then bit rate, fps and level.
+//
+// Each pattern is deliberately narrow. A missing match leaves the field empty,
+// which the UI prints as absent rather than as a guess — a camera that does not
+// declare its bit rate must not appear to have a measured one.
+var (
+	profile      = regexp.MustCompile(`Video: [a-zA-Z0-9_]+ \(([^)]+)\)`)
+	pixelFormat  = regexp.MustCompile(`Video: [^,]+, ([a-zA-Z0-9]+)(?:\([^)]*\))?, \d+x\d+`)
+	videoRate    = regexp.MustCompile(`, (\d+) kb/s`)
+	sampleAspect = regexp.MustCompile(`\[SAR (\d+:\d+) DAR`)
+	codecLevel   = regexp.MustCompile(`Video: [^,]+.*?\((?:Main|High|Baseline|Constrained Baseline|Main 10|High 10|Rext)[^)]*\).*?\b(\d+\.\d+)`)
+	audioRate    = regexp.MustCompile(`Audio: [^,]+, (\d+) Hz, (\w+)`)
+)
+
 func (r Runner) FirstFrame(ctx context.Context, raw string) (VideoEvidence, error) {
 	if !validInternalURL(raw) {
 		return VideoEvidence{}, ErrProbeTarget
@@ -159,7 +201,52 @@ func (r Runner) FirstFrame(ctx context.Context, raw string) (VideoEvidence, erro
 	if m := audio.FindSubmatch(logs); len(m) == 2 {
 		audioCodec = string(m[1])
 	}
-	return VideoEvidence{FirstFrame: true, Codec: string(c[1]), Width: width, Height: height, FPS: fps, AudioCodec: &audioCodec, ObservedAt: time.Now().UTC()}, nil
+	evidence := VideoEvidence{
+		FirstFrame:   true,
+		Codec:        string(c[1]),
+		Width:        width,
+		Height:       height,
+		FPS:          fps,
+		AudioCodec:   &audioCodec,
+		ObservedAt:   time.Now().UTC(),
+		PixelFormat:  firstGroup(pixelFormat, logs),
+		SampleAspect: firstGroup(sampleAspect, logs),
+		Level:        firstGroup(codecLevel, logs),
+	}
+	// The profile sits in the first parenthesised group after the codec name.
+	// Only accept it when the codec line is present: a match on some unrelated
+	// parenthesised text would label the stream with a profile it does not have.
+	if codec.Find(logs) != nil {
+		evidence.Profile = firstGroup(profile, logs)
+	}
+	if m := videoRate.FindSubmatch(logs); len(m) == 2 {
+		evidence.BitrateKbps, _ = strconv.Atoi(string(m[1]))
+	}
+	if m := audioRate.FindSubmatch(logs); len(m) == 3 {
+		evidence.AudioSampleRate, _ = strconv.Atoi(string(m[1]))
+		evidence.AudioChannels = channelCount(string(m[2]))
+	}
+	return evidence, nil
+}
+
+// firstGroup returns capture group 1 of the first match, or "".
+func firstGroup(pattern *regexp.Regexp, data []byte) string {
+	if m := pattern.FindSubmatch(data); len(m) == 2 {
+		return strings.TrimSpace(string(m[1]))
+	}
+	return ""
+}
+
+// channelCount maps ffmpeg's channel layout word to a number. Unknown layouts
+// report 0, which the UI omits rather than printing a wrong count.
+func channelCount(layout string) int {
+	switch layout {
+	case "mono":
+		return 1
+	case "stereo":
+		return 2
+	}
+	return 0
 }
 func (r Runner) InspectMP4(ctx context.Context, file *os.File) (FileEvidence, error) {
 	if file == nil {

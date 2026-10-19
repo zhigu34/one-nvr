@@ -236,7 +236,14 @@ func mediaParams(t StreamTest, observed *time.Time) *MediaParams {
 	if t.Codec == "" && t.Width == 0 {
 		return nil
 	}
-	return &MediaParams{Codec: t.Codec, Width: t.Width, Height: t.Height, FPS: t.FPS, AudioCodec: t.AudioCodec, ObservedAt: observed}
+	return &MediaParams{
+		Codec: t.Codec, Width: t.Width, Height: t.Height, FPS: t.FPS,
+		Profile: t.Profile, Level: t.Level, BitrateKbps: t.BitrateKbps,
+		PixelFormat: t.PixelFormat, SampleAspect: t.SampleAspect,
+		AudioCodec: t.AudioCodec, AudioSampleRate: t.AudioSampleRate,
+		AudioChannels: t.AudioChannels, AudioBitrateKbps: t.AudioBitrateKbps,
+		ObservedAt: observed,
+	}
 }
 
 // worstOf reports the first real fault across the three kinds plus the newest

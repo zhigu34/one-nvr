@@ -51,7 +51,14 @@ const summaries: Schema<'ChannelSummary'>[] = [
       width: 2560,
       height: 1440,
       fps: 25,
+      profile: 'High',
+      level: '5.1',
+      bitrate_kbps: 4096,
+      pixel_format: 'yuvj420p',
       audio_codec: 'pcm_alaw',
+      audio_sample_rate: 8000,
+      audio_channels: 1,
+      audio_bitrate_kbps: 64,
       observed_at: '2026-10-09T05:00:00Z',
     },
     sub_media: {
@@ -59,6 +66,9 @@ const summaries: Schema<'ChannelSummary'>[] = [
       width: 704,
       height: 576,
       fps: 25,
+      profile: 'Main',
+      bitrate_kbps: 1024,
+      sample_aspect: '12:11',
       audio_codec: 'pcm_alaw',
       observed_at: '2026-10-09T05:00:00Z',
     },
@@ -420,10 +430,17 @@ test('media parameters, access badge and healthy-row shortcuts', async () => {
   const view = await render(setup.view)
   const rows = view.getByTestId('channel-row')
   await expect.element(rows.nth(0)).toHaveTextContent('ONVIF')
-  // Main stream as one badge line (2560×1440 ≈ 3.7MP → 3MP), sub stream dimmed
-  // beneath, audio as a pill; "no audio" never prints.
-  await expect.element(rows.nth(0)).toHaveTextContent('3MP·H.264·25fps')
-  await expect.element(rows.nth(0)).toHaveTextContent('子: 704×576 · 25fps')
+  // Main stream leads with the megapixel shorthand and then states the exact
+  // pixel count, codec profile, frame rate and declared bit rate; the sub stream
+  // sits dimmed beneath; audio is a pill and "no audio" never prints.
+  await expect.element(rows.nth(0)).toHaveTextContent('3MP')
+  await expect.element(rows.nth(0)).toHaveTextContent('2560×1440')
+  await expect.element(rows.nth(0)).toHaveTextContent('H.264')
+  await expect.element(rows.nth(0)).toHaveTextContent('High')
+  await expect.element(rows.nth(0)).toHaveTextContent('25fps')
+  await expect.element(rows.nth(0)).toHaveTextContent('4.1M')
+  await expect.element(rows.nth(0)).toHaveTextContent('子: 704×576')
+  await expect.element(rows.nth(0)).toHaveTextContent('Main')
   await expect.element(rows.nth(0)).toHaveTextContent('PCMA')
   await expect.element(rows.nth(0)).not.toHaveTextContent('无音频')
   await expect.element(rows.nth(0)).toHaveTextContent('192.168.66.114')
@@ -444,7 +461,11 @@ test('media parameters, access badge and healthy-row shortcuts', async () => {
       'href',
       `/recordings?channel=${summaries[0].channel_id}&at=&tab=playback`
     )
-  await expect.element(rows.nth(3)).toHaveTextContent('4MP·H.265·25fps')
+  // The cell now carries the facts that explain a soft or unplayable picture:
+  // the exact pixel count and the declared bit rate, not just the shorthand.
+  await expect.element(rows.nth(3)).toHaveTextContent('4MP')
+  await expect.element(rows.nth(3)).toHaveTextContent('2560×1920')
+  await expect.element(rows.nth(3)).toHaveTextContent('H.265')
   await expect.element(rows.nth(3)).toHaveTextContent('AAC')
   setup.client.clear()
 })

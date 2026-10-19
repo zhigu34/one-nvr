@@ -8466,10 +8466,42 @@
           "fps": {
             "type": "number"
           },
+          "profile": {
+            "type": "string",
+            "description": "Codec profile the camera encodes with (Main, High, Baseline). Absent when the test predates this capture."
+          },
+          "level": {
+            "type": "string",
+            "description": "Codec level (for example 4.1). Absent when the stream does not declare one."
+          },
+          "bitrate_kbps": {
+            "type": "integer",
+            "description": "Declared video bit rate in kbps. Absent when the encoder does not declare one — that is not a measured value of zero."
+          },
+          "pixel_format": {
+            "type": "string",
+            "description": "Raw pixel layout such as yuvj420p or yuv420p10le."
+          },
+          "sample_aspect": {
+            "type": "string",
+            "description": "Sample aspect ratio when it is not 1:1, so anamorphic video is not misdescribed by its pixel size."
+          },
           "audio_codec": {
             "type": "string",
             "nullable": true,
             "description": "Audio codec as reported by the probe. Empty string means the stream carries no audio; null when the test predates audio capture."
+          },
+          "audio_sample_rate": {
+            "type": "integer",
+            "description": "Audio sample rate in Hz."
+          },
+          "audio_channels": {
+            "type": "integer",
+            "description": "Audio channel count."
+          },
+          "audio_bitrate_kbps": {
+            "type": "integer",
+            "description": "Declared audio bit rate in kbps."
           },
           "observed_at": {
             "type": "string",

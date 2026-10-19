@@ -2312,8 +2312,24 @@ export interface components {
             width?: number;
             height?: number;
             fps?: number;
+            /** @description Codec profile the camera encodes with (Main, High, Baseline). Absent when the test predates this capture. */
+            profile?: string;
+            /** @description Codec level (for example 4.1). Absent when the stream does not declare one. */
+            level?: string;
+            /** @description Declared video bit rate in kbps. Absent when the encoder does not declare one — that is not a measured value of zero. */
+            bitrate_kbps?: number;
+            /** @description Raw pixel layout such as yuvj420p or yuv420p10le. */
+            pixel_format?: string;
+            /** @description Sample aspect ratio when it is not 1:1, so anamorphic video is not misdescribed by its pixel size. */
+            sample_aspect?: string;
             /** @description Audio codec as reported by the probe. Empty string means the stream carries no audio; null when the test predates audio capture. */
             audio_codec?: string | null;
+            /** @description Audio sample rate in Hz. */
+            audio_sample_rate?: number;
+            /** @description Audio channel count. */
+            audio_channels?: number;
+            /** @description Declared audio bit rate in kbps. */
+            audio_bitrate_kbps?: number;
             /** Format: date-time */
             observed_at?: string | null;
         };
