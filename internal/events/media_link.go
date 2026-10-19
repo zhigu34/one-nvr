@@ -215,6 +215,24 @@ func (s *Service) ReconcileEventMedia(ctx context.Context) {
 	}
 }
 
+// channelBuffering reports whether a worker is currently keeping a ring for this
+// channel, using the same staleness rule the scheduler does.
+//
+// The buffer heartbeat is what makes this reliable: a row whose owner stopped
+// beating describes a tmpfs that died with that worker, so trusting it would queue
+// work against footage that no longer exists.
+func (s *Service) channelBuffering(ctx context.Context, tx pgx.Tx, channelID id.ID) bool {
+	var active bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM event_buffers WHERE channel_id=$1 AND heartbeat_at>clock_timestamp()-interval '2 minutes')`, channelID).Scan(&active)
+	if err != nil {
+		// A read failure must not silently drop a clip: assuming a buffer exists
+		// costs one row the assembler will resolve; assuming it does not lose the
+		// footage entirely.
+		return true
+	}
+	return active
+}
+
 // queueClipJob records that a buffered clip should be assembled for this event.
 //
 // Written here rather than by calling the recording package: events must not

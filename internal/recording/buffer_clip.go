@@ -333,3 +333,32 @@ func clipErrorCode(err error) string {
 
 var _ = fmt.Sprintf
 var _ = io.EOF
+
+// EventClipJobRetention is how long a finished clip job is kept.
+//
+// Longer than the buffer itself and shorter than the event index: the job is
+// useful while someone might ask "why does this event have no footage", and the
+// answer is stable within a week.
+const EventClipJobRetention = 7 * 24 * time.Hour
+
+// SweepEventClipJobs removes clip jobs that are settled and old.
+//
+// Only 'done' and 'failed' rows are removed. A 'queued' or 'growing' row is live
+// work, and deleting it would strand an event whose clip is still being cut.
+func (s *Service) SweepEventClipJobs(ctx context.Context) {
+	if s.DB == nil {
+		return
+	}
+	rows, err := s.DB.Pool.Exec(ctx, `DELETE FROM event_clip_jobs
+		WHERE state IN ('done','failed') AND updated_at < clock_timestamp()-make_interval(secs => $1)`,
+		EventClipJobRetention.Seconds())
+	if err != nil {
+		if ctx.Err() == nil {
+			slog.Warn("event clip job retention unavailable", "error", err)
+		}
+		return
+	}
+	if n := rows.RowsAffected(); n > 0 {
+		slog.Info("event clip jobs swept", "removed", n)
+	}
+}

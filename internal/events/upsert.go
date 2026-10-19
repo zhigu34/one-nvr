@@ -120,22 +120,28 @@ func (s *Service) eventUpsert(ctx context.Context, in upsertInput) error {
 			// in the same transaction: the job is a durable request that survives
 			// a worker restart between the detection and the assembly.
 			//
-			// The job is queued even when no buffer is running — the assembler
-			// reports "window empty" and the event keeps its honest verdict. Only
-			// queueing when a buffer looks active would race the heartbeat and
-			// silently drop footage the buffer actually holds.
-			//
-			// It is also re-queued on updates of an event that is still running,
-			// not only while the verdict is "unavailable": once a clip exists the
+			// It is re-queued on updates of an event that is still running, not
+			// only while the verdict is "unavailable": once a clip exists the
 			// verdict becomes linked, and gating on the verdict alone would freeze
 			// the clip at the first assembly — exactly the behaviour that left a
 			// five-minute detection with no footage until it ended.
 			//
-			// A finished event whose ordinary recording already covers it is the
-			// case that must NOT queue: the buffer would produce a second copy of
-			// footage that already exists.
+			// Three conditions must all hold:
+			//
+			//   - the buffer is needed: the event is still running, or nothing
+			//     ordinary covers it (a covered event would get a second copy of
+			//     footage that already exists);
+			//   - this channel is actually buffering. Queueing for a channel with
+			//     no buffer produced a permanent 'failed / window_empty' row for
+			//     every detection — measured on the live site at three rows within
+			//     twenty minutes on channels that had never enabled the switch,
+			//     with no cleanup to remove them. "Nothing to assemble" is not a
+			//     failure worth recording once per event per channel;
+			//   - no clip has been assembled yet, or the window has grown. A
+			//     finished event whose clip is already cut must not be re-cut on a
+			//     late duplicate message.
 			needsBuffer := stored.EndedAt == nil || link.State == "unavailable"
-			if needsBuffer {
+			if needsBuffer && s.channelBuffering(ctx, tx, *stored.ChannelID) {
 				if err := s.queueClipJob(ctx, tx, stored.ID, *stored.ChannelID, stored.StartedAt, stored.EndedAt); err != nil {
 					return err
 				}

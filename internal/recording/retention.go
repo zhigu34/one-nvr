@@ -42,6 +42,11 @@ func (s *Service) RunRetention(ctx context.Context) {
 		// this they accumulate at three rows per channel every ten seconds —
 		// millions a month — because nothing else deletes them.
 		s.SweepObservations(ctx)
+		// Event clip jobs are bookkeeping: once a job is finished the event's
+		// verdict is already on the event row, and a failed one is an answer
+		// ("no buffered footage") rather than work to retry. Keeping them forever
+		// would grow a table nobody reads, one row per detection.
+		s.SweepEventClipJobs(ctx)
 		// Archive-bound channels clean on their own shorter window, gated on a
 		// confirmed remote copy (ARC-05); the gate hook is injected by the
 		// assembly, so without it nothing happens.

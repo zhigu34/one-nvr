@@ -298,3 +298,114 @@ func clipJobStateOf(t *testing.T, fixture publishFixture, sourceID string) strin
 	}
 	return state
 }
+
+// A channel that is not buffering must not queue clip jobs: the assembler can
+// only answer "no window", and recording that answer once per detection per
+// channel grows a table nobody reads. Measured on the live site: three such rows
+// within twenty minutes on channels that had never enabled the switch.
+func TestEventWithoutABufferQueuesNothing(t *testing.T) {
+	fixture, service := newEventsFixture(t)
+	ctx := context.Background()
+	if err := service.SetMappings(ctx, fixture.Admin, map[id.ID]string{fixture.Channel: "front-door"}); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().UTC().Add(-2 * time.Minute)
+	if err := service.Ingest(ctx, frigatePayload("new", "evt-nobuf", "front-door", "person", float64(started.Unix()), nil, nil, false)); err != nil {
+		t.Fatal(err)
+	}
+	var jobs int
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM event_clip_jobs WHERE channel_id=$1`, fixture.Channel).Scan(&jobs); err != nil {
+		t.Fatal(err)
+	}
+	if jobs != 0 {
+		t.Fatalf("a channel with no buffer queued %d clip jobs that can only fail", jobs)
+	}
+}
+
+// The same event on a buffering channel does queue: the difference is the buffer,
+// not the event.
+func TestBufferingChannelQueuesClipWork(t *testing.T) {
+	fixture, service := newEventsFixture(t)
+	ctx := context.Background()
+	if err := service.SetMappings(ctx, fixture.Admin, map[id.ID]string{fixture.Channel: "front-door"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO event_buffers(channel_id,run_id,stream_session_id,source_revision_id,cache_path,keep_seconds,owner_token)
+		VALUES($1,$2,$3,$4,'/tmp',30,'test-owner')`, fixture.Channel, mustID(t), mustID(t), fixture.Revision); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().UTC().Add(-2 * time.Minute)
+	if err := service.Ingest(ctx, frigatePayload("new", "evt-buf", "front-door", "person", float64(started.Unix()), nil, nil, false)); err != nil {
+		t.Fatal(err)
+	}
+	var jobs int
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM event_clip_jobs WHERE channel_id=$1`, fixture.Channel).Scan(&jobs); err != nil {
+		t.Fatal(err)
+	}
+	if jobs != 1 {
+		t.Fatalf("a buffering channel queued %d jobs, want 1", jobs)
+	}
+}
+
+// A stale buffer row must not count: its tmpfs died with the worker that owned it,
+// so queueing against it would assemble footage that no longer exists.
+func TestStaleBufferDoesNotQueueClipWork(t *testing.T) {
+	fixture, service := newEventsFixture(t)
+	ctx := context.Background()
+	if err := service.SetMappings(ctx, fixture.Admin, map[id.ID]string{fixture.Channel: "front-door"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO event_buffers(channel_id,run_id,stream_session_id,source_revision_id,cache_path,keep_seconds,owner_token,heartbeat_at)
+		VALUES($1,$2,$3,$4,'/tmp',30,'dead-owner',clock_timestamp()-interval '10 minutes')`, fixture.Channel, mustID(t), mustID(t), fixture.Revision); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().UTC().Add(-2 * time.Minute)
+	if err := service.Ingest(ctx, frigatePayload("new", "evt-stalebuf", "front-door", "person", float64(started.Unix()), nil, nil, false)); err != nil {
+		t.Fatal(err)
+	}
+	var jobs int
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM event_clip_jobs WHERE channel_id=$1`, fixture.Channel).Scan(&jobs); err != nil {
+		t.Fatal(err)
+	}
+	if jobs != 0 {
+		t.Fatalf("a stale buffer row queued %d jobs against footage that is gone", jobs)
+	}
+}
+
+// Settled jobs are swept; live ones are not, however old they look.
+func TestClipJobRetentionKeepsLiveWork(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	fixture.Service.EventCacheDir = t.TempDir()
+	eventID := mustID(t)
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO events(id,channel_id,source,source_id,category,score,zones,started_at,snapshot_state,media_state,raw)
+		VALUES($1,$2,'frigate','evt-ret','person',0.5,'[]',clock_timestamp(),'gone','unavailable','{}')`, eventID, fixture.Channel); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	for state, age := range map[string]time.Duration{
+		"done":    30 * 24 * time.Hour,
+		"failed":  30 * 24 * time.Hour,
+		"growing": 30 * 24 * time.Hour,
+		"queued":  30 * 24 * time.Hour,
+	} {
+		ev := mustID(t)
+		if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO events(id,channel_id,source,source_id,category,score,zones,started_at,snapshot_state,media_state,raw)
+			VALUES($1,$2,'frigate',$3,'person',0.5,'[]',clock_timestamp(),'gone','unavailable','{}')`, ev, fixture.Channel, "src-"+state); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end,state,updated_at)
+			VALUES($1,$2,$3,$4,$5,$6)`, ev, fixture.Channel, now.Add(-time.Minute), now, state, now.Add(-age)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixture.Service.SweepEventClipJobs(ctx)
+	var remaining int
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM event_clip_jobs WHERE channel_id=$1`, fixture.Channel).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	// Only the two live rows survive.
+	if remaining != 2 {
+		t.Fatalf("%d jobs remained; settled ones must be swept and live ones kept", remaining)
+	}
+}
