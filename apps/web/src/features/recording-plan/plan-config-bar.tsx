@@ -6,6 +6,7 @@ import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { useAPI, useAction } from '@/features/foundation/hooks'
 import { sourceCommand } from '@/features/channels/api'
+import { boundOrDefaultPool, verifyPoolWrite } from '@/features/storage-pools/pool-check'
 import { cn } from '@/lib/utils'
 import { MANUAL_DURATIONS } from './durations'
 import { remainingLabel } from './manual-format'
@@ -155,17 +156,66 @@ export function PlanConfigBar({
             )
           }
           if (policy.mode !== effectiveMode) {
-            // A policy write is a source change: it queues a switch job, and
-            // the server rejects it without an idempotency key. sourceCommand is
-            // the helper that carries one, which is why the old per-row control
+            // A policy write is a source change: it queues a switch job, and the
+            // server rejects it without an idempotency key. sourceCommand is the
+            // helper that carries one, which is why the old per-row control
             // worked and this bar did not.
-            const change = await sourceCommand<Schema<'SourceChange'>>(
-              `/api/v1/channels/${channel.id}/recording-policy`,
-              { mode: effectiveMode },
-              policy.version,
-              undefined,
-              'PUT'
-            )
+            //
+            // One retry on 409: the token read a moment ago can be stale because
+            // anything else on the site may have touched the channel between the
+            // read and the write, and a batch that fails the whole row for that
+            // reports a conflict the operator cannot resolve from here.
+            let change: Schema<'SourceChange'>
+            try {
+              change = await sourceCommand<Schema<'SourceChange'>>(
+                `/api/v1/channels/${channel.id}/recording-policy`,
+                { mode: effectiveMode },
+                policy.version,
+                undefined,
+                'PUT'
+              )
+            } catch (cause) {
+              // Two different 409s arrive here and they need different
+              // handling. A stale version is retried once with a fresh token; a
+              // missing write proof is repaired by running one real pool check
+              // and retrying. Treating both as "someone else changed it" — which
+              // the first version did — told the operator to refresh when the
+              // actual problem was storage evidence, and refreshing would never
+              // fix it.
+              if (!(cause instanceof ApiError) || cause.status !== 409) throw cause
+              if (cause.code === 'zlm_write_evidence_unavailable') {
+                const poolID = await boundOrDefaultPool(channel.id ?? '')
+                if (!poolID) throw cause
+                const verified = await verifyPoolWrite(poolID)
+                if (!verified.ok) {
+                  // Rethrow the original: it carries the server's own reason,
+                  // and a fresh message would discard the context that says
+                  // which check failed.
+                  throw cause
+                }
+                const fresh = await apiRequest<Schema<'RecordingPolicy'>>(
+                  `/api/v1/channels/${channel.id}/recording-policy`
+                )
+                change = await sourceCommand<Schema<'SourceChange'>>(
+                  `/api/v1/channels/${channel.id}/recording-policy`,
+                  { mode: effectiveMode },
+                  fresh.version,
+                  undefined,
+                  'PUT'
+                )
+              } else {
+                const fresh = await apiRequest<Schema<'RecordingPolicy'>>(
+                  `/api/v1/channels/${channel.id}/recording-policy`
+                )
+                change = await sourceCommand<Schema<'SourceChange'>>(
+                  `/api/v1/channels/${channel.id}/recording-policy`,
+                  { mode: effectiveMode },
+                  fresh.version,
+                  undefined,
+                  'PUT'
+                )
+              }
+            }
             await settle(change.job_id)
           }
           if (!!policy.event_recording_enabled !== effectiveEvent) {
@@ -430,8 +480,14 @@ export function PlanConfigBar({
 }
 
 function describe(cause: unknown): string {
-  if (cause instanceof ApiError && cause.status === 409) {
-    return '配置已被其他人修改，请刷新后重试'
+  if (cause instanceof ApiError) {
+    // A 409 is not one thing. Naming the wrong one sends the operator to
+    // refresh a page that was never stale — which is exactly what happened
+    // while this bar was being built.
+    if (cause.code === 'zlm_write_evidence_unavailable') {
+      return '存储池写入检查未通过，请到「存储」页运行一次检查'
+    }
+    if (cause.status === 409) return '配置已被其他人修改，请刷新后重试'
   }
   return cause instanceof Error && cause.message ? cause.message : '操作失败'
 }
