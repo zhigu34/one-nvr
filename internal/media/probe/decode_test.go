@@ -72,3 +72,16 @@ func TestDecodeCheckRejectsInvalidAudio(t *testing.T) {
 		t.Fatal("corrupted audio decoded without complaint; the check cannot detect the defect it exists for")
 	}
 }
+
+// The null sink complains about non-monotonic DTS on some legitimate streams.
+// Counting that as corruption would delete healthy recordings: measured on the
+// live site, three of the first twenty files reported "corrupt" carried this
+// warning and nothing else.
+func TestDecodeCheckIgnoresMuxerComplaints(t *testing.T) {
+	if !isMuxerComplaint("[null @ 0x5592c944e980] Application provided invalid, non monotonically increasing dts to muxer in stream 0: 159 >= 159") {
+		t.Fatal("the null-sink DTS warning must not be counted as a decode error")
+	}
+	if isMuxerComplaint("[aac @ 0x5603451d32c0] Number of scalefactor bands in group (47) exceeds limit (40).") {
+		t.Fatal("a real AAC error was classified as a muxer complaint")
+	}
+}

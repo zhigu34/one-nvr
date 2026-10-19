@@ -46,12 +46,33 @@ func (r Runner) DecodeCheck(ctx context.Context, path string) DecodeReport {
 	runErr := cmd.Run()
 	output := strings.TrimSpace(stderr.String())
 	report := DecodeReport{Inspected: runErr == nil || output != ""}
-	if output != "" {
-		lines := strings.Split(output, "\n")
-		report.Errors = len(lines)
-		report.FirstError = strings.TrimSpace(lines[0])
+	if output == "" {
+		return report
+	}
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || isMuxerComplaint(line) {
+			continue
+		}
+		report.Errors++
+		if report.FirstError == "" {
+			report.FirstError = line
+		}
 	}
 	return report
+}
+
+// isMuxerComplaint reports whether a line is about the null OUTPUT sink rather
+// than the input.
+//
+// `-f null` re-muxes the decoded frames as they are produced, and for some
+// legitimate streams that muxer emits "Application provided invalid, non
+// monotonically increasing dts to muxer in stream 0: 159 >= 159". The file plays
+// fine; the complaint is about how this probe feeds its own discard sink.
+// Counting those marked healthy clips for deletion — measured on the live site,
+// three of the first twenty reported "corrupt" were only this.
+func isMuxerComplaint(line string) bool {
+	return strings.Contains(line, "non monotonically increasing dts to muxer")
 }
 
 // limitedBuffer keeps the first few kilobytes of stderr: a corrupt file can
