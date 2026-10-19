@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -1320,5 +1321,116 @@ func TestReconcilePublishesTheClipItCloses(t *testing.T) {
 	}
 	if segState != "ready" || locState != "ready" {
 		t.Fatalf("reconciliation closed the event but left its clip unpublished: segment=%q location=%q", segState, locState)
+	}
+}
+
+// A clip assembled in several passes must not be a concatenation of a
+// concatenation.
+//
+// The first version fed the previously published clip back in as the head of the
+// next assembly. That kept the start from moving, but it spliced AAC at a boundary
+// the previous pass had already spliced, and every generation left more invalid
+// audio. Measured against real ZLM fragments: one splice produced no AAC errors,
+// splicing that result again produced 51. A twenty-pass clip carried thousands,
+// and Chrome fails the whole clip on an undecodable audio track even though every
+// video frame is intact — the "可用但打不开" an operator reported.
+//
+// The parts directory is what breaks the chain: every input stays an original
+// recording, and each pass rebuilds from all of them.
+func TestClipNeverConcatenatesAPreviousClip(t *testing.T) {
+	ffmpeg := mediaTestTool(t, "ffmpeg")
+	ffprobe := mediaTestTool(t, "ffprobe")
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	cache := t.TempDir()
+	fixture.Service.EventCacheDir = cache
+	fixture.Service.EventCacheBytes = 512 << 20
+	fixture.Service.Probe = probe.Runner{FFmpeg: ffmpeg, FFprobe: ffprobe}
+
+	ring := filepath.Join(cache, "events", string(fixture.Channel))
+	if err := os.MkdirAll(ring, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Second)
+	writeFragment := func(offset int) {
+		start := base.Add(time.Duration(offset) * time.Second)
+		path := filepath.Join(ring, start.In(time.Local).Format("2006-01-02-15-04-05")+"-0.mp4")
+		if err := exec.Command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+			"-f", "lavfi", "-i", "testsrc2=size=160x90:rate=25", "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+			"-t", "3", "-c:v", "libx264", "-threads", "1", "-c:a", "aac", "-b:a", "32k", "-y", path).Run(); err != nil {
+			t.Fatal("synthetic fragment creation failed", err)
+		}
+		end := start.Add(3 * time.Second)
+		if err := os.Chtimes(path, end, end); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	eventID := mustID(t)
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO events(id,channel_id,source,source_id,category,score,zones,started_at,snapshot_state,media_state,raw)
+		VALUES($1,$2,'frigate','evt-generations','person',0.5,'[]',$3,'gone','pending','{}')`, eventID, fixture.Channel, base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end,state)
+		VALUES($1,$2,$3,$4,'queued')`, eventID, fixture.Channel, base, base.Add(6*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Four passes, each adding two fragments and evicting the oldest — exactly what
+	// a two-minute event does to a thirty-second ring.
+	for pass := 0; pass < 4; pass++ {
+		writeFragment(pass * 6)
+		writeFragment(pass*6 + 3)
+		if pass > 0 {
+			if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET state='queued',window_end=$2 WHERE event_id=$1`, eventID, base.Add(time.Duration(pass*6+6)*time.Second)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// Keep only the newest two fragments, as a thirty-second ring would after a
+		// long event: everything the earlier passes produced is already evicted.
+		entries, err := os.ReadDir(ring)
+		if err != nil {
+			t.Fatal(err)
+		}
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				names = append(names, entry.Name())
+			}
+		}
+		if len(names) > 2 {
+			sort.Strings(names)
+			for _, name := range names[:len(names)-2] {
+				if err := os.Remove(filepath.Join(ring, name)); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		fixture.Service.AssembleClips(ctx)
+	}
+
+	var target string
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT s.target_relative_path FROM recording_segments s
+		JOIN event_clip_jobs j ON j.segment_id=s.id WHERE j.event_id=$1`, eventID).Scan(&target); err != nil {
+		t.Fatal(err)
+	}
+	clip := filepath.Join(fixture.Pool.Path, target)
+	if err := exec.Command(ffmpeg, "-nostdin", "-v", "error", "-i", clip, "-f", "null", "-").Run(); err != nil {
+		t.Fatalf("the assembled clip no longer decodes cleanly after four passes: %v", err)
+	}
+	// The clip must cover the whole event, not just the newest fragments: the
+	// beginning survives in the parts directory after the ring evicted it.
+	probeRunner := probe.Runner{FFprobe: ffprobe}
+	file, err := os.Open(clip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := probeRunner.InspectMP4(ctx, file)
+	file.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Duration < 20*time.Second {
+		t.Fatalf("clip duration %v: the beginning was lost when the ring evicted it", evidence.Duration)
 	}
 }

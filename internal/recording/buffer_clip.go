@@ -25,6 +25,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -195,46 +196,53 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 	// index kept pointing at the first name while the identity columns described
 	// the last, which the storage reconciler correctly read as "file replaced".
 	//
-	// Taking the published copy as the head of the next assembly fixes both: the
-	// beginning cannot be evicted because it is no longer only in the ring, and the
-	// name stops moving. Only fragments not yet folded into it are appended.
-	var (
-		head      probe.ConcatPart
-		nameStart = start
-		haveHead  bool
-		headParts int
-	)
+	// Every assembly is built from ORIGINAL fragments held in the event's own
+	// parts directory — never from the previously published clip.
+	//
+	// Feeding the published file back in as the head was the second half of the
+	// same mistake. It kept the start from moving, but it made the clip a
+	// concatenation of a concatenation: each pass spliced AAC at a boundary the
+	// previous pass had already spliced, and every generation left a bit more
+	// invalid audio. Measured against real ZLM fragments: one splice produced no
+	// AAC errors, splicing that result again produced 51. The live site's 20-pass
+	// clips carried thousands, and Chrome fails the whole clip on an undecodable
+	// audio track even though every video frame is intact.
+	//
+	// The ring cannot be the source either — it keeps thirty seconds, so a long
+	// event's beginning is evicted before the next pass. Copying each fragment out
+	// as it is used gives both properties at once: the parts directory always
+	// holds the whole event from its first fragment, and every input stays an
+	// original recording.
+	partsDir := filepath.Join(pool.Path, work, "parts")
+	if err := os.MkdirAll(partsDir, 0o700); err != nil {
+		return err
+	}
+	nameStart := start
 	if job.Segment != nil {
-		head, nameStart, haveHead, err = s.existingClipHead(ctx, *job.Segment, poolID, root)
-		if err != nil {
+		var recorded time.Time
+		if err := s.DB.Pool.QueryRow(ctx, `SELECT start_at FROM recording_segments WHERE id=$1`, *job.Segment).Scan(&recorded); err != nil {
 			return err
 		}
-		if haveHead {
-			// The head stands for however many fragments the published clip already
-			// holds. The count lives on the segment's own media evidence, not on the
-			// event: the event's media_segments is recomputed by the linking pass and
-			// reading it here would count the same fragments twice.
-			var prior int
-			if err := s.DB.Pool.QueryRow(ctx, `SELECT coalesce((media_evidence->>'buffer_fragments')::int,0) FROM recording_segments WHERE id=$1`, *job.Segment).Scan(&prior); err != nil {
-				return err
-			}
-			headParts = prior
-		}
+		nameStart = recorded
 	}
-	if haveHead {
-		headEnd := nameStart.Add(head.Duration)
-		fragments = fragmentsAfter(fragments, headEnd)
-		picked, start, end = BufferWindow(fragments, from, to)
-		if len(picked) == 0 {
-			// Nothing new since the last assembly. Settling the job without
-			// rewriting the file keeps a running-but-idle event from re-encoding
-			// the same bytes every five seconds.
+	held, err := s.holdFragments(ctx, partsDir, fragments, from, to)
+	if err != nil {
+		return err
+	}
+	if len(held) == 0 {
+		if job.Segment != nil {
+			// Nothing new and nothing held: the clip is as complete as this pass can
+			// make it. Settling avoids rewriting identical bytes every five seconds.
 			return s.settleClip(ctx, eventID, job.StillOpen)
 		}
-	}
-	if len(picked) == 0 {
 		return errClipWindowEmpty
 	}
+	picked = held
+	start = nameStart
+	end = held[len(held)-1].End
+	// The clip is built from every part held for this event, so the count in its
+	// evidence is simply how many parts that is — there is no separate head now.
+	partCount := len(held)
 
 	// The output is written inside the run's work directory, then named by the
 	// standard rule, so the clip reads like every other recording in the library.
@@ -243,13 +251,18 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 		return err
 	}
 	staged := filepath.Join(outDir, "clip.mp4")
-	parts := make([]probe.ConcatPart, 0, len(picked)+1)
-	if haveHead {
-		parts = append(parts, head)
-	}
+	parts := make([]probe.ConcatPart, 0, len(picked))
 	for _, fragment := range picked {
 		parts = append(parts, probe.ConcatPart{Path: fragment.Path, Duration: fragment.End.Sub(fragment.Start)})
 	}
+	// A stream copy is enough now that every input is an original fragment.
+	//
+	// Measured against real ZLM fragments: splicing eight of them produced no AAC
+	// errors at all; splicing that RESULT again produced 51. The corruption was
+	// never in the fragments or in a single splice — it came from feeding a
+	// concatenation back into the concatenator. With the parts directory holding
+	// originals, one splice is all this path ever does, so re-encoding the audio
+	// would only cost fidelity for nothing.
 	evidence, err := s.Probe.ConcatMP4(ctx, parts, staged, nil)
 	if err != nil {
 		return err
@@ -331,9 +344,10 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 				}
 			}
 		} else {
-			// The row already exists; only its covered span moves. Its start is the
-			// clip's real beginning, which the head kept even after the ring evicted
-			// those fragments, so it must not follow the newest assembly's start.
+			// The row already exists; only its covered span moves. Its start stays at
+			// the clip's real beginning — the parts directory holds the first
+			// fragment even after the ring evicted it, so the span must not follow
+			// the newest assembly.
 			if _, err := tx.Exec(ctx, `UPDATE recording_runs SET started_at=$2,ended_at=$3 WHERE id=$1`, runID, nameStart.UTC(), end.UTC()); err != nil {
 				return err
 			}
@@ -380,13 +394,12 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 			// to be refreshed whenever the bytes change.
 			//
 			// start_at stays at nameStart for the same reason the file name does:
-			// it describes the bytes in the file, and the head guarantees the file
-			// still begins there. Writing the newest assembly's start would claim
-			// the clip begins later than it does.
-			// media_evidence carries how many buffer fragments the file holds, so a
-			// later assembly knows how much the head already covers without trusting
-			// the event row (which the linking pass rewrites independently).
-			evidenceJSON, err := json.Marshal(map[string]int{"buffer_fragments": len(picked) + headParts})
+			// it describes the bytes in the file, and the held parts guarantee the
+			// file still begins there. Writing the newest assembly's start would
+			// claim the clip begins later than it does.
+			// media_evidence records how many parts the file was built from, which
+			// is what the page's "N 段" reports.
+			evidenceJSON, err := json.Marshal(map[string]int{"buffer_fragments": partCount})
 			if err != nil {
 				return err
 			}
@@ -420,7 +433,7 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 		// that footage is finished. Conflating the two is what let a half-minute clip
 		// be indexed as a finished recording.
 		_, err := tx.Exec(ctx, `UPDATE events SET media_state='linked',media_start_at=$2,media_end_at=$3,media_segments=$4,updated_at=clock_timestamp() WHERE id=$1`,
-			eventID, nameStart.UTC(), end.UTC(), len(picked)+headParts)
+			eventID, nameStart.UTC(), end.UTC(), partCount)
 		if err != nil {
 			return err
 		}
@@ -440,7 +453,17 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 		return err
 	}
 	// The work directory held the staged file; the published copy is the segment.
-	_ = os.RemoveAll(outDir)
+	//
+	// The parts directory survives while the event runs: it is the only copy of
+	// the fragments the ring has already evicted, so deleting it here would make
+	// the next pass rebuild from a ring that no longer holds the beginning. A
+	// finished event has nothing more to assemble, so its parts go with the work
+	// directory.
+	if !job.StillOpen {
+		_ = os.RemoveAll(outDir)
+	} else {
+		_ = os.Remove(staged)
+	}
 	return nil
 }
 
@@ -453,71 +476,88 @@ func (s *Service) channelNaming(ctx context.Context, channelID id.ID) (int, stri
 	return number, zone, err
 }
 
-// existingClipHead returns the published clip of a re-cut as the first input of
-// the next assembly.
+// holdFragments copies the window's fragments into the event's parts directory
+// and returns every part held there, in play order.
 //
-// The returned start is read from the row rather than taken from the caller: the
-// naming rule made that instant part of the file's identity, so an assembly that
-// chose a different one would name a different file.
+// Copying rather than referencing is what makes an event longer than the ring's
+// thirty seconds possible at all: the ring evicts from the old end, so a
+// reference would dangle by the next pass. The copy is also what keeps every
+// input an ORIGINAL recording — see the comment at the call site for why
+// concatenating a published clip again corrupts its audio.
 //
-// A clip whose row exists but whose file does not (removed by the operator, or
-// lost with a pool) is NOT a head. Appending to bytes that are gone would publish
-// a file that starts mid-event while still claiming the old span; returning false
-// makes this pass rebuild from whatever the ring still holds, which is the honest
-// answer. The row is left as it is — the storage reconciler owns that verdict.
-func (s *Service) existingClipHead(ctx context.Context, segmentID, poolID id.ID, root *os.Root) (probe.ConcatPart, time.Time, bool, error) {
-	var start, end time.Time
-	var path string
-	// 'finalizing' is the normal state of a running event's clip, and that is
-	// exactly when this head is needed: every re-cut after the first one reads it
-	// back. Accepting only 'ready' made the second assembly treat the clip as
-	// absent, fall back to a zero start, and fail with an invalid completion —
-	// a running event could never grow past its first cut.
-	if err := s.DB.Pool.QueryRow(ctx, `SELECT s.start_at,s.end_at,l.relative_path FROM recording_segments s
-		JOIN recording_locations l ON l.segment_id=s.id AND l.pool_id=s.pool_id
-		WHERE s.id=$1 AND s.pool_id=$2 AND s.state IN ('ready','finalizing') AND l.state IN ('ready','finalizing')`, segmentID, poolID).Scan(&start, &end, &path); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return probe.ConcatPart{}, time.Time{}, false, nil
-		}
-		return probe.ConcatPart{}, time.Time{}, false, err
+// It is idempotent: a fragment already held is not copied twice, so a pass that
+// finds nothing new returns the same set and the clip is not rewritten.
+func (s *Service) holdFragments(ctx context.Context, dir string, fragments []BufferFragment, from, to time.Time) ([]BufferFragment, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	file, err := storage.OpenMediaFile(root, path)
+	window, _, _ := BufferWindow(fragments, from, to)
+	for _, fragment := range window {
+		// The name already encodes the fragment's start instant, which is also its
+		// identity inside this event; the extension keeps mp4tooling happy.
+		name := filepath.Base(fragment.Path)
+		target := filepath.Join(dir, name)
+		if _, err := os.Stat(target); err == nil {
+			continue
+		}
+		if err := copyFile(fragment.Path, target); err != nil {
+			// A fragment evicted between the scan and the copy is expected: the ring
+			// is a rolling buffer and another pass will hold what is still there.
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, err
+		}
+	}
+	held, err := ScanBufferFragments(dir)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return probe.ConcatPart{}, time.Time{}, false, nil
-		}
-		return probe.ConcatPart{}, time.Time{}, false, err
+		return nil, err
 	}
-	if _, err := file.Stat(); err != nil {
-		file.Close()
-		return probe.ConcatPart{}, time.Time{}, false, err
+	out := make([]BufferFragment, 0, len(held))
+	for _, fragment := range held {
+		out = append(out, fragment)
 	}
-	file.Close()
-	// The duration is the segment's recorded span: that is how much material the
-	// head file holds, and it is what the ffconcat script needs to timestamp the
-	// appended parts correctly. Deriving it from the file would need a probe of
-	// its own on every pass.
-	duration := end.Sub(start)
-	if duration <= 0 {
-		return probe.ConcatPart{}, time.Time{}, false, nil
+	sort.Slice(out, func(i, j int) bool { return out[i].Start.Before(out[j].Start) })
+	if len(out) == 0 {
+		return nil, nil
 	}
-	return probe.ConcatPart{Path: filepath.Join(root.Name(), path), Duration: duration}, start, true, nil
+	return out, nil
 }
 
-// fragmentsAfter keeps the fragments the head does not already cover.
-//
-// The head ends where the previous assembly stopped; only material from then on
-// is new. A fragment straddling that instant is dropped rather than split: a
-// partial fragment cannot be appended without re-encoding it, which this path
-// never does.
-func fragmentsAfter(fragments []BufferFragment, after time.Time) []BufferFragment {
-	out := make([]BufferFragment, 0, len(fragments))
-	for _, fragment := range fragments {
-		if fragment.Start.After(after) || fragment.Start.Equal(after) {
-			out = append(out, fragment)
-		}
+// copyFile duplicates one file, creating the target's directory tree.
+func copyFile(source, target string) error {
+	in, err := os.Open(source)
+	if err != nil {
+		return err
 	}
-	return out
+	defer in.Close()
+	sourceInfo, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		_ = os.Remove(target)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		_ = os.Remove(target)
+		return err
+	}
+	// The mtime IS the fragment's end instant: ZLM names a fragment after the
+	// moment it opened the file and the parser reads the close time from mtime.
+	// A copy that left "now" behind would claim every held fragment lasted until
+	// the copy ran, and the assembled clip's span — and its index entry — would
+	// be wrong.
+	if err := os.Chtimes(target, sourceInfo.ModTime(), sourceInfo.ModTime()); err != nil {
+		_ = os.Remove(target)
+		return err
+	}
+	return nil
 }
 
 // settleClip closes a job whose clip is already as complete as the ring allows.
