@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { AlertTriangle, CheckCheck, Clock, ImageOff, Play, User, VideoOff } from 'lucide-react'
+import { AlertTriangle, CheckCheck, Clock, ImageOff, Loader2, Play, User, VideoOff } from 'lucide-react'
 import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
@@ -909,7 +909,25 @@ function EventMediaAction({
 
   if (!canPlayback) return null
 
+  // An event that has not ended has a clip that is still being extended. Its
+  // segment is not published yet (the backend keeps it 'finalizing'), so playing
+  // it would open a file that grows underneath the player — and the last seconds
+  // an operator most wants to see are exactly the ones not written yet. Saying
+  // 录像生成中 is the honest answer; a play button that stops early is not.
   if (state === 'linked' || state === 'partial') {
+    if (!event.ended_at) {
+      return (
+        <div className='border-t px-3 py-2'>
+          <p className='inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-border px-2 py-1 text-xs text-muted-foreground'>
+            <Loader2 aria-hidden className='size-3 animate-spin' />
+            录像生成中
+          </p>
+          <p className='mt-1 text-center text-[11px] text-muted-foreground'>
+            事件结束后可回看
+          </p>
+        </div>
+      )
+    }
     const at = event.media_start_at ? Date.parse(event.media_start_at) : startedAt
     return (
       <div className='border-t px-3 py-2'>

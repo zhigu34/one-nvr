@@ -491,6 +491,22 @@ test('a partially covered event keeps playback and states the limit', async () =
   client.clear()
 })
 
+// An event that is still running has a clip that is still being extended, and its
+// segment is not published yet. Offering playback would open a file that grows
+// underneath the player, and the last seconds an operator most wants are exactly
+// the ones not written. The page must say 录像生成中 and must not link.
+test('a running event says its recording is still being produced', async () => {
+  const { client } = fixture([], {
+    events: [mediaEvent({ media_state: 'linked', ended_at: undefined })],
+  })
+  const screen = await view(client)
+  await expect.element(screen.getByText('录像生成中')).toBeVisible()
+  await expect
+    .element(screen.getByRole('link', { name: /查看事件录像/ }))
+    .not.toBeInTheDocument()
+  client.clear()
+})
+
 // A one-second detection never gets a snapshot: the detector writes them while an
 // event runs, so it can end before the first frame lands. Saying "无抓拍图像"
 // would read as a lost picture and send the operator looking for a fault that

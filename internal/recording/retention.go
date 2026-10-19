@@ -57,6 +57,9 @@ func (s *Service) RunRetention(ctx context.Context) {
 		// ever play them; leaving them would keep every long event's footage on
 		// disk twice over.
 		s.SweepEventClipOrphans(ctx)
+		// The safety net for clips whose event ended while their job was already
+		// settled: nothing re-queues those, so without this they stay finalizing.
+		s.PublishSettledClips(ctx)
 		// Archive-bound channels clean on their own shorter window, gated on a
 		// confirmed remote copy (ARC-05); the gate hook is injected by the
 		// assembly, so without it nothing happens.

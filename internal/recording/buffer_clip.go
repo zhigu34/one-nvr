@@ -338,6 +338,26 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 				return err
 			}
 		}
+		// Whether this clip is finished media is decided by the EVENT, not by the
+		// fact that a playable file exists.
+		//
+		// A running event's clip is re-cut every few seconds, so publishing it as
+		// 'ready' claimed far more than it should: 'ready' is what the archive
+		// scheduler uploads, what an export concatenates, what the watermark and
+		// quota paths are allowed to delete, and what pool usage counts. An event
+		// that lasted a minute would upload half a minute to the cloud and report a
+		// growing segment as finished footage. PRD PLAY-05 puts it plainly: only a
+		// formally completed, verified MP4 is playable — and REC-09 forbids treating
+		// an unfinished MP4 as a published one.
+		//
+		// 'finalizing' is exactly that state in this schema ("written, not yet
+		// published") and the library page already renders it as 写入中. The clip
+		// becomes 'ready' when the event ends, which is the moment the file stops
+		// changing.
+		segmentState := "finalizing"
+		if !job.StillOpen {
+			segmentState = "ready"
+		}
 		if job.Segment == nil {
 			evidenceJSON, err := json.Marshal(map[string]int{"buffer_fragments": len(picked)})
 			if err != nil {
@@ -345,8 +365,8 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 			}
 			if _, err := tx.Exec(ctx, `INSERT INTO recording_segments(id,channel_id,source_revision_id,run_id,pool_id,original_relative_path,target_relative_path,
 				original_start,naming_timezone,utc_offset_seconds,start_at,end_at,size_bytes,file_identity,media_evidence,state,time_evidence,ready_at)
-				VALUES($1,$2,$3,$4,$5,$6,$6,$7,$8,$9,$7,$10,$11,$12,$13,'ready','completion',clock_timestamp())`,
-				segmentID, channelID, revisionID, runID, poolID, published, start.UTC(), timezone, frozen.UTCOffsetSeconds, end.UTC(), info.Size(), rawID, evidenceJSON); err != nil {
+				VALUES($1,$2,$3,$4,$5,$6,$6,$7,$8,$9,$7,$10,$11,$12,$13,$14,'completion',CASE WHEN $14='ready' THEN clock_timestamp() END)`,
+				segmentID, channelID, revisionID, runID, poolID, published, start.UTC(), timezone, frozen.UTCOffsetSeconds, end.UTC(), info.Size(), rawID, evidenceJSON, segmentState); err != nil {
 				return err
 			}
 		} else {
@@ -370,8 +390,12 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 			if err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, `UPDATE recording_segments SET start_at=$2,end_at=$3,size_bytes=$4,file_identity=$5,media_evidence=$6,ready_at=clock_timestamp() WHERE id=$1`,
-				segmentID, nameStart.UTC(), end.UTC(), info.Size(), rawID, evidenceJSON); err != nil {
+			// ready_at marks the moment the clip STOPPED changing, so it is only set
+			// when this pass publishes it. A running event's clip has not finished
+			// being written and must not carry a publication timestamp.
+			if _, err := tx.Exec(ctx, `UPDATE recording_segments SET start_at=$2,end_at=$3,size_bytes=$4,file_identity=$5,media_evidence=$6,
+				state=$7,error_code=NULL,ready_at=CASE WHEN $7='ready' THEN clock_timestamp() ELSE ready_at END WHERE id=$1`,
+				segmentID, nameStart.UTC(), end.UTC(), info.Size(), rawID, evidenceJSON, segmentState); err != nil {
 				return err
 			}
 		}
@@ -379,22 +403,30 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 		// files and totals usage. Without it the clip is invisible to that pass —
 		// it neither gets checked nor counted, and a deleted file would keep
 		// reading as ready forever.
-		if _, err := tx.Exec(ctx, `INSERT INTO recording_locations(segment_id,pool_id,relative_path,size_bytes)
-			VALUES($1,$2,$3,$4) ON CONFLICT(segment_id,pool_id) DO UPDATE SET size_bytes=EXCLUDED.size_bytes,state='ready',verified_at=clock_timestamp()`,
-			segmentID, poolID, published, info.Size()); err != nil {
+		// The location row carries the same verdict as the segment. Writing 'ready'
+		// here while the segment is 'finalizing' would let the reconciler verify a
+		// file that is still being rewritten, and mark it damaged on the next pass
+		// for having changed — the same false verdict the identity refresh fixed.
+		locationState := segmentState
+		if _, err := tx.Exec(ctx, `INSERT INTO recording_locations(segment_id,pool_id,relative_path,size_bytes,state)
+			VALUES($1,$2,$3,$4,$5) ON CONFLICT(segment_id,pool_id) DO UPDATE SET size_bytes=EXCLUDED.size_bytes,state=EXCLUDED.state,verified_at=clock_timestamp()`,
+			segmentID, poolID, published, info.Size(), locationState); err != nil {
 			return err
 		}
-		// The event now has footage of its own, so its verdict becomes linked and
-		// the page can play it. The span starts where the file starts, not where the
-		// newest fragment does.
+		// The event now has footage of its own, so its verdict becomes linked. The
+		// span starts where the file starts, not where the newest fragment does.
+		// While the event runs the page shows 录像生成中 rather than a play button:
+		// media_state says footage EXISTS, while the segment's own state says whether
+		// that footage is finished. Conflating the two is what let a half-minute clip
+		// be indexed as a finished recording.
 		_, err := tx.Exec(ctx, `UPDATE events SET media_state='linked',media_start_at=$2,media_end_at=$3,media_segments=$4,updated_at=clock_timestamp() WHERE id=$1`,
 			eventID, nameStart.UTC(), end.UTC(), len(picked)+headParts)
 		if err != nil {
 			return err
 		}
-		// An event that is still running keeps its clip open for the next pass:
-		// the page can already play what exists, and the window extends as
-		// fragments accumulate. A finished event closes the job for good.
+		// An event that is still running keeps its clip open for the next pass: the
+		// window extends as fragments accumulate, and the segment stays
+		// 'finalizing'. A finished event closes the job for good and publishes.
 		next := "done"
 		if job.StillOpen {
 			next = "growing"
@@ -436,9 +468,14 @@ func (s *Service) channelNaming(ctx context.Context, channelID id.ID) (int, stri
 func (s *Service) existingClipHead(ctx context.Context, segmentID, poolID id.ID, root *os.Root) (probe.ConcatPart, time.Time, bool, error) {
 	var start, end time.Time
 	var path string
+	// 'finalizing' is the normal state of a running event's clip, and that is
+	// exactly when this head is needed: every re-cut after the first one reads it
+	// back. Accepting only 'ready' made the second assembly treat the clip as
+	// absent, fall back to a zero start, and fail with an invalid completion —
+	// a running event could never grow past its first cut.
 	if err := s.DB.Pool.QueryRow(ctx, `SELECT s.start_at,s.end_at,l.relative_path FROM recording_segments s
 		JOIN recording_locations l ON l.segment_id=s.id AND l.pool_id=s.pool_id
-		WHERE s.id=$1 AND s.pool_id=$2 AND s.state='ready' AND l.state='ready'`, segmentID, poolID).Scan(&start, &end, &path); err != nil {
+		WHERE s.id=$1 AND s.pool_id=$2 AND s.state IN ('ready','finalizing') AND l.state IN ('ready','finalizing')`, segmentID, poolID).Scan(&start, &end, &path); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return probe.ConcatPart{}, time.Time{}, false, nil
 		}
@@ -493,7 +530,33 @@ func (s *Service) settleClip(ctx context.Context, eventID id.ID, stillOpen bool)
 	if stillOpen {
 		next = "growing"
 	}
-	_, err := s.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET state=$2,updated_at=clock_timestamp() WHERE event_id=$1`, eventID, next)
+	err := s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `UPDATE event_clip_jobs SET state=$2,updated_at=clock_timestamp() WHERE event_id=$1`, eventID, next); err != nil {
+			return err
+		}
+		if stillOpen {
+			return nil
+		}
+		// The event ended without producing new fragments, so this is the pass that
+		// publishes its clip. Without this the segment would stay 'finalizing'
+		// forever — unplayable, unarchived, unexportable — precisely because nothing
+		// else happened to trigger a re-cut.
+		return s.publishClipTx(ctx, tx, eventID)
+	})
+	return err
+}
+
+// publishClipTx marks a clip's segment and location ready.
+//
+// It is the single place the transition happens, so "finished" cannot come to
+// mean two different things in two paths.
+func (s *Service) publishClipTx(ctx context.Context, tx pgx.Tx, eventID id.ID) error {
+	if _, err := tx.Exec(ctx, `UPDATE recording_segments s SET state='ready',error_code=NULL,ready_at=clock_timestamp()
+		FROM event_clip_jobs j WHERE j.event_id=$1 AND s.id=j.segment_id AND s.state='finalizing'`, eventID); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `UPDATE recording_locations l SET state='ready',verified_at=clock_timestamp()
+		FROM event_clip_jobs j WHERE j.event_id=$1 AND l.segment_id=j.segment_id AND l.state='finalizing'`, eventID)
 	return err
 }
 
@@ -639,6 +702,42 @@ func (s *Service) RepairEventClipDamage(ctx context.Context) {
 	if repaired > 0 {
 		slog.Info("event clips restored", "repaired", repaired)
 	}
+}
+
+// PublishSettledClips publishes clips whose event has ended.
+//
+// The normal path publishes a clip on the assembly pass that runs after the
+// event's end message. This covers the case that path cannot reach: the end
+// message arrived when the job was already 'done' (the event sat idle before it
+// ended), so nothing re-queued the assembly and the segment stayed 'finalizing'
+// forever — unplayable, unarchived, unexportable.
+//
+// It is a safety net, not the primary path: the WHERE clause only matches rows
+// whose event has an end time, so a running event's clip is never published
+// early.
+func (s *Service) PublishSettledClips(ctx context.Context) {
+	if s.DB == nil {
+		return
+	}
+	tag, err := s.DB.Pool.Exec(ctx, `UPDATE recording_segments s SET state='ready',error_code=NULL,ready_at=clock_timestamp()
+		FROM event_clip_jobs j JOIN events e ON e.id=j.event_id
+		WHERE j.segment_id=s.id AND s.state='finalizing' AND e.ended_at IS NOT NULL`)
+	if err != nil {
+		if ctx.Err() == nil {
+			slog.Warn("settled clip publication unavailable", "error", err)
+		}
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		return
+	}
+	if _, err := s.DB.Pool.Exec(ctx, `UPDATE recording_locations l SET state='ready',verified_at=clock_timestamp()
+		FROM event_clip_jobs j JOIN events e ON e.id=j.event_id
+		WHERE j.segment_id=l.segment_id AND l.state='finalizing' AND e.ended_at IS NOT NULL`); err != nil && ctx.Err() == nil {
+		slog.Warn("settled clip location publication unavailable", "error", err)
+		return
+	}
+	slog.Info("settled event clips published", "published", tag.RowsAffected())
 }
 
 // SweepEventClipOrphans removes the duplicate files the re-cut defect left behind.

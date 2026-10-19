@@ -24,6 +24,24 @@ import (
 	"github.com/zhigu34/one-nvr/internal/recording"
 )
 
+// markBuffering makes the channel look like it has a live ring buffer, which is
+// the gate queueClipJob applies: a channel that is not buffering has nothing to
+// assemble, and recording that answer once per detection would grow a table
+// nobody reads. Tests about the window/queue behaviour must state this
+// precondition rather than rely on the gate being absent.
+func markBuffering(t *testing.T, fixture publishFixture) {
+	t.Helper()
+	ctx := context.Background()
+	var session id.ID
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT stream_session_id FROM recording_runs WHERE id=$1`, fixture.Run).Scan(&session); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO event_buffers(channel_id,run_id,stream_session_id,source_revision_id,cache_path,keep_seconds,owner_token)
+		VALUES($1,$2,$3,$4,'/nonexistent',30,'owner')`, fixture.Channel, mustID(t), session, fixture.Revision); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // The buffer only runs where ordinary recording does not: a channel already
 // writing footage must not write the same bytes twice, and REC-10 says the
 // switch must leave continuous and scheduled recording untouched.
@@ -105,6 +123,7 @@ func TestEventWithoutFootageQueuesAClipJob(t *testing.T) {
 	if err := service.SetMappings(ctx, fixture.Admin, map[id.ID]string{fixture.Channel: "front-door"}); err != nil {
 		t.Fatal(err)
 	}
+	markBuffering(t, fixture)
 	started := time.Now().UTC().Add(-2 * time.Minute)
 	if err := service.Ingest(ctx, frigatePayload("new", "evt-clip", "front-door", "person", float64(started.Unix()), nil, nil, false)); err != nil {
 		t.Fatal(err)
@@ -227,6 +246,7 @@ func TestRunningEventAdvancesItsClipWindow(t *testing.T) {
 	if err := service.SetMappings(ctx, fixture.Admin, map[id.ID]string{fixture.Channel: "front-door"}); err != nil {
 		t.Fatal(err)
 	}
+	markBuffering(t, fixture)
 	started := time.Now().UTC().Add(-3 * time.Minute)
 	if err := service.Ingest(ctx, frigatePayload("new", "evt-growing", "front-door", "person", float64(started.Unix()), nil, nil, false)); err != nil {
 		t.Fatal(err)
@@ -276,6 +296,7 @@ func TestSettledClipJobIsNotReopened(t *testing.T) {
 	if err := service.SetMappings(ctx, fixture.Admin, map[id.ID]string{fixture.Channel: "front-door"}); err != nil {
 		t.Fatal(err)
 	}
+	markBuffering(t, fixture)
 	started := time.Now().UTC().Add(-2 * time.Minute)
 	ended := started.Add(10 * time.Second)
 	endedUnix := float64(ended.Unix())
@@ -1004,5 +1025,210 @@ func TestRepairAcceptsTheDefectsSmallSizeVariance(t *testing.T) {
 	}
 	if size != info.Size() {
 		t.Fatalf("size not realigned with the file: recorded %d, file %d", size, info.Size())
+	}
+}
+
+// A running event's clip must not be published: 'ready' is what the archive
+// scheduler uploads, what an export concatenates, what the watermark path may
+// delete, and what pool usage counts.
+//
+// PRD PLAY-05: only a formally completed, verified MP4 is playable. REC-09: an
+// unfinished MP4 must not be treated as published. Measured before the fix: an
+// event lasting a minute uploaded half a minute to the cloud and reported a
+// growing segment as finished footage.
+func TestRunningEventClipStaysUnpublishedUntilItEnds(t *testing.T) {
+	ffmpeg := mediaTestTool(t, "ffmpeg")
+	ffprobe := mediaTestTool(t, "ffprobe")
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	cache := t.TempDir()
+	fixture.Service.EventCacheDir = cache
+	fixture.Service.EventCacheBytes = 512 << 20
+	fixture.Service.Probe = probe.Runner{FFmpeg: ffmpeg, FFprobe: ffprobe}
+
+	ring := filepath.Join(cache, "events", string(fixture.Channel))
+	if err := os.MkdirAll(ring, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().UTC().Add(-40 * time.Second).Truncate(time.Second)
+	writeFragment := func(offset int) {
+		start := base.Add(time.Duration(offset) * time.Second)
+		path := filepath.Join(ring, start.In(time.Local).Format("2006-01-02-15-04-05")+"-0.mp4")
+		if err := exec.Command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+			"-f", "lavfi", "-i", "testsrc2=size=160x90:rate=5", "-t", "3",
+			"-c:v", "libx264", "-threads", "1", "-y", path).Run(); err != nil {
+			t.Fatal("synthetic fragment creation failed", err)
+		}
+		end := start.Add(3 * time.Second)
+		if err := os.Chtimes(path, end, end); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFragment(0)
+	writeFragment(3)
+
+	eventID := mustID(t)
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO events(id,channel_id,source,source_id,category,score,zones,started_at,snapshot_state,media_state,raw)
+		VALUES($1,$2,'frigate','evt-running','person',0.5,'[]',$3,'gone','pending','{}')`, eventID, fixture.Channel, base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end,state)
+		VALUES($1,$2,$3,$4,'queued')`, eventID, fixture.Channel, base, base.Add(6*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	fixture.Service.AssembleClips(ctx)
+
+	segmentStateOf := func() (string, string) {
+		t.Helper()
+		var seg, loc string
+		if err := fixture.DB.Pool.QueryRow(ctx, `SELECT s.state,l.state FROM recording_segments s
+			JOIN recording_locations l ON l.segment_id=s.id AND l.pool_id=s.pool_id
+			JOIN event_clip_jobs j ON j.segment_id=s.id WHERE j.event_id=$1`, eventID).Scan(&seg, &loc); err != nil {
+			t.Fatal(err)
+		}
+		return seg, loc
+	}
+	// The event is still open: the clip exists and can be played by a player that
+	// tolerates growth, but it is NOT published media.
+	if seg, loc := segmentStateOf(); seg != "finalizing" || loc != "finalizing" {
+		t.Fatalf("a running event's clip was published: segment=%q location=%q", seg, loc)
+	}
+	// None of the consumers that act on finished footage may see it.
+	var exported int
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM recording_segments s
+		JOIN event_clip_jobs j ON j.segment_id=s.id WHERE j.event_id=$1 AND s.state='ready'`, eventID).Scan(&exported); err != nil {
+		t.Fatal(err)
+	}
+	if exported != 0 {
+		t.Fatal("the archive/export/watermark set (state='ready') included a running event's clip")
+	}
+
+	// The event ends with no new fragments: this pass must publish what exists.
+	// Its ended_at is what StillOpen reads — marking only the job would leave the
+	// assembler believing the event is running and keeping the clip unpublished.
+	endedAt := base.Add(7 * time.Second)
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE events SET ended_at=$2 WHERE id=$1`, eventID, endedAt); err != nil {
+		t.Fatal(err)
+	}
+	// The window must move so this pass has work; the fragments are unchanged.
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET state='queued',window_end=$2 WHERE event_id=$1`, eventID, endedAt.Add(5*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	fixture.Service.AssembleClips(ctx)
+	if seg, loc := segmentStateOf(); seg != "ready" || loc != "ready" {
+		t.Fatalf("an ended event's clip stayed unpublished: segment=%q location=%q", seg, loc)
+	}
+}
+
+// An event can end while its job is already 'done' — it sat idle, the last
+// assembly settled, and only then did the end message arrive. Nothing re-queues
+// that job, so without a safety net the clip stays 'finalizing' forever:
+// unplayable, unarchived, unexportable.
+func TestSettledEventStillPublishesItsClip(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	eventID := mustID(t)
+	started := time.Now().UTC().Add(-5 * time.Minute)
+	ended := started.Add(30 * time.Second)
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO events(id,channel_id,source,source_id,category,score,zones,started_at,ended_at,snapshot_state,media_state,raw)
+		VALUES($1,$2,'frigate','evt-idle','person',0.5,'[]',$3,$4,'gone','linked','{}')`, eventID, fixture.Channel, started, ended); err != nil {
+		t.Fatal(err)
+	}
+	runID, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sessionID id.ID
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT stream_session_id FROM recording_runs WHERE id=$1`, fixture.Run).Scan(&sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_runs(id,site_id,channel_id,source_revision_id,stream_session_id,pool_id,work_relative_path,purpose,state)
+		VALUES($1,$2,$3,$4,$5,$6,$7,'event','stopped')`,
+		runID, fixture.Site.Secrets.SiteID, fixture.Channel, fixture.Revision, sessionID, fixture.Pool.ID, ".work/event/"+string(runID)); err != nil {
+		t.Fatal(err)
+	}
+	segment, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "recordings/" + string(segment) + ".mp4"
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_segments(id,channel_id,source_revision_id,run_id,pool_id,original_relative_path,target_relative_path,
+		original_start,naming_timezone,utc_offset_seconds,start_at,end_at,size_bytes,file_identity,state)
+		VALUES($1,$2,$3,$4,$5,$6,$6,$7,'UTC',0,$7,$8,1024,'{}','finalizing')`,
+		segment, fixture.Channel, fixture.Revision, runID, fixture.Pool.ID, path, started, ended); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_locations(segment_id,pool_id,relative_path,size_bytes,state)
+		VALUES($1,$2,$3,1024,'finalizing')`, segment, fixture.Pool.ID, path); err != nil {
+		t.Fatal(err)
+	}
+	// The job is settled: the assembly loop will never pick it up again.
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end,state,segment_id,clip_run_id)
+		VALUES($1,$2,$3,$4,'done',$5,$6)`, eventID, fixture.Channel, started, ended, segment, runID); err != nil {
+		t.Fatal(err)
+	}
+
+	fixture.Service.PublishSettledClips(ctx)
+
+	var segState, locState string
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT s.state,l.state FROM recording_segments s
+		JOIN recording_locations l ON l.segment_id=s.id AND l.pool_id=s.pool_id WHERE s.id=$1`, segment).Scan(&segState, &locState); err != nil {
+		t.Fatal(err)
+	}
+	if segState != "ready" || locState != "ready" {
+		t.Fatalf("an ended event's clip stayed unpublished: segment=%q location=%q", segState, locState)
+	}
+}
+
+// The safety net must not publish a clip whose event is still running: that is
+// the whole point of keeping it finalizing.
+func TestSettledPublicationSkipsRunningEvents(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	eventID := mustID(t)
+	started := time.Now().UTC().Add(-5 * time.Minute)
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO events(id,channel_id,source,source_id,category,score,zones,started_at,snapshot_state,media_state,raw)
+		VALUES($1,$2,'frigate','evt-still-running','person',0.5,'[]',$3,'gone','linked','{}')`, eventID, fixture.Channel, started); err != nil {
+		t.Fatal(err)
+	}
+	runID, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sessionID id.ID
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT stream_session_id FROM recording_runs WHERE id=$1`, fixture.Run).Scan(&sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_runs(id,site_id,channel_id,source_revision_id,stream_session_id,pool_id,work_relative_path,purpose,state)
+		VALUES($1,$2,$3,$4,$5,$6,$7,'event','stopped')`,
+		runID, fixture.Site.Secrets.SiteID, fixture.Channel, fixture.Revision, sessionID, fixture.Pool.ID, ".work/event/"+string(runID)); err != nil {
+		t.Fatal(err)
+	}
+	segment, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "recordings/" + string(segment) + ".mp4"
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_segments(id,channel_id,source_revision_id,run_id,pool_id,original_relative_path,target_relative_path,
+		original_start,naming_timezone,utc_offset_seconds,start_at,end_at,size_bytes,file_identity,state)
+		VALUES($1,$2,$3,$4,$5,$6,$6,$7,'UTC',0,$7,clock_timestamp(),1024,'{}','finalizing')`,
+		segment, fixture.Channel, fixture.Revision, runID, fixture.Pool.ID, path, started); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_locations(segment_id,pool_id,relative_path,size_bytes,state)
+		VALUES($1,$2,$3,1024,'finalizing')`, segment, fixture.Pool.ID, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end,state,segment_id,clip_run_id)
+		VALUES($1,$2,$3,clock_timestamp(),'growing',$4,$5)`, eventID, fixture.Channel, started, segment, runID); err != nil {
+		t.Fatal(err)
+	}
+	fixture.Service.PublishSettledClips(ctx)
+	var segState string
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state FROM recording_segments WHERE id=$1`, segment).Scan(&segState); err != nil {
+		t.Fatal(err)
+	}
+	if segState != "finalizing" {
+		t.Fatalf("a running event's clip was published by the safety net: %q", segState)
 	}
 }
