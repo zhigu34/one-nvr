@@ -299,11 +299,23 @@ export function TimelineCanvas({
       ctx.stroke()
       // Labels sit at the top of the ruler, inset from the edges so the first
       // and last are never clipped by the plate border.
-      const label = formatClock(at, zone).slice(0, 5)
+      //
+      // formatClock returns "YYYY-MM-DD HH:mm:ss", so the time is characters
+      // 11-16 — slicing from 0 printed the date, and every label read "2026-".
+      const clock = formatClock(at, zone)
+      const label = clock.slice(11, 16)
+      // Midnight is the one label that needs the date: without it a 24-hour
+      // view has two "00:00" ticks and no way to tell which day is which.
+      const dayLabel = clock.slice(0, 10)
       ctx.fillStyle = palette.labelMajor
       const edge = x < 22 ? 'left' : x > width - 22 ? 'right' : 'center'
       ctx.textAlign = edge
-      ctx.fillText(label, edge === 'left' ? 3 : edge === 'right' ? width - 3 : x, 3)
+      const textX = edge === 'left' ? 3 : edge === 'right' ? width - 3 : x
+      ctx.fillText(label, textX, 3)
+      if (label === '00:00') {
+        ctx.fillStyle = palette.labelMinor
+        ctx.fillText(dayLabel, textX, 13)
+      }
     }
 
     // --- Recording track: translucent fill with a bright top edge. The fill is
