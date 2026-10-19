@@ -315,10 +315,13 @@ export function TimelineCanvas({
       const edge = x < 22 ? 'left' : x > width - 22 ? 'right' : 'center'
       ctx.textAlign = edge
       const textX = edge === 'left' ? 3 : edge === 'right' ? width - 3 : x
-      ctx.fillText(label, textX, 3)
+      // Midnight stacks the date under the time. The second line sits lower than
+      // a single line would so the two never overlap the tick marks that start
+      // 9px above the ruler's bottom edge.
+      ctx.fillText(label, textX, 2)
       if (label === '00:00') {
         ctx.fillStyle = palette.labelMinor
-        ctx.fillText(dayLabel, textX, 13)
+        ctx.fillText(dayLabel, textX, 14)
       }
     }
 
