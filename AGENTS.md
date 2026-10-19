@@ -69,7 +69,7 @@ CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真�
   - **缺陷二：`Reload` 只看 `/api/restart` 的 HTTP 状态码**。该端点是**异步**的——返回 200 只代表请求被接受，重启发生在之后。所以一个检测器解析不了的配置会产生「发布成功」+ 检测器再也没回来。**修法**：`Reload` 在请求被接受后**轮询 `/api/version` 直到检测器重新应答**（15 秒预算，容忍重启期间的连接拒绝），把假成功变成诚实的失败并回滚配置。
   - **现场复验**：部署后同步循环自动跑了一轮 → 新 `published` 记录（01:24:41）→ **3 分钟内 0 条 ffmpeg 错误**、Frigate healthy。配置里的 5 个摄像头与数据库的 5 个启用通道一致。
   - **测试**：`detection/reload_test.go` 3 个（重启后不回来必须失败、回来了必须成功且容忍中途拒绝、请求被拒立即失败）；集成 1 个（`TestSessionSyncSurvivesAFailedPublication`：失败发布后 session 漂移仍必须能被同步）。**两个修复都验证过「改回旧实现会 FAIL」**。
-  - **顺带发现但未修**：CH01 有**两个 active 的 main session**（generation 5744 与 5743），旧的没有关闭。这是会话泄漏，不影响当前检测（配置用的是最新那条），但值得单独排查。
+  - **「会话泄漏」是我的误判，已核实并撤回**：CH01 的两条 active 会话是 **main（generation 5743）与 sub（5744）各一条**，属于正常设计。`detection_configs.stream='sub'`，所以检测配置指向 sub 会话是**正确的**。核实方式：`SELECT stream,purpose,state FROM stream_sessions` —— 我最初漏了 `purpose` 列，把两个不同用途的会话当成了同一个的重复。**教训**：判断「重复会话」必须同时看 `purpose`。
 
 
 - **2026-10-19 定时/事件录制批次 3 已实现：事件前录缓冲（REC-09/10）**。这是三个批次的最后一块。
