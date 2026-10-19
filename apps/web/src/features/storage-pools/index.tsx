@@ -18,6 +18,7 @@ import {
   Empty,
 } from '@/features/foundation/ui'
 import { PoolBinding } from './pool-binding'
+import { RetentionPolicyPanel } from './retention-panel'
 import { cn } from '@/lib/utils'
 
 type Pools = PageData<Schema<'Pool'>> & { capacity: Schema<'StorageCapacity'> }
@@ -168,6 +169,14 @@ export function StoragePools() {
           )}
         </>
       )}
+      {/* Retention is a site-wide policy, not a pool property — but the storage
+          page is where an operator decides how long footage is kept, so it
+          belongs here rather than under the recording list. The panel says the
+          scope in words, because sitting beside per-pool cards makes it read as
+          per-pool otherwise. */}
+      <Panel title='本地保留策略'>
+        <RetentionPolicyPanel />
+      </Panel>
     </>
   )
 }

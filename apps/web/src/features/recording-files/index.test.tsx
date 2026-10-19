@@ -223,33 +223,6 @@ test('protection can be toggled per row and is sent as a single PATCH', async ()
   expect(patches[0].body).toEqual({ protected: true })
 })
 
-test('the retention panel states what each mode does and saves the chosen period', async () => {
-  const setup = fixture({ retentionDays: 0 })
-  const view = await render(setup.view)
-  // The retention card is collapsed by default; open it to reach the body.
-  await userEvent.click(view.getByText('本地保留策略'))
-  await expect
-    .element(view.getByText(/当前不自动删除任何录像/))
-    .toBeVisible()
-  await userEvent.click(view.getByLabelText('保留天数'))
-  await userEvent.click(view.getByRole('option', { name: '7 天', exact: true }))
-  await userEvent.click(
-    view.getByRole('button', { name: '保存保留策略' })
-  )
-  const saves = setup.mutations.filter((m) => m.path === '/api/v1/site')
-  expect(saves).toHaveLength(1)
-  expect(saves[0].body).toEqual({ recording_retention_days: 7 })
-})
-
-test('an enabled retention period says it deletes and that protection is skipped', async () => {
-  const setup = fixture({ retentionDays: 30 })
-  const view = await render(setup.view)
-  // The retention card is collapsed by default; open it to reach the body.
-  await userEvent.click(view.getByText('本地保留策略'))
-  await expect.element(view.getByText(/超过 30 天的录像会自动删除本地副本/)).toBeVisible()
-  await expect.element(view.getByText(/已保护的录像始终跳过/)).toBeVisible()
-})
-
 test('file management is administrator only', async () => {
   const setup = fixture()
   useAuthStore.getState().setUser({

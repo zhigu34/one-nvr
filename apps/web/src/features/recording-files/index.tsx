@@ -6,11 +6,6 @@ import { apiRequest, jsonRequest, newRequestKey } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { useAPI, useAction } from '@/features/foundation/hooks'
 import {
@@ -639,26 +634,6 @@ export function RecordingFiles({
               )}
             </div>
           )}
-          {/* Retention deletes footage without anyone present, so it sits after
-              the working area rather than pushing every filter below the fold;
-              collapsed by default because it is rarely the daily concern. */}
-          <Collapsible className='rounded-lg border border-video-border bg-video-surface-raised/40'>
-            <CollapsibleTrigger asChild>
-              <button
-                type='button'
-                className='flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm text-video-chrome-foreground hover:bg-white/5'
-              >
-                <span className='flex items-center gap-2'>
-                  <span className='inline-block h-2 w-2 rounded-sm bg-amber-400' />
-                  本地保留策略
-                </span>
-                <ChevronDown className='size-4 transition-transform group-data-[state=open]:rotate-180' />
-              </button>
-            </CollapsibleTrigger>
-            <CollapsibleContent className='border-t border-video-border p-3'>
-              <RetentionPanel site={site.data} stats={stats.data} />
-            </CollapsibleContent>
-          </Collapsible>
         </>
       )}
       <ConfirmDialog
@@ -874,74 +849,3 @@ function RecordingRow({
   )
 }
 
-// Retention is the one setting that deletes footage without anyone present, so
-// the panel states the current occupancy and what the period would keep before
-// the operator turns it on. The Collapsible wrapper around this panel renders
-// the heading and the toggle; everything here is the body the trigger reveals.
-function RetentionPanel({
-  site,
-  stats,
-}: {
-  site?: Schema<'Site'>
-  stats?: Stats
-}) {
-  const action = useAction()
-  const [days, setDays] = useState(site ? String(site.recording_retention_days) : '0')
-  if (!site) return null
-  const enabled = site.recording_retention_days > 0
-  return (
-    <div className='space-y-2'>
-      <p className='text-xs text-video-chrome-foreground/70'>
-        {enabled
-          ? `超过 ${site.recording_retention_days} 天的录像会自动删除本地副本；已保护的录像始终跳过。`
-          : '当前不自动删除任何录像。设置天数后，超过该期限的录像会自动删除本地副本（已保护的除外）。'}
-      </p>
-      {stats && (
-        <p className='text-[11px] text-video-chrome-foreground/50'>
-          当前筛选范围：{stats.segments} 段 · {bytes(stats.logical_bytes)} 可播放 ·
-          已删除释放 {bytes(stats.deleted_bytes)}
-        </p>
-      )}
-      <div className='flex items-end gap-2'>
-        <SelectField
-          ariaLabel='保留天数'
-          value={days}
-          onValueChange={setDays}
-          options={[
-            { value: '0', label: '不自动删除' },
-            { value: '1', label: '1 天' },
-            { value: '3', label: '3 天' },
-            { value: '7', label: '7 天' },
-            { value: '14', label: '14 天' },
-            { value: '30', label: '30 天' },
-            { value: '90', label: '90 天' },
-            { value: '180', label: '180 天' },
-            { value: '365', label: '365 天' },
-          ]}
-        />
-        <Button
-          type='button'
-          variant='outline'
-          disabled={action.pending}
-          onClick={() =>
-            void action.run(
-              () =>
-                apiRequest(
-                  '/api/v1/site',
-                  jsonRequest(
-                    'PATCH',
-                    { recording_retention_days: Number(days) },
-                    site.version
-                  )
-                ),
-              Number(days) > 0 ? '已启用本地保留策略' : '已关闭自动删除'
-            )
-          }
-        >
-          保存保留策略
-        </Button>
-      </div>
-      <Notices {...action} />
-    </div>
-  )
-}

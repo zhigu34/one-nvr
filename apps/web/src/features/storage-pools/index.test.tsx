@@ -70,7 +70,10 @@ function poolFixture(
   }
 }
 
-function fixture(pools: Schema<'Pool'>[] = [poolFixture()]) {
+function fixture(
+  pools: Schema<'Pool'>[] = [poolFixture()],
+  retentionDays = 0
+) {
   useAuthStore.getState().setUser({
     id: 'admin',
     username: 'admin',
@@ -147,6 +150,17 @@ function fixture(pools: Schema<'Pool'>[] = [poolFixture()]) {
       }
     if (init?.method === 'PUT' && path.endsWith('/storage-pool'))
       return { job_id: 'job-bind', state: 'queued' }
+    // The retention panel lives here now but its scope is the site.
+    if (path === '/api/v1/site')
+      return {
+        id: 'site',
+        name: 'Test site',
+        timezone: 'Asia/Shanghai',
+        channel_count: 16,
+        require_storage_write_proof: false,
+        recording_retention_days: retentionDays,
+        version: 1,
+      }
     throw new Error('unexpected path ' + path)
   })
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -336,4 +350,39 @@ test('a pool with bound channels says so in one line', async () => {
     .element(screen.getByText('已绑定 1 路通道：CH01'))
     .toBeVisible()
   client.clear()
+})
+
+// Local retention is a SITE policy: one period covers every channel whichever
+// pool it is bound to. It sits on the storage page because that is where an
+// operator decides how long footage is kept, so the panel must say the scope
+// rather than let the neighbouring per-pool cards imply otherwise.
+test('the retention policy states its site-wide scope and saves a period', async () => {
+  const client = fixture([poolFixture()], 0)
+  const screen = await render(view(client))
+  await expect
+    .element(screen.getByText(/当前不自动删除任何录像/))
+    .toBeVisible()
+  await expect
+    .element(screen.getByText(/本站点全部通道.*与通道绑定哪个存储池无关/))
+    .toBeVisible()
+  await screen.getByLabelText('保留天数').click()
+  await screen.getByRole('option', { name: '7 天', exact: true }).click()
+  await screen.getByRole('button', { name: '保存保留策略' }).click()
+  const saves = calls.request.mock.calls.filter(
+    ([path, init]) =>
+      path === '/api/v1/site' && (init as RequestInit)?.method === 'PATCH'
+  )
+  expect(saves).toHaveLength(1)
+  expect(JSON.parse(String((saves[0][1] as RequestInit).body))).toEqual({
+    recording_retention_days: 7,
+  })
+})
+
+test('an enabled retention period says it deletes and that protection is skipped', async () => {
+  const client = fixture([poolFixture()], 30)
+  const screen = await render(view(client))
+  await expect
+    .element(screen.getByText(/超过 30 天的录像会自动删除本地副本/))
+    .toBeVisible()
+  await expect.element(screen.getByText(/已保护的录像始终跳过/)).toBeVisible()
 })
