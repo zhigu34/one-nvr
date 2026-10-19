@@ -544,7 +544,7 @@ const EventClipJobRetention = 7 * 24 * time.Hour
 // Idempotent and bounded: one batch per call, and rows it repairs stop being
 // candidates.
 func (s *Service) RepairEventClipDamage(ctx context.Context) {
-	if s.DB == nil || s.Pools == nil {
+	if s.DB == nil || s.Pools == nil || s.Probe == nil {
 		return
 	}
 	rows, err := s.DB.Pool.Query(ctx, `SELECT s.id,s.pool_id,l.relative_path
@@ -594,24 +594,23 @@ func (s *Service) RepairEventClipDamage(ctx context.Context) {
 			continue
 		}
 		info, statErr := file.Stat()
+		if statErr != nil {
+			file.Close()
+			root.Close()
+			continue
+		}
+		// Whether the bytes are whole is decided by reading them, not by comparing
+		// sizes. The defect wrote the same event several times and the files can
+		// differ by a lot — measured on the site: one clip was 13.6 MB on disk
+		// against 32 MB in the index, because the index described the last assembly
+		// and the file the first. A size rule would either refuse intact clips or
+		// launder a truncated one; an MP4 ffprobe cannot parse is the evidence that
+		// a file really is broken, and it is the same check the publication path
+		// applies before a segment is allowed to be ready.
+		media, probeErr := s.Probe.InspectMP4(ctx, file)
 		file.Close()
 		root.Close()
-		if statErr != nil {
-			continue
-		}
-		// A file MUCH smaller than the index recorded is evidence of truncation,
-		// not of stale evidence, and keeping it damaged is what stops this pass
-		// from laundering real loss. The threshold is a ratio rather than "any
-		// difference" because the defect wrote the same event twice: measured on
-		// the site, the two files of one event differed by 0.12% (10901509 vs
-		// 10914971 bytes), which a strict comparison would call truncation. A file
-		// really cut short by a crash is far below the recorded size, and a re-cut
-		// always writes through an atomic rename, so it cannot leave a partial file.
-		var recordedSize int64
-		if err := s.DB.Pool.QueryRow(ctx, `SELECT size_bytes FROM recording_segments WHERE id=$1`, item.Segment).Scan(&recordedSize); err != nil {
-			continue
-		}
-		if recordedSize > 0 && info.Size()*10 < recordedSize*9 {
+		if probeErr != nil || !media.Readable || media.Duration <= 0 {
 			continue
 		}
 		fileID, err := identity(info)

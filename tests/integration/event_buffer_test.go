@@ -464,6 +464,23 @@ func TestEventRecordingToggleUsesTheChannelVersion(t *testing.T) {
 	}
 }
 
+// writeSyntheticClip writes a short real MP4 for the repair pass to probe: the
+// pass restores a clip only when ffprobe can read it, so a byte string would look
+// exactly like a file that is actually broken.
+func writeSyntheticClip(t *testing.T, path string) time.Duration {
+	t.Helper()
+	ffmpeg := mediaTestTool(t, "ffmpeg")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := exec.Command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc2=size=160x90:rate=5", "-t", "2",
+		"-c:v", "libx264", "-threads", "1", "-y", path).Run(); err != nil {
+		t.Fatal("synthetic clip creation failed", err)
+	}
+	return 2 * time.Second
+}
+
 // A clip that already exists must be EXTENDED, never rebuilt from the ring.
 //
 // Measured on the live site: one event produced seven files for the same run —
@@ -666,21 +683,15 @@ func fileNameRun(name string) string {
 // identity from the file the index points at.
 func TestRepairRestoresEventClipsMarkedDamaged(t *testing.T) {
 	fixture := scheduledFixture(t)
+	fixture.Service.Probe = probe.Runner{FFmpeg: mediaTestTool(t, "ffmpeg"), FFprobe: mediaTestTool(t, "ffprobe")}
 	ctx := context.Background()
-	// A real file on disk is what the repair reads: the inode is the only thing a
-	// file can prove about itself.
-	if err := os.MkdirAll(filepath.Join(fixture.Pool.Path, "recordings"), 0o700); err != nil {
-		t.Fatal(err)
-	}
 	clipID, err := id.New()
 	if err != nil {
 		t.Fatal(err)
 	}
 	clipPath := "recordings/" + string(clipID) + ".mp4"
 	clipTarget := filepath.Join(fixture.Pool.Path, clipPath)
-	if err := os.WriteFile(clipTarget, []byte("clip-bytes"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeSyntheticClip(t, clipTarget)
 	clipInfo, err := os.Stat(clipTarget)
 	if err != nil {
 		t.Fatal(err)
@@ -875,17 +886,22 @@ func TestOrphanSweepRemovesDuplicatesKeepsPublished(t *testing.T) {
 // twice and the two files differed by a fraction of a percent.
 func TestRepairLeavesTruncatedClipDamaged(t *testing.T) {
 	fixture := scheduledFixture(t)
+	fixture.Service.Probe = probe.Runner{FFmpeg: mediaTestTool(t, "ffmpeg"), FFprobe: mediaTestTool(t, "ffprobe")}
 	ctx := context.Background()
-	if err := os.MkdirAll(filepath.Join(fixture.Pool.Path, "recordings"), 0o700); err != nil {
-		t.Fatal(err)
-	}
 	clipID, err := id.New()
 	if err != nil {
 		t.Fatal(err)
 	}
 	clipPath := "recordings/" + string(clipID) + ".mp4"
 	target := filepath.Join(fixture.Pool.Path, clipPath)
-	if err := os.WriteFile(target, []byte("short"), 0o600); err != nil {
+	writeSyntheticClip(t, target)
+	// Cut the moov box away: the bytes are present but no reader can play them,
+	// which is exactly what a file interrupted mid-write looks like.
+	full, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, full[:len(full)/4], 0o600); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(target)
@@ -935,6 +951,7 @@ func TestRepairLeavesTruncatedClipDamaged(t *testing.T) {
 // the index for the same clip.
 func TestRepairAcceptsTheDefectsSmallSizeVariance(t *testing.T) {
 	fixture := scheduledFixture(t)
+	fixture.Service.Probe = probe.Runner{FFmpeg: mediaTestTool(t, "ffmpeg"), FFprobe: mediaTestTool(t, "ffprobe")}
 	ctx := context.Background()
 	if err := os.MkdirAll(filepath.Join(fixture.Pool.Path, "recordings"), 0o700); err != nil {
 		t.Fatal(err)
@@ -945,10 +962,7 @@ func TestRepairAcceptsTheDefectsSmallSizeVariance(t *testing.T) {
 	}
 	clipPath := "recordings/" + string(clipID) + ".mp4"
 	target := filepath.Join(fixture.Pool.Path, clipPath)
-	payload := make([]byte, 100000)
-	if err := os.WriteFile(target, payload, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeSyntheticClip(t, target)
 	info, err := os.Stat(target)
 	if err != nil {
 		t.Fatal(err)
