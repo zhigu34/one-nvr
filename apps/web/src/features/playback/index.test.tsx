@@ -37,7 +37,9 @@ const channels: Schema<'Channel'>[] = [
     channel_group: '',
     enabled: true,
     version: 1,
-    permissions: ['playback'],
+    // Export is its own grant (EXP): the player bar's control only exists for a
+    // channel the operator may actually export from.
+    permissions: ['playback', 'export'],
   },
   {
     id: 'channel-2',
@@ -386,17 +388,21 @@ test('the timeline picks an export bracket and zooms the view', async () => {
   const strip = view.getByTestId('playback-timeline-canvas')
   await strip.click({ position: { x: 40, y: 45 } })
   await says('片段 aaaaaaaa')
-  // Picker mode: two background clicks bracket the range, the third restarts.
-  await view.getByRole('button', { name: '选择导出区间' }).click()
+  // Picker mode lives on the PLAYER bar now — export is the second most
+  // frequent action after watching, and it used to be a chip among the zoom
+  // buttons where nobody looked. Two background clicks bracket the range, the
+  // third restarts.
+  await view.getByRole('button', { name: '导出片段' }).click()
   await strip.click({ position: { x: 40, y: 45 } })
   await strip.click({ position: { x: 120, y: 45 } })
   await vi.waitFor(() => expect(document.querySelector('[data-testid="playback-bracket"]')).toBeTruthy())
   // Width via calc() keeps the overlay out of Playwright's visibility math in
   // headless mode; presence plus the dialogue below is the real assertion.
-  await expect
-    .element(view.getByRole('button', { name: '导出所选区间' }))
-    .toBeEnabled()
-  await view.getByRole('button', { name: '导出所选区间' }).click()
+  // Once a range exists the primary action names what it will export, so the
+  // duration doubles as the confirmation that the bracket was understood.
+  const exportButton = view.getByRole('button', { name: /^导出 \d/ })
+  await expect.element(exportButton).toBeEnabled()
+  await exportButton.click()
   // The dialog analyzes exactly the bracketed window.
   await vi.waitFor(() => {
     const paths = calls.request.mock.calls.map((call) => String(call[0]))

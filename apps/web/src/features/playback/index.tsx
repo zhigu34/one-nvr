@@ -6,6 +6,7 @@ import {
   Camera,
   ChevronLeft,
   ChevronRight,
+  Download,
   Maximize2,
   Maximize,
   Pause,
@@ -521,6 +522,9 @@ function Workspace({
   // No data in the searched window: the whole transport and the export
   // picker disable — there is nothing to play, scrub or bracket.
   const noData = timeline.entries.length === 0
+  // Export is authorisation-gated per channel (EXP), so the control is absent
+  // rather than disabled for someone who could never use it.
+  const canExport = (active?.permissions ?? []).includes('export')
 
   // When footage arrives and nothing is playing yet, park the playhead on the
   // newest segment and load its first frame (paused). The operator sees the
@@ -602,32 +606,22 @@ function Workspace({
   // (plain mode) or spans the full workspace width as row 2 (workspace mode).
   const timelineBand = (
     <div className='flex flex-col gap-1.5 rounded-xl bg-video-surface px-3.5 py-2.5'>
-      {/* Toolbar row: export picker on the left, zoom controls on the right.
-          Migrated out of the console card so the timeline owns its controls,
-          and the player keeps the freed vertical space. */}
+      {/* Toolbar row: zoom controls on the right, a short instruction while an
+          export range is being picked. Export itself lives on the PLAYER bar:
+          it is the second most frequent action after watching, and it was buried
+          between the zoom buttons where nobody looked for it. */}
       <div className='flex flex-wrap items-center gap-2'>
-        <Button
-          size='sm'
-          variant={pickMode ? 'secondary' : 'ghost'}
-          className='h-7 px-2 text-xs text-video-chrome-foreground hover:bg-video-wash'
-          aria-pressed={pickMode}
-          disabled={noData}
-          onClick={() => {
-            setPickMode(!pickMode)
-            setBracket(null)
-          }}
-        >
-          选择导出区间
-        </Button>
+        {pickMode && !bracket && (
+          <span className='text-xs text-amber-400'>
+            在时间轴上点两次：第一次定起点，第二次定终点；拖动左右手柄微调。
+          </span>
+        )}
         {pickMode && bracket && bracket.end > bracket.start && (
           <>
-            <Button
-              size='sm'
-              className='h-7 px-2 text-xs'
-              onClick={() => setExportRange({ ...bracket })}
-            >
-              导出所选区间
-            </Button>
+            <span className='text-xs tabular-nums text-video-chrome-foreground/70'>
+              已选 {formatClock(bracket.start, zone)} — {formatClock(bracket.end, zone)} ·{' '}
+              {formatDuration(bracket.end - bracket.start)}
+            </span>
             <Button
               size='sm'
               variant='ghost'
@@ -637,11 +631,6 @@ function Workspace({
               清除区间
             </Button>
           </>
-        )}
-        {pickMode && !bracket && (
-          <span className='text-xs text-video-chrome-foreground/60'>
-            在时间轴上点两次：第一次定起点，第二次定终点；拖动左右手柄微调。
-          </span>
         )}
         {/* Selected segment summary rides the toolbar's middle zone — the
             card that used to squat a 44px row under the video. */}
@@ -660,13 +649,17 @@ function Workspace({
               {(selected.bytes / 1048576).toFixed(1)} MiB
             </span>
             {active.permissions.includes('export') && !selected.blocked && (
+              // Exports THIS segment, while the player bar's control exports a
+              // picked range. Two different subjects, so the labels differ:
+              // 本段 vs 片段.
               <Button
                 size='sm'
                 variant='outline'
                 className='h-5 shrink-0 px-1.5 text-[10px]'
+                title='只导出这一段录像'
                 onClick={() => setExportOpen(true)}
               >
-                导出
+                导出本段
               </Button>
             )}
           </div>
@@ -728,12 +721,19 @@ function Workspace({
             该时间范围没有已登记录像
           </span>
         )}
-        <span data-testid='playback-timeline-window' className='text-video-chrome-foreground/60'>
+        <span data-testid='playback-timeline-window' className='text-video-chrome-foreground/40'>
           {formatClock(timeline.from, zone)} — {formatClock(timeline.to, zone)}
         </span>
-        <span>
-          当前{' '}
-          <b data-testid='playback-timeline-clock' className='font-medium text-red-400'>
+        {/* The playhead time is THE current time of this page: the biggest
+            number in the band, not one of three equal-weight clocks. The picture
+            carries a second clock burned in by the camera, and nothing here can
+            change that one — so this side has to be unmistakably the reference. */}
+        <span className='flex items-baseline gap-1.5'>
+          <span className='text-[10px] uppercase tracking-wide text-video-chrome-foreground/40'>播放头</span>
+          <b
+            data-testid='playback-timeline-clock'
+            className='text-base font-semibold tabular-nums text-video-chrome-foreground'
+          >
             {state.clock > 0 ? formatClock(state.clock, zone) : '—'}
           </b>
         </span>
@@ -1049,6 +1049,22 @@ return (
                   直通
                 </span>
               )}
+              {/* The picture carries a clock burned in by the camera, and it is
+                  not the playhead: camera clocks drift, and the stream that
+                  produced this file may have started before the recording did.
+                  Naming the two clocks is what stops an operator from reading
+                  "the video says 20:42:53 but the page says 20:42:51" as a bug
+                  in playback. The exact offset is not knowable here — it lives in
+                  the pixels — so this points at the playhead as the reference
+                  instead of inventing a delta. */}
+              {state.phase !== 'playing' && (
+                <span
+                  title='画面内时间是摄像头烧录的；本页「播放头」时间才是这份录像在站点时区中的位置。两者可能有秒级差异，且摄像头时钟可能独立漂移。'
+                  className='rounded-md border border-white/10 bg-black/40 px-2 py-0.5 text-[10px] text-white/55 shadow-sm backdrop-blur'
+                >
+                  画面内时间来自摄像头
+                </span>
+              )}
             </div>
             {/* Top-right playback-state badge: red dot + wall-clock when
                 playing, amber dot when paused, and a soft spinner while the
@@ -1058,7 +1074,13 @@ return (
               <div
                 data-testid='playback-state-badge'
                 className={cn(
-                  'pointer-events-none absolute right-3 top-3 flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px] tabular-nums shadow-sm backdrop-blur transition-opacity duration-200',
+                  // Top-LEFT, beside the codec/直通 pills and away from the
+                  // timeline's own clock. It used to sit top-right, where its
+                  // wall-clock read as a second "current time" competing with the
+                  // timeline header — an operator could not tell which one was
+                  // the playhead. A playback state belongs to the picture, so it
+                  // lives on the picture.
+                  'pointer-events-none absolute left-3 top-10 flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px] tabular-nums shadow-sm backdrop-blur transition-opacity duration-200',
                   // Same hover contract as the control bar and the top-left
                   // pills: visible while paused/loading, fade while playing.
                   state.phase === 'playing'
@@ -1267,6 +1289,54 @@ return (
                   }))}
                 />
               </div>
+              {/* Export: the second most frequent action on this page, so it is
+                  a named control on the player bar rather than a small chip
+                  among the zoom buttons. Picking a range is a mode, so it stays
+                  one button that names the next step; once a range exists the
+                  primary action appears beside it. */}
+              {canExport && (
+                <div className='ml-auto flex items-center gap-1.5'>
+                  {bracket && bracket.end > bracket.start ? (
+                    <>
+                      <Button
+                        size='sm'
+                        className='h-7 gap-1 px-2.5 text-xs'
+                        onClick={() => setExportRange({ ...bracket })}
+                      >
+                        <Download size={13} />
+                        导出 {formatDuration(bracket.end - bracket.start)}
+                      </Button>
+                      <Button
+                        size='sm'
+                        variant='ghost'
+                        className='h-7 px-2 text-xs text-white/80 hover:bg-white/15'
+                        onClick={() => {
+                          setPickMode(false)
+                          setBracket(null)
+                        }}
+                      >
+                        取消
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      size='sm'
+                      variant={pickMode ? 'secondary' : 'ghost'}
+                      className='h-7 gap-1 px-2.5 text-xs text-white hover:bg-white/15'
+                      aria-pressed={pickMode}
+                      disabled={noData}
+                      title='在时间轴上选一段区间后导出'
+                      onClick={() => {
+                        setPickMode(!pickMode)
+                        setBracket(null)
+                      }}
+                    >
+                      <Download size={13} />
+                      {pickMode ? '在时间轴上选区间' : '导出片段'}
+                    </Button>
+                  )}
+                </div>
+              )}
             </div>
           </div>
           {/* Warning strip: only rendered when there is an actual warning

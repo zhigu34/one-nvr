@@ -249,7 +249,11 @@ export function RecordingsWorkspace({
         <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
           <SheetContent
             side='right'
-            className='flex w-full flex-col gap-0 border-video-border bg-video-surface-raised p-0 text-video-chrome-foreground sm:max-w-sm'
+            // Below the 64px header, not over it. A full-height sheet covered the
+            // right end of the toolbar — including the very button that opens and
+            // closes this panel — so the way out was hidden by the thing that
+            // came in.
+            className='inset-y-0 top-16 flex h-auto w-full flex-col gap-0 border-video-border bg-video-surface-raised p-0 text-video-chrome-foreground sm:max-w-sm'
           >
             <SheetHeader className='border-b border-video-border px-4 py-3'>
               <SheetTitle className='text-sm font-semibold text-video-chrome-foreground'>
@@ -417,9 +421,14 @@ function ChannelRow({
       </span>
       <span className='flex-1 truncate'>{name}</span>
       {typeof segments === 'number' && segments > 0 && (
+        // Neutral by design. This is a COUNT of segments in the current window,
+        // while the chip beside it is a GROUP NAME — two different kinds of fact.
+        // Styling both green made an operator ask "is CH01 224 files or a group
+        // called 224", which is the one question a badge must never raise.
+        // tabular-nums keeps the column from shifting as the counts change.
         <span
           title={`当前时段 ${segments} 段录像`}
-          className='rounded bg-emerald-400/15 px-1 py-0.5 text-[10px] tabular-nums text-emerald-300'
+          className='rounded bg-zinc-700/50 px-1 py-0.5 text-[10px] font-normal tabular-nums text-zinc-400'
         >
           {segments > 999 ? '999+' : segments}
         </span>
@@ -427,7 +436,7 @@ function ChannelRow({
       {group && (
         <span
           title={`分组 · ${group}`}
-          className='rounded bg-video-wash px-1 py-0.5 text-[10px] text-video-chrome-foreground/60'
+          className='rounded bg-emerald-400/15 px-1 py-0.5 text-[10px] text-emerald-300'
         >
           {group}
         </span>
