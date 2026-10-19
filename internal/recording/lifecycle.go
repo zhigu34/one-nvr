@@ -83,7 +83,10 @@ func (s *Service) DeleteLocal(ctx context.Context, p auth.Principal, segmentIDs 
 // The caller is responsible for having established that the media really is
 // unreadable; this function deletes what it is given.
 func (s *Service) DeleteCorruptLocal(ctx context.Context, segmentIDs []id.ID) ([]DeleteOutcome, error) {
-	if s.Auth == nil || s.Pools == nil {
+	// Only the pool is needed: no authorization is consulted because no user is
+	// acting. An implementation that demanded Auth here would fail in exactly the
+	// place it is meant to serve — an integrity sweep run from the admin binary.
+	if s.Pools == nil {
 		return nil, auth.ErrNotFound
 	}
 	return s.deleteLocal(ctx, "", segmentIDs, "corrupt"), nil
