@@ -58,7 +58,7 @@ const FreshnessDelay = 10 * time.Minute
 // the caller sees exactly which files were removed and how many bytes that
 // released.
 func (s *Service) DeleteLocal(ctx context.Context, p auth.Principal, segmentIDs []id.ID, reason string) ([]DeleteOutcome, error) {
-	if len(segmentIDs) == 0 || len(segmentIDs) > 100 || (reason != "manual" && reason != "retention") {
+	if len(segmentIDs) == 0 || len(segmentIDs) > 100 || (reason != "manual" && reason != "retention" && reason != "corrupt" && reason != "quota" && reason != "watermark") {
 		return nil, auth.ErrInvalid
 	}
 	if s.Auth == nil || s.Pools == nil {
@@ -70,6 +70,23 @@ func (s *Service) DeleteLocal(ctx context.Context, p auth.Principal, segmentIDs 
 		return nil, err
 	}
 	return s.deleteLocal(ctx, p.UserID, segmentIDs, reason), nil
+}
+
+// DeleteCorruptLocal removes recordings whose media cannot be decoded.
+//
+// It exists for an integrity sweep rather than an operator request: the actor is
+// empty, which the audit log records as "no user", and the reason is 'corrupt'
+// so the trail says WHY the file went. It reuses deleteOne, so the identity
+// check, export/archive/lease pins, protection and the audit row all still apply
+// — a sweep may not become a way around any of them.
+//
+// The caller is responsible for having established that the media really is
+// unreadable; this function deletes what it is given.
+func (s *Service) DeleteCorruptLocal(ctx context.Context, segmentIDs []id.ID) ([]DeleteOutcome, error) {
+	if s.Auth == nil || s.Pools == nil {
+		return nil, auth.ErrNotFound
+	}
+	return s.deleteLocal(ctx, "", segmentIDs, "corrupt"), nil
 }
 
 // deleteLocal is the deletion core, shared by the administrator path and the

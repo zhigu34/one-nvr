@@ -27,6 +27,9 @@ func run() error {
 	if handled, err := deploymentCommand(os.Args[1:]); handled {
 		return err
 	}
+	if handled, err := purgeCorruptCommand(os.Args[1:]); handled {
+		return err
+	}
 	if len(os.Args) == 2 && os.Args[1] == "init-secrets" {
 		c, err := config.Load()
 		if err != nil {
