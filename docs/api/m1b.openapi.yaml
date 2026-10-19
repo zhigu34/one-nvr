@@ -2200,6 +2200,62 @@
         }
       }
     },
+    "/api/v1/operations/abnormal-events": {
+      "get": {
+        "operationId": "listAbnormalEvents",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "description": "Operational incidents (PRD EVT-04): what is broken right now, as a worklist ordered by severity. One open row per (kind, subject) — a persistent condition updates its row instead of adding one. Resolved incidents keep their history.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "include_resolved",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Firing incidents, most severe first, then recently resolved ones when asked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/AbnormalEvent"
+                          }
+                        }
+                      },
+                      "required": ["items"],
+                      "additionalProperties": false
+                    },
+                    "request_id": {
+                      "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+                    }
+                  },
+                  "required": ["data", "request_id"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/recording-policies": {
       "put": {
         "operationId": "setRecordingPolicies",
@@ -9986,6 +10042,65 @@
           "items",
           "next_cursor"
         ],
+        "additionalProperties": false
+      },
+      "AbnormalEvent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "kind": {
+            "type": "string",
+            "description": "EVT-04 category: camera_offline, stream_degraded, recording_stalled, storage_unwritable, capacity_low, detector_unavailable, broker_unavailable, config_publish_failed, queue_backlog."
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "warning", "info"]
+          },
+          "subject": {
+            "type": "string",
+            "description": "The broken thing: a channel id, a pool id, or a component name."
+          },
+          "channel_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "channel_no": {
+            "type": "integer",
+            "nullable": true
+          },
+          "channel_name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": ["firing", "resolved"]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "occurrences": {
+            "type": "integer",
+            "description": "How many sweeps saw this condition. A climbing count means it is flapping rather than steady."
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ended_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": ["id", "kind", "severity", "subject", "state", "summary", "detail", "occurrences", "started_at", "last_seen_at"],
         "additionalProperties": false
       },
       "ScheduleWindow": {

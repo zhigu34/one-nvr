@@ -6,10 +6,12 @@ import (
 	"time"
 
 	"github.com/zhigu34/one-nvr/internal/archive"
+	"github.com/zhigu34/one-nvr/internal/config"
 	"github.com/zhigu34/one-nvr/internal/database"
 	"github.com/zhigu34/one-nvr/internal/detection"
 	"github.com/zhigu34/one-nvr/internal/events"
 	"github.com/zhigu34/one-nvr/internal/notify"
+	"github.com/zhigu34/one-nvr/internal/operations"
 	"github.com/zhigu34/one-nvr/internal/recording"
 	"github.com/zhigu34/one-nvr/internal/reliability"
 )
@@ -196,6 +198,25 @@ func runClipAssembly(ctx context.Context, s *recording.Service) {
 	for {
 		s.AssembleClips(ctx)
 		s.TouchBuffers(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// runAbnormalSweep keeps the abnormal-event table current (PRD EVT-04).
+//
+// Ten seconds matches the observation cadence: a condition is reported within one
+// sampling cycle of becoming observable, so the worklist and the channel pages
+// cannot disagree for long.
+func runAbnormalSweep(ctx context.Context, db *database.DB, c config.Config) {
+	service := operations.New(db, nil, c.FrigateEnabled, c.OpenListEnabled)
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		service.AbnormalSweep(ctx)
 		select {
 		case <-ctx.Done():
 			return

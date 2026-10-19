@@ -297,12 +297,12 @@ func Run(name string) error {
 		// answer readiness never starts at all), and a failure to settle old
 		// history must not stop recording — reliability is an observation of the
 		// media pipeline, never a precondition for it.
-		// Nine goroutines follow, and the count is stated once so a tenth
+		// Ten goroutines follow, and the count is stated once so an eleventh
 		// cannot be added without the Add moving with it. (It was wrong here
 		// twice already: an Add(2) covering one goroutine hangs shutdown, an
 		// Add(1) covering two panics it with a negative counter. The guard test
 		// in run_waitgroup_test.go is what keeps this honest.)
-		background.Add(9)
+		background.Add(10)
 		go func() { defer background.Done(); runReliabilityRetention(ctx, db) }()
 		// The summary tiers (REL-06). Derived data: if this loop never runs, the
 		// reports read intervals directly and stay correct.
@@ -331,6 +331,10 @@ func Run(name string) error {
 		// that reserved no memory for the cache, which is the default.
 		go func() { defer background.Done(); recordings.RunBufferSweeper(ctx) }()
 		go func() { defer background.Done(); runClipAssembly(ctx, recordings) }()
+		// EVT-04: the abnormal-event sweep. It reads the probe table, the channel
+		// observations, the pool checks and the job queue — all of which already
+		// exist — and reconciles one open row per broken thing.
+		go func() { defer background.Done(); runAbnormalSweep(ctx, db, c) }()
 		// Retention runs with the recorder loops because it touches pool files
 		// and publishes into the same index. It stays inert until a site sets a
 		// period, so an upgraded site keeps M1's never-delete behaviour.
@@ -435,6 +439,16 @@ func Run(name string) error {
 		operationsService := operations.New(db, accounts, c.FrigateEnabled, c.OpenListEnabled)
 		if c.EventCacheMB > 0 {
 			operationsService.EventCacheDir = "/cache"
+		}
+		// EVT-04: a failed publish is an instant, not a state a sweep can find,
+		// so detection reports it here. A success closes the incident.
+		if detectionService != nil {
+			detectionService.OnPublishFailure = func(ctx context.Context, detail string) {
+				operationsService.RecordPublishFailure(ctx, detail)
+			}
+			detectionService.OnPublishSuccess = func(ctx context.Context) {
+				operationsService.ClearPublishFailure(ctx)
+			}
 		}
 		handler = httpapi.NewHandler(httpapi.Dependencies{Events: intelligence, Detection: detectionService, Auth: accounts, Site: &site.Service{DB: db, Auth: accounts, Secrets: secret, Passwords: passwords}, Sources: sources, Live: &live.Service{DB: db, Auth: accounts, Media: media}, PublicURL: c.PublicURL, TrustedProxyToken: proxyKey, HealthCheck: check, Storage: pools, TLS: certificates, FrigateEnabled: c.FrigateEnabled, OpenListEnabled: c.OpenListEnabled, Archive: archive.New(db, accounts, secret, pools), Notify: notify.New(db, accounts, secret, secret.SiteID), Reliability: reliability.New(db, accounts), Operations: operationsService})
 	}

@@ -12,6 +12,7 @@ import {
   Forbidden,
 } from '@/features/foundation/ui'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { AbnormalEvents } from './abnormal-events'
 import { ReliabilityOperations } from './reliability'
 import { AuditFamilyFilter, AuditTrail } from './audit-trail'
 
@@ -24,6 +25,7 @@ import { AuditFamilyFilter, AuditTrail } from './audit-trail'
  * tax this removes.
  */
 const ANCHORS = [
+  { id: 'abnormal', label: '异常事件' },
   { id: 'components', label: '组件状态' },
   { id: 'reliability', label: '可靠性' },
   { id: 'alerts', label: '告警' },
@@ -122,6 +124,10 @@ export function Operations() {
           </a>
         ))}
       </nav>
+
+      {/* First on the page: what is broken right now outranks how the components
+          are doing, and the component table is the detail behind these rows. */}
+      <AbnormalEvents zone={site.data?.timezone || ''} />
 
       <Panel title='组件状态' anchor='components' spaced={false}>
         <QueryState

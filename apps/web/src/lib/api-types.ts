@@ -786,6 +786,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/abnormal-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Operational incidents (PRD EVT-04): what is broken right now, as a worklist ordered by severity. One open row per (kind, subject) — a persistent condition updates its row instead of adding one. Resolved incidents keep their history. */
+        get: operations["listAbnormalEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recording-policies": {
         parameters: {
             query?: never;
@@ -2796,6 +2813,30 @@ export interface components {
         RecordingPage: {
             items: components["schemas"]["RecordingSegment"][];
             next_cursor: components["schemas"]["UUID"] | null;
+        };
+        AbnormalEvent: {
+            id: components["schemas"]["UUID"];
+            /** @description EVT-04 category: camera_offline, stream_degraded, recording_stalled, storage_unwritable, capacity_low, detector_unavailable, broker_unavailable, config_publish_failed, queue_backlog. */
+            kind: string;
+            /** @enum {string} */
+            severity: "critical" | "warning" | "info";
+            /** @description The broken thing: a channel id, a pool id, or a component name. */
+            subject: string;
+            channel_id?: components["schemas"]["UUID"];
+            channel_no?: number | null;
+            channel_name?: string;
+            /** @enum {string} */
+            state: "firing" | "resolved";
+            summary: string;
+            detail: string;
+            /** @description How many sweeps saw this condition. A climbing count means it is flapping rather than steady. */
+            occurrences: number;
+            /** Format: date-time */
+            started_at: string;
+            /** Format: date-time */
+            last_seen_at: string;
+            /** Format: date-time */
+            ended_at?: string | null;
         };
         ScheduleWindow: {
             /** @description ISO-8601 weekday: 1=Monday .. 7=Sunday. */
@@ -5966,6 +6007,33 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listAbnormalEvents: {
+        parameters: {
+            query?: {
+                include_resolved?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Firing incidents, most severe first, then recently resolved ones when asked. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            items: components["schemas"]["AbnormalEvent"][];
+                        };
+                        request_id: components["schemas"]["UUID"];
+                    };
                 };
             };
         };

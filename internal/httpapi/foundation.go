@@ -6,6 +6,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/channel"
 	"github.com/zhigu34/one-nvr/internal/fault"
+	"github.com/zhigu34/one-nvr/internal/operations"
 	"github.com/zhigu34/one-nvr/internal/site"
 )
 
@@ -193,4 +194,20 @@ func (r *router) futureIntelligence(w http.ResponseWriter, q *http.Request, p au
 		return
 	}
 	fail(w, q, fault.New(501, "endpoint_not_available", "该占位端点未实现：检测规则请使用 /api/v1/detection/rules"))
+}
+
+// abnormalEvents lists operational incidents (PRD EVT-04).
+//
+// Administrator-only: it names broken infrastructure across the site, which is
+// operational data rather than something a viewer needs to triage.
+func (r *router) abnormalEvents(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	includeResolved := q.URL.Query().Get("include_resolved") == "true"
+	out, err := r.d.Operations.ListAbnormal(q.Context(), p, includeResolved)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, struct {
+		Items []operations.AbnormalEvent `json:"items"`
+	}{Items: out})
 }

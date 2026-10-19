@@ -103,6 +103,13 @@ type Service struct {
 	// deployment's hardware report; a detector pointed at unaccelerated
 	// hardware fails at startup, so this is never guessed.
 	Inference string
+	// OnPublishFailure and OnPublishSuccess report the outcome to whoever records
+	// abnormal events (EVT-04). Injected rather than imported: detection must not
+	// depend on the operations package, and a publish failure is only knowable
+	// here — a sweep would either miss one that was fixed before it ran or report
+	// one that never happened.
+	OnPublishFailure func(ctx context.Context, detail string)
+	OnPublishSuccess func(ctx context.Context)
 }
 
 func New(db *database.DB, accounts *auth.Service, frigateURL, configPath string) *Service {
@@ -123,6 +130,13 @@ type ServiceConfig struct {
 	// Inference is the hardware profile the detector should run on: "intel"
 	// for the accelerated path, empty for CPU.
 	Inference string
+	// OnPublishFailure and OnPublishSuccess report the outcome to whoever records
+	// abnormal events (EVT-04). Injected rather than imported: detection must not
+	// depend on the operations package, and a publish failure is only knowable
+	// here — a sweep would either miss one that was fixed before it ran or report
+	// one that never happened.
+	OnPublishFailure func(ctx context.Context, detail string)
+	OnPublishSuccess func(ctx context.Context)
 }
 
 // Complete reports whether every field the publication path needs is set.
@@ -299,9 +313,15 @@ func (s *Service) PublishRendered(ctx context.Context, rendered []byte, actor id
 			_ = os.Remove(s.ConfigPath)
 		}
 		s.recordRevision(ctx, configHash, "failed", cameraCount, actor, "reload_failed")
+		if s.OnPublishFailure != nil {
+			s.OnPublishFailure(ctx, "检测器未能重新加载配置（reload_failed）")
+		}
 		return "", ErrPublishFailed
 	}
 	s.recordRevision(ctx, configHash, "published", cameraCount, actor, "")
+	if s.OnPublishSuccess != nil {
+		s.OnPublishSuccess(ctx)
+	}
 	return configHash, nil
 }
 
