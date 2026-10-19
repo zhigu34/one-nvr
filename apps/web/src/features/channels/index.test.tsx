@@ -441,7 +441,8 @@ test('media parameters, access badge and healthy-row shortcuts', async () => {
   await expect.element(rows.nth(0)).toHaveTextContent('4.1M')
   await expect.element(rows.nth(0)).toHaveTextContent('子: 704×576')
   await expect.element(rows.nth(0)).toHaveTextContent('Main')
-  await expect.element(rows.nth(0)).toHaveTextContent('PCMA')
+  // Audio is stated per stream now: "主 PCMA" says the MAIN stream carries it.
+  await expect.element(rows.nth(0)).toHaveTextContent('主 PCMA')
   await expect.element(rows.nth(0)).not.toHaveTextContent('无音频')
   await expect.element(rows.nth(0)).toHaveTextContent('192.168.66.114')
   await expect
@@ -466,7 +467,7 @@ test('media parameters, access badge and healthy-row shortcuts', async () => {
   await expect.element(rows.nth(3)).toHaveTextContent('4MP')
   await expect.element(rows.nth(3)).toHaveTextContent('2560×1920')
   await expect.element(rows.nth(3)).toHaveTextContent('H.265')
-  await expect.element(rows.nth(3)).toHaveTextContent('AAC')
+  await expect.element(rows.nth(3)).toHaveTextContent('主 AAC')
   setup.client.clear()
 })
 test('thumbnail slot and recording shortcut on configured channels', async () => {

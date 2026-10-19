@@ -24,6 +24,27 @@ const VIDEO_CODEC_NAMES: Record<string, string> = {
   hevc: 'H.265',
 }
 
+/**
+ * Codec profiles in the words an operator reasons about.
+ *
+ * "Main" on its own is the worst possible label here: it reads as the MAIN
+ * stream, which is exactly the confusion the two lines above it are trying to
+ * avoid. The profile is a compression profile, not a stream identity.
+ */
+const VIDEO_PROFILE_NAMES: Record<string, string> = {
+  baseline: 'Baseline',
+  'constrained baseline': 'Baseline',
+  main: 'Main',
+  high: 'High',
+  'main 10': 'Main10',
+  'high 10': 'High10',
+}
+
+function profileLabel(profile: string | undefined) {
+  if (!profile) return ''
+  return VIDEO_PROFILE_NAMES[profile.toLowerCase()] ?? profile
+}
+
 function codecLabel(codec: string | undefined) {
   return codec ? (VIDEO_CODEC_NAMES[codec] ?? codec.toUpperCase()) : ''
 }
@@ -56,39 +77,68 @@ function audioDetail(media: Media) {
 }
 
 /**
- * The audio pill: only rendered when the probe actually captured a codec.
- * "No audio" stays silent — printing it on every row was pure noise.
+ * One audio mark per stream, naming WHICH stream it belongs to.
  *
- * The pill carries the codec only; the sample rate, channel layout and bit rate
- * live in the row's hover title, because a 640×480 mono 8 kHz track is not
- * something an operator needs in a table cell but is exactly what they need when
- * asking why the picture and sound do not match.
+ * The previous version showed a single pill for "the row", so a channel with
+ * audio on the main stream and none on the sub looked identical to one with audio
+ * on both. That is the question an operator asks first when preview plays sound
+ * but recording does not — the recording follows the main stream, the preview may
+ * follow the sub — and the cell could not answer it.
+ *
+ * Codes are spelled out with their sample rate, channel count and bit rate on
+ * hover. A stream the probe confirmed has NO audio prints 无音 rather than
+ * nothing: silence made "not captured yet" and "genuinely silent" look alike.
  */
-function AudioPill({ media }: { media: Media | null | undefined }) {
-  const codec = media?.audio_codec
-  if (codec == null || codec === '') return null
-  const label = audioCodecLabel(codec)
-  const detail = audioDetail(media ?? ({} as Media))
-  const title = detail
-    ? `${label} · ${detail}${audioPreviewable(codec) ? ' · 实时预览可出声' : ' · 实时预览无声（WebRTC 只转发 opus/PCMA/PCMU）'}`
-    : audioPreviewable(codec)
-      ? '实时预览可出声'
-      : '实时预览无声：ZLM 的 WebRTC 只支持 opus / PCMA / PCMU，其余编码（如 AAC）不会被转发'
-  if (audioPreviewable(codec))
+function AudioMark({
+  stream,
+  codec,
+  media,
+}: {
+  stream: '主' | '子'
+  codec: string | null | undefined
+  media: Media
+}) {
+  // null means the test predates audio capture — say so rather than guessing.
+  const unknown = codec == null
+  if (unknown) {
     return (
       <span
-        title={title}
-        className='rounded-full border border-emerald-700/40 bg-emerald-950/40 px-1.5 py-px text-[10px] leading-4 text-emerald-400'
+        title={`${stream}流：这次测试早于音频采集，需要重新测试才能判断`}
+        className='rounded-full border border-zinc-700/60 bg-zinc-900/60 px-1.5 py-px text-[10px] leading-4 text-zinc-500'
       >
-        {label}
+        {stream}?
       </span>
     )
+  }
+  if (codec === '') {
+    return (
+      <span
+        title={`${stream}流：摄像头没有送音频`}
+        className='rounded-full border border-zinc-700/60 bg-zinc-900/60 px-1.5 py-px text-[10px] leading-4 text-zinc-500'
+      >
+        {stream}无音
+      </span>
+    )
+  }
+  const label = audioCodecLabel(codec)
+  const detail = audioDetail(media)
+  const preview = audioPreviewable(codec)
+    ? '实时预览可出声'
+    : '实时预览无声（WebRTC 只转发 opus/PCMA/PCMU）'
+  const title = [
+    `${stream}流音频：${label}`,
+    detail,
+    preview,
+  ].filter(Boolean).join(' · ')
+  const tone = preview
+    ? 'border-emerald-700/40 bg-emerald-950/40 text-emerald-400'
+    : 'border-amber-700/40 bg-amber-950/30 text-amber-400'
   return (
     <span
       title={title}
-      className='rounded-full border border-amber-700/40 bg-amber-950/30 px-1.5 py-px text-[10px] leading-4 text-amber-400'
+      className={`rounded-full border px-1.5 py-px text-[10px] leading-4 ${tone}`}
     >
-      {label}
+      {stream} {label}
     </span>
   )
 }
@@ -104,7 +154,7 @@ function streamLine(media: Media, withMegapixels: boolean) {
     size,
     resolution,
     codecLabel(media.codec),
-    media.profile ?? '',
+    profileLabel(media.profile),
     fpsLabel(media),
     bitrateLabel(media.bitrate_kbps),
   ].filter(Boolean)
@@ -194,7 +244,12 @@ export function MediaParamsCell({
           </span>
         ) : null}
       </div>
-      <AudioPill media={main ?? sub} />
+      <div className='flex shrink-0 flex-col gap-0.5'>
+        {main && (
+          <AudioMark stream='主' codec={main.audio_codec} media={main} />
+        )}
+        {sub && <AudioMark stream='子' codec={sub.audio_codec} media={sub} />}
+      </div>
     </div>
   )
 }

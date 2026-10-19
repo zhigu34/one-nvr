@@ -162,12 +162,22 @@ var rate = regexp.MustCompile(`([0-9.]+) fps`)
 // which the UI prints as absent rather than as a guess — a camera that does not
 // declare its bit rate must not appear to have a measured one.
 var (
-	profile      = regexp.MustCompile(`Video: [a-zA-Z0-9_]+ \(([^)]+)\)`)
-	pixelFormat  = regexp.MustCompile(`Video: [^,]+, ([a-zA-Z0-9]+)(?:\([^)]*\))?, \d+x\d+`)
-	videoRate    = regexp.MustCompile(`, (\d+) kb/s`)
-	sampleAspect = regexp.MustCompile(`\[SAR (\d+:\d+) DAR`)
-	codecLevel   = regexp.MustCompile(`Video: [^,]+.*?\((?:Main|High|Baseline|Constrained Baseline|Main 10|High 10|Rext)[^)]*\).*?\b(\d+\.\d+)`)
-	audioRate    = regexp.MustCompile(`Audio: [^,]+, (\d+) Hz, (\w+)`)
+	profile     = regexp.MustCompile(`Video: [a-zA-Z0-9_]+ \(([^)]+)\)`)
+	pixelFormat = regexp.MustCompile(`Video: [^,]+, ([a-zA-Z0-9]+)(?:\([^)]*\))?, \d+x\d+`)
+	// videoStreamLine matches any ffmpeg stream-info line. The bit rate must
+	// come from the INPUT one: ffmpeg also prints an output stream for its null
+	// sink, and that line carries a placeholder rate of 200 kb/s that has nothing
+	// to do with the camera. Measured on a live site, every row reported exactly
+	// 200 while the real streams ran at 243-3446 kbps.
+	videoStreamLine = regexp.MustCompile(`(?i)stream #0:\d+[^\n]*`)
+	videoRate       = regexp.MustCompile(`, (\d+) kb/s`)
+	// nullSinkDecoder names the decoder ffmpeg uses for its discard sink, which
+	// is how the output line is recognised. Go's regexp has no lookahead, so the
+	// line is filtered after matching rather than excluded by the pattern.
+	nullSinkDecoder = "wrapped_avframe"
+	sampleAspect    = regexp.MustCompile(`\[SAR (\d+:\d+) DAR`)
+	codecLevel      = regexp.MustCompile(`Video: [^,]+.*?\((?:Main|High|Baseline|Constrained Baseline|Main 10|High 10|Rext)[^)]*\).*?\b(\d+\.\d+)`)
+	audioRate       = regexp.MustCompile(`Audio: [^,]+, (\d+) Hz, (\w+)`)
 )
 
 func (r Runner) FirstFrame(ctx context.Context, raw string) (VideoEvidence, error) {
@@ -213,20 +223,36 @@ func (r Runner) FirstFrame(ctx context.Context, raw string) (VideoEvidence, erro
 		SampleAspect: firstGroup(sampleAspect, logs),
 		Level:        firstGroup(codecLevel, logs),
 	}
-	// The profile sits in the first parenthesised group after the codec name.
-	// Only accept it when the codec line is present: a match on some unrelated
-	// parenthesised text would label the stream with a profile it does not have.
-	if codec.Find(logs) != nil {
-		evidence.Profile = firstGroup(profile, logs)
+	// The profile sits in the first parenthesised group after the codec name on
+	// the INPUT line. Reading it from the whole log risks the null sink's own
+	// line, whose decoder name is not a codec profile at all.
+	if input := firstInputStreamLine(logs); input != nil && codec.Find(input) != nil {
+		evidence.Profile = firstGroup(profile, input)
 	}
-	if m := videoRate.FindSubmatch(logs); len(m) == 2 {
-		evidence.BitrateKbps, _ = strconv.Atoi(string(m[1]))
+	// Every number below comes from the INPUT line, never from the null sink's
+	// output line (see videoStreamLine above).
+	if input := firstInputStreamLine(logs); input != nil {
+		if m := videoRate.FindSubmatch(input); len(m) == 2 {
+			evidence.BitrateKbps, _ = strconv.Atoi(string(m[1]))
+		}
 	}
 	if m := audioRate.FindSubmatch(logs); len(m) == 3 {
 		evidence.AudioSampleRate, _ = strconv.Atoi(string(m[1]))
 		evidence.AudioChannels = channelCount(string(m[2]))
 	}
 	return evidence, nil
+}
+
+// firstInputStreamLine returns the first stream-info line that belongs to the
+// INPUT, skipping the line ffmpeg prints for its own null sink.
+func firstInputStreamLine(logs []byte) []byte {
+	for _, line := range videoStreamLine.FindAll(logs, -1) {
+		if bytes.Contains(line, []byte(nullSinkDecoder)) {
+			continue
+		}
+		return line
+	}
+	return nil
 }
 
 // firstGroup returns capture group 1 of the first match, or "".
