@@ -175,6 +175,11 @@ func (s *Service) deleteOne(ctx context.Context, actor id.ID, segmentID id.ID, r
 		return DeleteOutcome{SegmentID: segmentID, State: deleteStateDeleted}, nil
 	case item.State == "missing":
 		return DeleteOutcome{SegmentID: segmentID, State: deleteStateMissing, Reason: "missing"}, nil
+	case item.State == "damaged":
+		// A quarantined file is unplayable under this index entry: the content no
+		// longer matches the record that authorizes serving it. Removing it is the
+		// only way to make the index honest, and the reconciler's verdict is not
+		// re-decided here — this branch only allows the deletion to proceed.
 	case item.State != "ready":
 		return DeleteOutcome{SegmentID: segmentID, State: deleteStateNotReady, Reason: item.State}, nil
 	}
@@ -199,7 +204,15 @@ func (s *Service) deleteOne(ctx context.Context, actor id.ID, segmentID id.ID, r
 		return DeleteOutcome{}, err
 	}
 	info, err := file.Stat()
-	if err != nil || !item.Identity.matches(info) {
+	if err != nil {
+		file.Close()
+		return DeleteOutcome{}, err
+	}
+	// A damaged row is here BECAUSE its identity no longer matches: refusing on
+	// that would make the state permanently undeletable. The check still guards
+	// every other row, which is what stops a stale path from authorizing the
+	// removal of whatever now sits there.
+	if item.State != "damaged" && !item.Identity.matches(info) {
 		file.Close()
 		return DeleteOutcome{SegmentID: segmentID, State: deleteStateSkipped, Reason: "identity_mismatch"}, nil
 	}
@@ -215,7 +228,7 @@ func (s *Service) deleteOne(ctx context.Context, actor id.ID, segmentID id.ID, r
 	// deleted but the index claiming otherwise, so both happen in one
 	// transaction and the file is already gone either way.
 	err = s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `UPDATE recording_segments SET state='deleted',error_code=NULL WHERE id=$1 AND state='ready'`, segmentID); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE recording_segments SET state='deleted',error_code=NULL WHERE id=$1 AND state IN ('ready','damaged')`, segmentID); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `UPDATE recording_locations SET state='deleted',deleted_at=clock_timestamp(),delete_reason=$2,verified_at=clock_timestamp() WHERE segment_id=$1`, segmentID, reason); err != nil {

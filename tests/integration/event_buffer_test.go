@@ -1434,3 +1434,52 @@ func TestClipNeverConcatenatesAPreviousClip(t *testing.T) {
 		t.Fatalf("clip duration %v: the beginning was lost when the ring evicted it", evidence.Duration)
 	}
 }
+
+// A quarantined segment must be removable. The reconciler marks a file damaged
+// precisely because its identity no longer matches the index entry that
+// authorizes serving it, so gating deletion on that identity would make the state
+// permanent — the row would claim a recording exists that nothing can serve.
+//
+// It still verifies identity for every other state: that check is what stops a
+// stale path from authorizing the removal of whatever now sits there.
+func TestDamagedSegmentCanBeDeleted(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	segment := seedSegment(t, fixture, time.Now().UTC().Add(-time.Hour), time.Now().UTC().Add(-59*time.Minute))
+	path := "recordings/" + string(segment) + ".mp4"
+	target := filepath.Join(fixture.Pool.Path, path)
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The row carries an identity for a different file — the defect's shape.
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE recording_segments
+		SET state='damaged',error_code='damaged',file_identity='{"Device":1,"Inode":2,"Size":3}' WHERE id=$1`, segment); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_locations(segment_id,pool_id,relative_path,size_bytes,state)
+		VALUES($1,$2,$3,1024,'damaged')`, segment, fixture.Pool.ID, path); err != nil {
+		t.Fatal(err)
+	}
+
+	outcomes, err := fixture.Service.DeleteCorruptLocal(ctx, []id.ID{segment})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outcomes) != 1 || outcomes[0].State != "deleted" {
+		t.Fatalf("a damaged segment could not be deleted: %+v", outcomes)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatal("the file is still on disk after a successful deletion")
+	}
+	var state, reason string
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT s.state,l.delete_reason FROM recording_segments s
+		JOIN recording_locations l ON l.segment_id=s.id WHERE s.id=$1`, segment).Scan(&state, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if state != "deleted" || reason != "corrupt" {
+		t.Fatalf("state=%q reason=%q, want deleted/corrupt", state, reason)
+	}
+}

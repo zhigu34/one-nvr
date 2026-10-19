@@ -46,15 +46,22 @@ type corruptCandidate struct {
 func purgeCorruptCommand(args []string) (bool, error) {
 	dryRun := false
 	found := false
+	byState := false
 	for _, arg := range args {
 		switch arg {
 		case "purge-corrupt":
 			found = true
+		case "purge-damaged":
+			// Removes segments the reconciler already quarantined, whatever the
+			// reason: a file whose identity no longer matches the index cannot be
+			// served under that index entry, so the entry describes nothing.
+			found = true
+			byState = true
 		case "--dry-run":
 			dryRun = true
 		default:
 			if found {
-				return true, fmt.Errorf("usage: admin purge-corrupt [--dry-run]")
+				return true, fmt.Errorf("usage: admin purge-corrupt|purge-damaged [--dry-run]")
 			}
 		}
 	}
@@ -77,7 +84,21 @@ func purgeCorruptCommand(args []string) (bool, error) {
 	mediaProbe := probe.Runner{FFmpeg: "/usr/bin/ffmpeg", FFprobe: "/usr/bin/ffprobe"}
 	service := recording.New(db, nil, mediaProbe, roots, c.DataDir)
 
-	candidates, err := corruptCandidates(ctx, db)
+	var candidates []corruptCandidate
+	if byState {
+		candidates, err = damagedCandidates(ctx, db)
+		if err != nil {
+			return true, err
+		}
+	} else {
+		candidates, err = corruptCandidates(ctx, db)
+	}
+	if err != nil {
+		return true, err
+	}
+	if byState {
+		return purgeDamaged(ctx, service, candidates, dryRun)
+	}
 	if err != nil {
 		return true, err
 	}
@@ -164,6 +185,70 @@ func materialize(pools *storage.Service, ctx context.Context, poolID id.ID, targ
 	file.Close()
 	root.Close()
 	return pool.Path + "/" + target, func() {}, nil
+}
+
+// damagedCandidates lists segments the reconciler has already quarantined.
+func damagedCandidates(ctx context.Context, db *database.DB) ([]corruptCandidate, error) {
+	rows, err := db.Pool.Query(ctx, `SELECT s.id,s.pool_id,s.target_relative_path,s.start_at
+		FROM recording_segments s WHERE s.state='damaged' ORDER BY s.start_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []corruptCandidate
+	for rows.Next() {
+		var item corruptCandidate
+		if err := rows.Scan(&item.ID, &item.PoolID, &item.Target, &item.Start); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// purgeDamaged removes segments already marked damaged. There is no decode check
+// here: the verdict is the reconciler's, and re-deciding it would make this
+// command disagree with the page that showed the state.
+func purgeDamaged(ctx context.Context, service *recording.Service, candidates []corruptCandidate, dryRun bool) (bool, error) {
+	for _, item := range candidates {
+		fmt.Printf("damaged %s\n", item.Target)
+	}
+	summary, err := json.Marshal(map[string]int{"damaged": len(candidates), "dry_run": boolInt(dryRun)})
+	if err != nil {
+		return true, err
+	}
+	fmt.Println(string(summary))
+	if dryRun || len(candidates) == 0 {
+		return true, nil
+	}
+	ids := make([]id.ID, 0, len(candidates))
+	for _, item := range candidates {
+		ids = append(ids, item.ID)
+	}
+	removed := 0
+	for start := 0; start < len(ids); start += corruptDeleteBatch {
+		end := start + corruptDeleteBatch
+		if end > len(ids) {
+			end = len(ids)
+		}
+		outcomes, err := service.DeleteCorruptLocal(ctx, ids[start:end])
+		if err != nil {
+			return true, err
+		}
+		for _, outcome := range outcomes {
+			if outcome.State == "deleted" {
+				removed++
+			} else {
+				fmt.Printf("kept %s: %s\n", outcome.SegmentID, outcome.Reason)
+			}
+		}
+	}
+	result, err := json.Marshal(map[string]int{"deleted": removed})
+	if err != nil {
+		return true, err
+	}
+	fmt.Println(string(result))
+	return true, nil
 }
 
 func boolInt(value bool) int {
