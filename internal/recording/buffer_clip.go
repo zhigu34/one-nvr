@@ -235,9 +235,15 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 		}
 		segmentID = created
 	}
-	workRelative, err := filepath.Rel(pool.Path, staged)
+	// Two different paths, and using the wrong one is silent: the index must
+	// point at the PUBLISHED file. Storing the staging path (what the first
+	// version did) leaves an entry pointing into the work directory, which the
+	// cleanup below deletes — so every clip reads as "missing" seconds after it
+	// was assembled, and the footage looks lost when it is on disk under its
+	// proper name.
+	published, err := filepath.Rel(pool.Path, target)
 	if err != nil {
-		workRelative = work
+		return err
 	}
 	err = s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
 		if job.Run == nil {
@@ -265,7 +271,7 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 			if _, err := tx.Exec(ctx, `INSERT INTO recording_segments(id,channel_id,source_revision_id,run_id,pool_id,original_relative_path,target_relative_path,
 				original_start,naming_timezone,utc_offset_seconds,start_at,end_at,size_bytes,file_identity,media_evidence,state,time_evidence,ready_at)
 				VALUES($1,$2,$3,$4,$5,$6,$6,$7,$8,$9,$7,$10,$11,$12,$13,'ready','completion',clock_timestamp())`,
-				segmentID, channelID, revisionID, runID, poolID, workRelative, start.UTC(), timezone, frozen.UTCOffsetSeconds, end.UTC(), info.Size(), []byte("{}"), []byte("{}")); err != nil {
+				segmentID, channelID, revisionID, runID, poolID, published, start.UTC(), timezone, frozen.UTCOffsetSeconds, end.UTC(), info.Size(), []byte("{}"), []byte("{}")); err != nil {
 				return err
 			}
 		} else {
