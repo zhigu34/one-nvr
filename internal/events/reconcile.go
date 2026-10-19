@@ -32,9 +32,19 @@ import (
 const ReconcileInterval = 5 * time.Minute
 
 // reconcileMinAge keeps the sweep away from events that are legitimately still
-// running. A detection lasts seconds; waiting ten minutes means a live event is
-// never mistaken for an abandoned one.
-const reconcileMinAge = 10 * time.Minute
+// running, and it must be chosen against the SHAPE of real detections.
+//
+// It was ten minutes, which measured against this site covers almost every
+// event: the median detection lasts 47 seconds and the 95th percentile is 4.7
+// minutes (max 8.6). A ten-minute gate therefore did not protect live events — it
+// only guaranteed that a lost end message was repaired long after everyone had
+// stopped looking, and the whole time the event's clip sat 'finalizing' (the page
+// says 写入中) even though later clips had already appeared.
+//
+// Two minutes is still well above a typical detection, and the sweep never closes
+// an event the detector has not reported an end for — a live event cannot be
+// mistaken for an abandoned one by arriving early.
+const reconcileMinAge = 2 * time.Minute
 
 // reconcileBatch bounds one pass. Each candidate costs one HTTP call to the
 // detector, and an unbounded sweep on first enable would hammer it.
@@ -248,7 +258,40 @@ func (s *Service) applyReport(ctx context.Context, candidate openEvent, report e
 	if errors.Is(err, errEventUnmapped) {
 		return nil
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if endTime != nil {
+		s.publishReconciledClip(ctx, candidate.ID)
+	}
+	return nil
+}
+
+// publishReconciledClip publishes the clip of an event this pass just closed.
+//
+// The assembly loop publishes a clip on the pass that follows the event's end
+// message, and a retention-ticker safety net catches clips whose job already
+// settled. Neither runs here: this path learns about the end from the DETECTOR,
+// minutes later, so without this call the clip stays 'finalizing' (the page says
+// 写入中) until the next safety-net tick — long after later clips have already
+// been published, which is exactly the inconsistency an operator notices first.
+//
+// Written as SQL rather than a call into the recording package because the
+// dependency runs recording → events; going the other way would be a cycle.
+func (s *Service) publishReconciledClip(ctx context.Context, eventID id.ID) {
+	if _, err := s.DB.Pool.Exec(ctx, `UPDATE recording_segments s SET state='ready',error_code=NULL,ready_at=clock_timestamp()
+		FROM event_clip_jobs j
+		WHERE j.event_id=$1 AND j.segment_id=s.id AND s.state='finalizing'`, eventID); err != nil {
+		if ctx.Err() == nil {
+			slog.Warn("reconciled clip not published", "event", eventID, "error", err)
+		}
+		return
+	}
+	if _, err := s.DB.Pool.Exec(ctx, `UPDATE recording_locations l SET state='ready',verified_at=clock_timestamp()
+		FROM event_clip_jobs j
+		WHERE j.event_id=$1 AND j.segment_id=l.segment_id AND l.state='finalizing'`, eventID); err != nil && ctx.Err() == nil {
+		slog.Warn("reconciled clip location not published", "event", eventID, "error", err)
+	}
 }
 
 // settleAbandoned handles an event the detector no longer knows about at all.
@@ -267,9 +310,16 @@ func (s *Service) settleAbandoned(ctx context.Context, candidate openEvent) {
 			updated_at=clock_timestamp()
 		WHERE id=$1 AND (ended_at IS NULL OR snapshot_state='pending')`,
 		candidate.ID, EventIndexRetention.String())
-	if err != nil && ctx.Err() == nil {
-		slog.Warn("abandoned event not settled", "event", candidate.ID, "error", err)
+	if err != nil {
+		if ctx.Err() == nil {
+			slog.Warn("abandoned event not settled", "event", candidate.ID, "error", err)
+		}
+		return
 	}
+	// The event is now closed, so its clip is finished media. See
+	// publishReconciledClip: this path also closes events the end message never
+	// reached, and without this the clip would wait for the next safety-net tick.
+	s.publishReconciledClip(ctx, candidate.ID)
 }
 
 // snapshotVerdict is what asking the detector for the image itself established.

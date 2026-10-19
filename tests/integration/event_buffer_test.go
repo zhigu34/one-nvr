@@ -11,9 +11,12 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -1230,5 +1233,92 @@ func TestSettledPublicationSkipsRunningEvents(t *testing.T) {
 	}
 	if segState != "finalizing" {
 		t.Fatalf("a running event's clip was published by the safety net: %q", segState)
+	}
+}
+
+// A clip must be published as soon as reconciliation learns the event ended.
+//
+// The end message is the fast path and it can be lost. Reconciliation closes the
+// event minutes later, but the clip's publication is driven by the assembly loop
+// and the retention safety net — neither runs on that path. Measured on the live
+// site: clips for events that ended at 17:11 were still 写入中 at 17:17 while
+// later clips had already been published, which is what an operator notices.
+func TestReconcilePublishesTheClipItCloses(t *testing.T) {
+	fixture, service := newEventsFixture(t)
+	ctx := context.Background()
+	if err := service.SetMappings(ctx, fixture.Admin, map[id.ID]string{fixture.Channel: "front-door"}); err != nil {
+		t.Fatal(err)
+	}
+	markBuffering(t, fixture)
+
+	// The event arrived and never closed: an old start, no end.
+	started := time.Now().UTC().Add(-20 * time.Minute)
+	startedUnix := float64(started.Unix())
+	if err := service.Ingest(ctx, frigatePayload("new", "evt-lost-end", "front-door", "person", startedUnix, nil, nil, false)); err != nil {
+		t.Fatal(err)
+	}
+	var eventID id.ID
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT id FROM events WHERE source_id='evt-lost-end'`).Scan(&eventID); err != nil {
+		t.Fatal(err)
+	}
+
+	// It has a clip that is still finalizing, as a running event's would be.
+	runID, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sessionID id.ID
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT stream_session_id FROM recording_runs WHERE id=$1`, fixture.Run).Scan(&sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_runs(id,site_id,channel_id,source_revision_id,stream_session_id,pool_id,work_relative_path,purpose,state)
+		VALUES($1,$2,$3,$4,$5,$6,$7,'event','stopped')`,
+		runID, fixture.Site.Secrets.SiteID, fixture.Channel, fixture.Revision, sessionID, fixture.Pool.ID, ".work/event/"+string(runID)); err != nil {
+		t.Fatal(err)
+	}
+	segment, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "recordings/" + string(segment) + ".mp4"
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_segments(id,channel_id,source_revision_id,run_id,pool_id,original_relative_path,target_relative_path,
+		original_start,naming_timezone,utc_offset_seconds,start_at,end_at,size_bytes,file_identity,state)
+		VALUES($1,$2,$3,$4,$5,$6,$6,$7,'UTC',0,$7,clock_timestamp(),1024,'{}','finalizing')`,
+		segment, fixture.Channel, fixture.Revision, runID, fixture.Pool.ID, path, started); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_locations(segment_id,pool_id,relative_path,size_bytes,state)
+		VALUES($1,$2,$3,1024,'finalizing')`, segment, fixture.Pool.ID, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET segment_id=$2,clip_run_id=$3,state='growing' WHERE event_id=$1`, eventID, segment, runID); err != nil {
+		t.Fatal(err)
+	}
+
+	// The detector reports the real end.
+	ended := started.Add(40 * time.Second)
+	endedUnix := ended.Unix()
+	detector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/events/evt-lost-end" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"evt-lost-end","label":"person","camera":"front-door",` +
+			`"start_time":` + strconv.FormatFloat(startedUnix, 'f', -1, 64) + `,` +
+			`"end_time":` + strconv.FormatInt(endedUnix, 10) + `,` +
+			`"has_snapshot":true,"zones":[],"data":{"score":0.7,"zones":[]}}`))
+	}))
+	defer detector.Close()
+	service.Frigate = detector.URL
+
+	service.ReconcileOpenEvents(ctx)
+
+	var segState, locState string
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT s.state,l.state FROM recording_segments s
+		JOIN recording_locations l ON l.segment_id=s.id AND l.pool_id=s.pool_id WHERE s.id=$1`, segment).Scan(&segState, &locState); err != nil {
+		t.Fatal(err)
+	}
+	if segState != "ready" || locState != "ready" {
+		t.Fatalf("reconciliation closed the event but left its clip unpublished: segment=%q location=%q", segState, locState)
 	}
 }
