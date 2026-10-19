@@ -393,8 +393,10 @@ test('the timeline picks an export bracket and zooms the view', async () => {
   // buttons where nobody looked. Two background clicks bracket the range, the
   // third restarts.
   await view.getByRole('button', { name: '导出片段' }).click()
-  await strip.click({ position: { x: 40, y: 45 } })
-  await strip.click({ position: { x: 120, y: 45 } })
+  // Clicks land on the RECORDING track (24px ruler + 3px gap = y 27..57): a
+  // press on the ruler scrubs, which would never bracket.
+  await strip.click({ position: { x: 40, y: 42 } })
+  await strip.click({ position: { x: 120, y: 42 } })
   await vi.waitFor(() => expect(document.querySelector('[data-testid="playback-bracket"]')).toBeTruthy())
   // Width via calc() keeps the overlay out of Playwright's visibility math in
   // headless mode; presence plus the dialogue below is the real assertion.
@@ -410,10 +412,18 @@ test('the timeline picks an export bracket and zooms the view', async () => {
     expect(analyze).toBeTruthy()
   })
   await view.getByRole('button', { name: '取消' }).click()
-  // Zoom narrows the caption bounds; 全览 returns to the full range.
-  await view.getByRole('button', { name: '时间轴放大' }).click()
-  await view.getByRole('button', { name: '显示完整范围' }).click()
-  await expect.element(view.getByText(/2026-10-05 08:00:00 — 2026-10-05 08:05:00/)).toBeVisible()
+  // Zoom is three preset spans now. This fixture's search window is five
+  // minutes, so every preset is WIDER than the range and each one resolves to
+  // "show the full range" — a preset must never invent a view outside what was
+  // searched. The caption states the visible range, so it is what proves the
+  // zoom did nothing rather than something wrong.
+  await view.getByRole('button', { name: '1h' }).click()
+  await expect
+    .element(view.getByTestId('playback-timeline-window'))
+    .not.toHaveTextContent('（已缩放）')
+  await expect
+    .element(view.getByTestId('playback-timeline-window'))
+    .toHaveTextContent('2026-10-05 08:00:00 — 2026-10-05 08:05:00')
 })
 
 // Timeline upgrade: the ruler is canvas-drawn now (ticks are pixels, not

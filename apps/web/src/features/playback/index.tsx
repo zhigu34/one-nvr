@@ -4,19 +4,15 @@ import { Link } from '@tanstack/react-router'
 import {
   ArrowLeft,
   Camera,
-  ChevronLeft,
-  ChevronRight,
   Download,
-  Maximize2,
   Maximize,
   Pause,
   Play,
   RotateCcw,
+  SkipBack,
   SkipForward,
   Square,
   VideoOff,
-  ZoomIn,
-  ZoomOut,
 } from 'lucide-react'
 import type { PageData, Schema } from '@/lib/types'
 import { apiRequest } from '@/lib/api-client'
@@ -39,7 +35,6 @@ import {
   formatDuration,
   sliceView,
   snapToPlayable,
-  zoomView,
   type Entry,
 } from './timeline'
 import { eventMarks, eventWindowSize } from './event-marks'
@@ -95,6 +90,18 @@ const QUICK_RANGES: { kind: QuickRangeKind; label: string }[] = [
   { kind: 'today', label: '今天' },
   { kind: 'yesterday', label: '昨天' },
   { kind: 'week', label: '最近 7 天' },
+]
+
+/**
+ * The three spans an operator actually wants on a timeline. The full range is
+ * whatever the search returned; a few hours is "the shift I am reviewing"; one
+ * hour is "the event I just clicked". Arbitrary +/- zoom made reaching any of
+ * them a series of guesses.
+ */
+const ZOOM_PRESETS: { label: string; span: number }[] = [
+  { label: '24h', span: 24 * 3_600_000 },
+  { label: '6h', span: 6 * 3_600_000 },
+  { label: '1h', span: 3_600_000 },
 ]
 
 /** Tooltip copy for the timeline's "?" icon: how the axis behaves. */
@@ -346,27 +353,6 @@ function Workspace({
     () => sliceView(timeline, viewBounds.start, viewBounds.end),
     [timeline, viewBounds]
   )
-  function zoomIn() {
-    // Zoom around the playhead when it is inside the view, else around the
-    // view center. Computed lazily: the playhead lives in state declared below.
-    const anchor = state.clock >= viewBounds.start && state.clock <= viewBounds.end
-      ? state.clock
-      : (viewBounds.start + viewBounds.end) / 2
-    setView(zoomView(viewBounds.start, viewBounds.end, anchor, range))
-  }
-  function zoomOut() {
-    const span = viewBounds.end - viewBounds.start
-    const center = (viewBounds.start + viewBounds.end) / 2
-    const start = Math.max(range.start, center - span)
-    const end = Math.min(range.end, center + span)
-    setView(start <= range.start && end >= range.end ? null : { start, end })
-  }
-  function pan(direction: -1 | 1) {
-    const shift = (direction * (viewBounds.end - viewBounds.start)) / 3
-    const start = Math.max(range.start, viewBounds.start + shift)
-    const end = Math.min(range.end, viewBounds.end + shift)
-    setView({ start, end })
-  }
   // Wheel zoom anchored at the pointer: the millisecond under the cursor
   // stays under it, the way every map and NVR timeline zooms.
   function zoomAt(anchor: number, factor: number) {
@@ -568,6 +554,39 @@ function Workspace({
     () => eventMarks(eventsQuery.data?.items || [], viewBounds.start, viewBounds.end),
     [eventsQuery.data, viewBounds.start, viewBounds.end]
   )
+  // Event stepping: the neighbour of the playhead in each direction. Computed
+  // here rather than in the canvas because the buttons live in the toolbar and
+  // the playhead is page state.
+  const eventJumpTargets = useMemo(() => {
+    const here = state.clock > 0 ? state.clock : viewBounds.start
+    let prev: number | null = null
+    let next: number | null = null
+    for (const mark of marksForCanvas) {
+      if (mark.at < here - 500) prev = mark.at
+      else if (mark.at > here + 500 && next === null) next = mark.at
+    }
+    return { prev, next }
+  }, [marksForCanvas, state.clock, viewBounds.start])
+  const prevEventAt = eventJumpTargets.prev
+  const nextEventAt = eventJumpTargets.next
+  const jumpToEvent = (at: number) => {
+    // The mark covers [start-5s, end+5s]; seeking to its start shows the
+    // seconds before the detection, which is what an operator wants to see.
+    controller.current?.start(snapToPlayable(timeline, at).at)
+  }
+  // A preset span centres on the playhead so zooming keeps the operator's
+  // attention where it already is. Full range clears the view instead of
+  // inventing bounds.
+  const zoomToSpan = (targetSpan: number) => {
+    if (targetSpan >= range.end - range.start) {
+      setView(null)
+      return
+    }
+    const anchor = state.clock > 0 ? state.clock : (viewBounds.start + viewBounds.end) / 2
+    const start = Math.max(range.start, anchor - targetSpan / 2)
+    const end = Math.min(range.end, start + targetSpan)
+    setView({ start: Math.max(range.start, end - targetSpan), end })
+  }
   // A blocked selection is never a play target: fall forward to the next
   // segment the index does vouch for, without pretending it starts here.
   const startTarget = useMemo(() => {
@@ -664,32 +683,77 @@ function Workspace({
             )}
           </div>
         )}
-        <div className='ml-auto flex items-center gap-0.5'>
-          <Button size='sm' variant='ghost' aria-label='时间轴左移' disabled={!view || noData} onClick={() => pan(-1)}
-            className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-video-wash hover:text-video-chrome-foreground'>
-            <ChevronLeft size={14} />
-          </Button>
-          <Button size='sm' variant='ghost' aria-label='时间轴放大' disabled={viewBounds.end - viewBounds.start <= 60_000 || noData} onClick={zoomIn}
-            className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-video-wash hover:text-video-chrome-foreground'>
-            <ZoomIn size={14} />
-          </Button>
-          <Button size='sm' variant='ghost' aria-label='时间轴缩小' disabled={!view || noData} onClick={zoomOut}
-            className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-video-wash hover:text-video-chrome-foreground'>
-            <ZoomOut size={14} />
-          </Button>
-          <Button size='sm' variant='ghost' aria-label='时间轴右移' disabled={!view || noData} onClick={() => pan(1)}
-            className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-video-wash hover:text-video-chrome-foreground'>
-            <ChevronRight size={14} />
-          </Button>
-          <Button size='sm' variant='ghost' aria-label='显示完整范围' disabled={!view || noData} onClick={() => setView(null)}
-            className='h-7 w-7 p-0 text-video-chrome-foreground hover:bg-video-wash hover:text-video-chrome-foreground'>
-            <Maximize2 size={14} />
-          </Button>
+        <div className='ml-auto flex items-center gap-3'>
+          {/* Legend: what the two tracks mean, stated where the tracks are.
+              The colours are read off the canvas, so the chips must match the
+              fill/edge the canvas actually draws. */}
+          <div className='flex items-center gap-2.5 text-[10px] text-video-chrome-foreground/60'>
+            <span className='inline-flex items-center gap-1'>
+              <span className='inline-block h-2 w-3 rounded-[1px] border-t-2 border-emerald-500 bg-emerald-500/25' />
+              连续录像
+            </span>
+            <span className='inline-flex items-center gap-1'>
+              <span className='inline-block size-2 rounded-full bg-amber-500' />
+              AI 事件 ({marksForCanvas.length})
+            </span>
+          </div>
+          {/* Event stepping: aiming at a 3px block inside 24 hours is a game of
+              chance, so the two jumps do the aiming. */}
+          <div className='flex items-center gap-0.5'>
+            <Button
+              size='sm'
+              variant='ghost'
+              aria-label='上一事件'
+              title='跳到上一个 AI 事件'
+              disabled={!prevEventAt || noData}
+              onClick={() => prevEventAt && jumpToEvent(prevEventAt)}
+              className='h-7 px-1.5 text-video-chrome-foreground hover:bg-video-wash'
+            >
+              <SkipBack size={13} />
+            </Button>
+            <Button
+              size='sm'
+              variant='ghost'
+              aria-label='下一事件'
+              title='跳到下一个 AI 事件'
+              disabled={!nextEventAt || noData}
+              onClick={() => nextEventAt && jumpToEvent(nextEventAt)}
+              className='h-7 px-1.5 text-video-chrome-foreground hover:bg-video-wash'
+            >
+              <SkipForward size={13} />
+            </Button>
+          </div>
+          {/* Zoom presets rather than a pair of +/- buttons: the three spans an
+              operator actually wants are the full range, a few hours, and one
+              hour around what they are watching. */}
+          <div className='flex items-center gap-0.5 rounded-md border border-video-border p-0.5'>
+            {ZOOM_PRESETS.map((preset) => {
+              const activePreset =
+                Math.abs(viewBounds.end - viewBounds.start - preset.span) < 60_000
+              return (
+                <button
+                  key={preset.label}
+                  type='button'
+                  disabled={noData}
+                  aria-pressed={activePreset}
+                  onClick={() => zoomToSpan(preset.span)}
+                  className={cn(
+                    'rounded px-1.5 py-0.5 text-[10px] tabular-nums transition-colors',
+                    activePreset
+                      ? 'bg-video-wash font-medium text-video-chrome-foreground'
+                      : 'text-video-chrome-foreground/55 hover:bg-video-wash/60 hover:text-video-chrome-foreground'
+                  )}
+                >
+                  {preset.label}
+                </button>
+              )
+            })}
+          </div>
           <span
             role='note'
             aria-label='时间轴使用说明'
             title={TIMELINE_HELP}
-            className='ml-1 grid size-5 cursor-help place-items-center rounded-full border border-video-border text-[10px] text-video-chrome-foreground/60'
+            className='grid size-5 cursor-help place-items-center rounded-full border border-video-border text-[10px] text-video-chrome-foreground/60'
           >
             ?
           </span>

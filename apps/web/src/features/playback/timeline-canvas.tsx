@@ -16,60 +16,99 @@ import {
   type Entry,
   type Timeline as TimelineData,
 } from './timeline'
+import type { EventMark } from './event-marks'
 
 /**
- * The interactive timeline strip: one `<canvas>` draws the dense layers
- * (coverage bars, tick grid, event markers) and a thin DOM layer on top owns
- * only the things that need events or per-frame updates — the playhead, the
- * export bracket and the hover tooltip.
+ * The interactive timeline strip, in three stacked tracks:
  *
- * Why canvas: a 7-day window is thousands of one-minute segments plus
- * hundreds of event marks. Drawing them as DOM nodes reflows on every zoom
- * and shows sub-pixel seams between adjacent slices; a canvas repaint is one
- * raster pass, and the 1.5 s merge in `mergeEntries` keeps adjacent segments
- * seamless so only true dropouts read as gaps.
+ *   1. a precision time ruler (major ticks on the hour, minor on the half and
+ *      quarter hour) so any position can be read without hovering;
+ *   2. the recording track — translucent fills with a bright top edge, which
+ *      leaves the contrast budget for the layer above;
+ *   3. the AI event track, drawn ON the recording track at its true time span
+ *      and colour-coded by category.
+ *
+ * One `<canvas>` draws the dense layers; a thin DOM layer owns only what needs
+ * events or per-frame updates — the playhead, the export bracket, the hover
+ * cursor and its tooltip.
+ *
+ * Why canvas: a 7-day window is thousands of one-minute segments plus hundreds
+ * of event marks. Drawing them as DOM nodes reflows on every zoom and shows
+ * sub-pixel seams between adjacent slices; a canvas repaint is one raster pass,
+ * and the 1.5 s merge in `mergeEntries` keeps adjacent segments seamless so only
+ * true dropouts read as gaps.
  */
 
-// The segment band is what an operator drags, scrubs and reads gaps from, so it
-// gets the room. At 30px a 1-hour window compressed 231 segments into a band
-// where a 30-second dropout was a single unclickable pixel; the band is now
-// tall enough to aim at, and the whole strip grew with it rather than stealing
-// the space from the ticks and the event track.
-const HEIGHT = 148
-const DENSITY_H = 8
-const TICKS_H = 14
-const SEGMENTS_H = 96
-const EVENTS_H = 16
-// Ticks sit between the density bar and the segment bar; 1px of headroom on
-// both sides keeps the density inset from the rounded frame. The event track
-// keeps a 4px bottom inset so amber marks never touch the canvas edge.
-const DENSITY_TOP = 1
-const TICKS_TOP = DENSITY_TOP + DENSITY_H
-const SEGMENTS_TOP = TICKS_TOP + TICKS_H
-const EVENTS_TOP = SEGMENTS_TOP + SEGMENTS_H
-const EVENT_BOTTOM_INSET = 4
+// Track geometry. The ruler is a fixed height because its labels have to line up
+// with the ticks; the two data tracks share the rest.
+const RULER_H = 24
+const RECORDING_H = 30
+const EVENTS_H = 22
+const GAP_H = 3
+const HEIGHT = RULER_H + GAP_H + RECORDING_H + GAP_H + EVENTS_H
 
-const PLAYABLE = '#10b981'
-const BLOCKED = '#ef4444'
-const EVENT = '#f59e0b'
-const EVENT_OPEN = '#fbbf24'
+const RULER_TOP = 0
+const RECORDING_TOP = RULER_H + GAP_H
+const EVENTS_TOP = RECORDING_TOP + RECORDING_H + GAP_H
 
-// Light mode draws on a pale track, so the density槽 and tick grid switch to
-// dark ink; the colored spans stay identical in both themes.
+// Every event mark is at least this wide, whatever its true duration. At a
+// 24-hour view a 12-second detection is 0.3px — invisible and unclickable, so
+// the marks would silently vanish exactly when the operator is scanning for
+// them. 3px is the narrowest block that still reads as a block.
+const MARK_MIN_W = 3
+
+const RECORDING_FILL = 'rgba(16, 185, 129, 0.22)'
+const RECORDING_EDGE = '#10b981'
+const BLOCKED_FILL = 'rgba(239, 68, 68, 0.28)'
+const BLOCKED_EDGE = '#ef4444'
+const EVENT_PERSON = '#f59e0b'
+const EVENT_VEHICLE = '#38bdf8'
+const EVENT_OTHER = '#c084fc'
+
+/** Event categories that get the vehicle colour rather than the neutral one. */
+const VEHICLE_CATEGORIES = new Set([
+  'car',
+  'truck',
+  'bus',
+  'motorcycle',
+  'bicycle',
+])
+
+/**
+ * Which colour a mark is drawn in. Person events are the ones an operator
+ * scans for, so they take the warm accent; vehicles are the second most common
+ * and get their own hue; everything else falls back to a neutral third rather
+ * than borrowing a colour that already means something else.
+ */
+function markColor(category: string): string {
+  if (category === 'person') return EVENT_PERSON
+  if (VEHICLE_CATEGORIES.has(category)) return EVENT_VEHICLE
+  return EVENT_OTHER
+}
+
+// The tracks are a dark industrial surface in both themes; only the ink on the
+// ruler and the empty-track texture change, because a pale strip beside a black
+// video looks like a different application.
 const CANVAS_PALETTES = {
   dark: {
-    densityTrack: 'rgba(255,255,255,0.05)',
-    tickDay: 'rgba(253,230,138,0.5)',
-    tick: 'rgba(253,230,138,0.25)',
-    labelDay: 'rgba(255,255,255,0.9)',
-    label: 'rgba(255,255,255,0.5)',
+    surface: '#0b0f14',
+    border: 'rgba(255,255,255,0.10)',
+    emptyTrack: 'rgba(255,255,255,0.025)',
+    emptyHatch: 'rgba(255,255,255,0.04)',
+    tickMajor: 'rgba(255,255,255,0.55)',
+    tickMinor: 'rgba(255,255,255,0.22)',
+    labelMajor: 'rgba(255,255,255,0.92)',
+    labelMinor: 'rgba(255,255,255,0.38)',
   },
   light: {
-    densityTrack: 'rgba(9,9,11,0.06)',
-    tickDay: 'rgba(9,9,11,0.35)',
-    tick: 'rgba(9,9,11,0.18)',
-    labelDay: 'rgba(9,9,11,0.85)',
-    label: 'rgba(9,9,11,0.5)',
+    surface: '#0b0f14',
+    border: 'rgba(255,255,255,0.10)',
+    emptyTrack: 'rgba(255,255,255,0.025)',
+    emptyHatch: 'rgba(255,255,255,0.04)',
+    tickMajor: 'rgba(255,255,255,0.55)',
+    tickMinor: 'rgba(255,255,255,0.22)',
+    labelMajor: 'rgba(255,255,255,0.92)',
+    labelMinor: 'rgba(255,255,255,0.38)',
   },
 } as const
 
@@ -79,7 +118,7 @@ export type TimelineCanvasProps = {
   clock: number
   selected: Entry | null
   disabled: boolean
-  marks: ReturnType<typeof import('./event-marks').eventMarks>
+  marks: EventMark[]
   bracket: { start: number; end: number } | null
   pickMode: boolean
   viewIsFull: boolean
@@ -102,22 +141,32 @@ function timeFor(px: number, from: number, span: number, width: number) {
   return from + (px / width) * span
 }
 
-function roundRect(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  r: number
-) {
-  const radius = Math.min(r, w / 2, h / 2)
-  ctx.beginPath()
-  ctx.moveTo(x + radius, y)
-  ctx.arcTo(x + w, y, x + w, y + h, radius)
-  ctx.arcTo(x + w, y + h, x, y + h, radius)
-  ctx.arcTo(x, y + h, x, y, radius)
-  ctx.arcTo(x, y, x + w, y, radius)
-  ctx.closePath()
+/**
+ * The mark whose drawn block covers `px`, or null.
+ *
+ * The hit area is the DRAWN width, not the true span: a 12-second event is
+ * rendered 3px wide at a 24-hour view, and hit-testing its real width would make
+ * the visible block unclickable — the one thing the minimum-width rule exists to
+ * prevent.
+ */
+function markAt(
+  marks: EventMark[],
+  px: number,
+  from: number,
+  span: number,
+  width: number
+): EventMark | null {
+  let best: EventMark | null = null
+  for (const mark of marks) {
+    const x = xFor(mark.at, from, span, width)
+    const drawnW = Math.max(xFor(mark.end, from, span, width) - x, MARK_MIN_W)
+    if (px >= x - 1 && px <= x + drawnW + 1) {
+      // Overlapping marks: prefer the later one so the newest event wins a
+      // tie, which is the one an operator is usually chasing.
+      if (!best || mark.at >= best.at) best = mark
+    }
+  }
+  return best
 }
 
 export function TimelineCanvas({
@@ -142,12 +191,15 @@ export function TimelineCanvas({
   const palette = CANVAS_PALETTES[resolvedTheme === 'light' ? 'light' : 'dark']
   const wrapRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const tooltipRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(0)
   const [dragging, setDragging] = useState(false)
-  // Bracket handle drag: which edge of an existing bracket is being pulled.
+  // Mirrors scrubbingRef for the cursor only: a ref cannot be read during
+  // render, and the cursor is render output.
+  const [scrubbing, setScrubbing] = useState(false)
+  const [hover, setHover] = useState<{ px: number; at: number; mark: EventMark | null } | null>(null)
   const handleRef = useRef<'start' | 'end' | null>(null)
   const pointerDownRef = useRef<{ x: number; at: number; moved: boolean } | null>(null)
+  const scrubbingRef = useRef(false)
 
   const from = timeline.from
   const span = timeline.to - timeline.from
@@ -156,7 +208,7 @@ export function TimelineCanvas({
     [timeline.entries]
   )
 
-  // Track container width — the canvas raster and the DOM cursor both need it.
+  // Track container width — the canvas raster and the DOM overlays both need it.
   useEffect(() => {
     const element = wrapRef.current
     if (!element) return
@@ -167,8 +219,8 @@ export function TimelineCanvas({
     return () => observer.disconnect()
   }, [])
 
-  // One raster pass over all layers. Dependencies are the draw inputs only;
-  // playhead movement does NOT repaint (the DOM cursor handles that).
+  // One raster pass over all three tracks. Dependencies are the draw inputs
+  // only; playhead movement does NOT repaint (the DOM cursor handles that).
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas || width <= 0) return
@@ -180,106 +232,133 @@ export function TimelineCanvas({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, width, HEIGHT)
 
-    // --- Density band: the whole searched window's coverage, merged spans
-    // drawn as one continuous bar so this row reads "how much exists".
-    ctx.fillStyle = palette.densityTrack
-    roundRect(ctx, 0, DENSITY_TOP, width, DENSITY_H, 3)
-    ctx.fill()
-    ctx.fillStyle = 'rgba(16,185,129,0.55)'
-    for (const piece of merged.playable) {
-      const x = xFor(piece.start, from, span, width)
-      const w = Math.max(xFor(piece.end, from, span, width) - x, 1)
-      ctx.fillRect(x, DENSITY_TOP, w, DENSITY_H)
-    }
-    // Zoom viewport outline.
-    if (!viewIsFull) {
-      ctx.strokeStyle = '#f59e0b'
-      ctx.lineWidth = 1.5
-      const vx = xFor(timeline.from, from, span, width)
-      const vw = Math.max(xFor(timeline.to, from, span, width) - vx, 4)
-      ctx.strokeRect(vx + 0.5, DENSITY_TOP + 0.5, vw - 1, DENSITY_H - 1)
+    // --- Track surfaces: one dark plate per track, hairline border, so the
+    // three layers read as stacked instruments rather than one gradient.
+    ctx.fillStyle = palette.surface
+    ctx.fillRect(0, RULER_TOP, width, RULER_H)
+    ctx.fillRect(0, RECORDING_TOP, width, RECORDING_H)
+    ctx.fillRect(0, EVENTS_TOP, width, EVENTS_H)
+    ctx.strokeStyle = palette.border
+    ctx.lineWidth = 1
+    for (const top of [RULER_TOP, RECORDING_TOP, EVENTS_TOP]) {
+      const h = top === RULER_TOP ? RULER_H : top === RECORDING_TOP ? RECORDING_H : EVENTS_H
+      ctx.strokeRect(0.5, top + 0.5, width - 1, h - 1)
     }
 
-    // --- Tick grid + labels across the segment band height, self-scaling
-    // label step from the view span.
-    ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace'
-    ctx.textBaseline = 'top'
+    // Empty-track texture: a faint hatch tells "nothing recorded here" apart
+    // from "not drawn", which a flat fill cannot do on a dark plate.
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(0, RECORDING_TOP + 1, width, RECORDING_H - 1)
+    ctx.clip()
+    ctx.strokeStyle = palette.emptyHatch
+    ctx.lineWidth = 1
+    for (let x = -RECORDING_H; x < width + RECORDING_H; x += 6) {
+      ctx.beginPath()
+      ctx.moveTo(x, RECORDING_TOP + RECORDING_H)
+      ctx.lineTo(x + RECORDING_H, RECORDING_TOP)
+      ctx.stroke()
+    }
+    ctx.restore()
+
+    // --- Ruler: major ticks on the hour (tall, labelled), minor on the half
+    // and quarter hour. The ladder is chosen from the visible span so a 24-hour
+    // view labels every two hours while a 1-hour view labels every ten minutes.
     const spanSeconds = span / 1000
-    const LADDER = [
-      60, 300, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400, 172800,
-      604800,
-    ]
-    const target = Math.max(4, Math.floor(width / 110))
-    let step = LADDER[LADDER.length - 1]
-    for (const candidate of LADDER) {
-      if (spanSeconds / candidate <= target) {
-        step = candidate
+    const majorLadder = [60, 300, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400]
+    const labelTarget = Math.max(4, Math.floor(width / 96))
+    let majorStep = majorLadder[majorLadder.length - 1]
+    for (const candidate of majorLadder) {
+      if (spanSeconds / candidate <= labelTarget) {
+        majorStep = candidate
         break
       }
     }
-    const firstTick = Math.ceil(from / (step * 1000)) * step * 1000
-    for (let at = firstTick; at <= timeline.to; at += step * 1000) {
-      const x = xFor(at, from, span, width)
-      const isDay = new Date(at).getUTCHours() === 0
-      ctx.strokeStyle = isDay ? palette.tickDay : palette.tick
-      ctx.lineWidth = 1
+    const minorStep = majorStep / 4
+
+    // Minor ticks first so a major tick overdraws its neighbour cleanly.
+    ctx.strokeStyle = palette.tickMinor
+    ctx.beginPath()
+    const firstMinor = Math.ceil(from / (minorStep * 1000)) * minorStep * 1000
+    for (let at = firstMinor; at <= timeline.to; at += minorStep * 1000) {
+      const x = Math.round(xFor(at, from, span, width)) + 0.5
+      ctx.moveTo(x, RULER_H - 5)
+      ctx.lineTo(x, RULER_H - 1)
+    }
+    ctx.stroke()
+
+    ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace'
+    ctx.textBaseline = 'top'
+    const firstMajor = Math.ceil(from / (majorStep * 1000)) * majorStep * 1000
+    for (let at = firstMajor; at <= timeline.to; at += majorStep * 1000) {
+      const x = Math.round(xFor(at, from, span, width)) + 0.5
+      ctx.strokeStyle = palette.tickMajor
       ctx.beginPath()
-      ctx.moveTo(x + 0.5, TICKS_TOP)
-      ctx.lineTo(x + 0.5, TICKS_TOP + TICKS_H + SEGMENTS_H + EVENTS_H)
+      ctx.moveTo(x, RULER_H - 9)
+      ctx.lineTo(x, RULER_H - 1)
       ctx.stroke()
-      const label = formatClock(at, zone).slice(isDay ? 5 : 11)
-      ctx.fillStyle = isDay ? palette.labelDay : palette.label
-      const edge = x < 18 ? 'left' : x > width - 18 ? 'right' : 'center'
+      // Labels sit at the top of the ruler, inset from the edges so the first
+      // and last are never clipped by the plate border.
+      const label = formatClock(at, zone).slice(0, 5)
+      ctx.fillStyle = palette.labelMajor
+      const edge = x < 22 ? 'left' : x > width - 22 ? 'right' : 'center'
       ctx.textAlign = edge
-      ctx.fillText(label, edge === 'left' ? 2 : edge === 'right' ? width - 2 : x, TICKS_TOP + 1)
+      ctx.fillText(label, edge === 'left' ? 3 : edge === 'right' ? width - 3 : x, 3)
     }
 
-    // --- Segment band: merged playable (green) and blocked (red) spans.
+    // --- Recording track: translucent fill with a bright top edge. The fill is
+    // deliberately weak so the event layer above it stays legible where they
+    // overlap; the edge is what makes a span readable at a glance.
+    const drawSpan = (
+      start: number,
+      end: number,
+      fill: string,
+      edge: string
+    ) => {
+      const x = xFor(start, from, span, width)
+      const w = Math.max(xFor(end, from, span, width) - x, 1)
+      ctx.fillStyle = fill
+      ctx.fillRect(x, RECORDING_TOP + 1, w, RECORDING_H - 1)
+      ctx.fillStyle = edge
+      ctx.fillRect(x, RECORDING_TOP + 1, w, 2)
+    }
     for (const piece of merged.blocked) {
-      const x = xFor(piece.start, from, span, width)
-      const w = Math.max(xFor(piece.end, from, span, width) - x, 1)
-      ctx.fillStyle = BLOCKED
-      roundRect(ctx, x, SEGMENTS_TOP, w, SEGMENTS_H, 3)
-      ctx.fill()
+      drawSpan(piece.start, piece.end, BLOCKED_FILL, BLOCKED_EDGE)
     }
     for (const piece of merged.playable) {
-      const x = xFor(piece.start, from, span, width)
-      const w = Math.max(xFor(piece.end, from, span, width) - x, 1)
-      ctx.fillStyle = PLAYABLE
-      roundRect(ctx, x, SEGMENTS_TOP, w, SEGMENTS_H, 3)
-      ctx.fill()
+      drawSpan(piece.start, piece.end, RECORDING_FILL, RECORDING_EDGE)
     }
-    // Selected segment gets a bright outline drawn over the merged bars.
     if (selected) {
       const x = xFor(selected.start, from, span, width)
       const w = Math.max(xFor(selected.end, from, span, width) - x, 2)
       ctx.strokeStyle = '#fbbf24'
-      ctx.lineWidth = 2
-      ctx.strokeRect(x + 1, SEGMENTS_TOP + 1, w - 2, SEGMENTS_H - 2)
+      ctx.lineWidth = 1.5
+      ctx.strokeRect(x + 0.5, RECORDING_TOP + 1.5, w - 1, RECORDING_H - 3)
     }
 
-    // --- Event band: one rounded tick per mark; open events brighter. The
-    // 4px bottom inset keeps marks off the canvas edge.
+    // --- Event track: one block per mark at its true span, floored to
+    // MARK_MIN_W. Open events are drawn hollow so "still running" is visible
+    // without a second colour.
     for (const mark of marks) {
       const x = xFor(mark.at, from, span, width)
-      const w = Math.max(xFor(mark.end, from, span, width) - x, 2)
-      ctx.fillStyle = mark.handleState === 'open' ? EVENT_OPEN : EVENT
-      roundRect(
-        ctx,
-        x,
-        EVENTS_TOP + 2,
-        w,
-        Math.max(EVENTS_H - 2 - EVENT_BOTTOM_INSET, 2),
-        2
-      )
-      ctx.fill()
+      const w = Math.max(xFor(mark.end, from, span, width) - x, MARK_MIN_W)
+      const color = markColor(mark.category)
+      ctx.fillStyle = color
+      ctx.fillRect(x, EVENTS_TOP + 3, w, EVENTS_H - 7)
+      if (mark.handleState === 'open') {
+        ctx.strokeStyle = 'rgba(11,15,20,0.85)'
+        ctx.lineWidth = 1
+        ctx.strokeRect(x + 0.5, EVENTS_TOP + 3.5, Math.max(w - 1, 1), EVENTS_H - 8)
+      }
+      // A cap dot marks the exact start when the block is wider than the floor:
+      // the span is [start-5s, end+5s], and the dot is the event itself.
+      if (w > 6) {
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(x, EVENTS_TOP + 3, 1, EVENTS_H - 7)
+      }
     }
   }, [width, merged, marks, timeline.from, timeline.to, from, span, selected, viewIsFull, zone, palette])
 
-  // Playhead position: derived, so the DOM cursor moves without a canvas
-  // repaint and without layout thrash (transform only). Before the first
-  // playback the cursor parks at the selected segment's start — the operator
-  // always sees where 播放 would begin.
   const playheadAt = clock > 0 ? clock : selected?.start
   const playheadX =
     playheadAt != null && span > 0 ? xFor(playheadAt, from, span, width) : null
@@ -287,10 +366,8 @@ export function TimelineCanvas({
   const pointerAt = (event: { clientX: number }) => {
     const box = wrapRef.current?.getBoundingClientRect()
     if (!box) return null
-    return {
-      px: event.clientX - box.left,
-      at: Math.round(timeFor(event.clientX - box.left, from, span, box.width)),
-    }
+    const px = event.clientX - box.left
+    return { px, at: Math.round(timeFor(px, from, span, box.width)), box }
   }
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -298,8 +375,18 @@ export function TimelineCanvas({
     const hit = pointerAt(event)
     if (!hit) return
     event.currentTarget.setPointerCapture(event.pointerId)
+    // A press on the ruler or the playhead scrubs: the operator is aiming at a
+    // time, not at a block. A press on a block still selects it (below).
+    // Scrubbing is for aiming at a TIME. In pick mode the operator is aiming at
+    // a RANGE, so a press must not also move the playhead — that made the
+    // bracket's first click jump playback before the range existed.
+    const onRuler = event.nativeEvent.offsetY <= RULER_H
+    if (onRuler && !pickMode) {
+      scrubbingRef.current = true
+      setScrubbing(true)
+      onSeek(hit.at)
+    }
     pointerDownRef.current = { x: hit.px, at: hit.at, moved: false }
-    // Bracket handle grab takes priority over pan.
     if (bracket && pickMode) {
       const startPx = xFor(bracket.start, from, span, width)
       const endPx = xFor(bracket.end, from, span, width)
@@ -309,25 +396,16 @@ export function TimelineCanvas({
   }
 
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const box = wrapRef.current?.getBoundingClientRect()
-    if (!box || span <= 0) return
-    const px = event.clientX - box.left
-    const at = Math.round(timeFor(px, from, span, box.width))
-    // Tooltip: the time under the cursor, or the event under it.
-    const tooltip = tooltipRef.current
-    if (tooltip && !dragging) {
-      const hitMark = marks.find(
-        (mark) => px >= xFor(mark.at, from, span, box.width) - 3 &&
-          px <= xFor(mark.end, from, span, box.width) + 3
-      )
-      const text = hitMark
-        ? `${hitMark.category || '事件'} · ${Math.round(hitMark.score * 100)}% · ${formatClock(hitMark.at, zone)}`
-        : formatClock(at, zone)
-      tooltip.textContent = text
-      tooltip.style.transform = `translateX(${Math.min(Math.max(px, 60), box.width - 60)}px)`
-      tooltip.style.visibility = 'visible'
+    const hit = pointerAt(event)
+    if (!hit || span <= 0) return
+    const { px, at, box } = hit
+    const mark = markAt(marks, px, from, span, box.width)
+    setHover({ px, at, mark })
+
+    if (scrubbingRef.current && !pickMode) {
+      onSeek(at)
+      return
     }
-    // Bracket handle drag.
     if (handleRef.current && bracket) {
       const edge = handleRef.current
       onSetBracket({
@@ -336,7 +414,6 @@ export function TimelineCanvas({
       })
       return
     }
-    // Pan once the pointer moves past the click slop.
     const down = pointerDownRef.current
     if (down) {
       const dx = px - down.x
@@ -344,7 +421,7 @@ export function TimelineCanvas({
       if (down.moved && !pickMode) {
         if (!dragging) setDragging(true)
         const movedAt = Math.round(timeFor(down.x, from, span, box.width))
-        onMoveView(movedAt - dx / box.width * span)
+        onMoveView(movedAt - (dx / box.width) * span)
         return
       }
     }
@@ -352,6 +429,9 @@ export function TimelineCanvas({
 
   const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (disabled) return
+    const wasScrubbing = scrubbingRef.current
+    scrubbingRef.current = false
+    setScrubbing(false)
     handleRef.current = null
     const down = pointerDownRef.current
     pointerDownRef.current = null
@@ -359,11 +439,18 @@ export function TimelineCanvas({
     if (!down) return
     const hit = pointerAt(event)
     if (!hit) return
-    // A click without drag: pick bracket in picker mode, else select a
-    // segment, else seek.
+    if (wasScrubbing && !down.moved) return
     if (!down.moved) {
       if (pickMode) {
         onPick(hit.at)
+        return
+      }
+      const mark = markAt(marks, hit.px, from, span, hit.box.width)
+      if (mark) {
+        // Clicking an event jumps to the clip that covers its lead-in — the
+        // span is [start-5s, end+5s], so playing from its start is what shows
+        // the seconds before the detection.
+        onSeek(snapToPlayable(timeline, mark.at).at)
         return
       }
       const entry = entryAtAny(timeline, hit.at)
@@ -410,13 +497,15 @@ export function TimelineCanvas({
       data-testid='playback-timeline-canvas'
       aria-label='录像时间轴'
       role='application'
-      className={`relative touch-none select-none ${disabled ? 'cursor-not-allowed' : dragging ? 'cursor-grabbing' : 'cursor-crosshair'}`}
+      className={`relative touch-none select-none overflow-hidden rounded-md border border-video-border ${disabled ? 'cursor-not-allowed' : dragging ? 'cursor-grabbing' : scrubbing ? 'cursor-ew-resize' : 'cursor-crosshair'}`}
       style={{ height: HEIGHT }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerLeave={() => {
-        if (tooltipRef.current) tooltipRef.current.style.visibility = 'hidden'
+        setHover(null)
+        scrubbingRef.current = false
+        setScrubbing(false)
       }}
       onDoubleClick={onDoubleClick}
       onWheel={onWheelZoom}
@@ -424,16 +513,51 @@ export function TimelineCanvas({
       <canvas
         ref={canvasRef}
         style={{ width: '100%', height: HEIGHT }}
-        className='pointer-events-none block rounded-md'
+        className='pointer-events-none block'
       />
-      {/* Hover tooltip: the cursor's wall clock, or the hovered event. */}
-      <div
-        ref={tooltipRef}
-        aria-hidden
-        className='pointer-events-none absolute top-0 z-10 whitespace-nowrap rounded border bg-popover px-1.5 py-0.5 text-[10px] tabular-nums text-popover-foreground shadow-md'
-        style={{ visibility: 'hidden', left: 0 }}
-      />
-      {/* Export bracket: translucent mask + drag handles. */}
+
+      {/* Hover cursor: a dashed vertical line through all three tracks plus the
+          time readout. It answers "where am I" without the operator having to
+          press anything, which the playhead alone cannot do. */}
+      {hover && !dragging && (
+        <>
+          <div
+            aria-hidden
+            className='pointer-events-none absolute top-0 z-10 w-px border-l border-dashed border-white/35'
+            style={{ left: hover.px, height: HEIGHT }}
+          />
+          <div
+            role='tooltip'
+            data-testid='playback-hover-tooltip'
+            className='pointer-events-none absolute z-20 whitespace-nowrap rounded border border-white/15 bg-popover px-1.5 py-0.5 text-[10px] tabular-nums text-popover-foreground shadow-md'
+            style={{
+              left: Math.min(Math.max(hover.px, 70), Math.max(width - 70, 70)),
+              top: 1,
+              transform: 'translateX(-50%)',
+            }}
+          >
+            {hover.mark ? (
+              <span className='flex items-center gap-1.5'>
+                <span
+                  className='inline-block size-1.5 rounded-full'
+                  style={{ background: markColor(hover.mark.category) }}
+                />
+                <span className='font-medium'>{hover.mark.category || '事件'}</span>
+                <span className='text-muted-foreground'>
+                  {formatClock(hover.mark.at, zone)}
+                </span>
+                <span className='text-muted-foreground'>
+                  持续 {Math.max(1, Math.round((hover.mark.end - hover.mark.at) / 1000))}s
+                </span>
+              </span>
+            ) : (
+              formatClock(hover.at, zone)
+            )}
+          </div>
+        </>
+      )}
+
+      {/* Export bracket: translucent mask over the recording track only. */}
       {bracketPx && (
         <div
           data-testid='playback-bracket'
@@ -442,8 +566,8 @@ export function TimelineCanvas({
           style={{
             left: bracketPx.left,
             width: bracketPx.right - bracketPx.left,
-            top: SEGMENTS_TOP,
-            height: SEGMENTS_H,
+            top: RECORDING_TOP,
+            height: RECORDING_H,
           }}
         >
           <div
@@ -457,17 +581,29 @@ export function TimelineCanvas({
           <div className='absolute -right-1.5 top-0 h-full w-3 cursor-col-resize' data-handle='end' />
         </div>
       )}
-      {/* Playhead: one absolutely-positioned cursor moved via transform. */}
+
+      {/* Playhead: one 2px line through all three tracks with a capsule label
+          showing the time it sits on. The capsule is the only place the exact
+          position is stated, so it must not clip at either edge. */}
       {playheadX !== null && (
         <div
           data-testid='playback-playhead'
-          className='pointer-events-none absolute'
-          style={{ left: 0, top: SEGMENTS_TOP, height: SEGMENTS_H, width: 2 }}
+          className='pointer-events-none absolute top-0 z-30'
+          style={{ left: 0, height: HEIGHT, width: 2 }}
         >
           <div
-            className='h-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.7)]'
+            className='absolute inset-y-0 w-0.5 bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.75)]'
             style={{ transform: `translateX(${playheadX - 1}px)` }}
           />
+          <div
+            className='absolute flex items-center gap-1 rounded-sm bg-red-500 px-1 py-px text-[10px] font-medium leading-4 tabular-nums text-white shadow-sm'
+            style={{
+              transform: `translateX(${Math.min(Math.max(playheadX - 26, 0), Math.max(width - 52, 0))}px)`,
+              top: HEIGHT - 18,
+            }}
+          >
+            {playheadAt ? formatClock(playheadAt, zone) : '—'}
+          </div>
         </div>
       )}
     </div>
