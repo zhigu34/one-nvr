@@ -195,3 +195,79 @@ func TestDetectionPublishFailureKeepsPrevious(t *testing.T) {
 	}
 	_ = id.ID("")
 }
+
+// One reload failure must not disable automatic session syncing.
+//
+// The sync reads the newest publication to decide whether settings have moved
+// since it. Reading the newest *row* meant a failed publish — a transient detector
+// outage — left "failed" as the newest row forever, the sync bailed out on the
+// state check, and the detector kept pulling a media session that no longer
+// existed. Measured on the live site: detection had been dead since the failure,
+// every channel logged "ffmpeg process is not running", and nothing in the
+// product connected the two.
+func TestSessionSyncSurvivesAFailedPublication(t *testing.T) {
+	fixture := newPublicationFixture(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	service := detection.New(fixture.DB, fixture.Auth, "", configPath)
+	service.MQTTKey = "mqtt-secret"
+	service.ProbeToken = "probe-secret"
+	reloadCount := 0
+	failReload := false
+	service.Reload = func(context.Context) error {
+		reloadCount++
+		if failReload {
+			return detection.ErrPublishFailed
+		}
+		return nil
+	}
+	// The sync only republishes when a live session exists for the camera.
+	if _, err := fixture.DB.Pool.Exec(ctx, "UPDATE channels SET current_revision_id=$2 WHERE id=$1", fixture.Channel, fixture.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO stream_sessions(id,channel_id,source_revision_id,generation,app,stream,purpose,state)
+		VALUES(gen_random_uuid(),$1,$2,1,'one_nvr',gen_random_uuid()::text,'main','active')`, fixture.Channel, fixture.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Upsert(ctx, fixture.Admin, detection.Config{
+		ChannelID: fixture.Channel, Enabled: true, Stream: "sub", FPS: 5, Labels: []string{"person"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Publish(ctx, fixture.Admin); err != nil {
+		t.Fatal(err)
+	}
+	published, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A publish that fails at the reload step, as a detector outage would. The
+	// settings do not change: what fails is the detector, not the operator.
+	failReload = true
+	if _, err := service.Publish(ctx, fixture.Admin); err == nil {
+		t.Fatal("a reload failure must surface as a failed publish")
+	}
+	restored, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(restored) != string(published) {
+		t.Fatal("a failed publish did not restore the previous config")
+	}
+
+	// The detector recovers and a new media session appears, so the published
+	// config now points at a dead stream. The newest row is still 'failed'; the
+	// newest *published* row is the truth about what the detector is running.
+	failReload = false
+	before := reloadCount
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO stream_sessions(id,channel_id,source_revision_id,generation,app,stream,purpose,state)
+		VALUES(gen_random_uuid(),$1,$2,2,'one_nvr',gen_random_uuid()::text,'main','active')`, fixture.Channel, fixture.Revision); err != nil {
+		t.Fatal(err)
+	}
+	service.SyncAfterSessionChange(ctx)
+	if reloadCount == before {
+		t.Fatal("a failed publication disabled session syncing; the detector would pull a dead session forever")
+	}
+}

@@ -251,6 +251,17 @@ type HTTPReloader struct {
 	Client  *http.Client
 }
 
+// Reload asks the detector to reload and then waits for it to come back.
+//
+// The wait is the point. /api/restart is asynchronous: it returns 200 as soon as
+// the request is accepted, and the detector restarts afterwards. A configuration
+// the detector cannot parse therefore produced "published" followed by a detector
+// that never came back — the operator saw a success message and lost detection,
+// and nothing in the product said which of the two had happened.
+//
+// Waiting turns that into an honest answer: either the detector serves requests
+// again within the budget, or the publish is reported as failed and the previous
+// config is restored by the caller.
 func (r HTTPReloader) Reload(ctx context.Context) error {
 	if r.BaseURL == "" {
 		return ErrPublishFailed
@@ -259,7 +270,8 @@ func (r HTTPReloader) Reload(ctx context.Context) error {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(r.BaseURL, "/")+"/api/restart", nil)
+	base := strings.TrimRight(r.BaseURL, "/")
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/restart", nil)
 	if err != nil {
 		return ErrPublishFailed
 	}
@@ -272,7 +284,52 @@ func (r HTTPReloader) Reload(ctx context.Context) error {
 	if response.StatusCode/100 != 2 {
 		return ErrPublishFailed
 	}
-	return nil
+	return waitDetectorReady(ctx, client, base)
+}
+
+// detectorReadyBudget bounds how long a restart may take. Frigate's restart is a
+// process restart: a few seconds normally, longer on a large config. Fifteen
+// seconds is well past the observed norm and short enough that an operator
+// waiting on the publish dialog does not give up first.
+const detectorReadyBudget = 15 * time.Second
+
+// waitDetectorReady polls until the detector answers again.
+//
+// It tolerates connection failures during the window rather than treating the
+// first one as fatal: a restarting process refuses connections by definition, and
+// failing on that would report every successful publish as broken.
+func waitDetectorReady(ctx context.Context, client *http.Client, base string) error {
+	deadline := time.Now().Add(detectorReadyBudget)
+	for {
+		probe, cancel := context.WithTimeout(ctx, 3*time.Second)
+		request, err := http.NewRequestWithContext(probe, http.MethodGet, base+"/api/version", nil)
+		if err != nil {
+			cancel()
+			return ErrPublishFailed
+		}
+		response, err := client.Do(request)
+		if err == nil {
+			io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
+			response.Body.Close()
+			cancel()
+			if response.StatusCode/100 == 2 {
+				return nil
+			}
+		} else {
+			cancel()
+		}
+		if ctx.Err() != nil {
+			return ErrPublishFailed
+		}
+		if time.Now().After(deadline) {
+			return ErrPublishFailed
+		}
+		select {
+		case <-ctx.Done():
+			return ErrPublishFailed
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
 }
 
 // RunRuntime polls the detector every minute for the capability card.
@@ -482,9 +539,18 @@ func (s *Service) SyncAfterSessionChange(ctx context.Context) {
 // latestRevisionRow returns the newest publication attempt, or nil when none
 // exists. It is the unauthenticated counterpart of LatestRevision, used by the
 // worker-side sync.
+// latestRevisionRow returns the newest *successful* publication.
+//
+// Not simply the newest row: a failed publish is an event, not the current state.
+// Reading the newest row made one reload failure disable automatic session
+// syncing forever — the newest row stayed "failed", the sync bailed out on its
+// state check, and the detector kept pulling a media session that no longer
+// existed. Measured on the live site: detection had been dead since the failure
+// and every channel logged "ffmpeg process is not running", while the page showed
+// nothing wrong with publishing.
 func (s *Service) latestRevisionRow(ctx context.Context) (*Revision, error) {
 	var revision Revision
-	err := s.DB.Pool.QueryRow(ctx, `SELECT id,config_hash,state,camera_count,error_code,to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SSOF'),config_versions FROM detection_config_revisions ORDER BY created_at DESC LIMIT 1`).
+	err := s.DB.Pool.QueryRow(ctx, `SELECT id,config_hash,state,camera_count,error_code,to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SSOF'),config_versions FROM detection_config_revisions WHERE state='published' ORDER BY created_at DESC LIMIT 1`).
 		Scan(&revision.ID, &revision.ConfigHash, &revision.State, &revision.CameraCount, &revision.ErrorCode, &revision.CreatedAt, &revision.ConfigVersions)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
