@@ -288,10 +288,16 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 				return err
 			}
 		} else {
-			// The identity columns are immutable by trigger; only the span and the
-			// size describe a clip that is still growing.
-			if _, err := tx.Exec(ctx, `UPDATE recording_segments SET start_at=$2,end_at=$3,size_bytes=$4,ready_at=clock_timestamp() WHERE id=$1`,
-				segmentID, start.UTC(), end.UTC(), info.Size()); err != nil {
+			// A re-cut REPLACES the file, so the identity captured at the previous
+			// assembly no longer describes it: the size grew and the rename gave it
+			// a new inode. Leaving the old identity in place made the storage
+			// reconciler mark the clip damaged on its next pass — which is why
+			// clips recorded *after* the fix were still unusable. The identity
+			// columns are immutable by trigger (they are part of the publication
+			// identity), but file_identity is evidence, not identity: it is meant
+			// to be refreshed whenever the bytes change.
+			if _, err := tx.Exec(ctx, `UPDATE recording_segments SET start_at=$2,end_at=$3,size_bytes=$4,file_identity=$5,ready_at=clock_timestamp() WHERE id=$1`,
+				segmentID, start.UTC(), end.UTC(), info.Size(), rawID); err != nil {
 				return err
 			}
 		}

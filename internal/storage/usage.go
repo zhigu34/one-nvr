@@ -86,34 +86,8 @@ func (s *Service) verifiedUsage(ctx context.Context, pool Pool) (*int64, error) 
 			if statErr != nil {
 				return nil, nil
 			}
-			var want struct {
-				Device, Inode  uint64
-				Size, Modified int64
-			}
 			stat, ok := info.Sys().(*syscall.Stat_t)
-			// An empty identity is "never captured", not "changed": the column
-			// defaults to {} and some writers (the event clip assembler, until it
-			// was fixed) never filled it. Treating that as a mismatch marked every
-			// such file 'damaged' on the next pass even though nothing had touched
-			// it — the row still has the size to compare, which is enough to catch
-			// a truncated file.
-			// What proves the bytes are the ones that were published:
-			//
-			//   - the file is the same inode on the same device. A different
-			//     inode means something replaced it;
-			//   - its size matches both the recorded identity and the location.
-			//     A truncated file fails here.
-			//
-			// mtime is deliberately NOT part of the verdict. It changes when a
-			// file is copied, restored from a backup, or touched by anything that
-			// rewrites metadata — none of which alter the footage. Measured on the
-			// live site: 45 segments were quarantined as damaged while all 45
-			// probed clean, purely because their mtime had moved.
-			captured := len(location.Identity) > 2
-			if json.Unmarshal(location.Identity, &want) != nil || !ok ||
-				(captured && (want.Device != uint64(stat.Dev) || want.Inode != uint64(stat.Ino))) ||
-				(captured && want.Size != info.Size()) ||
-				info.Size() != location.Size {
+			if !ok || fileDamage(location.Identity, location.Size, uint64(stat.Dev), uint64(stat.Ino), info.Size(), info.ModTime().UnixNano()) {
 				if _, err := s.DB.Pool.Exec(ctx, `UPDATE recording_locations SET state='damaged',verified_at=clock_timestamp() WHERE segment_id=$1 AND pool_id=$2`, location.ID, pool.ID); err != nil {
 					return nil, err
 				}
@@ -130,4 +104,41 @@ func (s *Service) verifiedUsage(ctx context.Context, pool Pool) (*int64, error) 
 		after = locations[len(locations)-1].ID
 	}
 	return &total, nil
+}
+
+// fileDamage reports whether the file on disk is no longer the one that was
+// published.
+//
+// Two things prove that:
+//
+//   - the same inode on the same device. A different inode means something
+//     replaced the file;
+//   - the size matches both the recorded identity and the location. A truncated
+//     file fails here.
+//
+// mtime is deliberately NOT part of the verdict. It moves when a file is copied,
+// restored from a backup, or touched by anything that rewrites metadata, none of
+// which alter the footage. Measured on the live site: 45 segments were quarantined
+// as damaged while all 45 probed clean and played normally, purely because their
+// mtime had moved.
+//
+// An empty identity means "never captured", not "changed": the column defaults to
+// {} and some writers never filled it. Treating that as a mismatch marked intact
+// files damaged on the next pass — the size comparison still catches truncation.
+func fileDamage(identity []byte, locatedSize int64, device, inode uint64, size, modified int64) bool {
+	var want struct {
+		Device, Inode  uint64
+		Size, Modified int64
+	}
+	if json.Unmarshal(identity, &want) != nil {
+		return true
+	}
+	captured := len(identity) > 2
+	if captured && (want.Device != device || want.Inode != inode) {
+		return true
+	}
+	if captured && want.Size != size {
+		return true
+	}
+	return size != locatedSize
 }
