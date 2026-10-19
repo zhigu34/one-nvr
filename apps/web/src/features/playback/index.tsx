@@ -721,8 +721,23 @@ function Workspace({
             该时间范围没有已登记录像
           </span>
         )}
-        <span data-testid='playback-timeline-window' className='text-video-chrome-foreground/40'>
-          {formatClock(timeline.from, zone)} — {formatClock(timeline.to, zone)}
+        {/* The label states the VISIBLE window, not the search range. Zooming
+            into six hours while this read the full twenty-four made the event
+            track look like it had lost its marks: the window said 01:28-01:28
+            either way, so nothing on screen accounted for the change. When the
+            view is the whole range the two are the same, and the label says so
+            only once. */}
+        <span
+          data-testid='playback-timeline-window'
+          className='text-video-chrome-foreground/40'
+          title={
+            view
+              ? `当前视野；检索范围 ${formatClock(timeline.from, zone)} — ${formatClock(timeline.to, zone)}`
+              : '当前检索范围'
+          }
+        >
+          {formatClock(viewBounds.start, zone)} — {formatClock(viewBounds.end, zone)}
+          {view ? '（已缩放）' : ''}
         </span>
         {/* The playhead time is THE current time of this page: the biggest
             number in the band, not one of three equal-weight clocks. The picture
