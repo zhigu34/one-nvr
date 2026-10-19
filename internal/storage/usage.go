@@ -91,7 +91,17 @@ func (s *Service) verifiedUsage(ctx context.Context, pool Pool) (*int64, error) 
 				Size, Modified int64
 			}
 			stat, ok := info.Sys().(*syscall.Stat_t)
-			if json.Unmarshal(location.Identity, &want) != nil || !ok || want.Device != uint64(stat.Dev) || want.Inode != uint64(stat.Ino) || want.Size != info.Size() || want.Modified != info.ModTime().UnixNano() || info.Size() != location.Size {
+			// An empty identity is "never captured", not "changed": the column
+			// defaults to {} and some writers (the event clip assembler, until it
+			// was fixed) never filled it. Treating that as a mismatch marked every
+			// such file 'damaged' on the next pass even though nothing had touched
+			// it — the row still has the size to compare, which is enough to catch
+			// a truncated file.
+			captured := len(location.Identity) > 2
+			if json.Unmarshal(location.Identity, &want) != nil || !ok ||
+				(captured && (want.Device != uint64(stat.Dev) || want.Inode != uint64(stat.Ino))) ||
+				(captured && (want.Size != info.Size() || want.Modified != info.ModTime().UnixNano())) ||
+				info.Size() != location.Size {
 				if _, err := s.DB.Pool.Exec(ctx, `UPDATE recording_locations SET state='damaged',verified_at=clock_timestamp() WHERE segment_id=$1 AND pool_id=$2`, location.ID, pool.ID); err != nil {
 					return nil, err
 				}

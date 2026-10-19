@@ -18,6 +18,7 @@ package recording
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -225,6 +226,18 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 
 	// Reuse the segment when the clip already exists, so the event keeps pointing
 	// at one clip that grows rather than at a row per assembly.
+	// The identity is what the storage reconciler verifies against the file later:
+	// device, inode, size and mtime. Writing an empty object (the first version
+	// did) makes every comparison fail, so each clip was marked 'damaged' on the
+	// next reconciliation pass even though the file was intact.
+	fileID, err := identity(info)
+	if err != nil {
+		return err
+	}
+	rawID, err := json.Marshal(fileID)
+	if err != nil {
+		return err
+	}
 	segmentID := id.ID("")
 	if job.Segment != nil {
 		segmentID = *job.Segment
@@ -271,7 +284,7 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 			if _, err := tx.Exec(ctx, `INSERT INTO recording_segments(id,channel_id,source_revision_id,run_id,pool_id,original_relative_path,target_relative_path,
 				original_start,naming_timezone,utc_offset_seconds,start_at,end_at,size_bytes,file_identity,media_evidence,state,time_evidence,ready_at)
 				VALUES($1,$2,$3,$4,$5,$6,$6,$7,$8,$9,$7,$10,$11,$12,$13,'ready','completion',clock_timestamp())`,
-				segmentID, channelID, revisionID, runID, poolID, published, start.UTC(), timezone, frozen.UTCOffsetSeconds, end.UTC(), info.Size(), []byte("{}"), []byte("{}")); err != nil {
+				segmentID, channelID, revisionID, runID, poolID, published, start.UTC(), timezone, frozen.UTCOffsetSeconds, end.UTC(), info.Size(), rawID, []byte("{}")); err != nil {
 				return err
 			}
 		} else {
