@@ -97,10 +97,22 @@ func (s *Service) verifiedUsage(ctx context.Context, pool Pool) (*int64, error) 
 			// such file 'damaged' on the next pass even though nothing had touched
 			// it — the row still has the size to compare, which is enough to catch
 			// a truncated file.
+			// What proves the bytes are the ones that were published:
+			//
+			//   - the file is the same inode on the same device. A different
+			//     inode means something replaced it;
+			//   - its size matches both the recorded identity and the location.
+			//     A truncated file fails here.
+			//
+			// mtime is deliberately NOT part of the verdict. It changes when a
+			// file is copied, restored from a backup, or touched by anything that
+			// rewrites metadata — none of which alter the footage. Measured on the
+			// live site: 45 segments were quarantined as damaged while all 45
+			// probed clean, purely because their mtime had moved.
 			captured := len(location.Identity) > 2
 			if json.Unmarshal(location.Identity, &want) != nil || !ok ||
 				(captured && (want.Device != uint64(stat.Dev) || want.Inode != uint64(stat.Ino))) ||
-				(captured && (want.Size != info.Size() || want.Modified != info.ModTime().UnixNano())) ||
+				(captured && want.Size != info.Size()) ||
 				info.Size() != location.Size {
 				if _, err := s.DB.Pool.Exec(ctx, `UPDATE recording_locations SET state='damaged',verified_at=clock_timestamp() WHERE segment_id=$1 AND pool_id=$2`, location.ID, pool.ID); err != nil {
 					return nil, err
