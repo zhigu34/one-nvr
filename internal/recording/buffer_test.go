@@ -189,3 +189,32 @@ func TestParseBufferFragmentUsesTheContainerZone(t *testing.T) {
 		t.Fatalf("start = %v, want %v (parsing the name as UTC would put it eight hours ahead)", got.Start, want)
 	}
 }
+
+// A re-cut appends only material the published clip does not already hold.
+//
+// The ring keeps thirty seconds, so an event longer than that evicts its own
+// beginning. Rebuilding from the ring therefore produced smaller files over time
+// (measured on the live site: 13.7 MB, then 10.9 MB for the same event) and moved
+// the clip's start forward on every pass.
+func TestFragmentsAfterKeepsOnlyNewMaterial(t *testing.T) {
+	fragments := []BufferFragment{
+		fragment(0, 3, 10),
+		fragment(3, 6, 10),
+		fragment(6, 9, 10),
+	}
+	// The head already covers 0..6; only the fragment starting at 6 is new.
+	got := fragmentsAfter(fragments, bufAt(6))
+	if len(got) != 1 || !got[0].Start.Equal(bufAt(6)) {
+		t.Fatalf("expected only the fragment starting at 6, got %+v", got)
+	}
+	// A fragment straddling the boundary is dropped, not split: appending half a
+	// fragment would need a re-encode, which this path never does.
+	got = fragmentsAfter(fragments, bufAt(4))
+	if len(got) != 1 || !got[0].Start.Equal(bufAt(6)) {
+		t.Fatalf("a straddling fragment must be dropped, got %+v", got)
+	}
+	// Nothing new when the head already reaches the end.
+	if got := fragmentsAfter(fragments, bufAt(9)); len(got) != 0 {
+		t.Fatalf("expected no new fragments, got %+v", got)
+	}
+}

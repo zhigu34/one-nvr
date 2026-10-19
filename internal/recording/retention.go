@@ -47,6 +47,16 @@ func (s *Service) RunRetention(ctx context.Context) {
 		// ("no buffered footage") rather than work to retry. Keeping them forever
 		// would grow a table nobody reads, one row per detection.
 		s.SweepEventClipJobs(ctx)
+		// Event clips quarantined by the re-cut defect carry evidence about a file
+		// that no longer exists; only the file itself can say what its inode is, so
+		// this cannot be a SQL migration. It runs on the same ticker and stops
+		// finding candidates once the rows are repaired.
+		s.RepairEventClipDamage(ctx)
+		// The same defect left duplicate files: one per assembly, only one of them
+		// referenced. They are the same event at earlier extents, so nothing can
+		// ever play them; leaving them would keep every long event's footage on
+		// disk twice over.
+		s.SweepEventClipOrphans(ctx)
 		// Archive-bound channels clean on their own shorter window, gated on a
 		// confirmed remote copy (ARC-05); the gate hook is injected by the
 		// assembly, so without it nothing happens.

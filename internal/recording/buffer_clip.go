@@ -25,11 +25,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/media/probe"
+	"github.com/zhigu34/one-nvr/internal/storage"
 )
 
 // QueueClip records that an event needs a clip assembled from the buffer.
@@ -148,9 +150,6 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 		return err
 	}
 	picked, start, end := BufferWindow(fragments, from, to)
-	if len(picked) == 0 {
-		return errClipWindowEmpty
-	}
 
 	// This run exists so the assembled clip has somewhere to belong: segments
 	// reference a recording_runs row, and the foreign key is what keeps an index
@@ -185,6 +184,58 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 	}
 	defer root.Close()
 
+	// A clip that already exists is EXTENDED, never rebuilt from the ring.
+	//
+	// Rebuilding looked right and was wrong in two ways that only appear on a real
+	// event. The ring keeps thirty seconds, so an event longer than that evicts its
+	// own beginning: every re-cut started later and the assembled file could come
+	// out SMALLER than the previous one (measured on the site: 13.7 MB, then
+	// 10.9 MB for the same event). And the naming rule derives the file name from
+	// the start instant, so a moving start named a different file each pass — the
+	// index kept pointing at the first name while the identity columns described
+	// the last, which the storage reconciler correctly read as "file replaced".
+	//
+	// Taking the published copy as the head of the next assembly fixes both: the
+	// beginning cannot be evicted because it is no longer only in the ring, and the
+	// name stops moving. Only fragments not yet folded into it are appended.
+	var (
+		head      probe.ConcatPart
+		nameStart = start
+		haveHead  bool
+		headParts int
+	)
+	if job.Segment != nil {
+		head, nameStart, haveHead, err = s.existingClipHead(ctx, *job.Segment, poolID, root)
+		if err != nil {
+			return err
+		}
+		if haveHead {
+			// The head stands for however many fragments the published clip already
+			// holds. The count lives on the segment's own media evidence, not on the
+			// event: the event's media_segments is recomputed by the linking pass and
+			// reading it here would count the same fragments twice.
+			var prior int
+			if err := s.DB.Pool.QueryRow(ctx, `SELECT coalesce((media_evidence->>'buffer_fragments')::int,0) FROM recording_segments WHERE id=$1`, *job.Segment).Scan(&prior); err != nil {
+				return err
+			}
+			headParts = prior
+		}
+	}
+	if haveHead {
+		headEnd := nameStart.Add(head.Duration)
+		fragments = fragmentsAfter(fragments, headEnd)
+		picked, start, end = BufferWindow(fragments, from, to)
+		if len(picked) == 0 {
+			// Nothing new since the last assembly. Settling the job without
+			// rewriting the file keeps a running-but-idle event from re-encoding
+			// the same bytes every five seconds.
+			return s.settleClip(ctx, eventID, job.StillOpen)
+		}
+	}
+	if len(picked) == 0 {
+		return errClipWindowEmpty
+	}
+
 	// The output is written inside the run's work directory, then named by the
 	// standard rule, so the clip reads like every other recording in the library.
 	outDir := filepath.Join(pool.Path, work)
@@ -192,7 +243,10 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 		return err
 	}
 	staged := filepath.Join(outDir, "clip.mp4")
-	parts := make([]probe.ConcatPart, 0, len(picked))
+	parts := make([]probe.ConcatPart, 0, len(picked)+1)
+	if haveHead {
+		parts = append(parts, head)
+	}
 	for _, fragment := range picked {
 		parts = append(parts, probe.ConcatPart{Path: fragment.Path, Duration: fragment.End.Sub(fragment.Start)})
 	}
@@ -212,7 +266,9 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 	if err != nil {
 		return err
 	}
-	frozen, err := FreezePath(channelNo, start, timezone, runID)
+	// nameStart is fixed by the first assembly and read back from the segment on
+	// every later one, so all assemblies of one clip land on one file.
+	frozen, err := FreezePath(channelNo, nameStart, timezone, runID)
 	if err != nil {
 		return err
 	}
@@ -275,16 +331,22 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 				}
 			}
 		} else {
-			// The row already exists; only its covered span moves.
-			if _, err := tx.Exec(ctx, `UPDATE recording_runs SET started_at=$2,ended_at=$3 WHERE id=$1`, runID, start.UTC(), end.UTC()); err != nil {
+			// The row already exists; only its covered span moves. Its start is the
+			// clip's real beginning, which the head kept even after the ring evicted
+			// those fragments, so it must not follow the newest assembly's start.
+			if _, err := tx.Exec(ctx, `UPDATE recording_runs SET started_at=$2,ended_at=$3 WHERE id=$1`, runID, nameStart.UTC(), end.UTC()); err != nil {
 				return err
 			}
 		}
 		if job.Segment == nil {
+			evidenceJSON, err := json.Marshal(map[string]int{"buffer_fragments": len(picked)})
+			if err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx, `INSERT INTO recording_segments(id,channel_id,source_revision_id,run_id,pool_id,original_relative_path,target_relative_path,
 				original_start,naming_timezone,utc_offset_seconds,start_at,end_at,size_bytes,file_identity,media_evidence,state,time_evidence,ready_at)
 				VALUES($1,$2,$3,$4,$5,$6,$6,$7,$8,$9,$7,$10,$11,$12,$13,'ready','completion',clock_timestamp())`,
-				segmentID, channelID, revisionID, runID, poolID, published, start.UTC(), timezone, frozen.UTCOffsetSeconds, end.UTC(), info.Size(), rawID, []byte("{}")); err != nil {
+				segmentID, channelID, revisionID, runID, poolID, published, start.UTC(), timezone, frozen.UTCOffsetSeconds, end.UTC(), info.Size(), rawID, evidenceJSON); err != nil {
 				return err
 			}
 		} else {
@@ -296,8 +358,20 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 			// columns are immutable by trigger (they are part of the publication
 			// identity), but file_identity is evidence, not identity: it is meant
 			// to be refreshed whenever the bytes change.
-			if _, err := tx.Exec(ctx, `UPDATE recording_segments SET start_at=$2,end_at=$3,size_bytes=$4,file_identity=$5,ready_at=clock_timestamp() WHERE id=$1`,
-				segmentID, start.UTC(), end.UTC(), info.Size(), rawID); err != nil {
+			//
+			// start_at stays at nameStart for the same reason the file name does:
+			// it describes the bytes in the file, and the head guarantees the file
+			// still begins there. Writing the newest assembly's start would claim
+			// the clip begins later than it does.
+			// media_evidence carries how many buffer fragments the file holds, so a
+			// later assembly knows how much the head already covers without trusting
+			// the event row (which the linking pass rewrites independently).
+			evidenceJSON, err := json.Marshal(map[string]int{"buffer_fragments": len(picked) + headParts})
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE recording_segments SET start_at=$2,end_at=$3,size_bytes=$4,file_identity=$5,media_evidence=$6,ready_at=clock_timestamp() WHERE id=$1`,
+				segmentID, nameStart.UTC(), end.UTC(), info.Size(), rawID, evidenceJSON); err != nil {
 				return err
 			}
 		}
@@ -311,9 +385,10 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 			return err
 		}
 		// The event now has footage of its own, so its verdict becomes linked and
-		// the page can play it.
+		// the page can play it. The span starts where the file starts, not where the
+		// newest fragment does.
 		_, err := tx.Exec(ctx, `UPDATE events SET media_state='linked',media_start_at=$2,media_end_at=$3,media_segments=$4,updated_at=clock_timestamp() WHERE id=$1`,
-			eventID, start.UTC(), end.UTC(), len(picked))
+			eventID, nameStart.UTC(), end.UTC(), len(picked)+headParts)
 		if err != nil {
 			return err
 		}
@@ -346,6 +421,82 @@ func (s *Service) channelNaming(ctx context.Context, channelID id.ID) (int, stri
 	return number, zone, err
 }
 
+// existingClipHead returns the published clip of a re-cut as the first input of
+// the next assembly.
+//
+// The returned start is read from the row rather than taken from the caller: the
+// naming rule made that instant part of the file's identity, so an assembly that
+// chose a different one would name a different file.
+//
+// A clip whose row exists but whose file does not (removed by the operator, or
+// lost with a pool) is NOT a head. Appending to bytes that are gone would publish
+// a file that starts mid-event while still claiming the old span; returning false
+// makes this pass rebuild from whatever the ring still holds, which is the honest
+// answer. The row is left as it is — the storage reconciler owns that verdict.
+func (s *Service) existingClipHead(ctx context.Context, segmentID, poolID id.ID, root *os.Root) (probe.ConcatPart, time.Time, bool, error) {
+	var start, end time.Time
+	var path string
+	if err := s.DB.Pool.QueryRow(ctx, `SELECT s.start_at,s.end_at,l.relative_path FROM recording_segments s
+		JOIN recording_locations l ON l.segment_id=s.id AND l.pool_id=s.pool_id
+		WHERE s.id=$1 AND s.pool_id=$2 AND s.state='ready' AND l.state='ready'`, segmentID, poolID).Scan(&start, &end, &path); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return probe.ConcatPart{}, time.Time{}, false, nil
+		}
+		return probe.ConcatPart{}, time.Time{}, false, err
+	}
+	file, err := storage.OpenMediaFile(root, path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return probe.ConcatPart{}, time.Time{}, false, nil
+		}
+		return probe.ConcatPart{}, time.Time{}, false, err
+	}
+	if _, err := file.Stat(); err != nil {
+		file.Close()
+		return probe.ConcatPart{}, time.Time{}, false, err
+	}
+	file.Close()
+	// The duration is the segment's recorded span: that is how much material the
+	// head file holds, and it is what the ffconcat script needs to timestamp the
+	// appended parts correctly. Deriving it from the file would need a probe of
+	// its own on every pass.
+	duration := end.Sub(start)
+	if duration <= 0 {
+		return probe.ConcatPart{}, time.Time{}, false, nil
+	}
+	return probe.ConcatPart{Path: filepath.Join(root.Name(), path), Duration: duration}, start, true, nil
+}
+
+// fragmentsAfter keeps the fragments the head does not already cover.
+//
+// The head ends where the previous assembly stopped; only material from then on
+// is new. A fragment straddling that instant is dropped rather than split: a
+// partial fragment cannot be appended without re-encoding it, which this path
+// never does.
+func fragmentsAfter(fragments []BufferFragment, after time.Time) []BufferFragment {
+	out := make([]BufferFragment, 0, len(fragments))
+	for _, fragment := range fragments {
+		if fragment.Start.After(after) || fragment.Start.Equal(after) {
+			out = append(out, fragment)
+		}
+	}
+	return out
+}
+
+// settleClip closes a job whose clip is already as complete as the ring allows.
+//
+// This is what keeps a running-but-idle event from rewriting the same bytes every
+// five seconds. A running event still goes back to 'growing' so the next message
+// can extend it; a finished one is 'done'.
+func (s *Service) settleClip(ctx context.Context, eventID id.ID, stillOpen bool) error {
+	next := "done"
+	if stillOpen {
+		next = "growing"
+	}
+	_, err := s.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET state=$2,updated_at=clock_timestamp() WHERE event_id=$1`, eventID, next)
+	return err
+}
+
 var (
 	errClipWindowEmpty = errors.New("event_clip_window_empty")
 	errClipNoPool      = errors.New("event_clip_pool_unbound")
@@ -374,6 +525,227 @@ var _ = io.EOF
 // useful while someone might ask "why does this event have no footage", and the
 // answer is stable within a week.
 const EventClipJobRetention = 7 * 24 * time.Hour
+
+// RepairEventClipDamage restores event clips quarantined by the re-cut defect.
+//
+// Before a re-cut kept its head, every assembly of a running event wrote a NEW
+// file: the name came from the start instant and the start moved forward as the
+// ring evicted the beginning. The index kept pointing at the first (largest)
+// file, while size_bytes and file_identity were overwritten with the last one's.
+// The reconciler then compared a correct file against evidence about a different
+// file and marked it damaged — the footage was intact and played normally.
+//
+// The fix cannot be a pure SQL migration: the identity lives in the inode, and
+// only the file itself can say what it is. This pass re-reads each damaged event
+// clip from the path the index already records and rewrites the evidence from
+// the file that is actually there. A file that is genuinely absent or truncated
+// is left damaged, so this cannot hide real loss.
+//
+// Idempotent and bounded: one batch per call, and rows it repairs stop being
+// candidates.
+func (s *Service) RepairEventClipDamage(ctx context.Context) {
+	if s.DB == nil || s.Pools == nil {
+		return
+	}
+	rows, err := s.DB.Pool.Query(ctx, `SELECT s.id,s.pool_id,l.relative_path
+		FROM recording_segments s
+		JOIN recording_locations l ON l.segment_id=s.id AND l.pool_id=s.pool_id
+		JOIN recording_runs r ON r.id=s.run_id
+		WHERE s.state='damaged' AND l.state='damaged' AND r.purpose='event'
+		ORDER BY s.start_at DESC LIMIT 50`)
+	if err != nil {
+		if ctx.Err() == nil {
+			slog.Warn("event clip repair scan unavailable", "error", err)
+		}
+		return
+	}
+	type candidate struct {
+		Segment id.ID
+		Pool    id.ID
+		Path    string
+	}
+	var candidates []candidate
+	for rows.Next() {
+		var item candidate
+		if err := rows.Scan(&item.Segment, &item.Pool, &item.Path); err != nil {
+			rows.Close()
+			return
+		}
+		candidates = append(candidates, item)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return
+	}
+	repaired := 0
+	for _, item := range candidates {
+		if ctx.Err() != nil {
+			return
+		}
+		root, _, err := s.Pools.OpenMediaRoot(ctx, item.Pool)
+		if err != nil {
+			continue
+		}
+		file, err := storage.OpenMediaFile(root, item.Path)
+		if err != nil {
+			root.Close()
+			// A missing file is a real loss: the reconciler already recorded that
+			// verdict and this pass must not overwrite it.
+			continue
+		}
+		info, statErr := file.Stat()
+		file.Close()
+		root.Close()
+		if statErr != nil {
+			continue
+		}
+		// A file SMALLER than the index recorded is evidence of truncation, not of
+		// stale evidence: the re-cut defect always produced files at least as large
+		// as the one it replaced, so nothing it wrote can be shorter. Keeping these
+		// damaged is what stops this pass from laundering real loss.
+		var recordedSize int64
+		if err := s.DB.Pool.QueryRow(ctx, `SELECT size_bytes FROM recording_segments WHERE id=$1`, item.Segment).Scan(&recordedSize); err != nil {
+			continue
+		}
+		if info.Size() < recordedSize {
+			continue
+		}
+		fileID, err := identity(info)
+		if err != nil {
+			continue
+		}
+		rawID, err := json.Marshal(fileID)
+		if err != nil {
+			continue
+		}
+		err = s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `UPDATE recording_segments
+				SET size_bytes=$2,file_identity=$3,state='ready',error_code=NULL,ready_at=clock_timestamp()
+				WHERE id=$1 AND state='damaged'`, item.Segment, info.Size(), rawID); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `UPDATE recording_locations SET size_bytes=$3,state='ready',verified_at=clock_timestamp()
+				WHERE segment_id=$1 AND pool_id=$2 AND state='damaged'`, item.Segment, item.Pool, info.Size())
+			return err
+		})
+		if err != nil {
+			continue
+		}
+		repaired++
+	}
+	if repaired > 0 {
+		slog.Info("event clips restored", "repaired", repaired)
+	}
+}
+
+// SweepEventClipOrphans removes the duplicate files the re-cut defect left behind.
+//
+// Every assembly named its output after the start instant, and the start moved as
+// the ring evicted the beginning, so one event could leave seven files. Only the
+// file the index records is referenced: the others are the same event at earlier
+// extents and nothing will ever play them. Measured on the live site: 58 healed
+// clips had left 100+ orphans on disk.
+//
+// The published file is never a candidate — it is matched by the segment's own
+// target_relative_path, not by a naming rule — so a naming change cannot delete
+// footage.
+func (s *Service) SweepEventClipOrphans(ctx context.Context) {
+	if s.DB == nil || s.Pools == nil {
+		return
+	}
+	// One row per (pool, channel, run): the run id is the part of the file name
+	// that is unique to one clip, so grouping on it finds exactly the duplicates
+	// this defect created.
+	rows, err := s.DB.Pool.Query(ctx, `SELECT DISTINCT s.pool_id,s.channel_id,s.run_id,c.channel_no
+		FROM recording_segments s JOIN recording_runs r ON r.id=s.run_id JOIN channels c ON c.id=s.channel_id
+		WHERE r.purpose='event' LIMIT 200`)
+	if err != nil {
+		if ctx.Err() == nil {
+			slog.Warn("event clip orphan scan unavailable", "error", err)
+		}
+		return
+	}
+	type clipRun struct {
+		Pool    id.ID
+		Channel id.ID
+		Run     id.ID
+		Number  int
+	}
+	var clipRuns []clipRun
+	for rows.Next() {
+		var item clipRun
+		if err := rows.Scan(&item.Pool, &item.Channel, &item.Run, &item.Number); err != nil {
+			rows.Close()
+			return
+		}
+		clipRuns = append(clipRuns, item)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return
+	}
+	removed := 0
+	for _, item := range clipRuns {
+		if ctx.Err() != nil {
+			return
+		}
+		var published string
+		err := s.DB.Pool.QueryRow(ctx, `SELECT target_relative_path FROM recording_segments WHERE run_id=$1 LIMIT 1`, item.Run).Scan(&published)
+		if err != nil {
+			continue
+		}
+		root, pool, err := s.Pools.OpenMediaRoot(ctx, item.Pool)
+		if err != nil {
+			continue
+		}
+		root.Close()
+		orphans, err := clipOrphans(pool.Path, item.Run, published)
+		if err != nil {
+			continue
+		}
+		for _, orphan := range orphans {
+			if err := os.Remove(orphan); err != nil && !errors.Is(err, os.ErrNotExist) {
+				slog.Warn("event clip orphan removal failed", "path", orphan, "error", err)
+				continue
+			}
+			removed++
+		}
+	}
+	if removed > 0 {
+		slog.Info("event clip orphans removed", "removed", removed)
+	}
+}
+
+// clipOrphans lists files whose name carries the run id but which the index does
+// not point at.
+func clipOrphans(poolPath string, runID id.ID, published string) ([]string, error) {
+	suffix := "_" + strings.ReplaceAll(string(runID), "-", "") + ".mp4"
+	publishedPath := filepath.Join(poolPath, published)
+	// Only the directory the published clip is in: every assembly of one run
+	// names its file after that same start instant, so the duplicates are always
+	// siblings. Walking the whole recordings tree per run would make this sweep
+	// cost grow with the size of the library.
+	dir := filepath.Dir(publishedPath)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []string
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), suffix) {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		if path == publishedPath {
+			continue
+		}
+		out = append(out, path)
+	}
+	return out, nil
+}
 
 // SweepEventClipJobs removes clip jobs that are settled and old.
 //

@@ -10,12 +10,17 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/zhigu34/one-nvr/internal/id"
+	"github.com/zhigu34/one-nvr/internal/media/probe"
 	"github.com/zhigu34/one-nvr/internal/recording"
 )
 
@@ -456,5 +461,469 @@ func TestEventRecordingToggleUsesTheChannelVersion(t *testing.T) {
 	// And the new token works.
 	if err := fixture.Service.Sources.SetEventRecording(ctx, fixture.Admin, fixture.Channel, false, after.Version); err != nil {
 		t.Fatalf("toggling with the fresh version failed: %v", err)
+	}
+}
+
+// A clip that already exists must be EXTENDED, never rebuilt from the ring.
+//
+// Measured on the live site: one event produced seven files for the same run —
+// CH03_20261019_155243, _155250, _155253, _155257, _155303, _155306, _155313 — and
+// the assembled file shrank from 13.7 MB to 10.9 MB. The ring keeps thirty
+// seconds, so an event longer than that evicts its own beginning; every re-cut
+// then started later, named a different file, and left the previous one orphaned.
+// The index kept pointing at the FIRST name while file_identity and size_bytes
+// described the LAST, which the storage reconciler correctly reported as "the
+// file was replaced" — every long event ended up damaged.
+func TestClipRecutExtendsTheSameFile(t *testing.T) {
+	ffmpeg := mediaTestTool(t, "ffmpeg")
+	ffprobe := mediaTestTool(t, "ffprobe")
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	cache := t.TempDir()
+	fixture.Service.EventCacheDir = cache
+	fixture.Service.EventCacheBytes = 512 << 20
+	fixture.Service.Probe = probe.Runner{FFmpeg: ffmpeg, FFprobe: ffprobe}
+
+	// ZLM writes the fragments as it goes; the test writes the same shape. The
+	// names are container-local, which for this fixture is UTC because the site is.
+	ring := filepath.Join(cache, "events", string(fixture.Channel))
+	if err := os.MkdirAll(ring, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().UTC().Add(-40 * time.Second).Truncate(time.Second)
+	writeFragment := func(offset int) {
+		start := base.Add(time.Duration(offset) * time.Second)
+		// ZLM names a fragment in the CONTAINER's local zone. Formatting in UTC
+		// here made the parser read every name eight hours early on a +08 machine,
+		// which is the same mismatch the production fix addressed.
+		name := start.In(time.Local).Format("2006-01-02-15-04-05") + "-0.mp4"
+		path := filepath.Join(ring, name)
+		if err := exec.Command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+			"-f", "lavfi", "-i", "testsrc2=size=160x90:rate=5", "-t", "3",
+			"-c:v", "libx264", "-threads", "1", "-y", path).Run(); err != nil {
+			t.Fatal("synthetic fragment creation failed", err)
+		}
+		// The parser reads a fragment's end from its mtime, because that is when
+		// ZLM closed the file. ffmpeg writes "now" instead, so the fixture sets
+		// the real end explicitly — otherwise every fragment looks minutes long
+		// and the clip's covered span swallows material that is still pending.
+		end := start.Add(3 * time.Second)
+		if err := os.Chtimes(path, end, end); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFragment(0)
+	writeFragment(3)
+
+	eventID := mustID(t)
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO events(id,channel_id,source,source_id,category,score,zones,started_at,snapshot_state,media_state,raw)
+		VALUES($1,$2,'frigate','evt-recut','person',0.5,'[]',$3,'gone','unavailable','{}')`, eventID, fixture.Channel, base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end,state)
+		VALUES($1,$2,$3,$4,'queued')`, eventID, fixture.Channel, base, base.Add(6*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	fixture.Service.AssembleClips(ctx)
+
+	var (
+		firstPath  string
+		firstStart time.Time
+		firstSize  int64
+		firstName  string
+	)
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT target_relative_path,original_start,size_bytes
+		FROM recording_segments WHERE run_id=(SELECT clip_run_id FROM event_clip_jobs WHERE event_id=$1)`, eventID).
+		Scan(&firstPath, &firstStart, &firstSize); err != nil {
+		t.Fatal(err)
+	}
+	firstName = filepath.Base(firstPath)
+
+	// The event keeps running: two more fragments land and the job re-queues.
+	writeFragment(6)
+	writeFragment(9)
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET state='queued',window_end=$2 WHERE event_id=$1`, eventID, base.Add(12*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	// The ring evicts the oldest fragments, exactly as the sweeper would: this is
+	// what made a rebuild produce a SMALLER file and a later start.
+	for _, offset := range []int{0, 3} {
+		name := base.Add(time.Duration(offset)*time.Second).In(time.Local).Format("2006-01-02-15-04-05") + "-0.mp4"
+		if err := os.Remove(filepath.Join(ring, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixture.Service.AssembleClips(ctx)
+	var (
+		secondPath  string
+		secondStart time.Time
+		secondSize  int64
+	)
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT target_relative_path,original_start,size_bytes
+		FROM recording_segments WHERE run_id=(SELECT clip_run_id FROM event_clip_jobs WHERE event_id=$1)`, eventID).
+		Scan(&secondPath, &secondStart, &secondSize); err != nil {
+		t.Fatal(err)
+	}
+	if secondPath != firstPath {
+		t.Fatalf("a re-cut must land on the same file:\n  first  %s\n  second %s", firstPath, secondPath)
+	}
+	if !secondStart.Equal(firstStart) {
+		t.Fatalf("a re-cut moved the clip's start from %v to %v; the ring had evicted the beginning", firstStart, secondStart)
+	}
+	if secondSize <= firstSize {
+		t.Fatalf("the clip did not grow (first %d bytes, second %d): the beginning was dropped and only the tail survived", firstSize, secondSize)
+	}
+	// One file on disk under the run, not one per assembly.
+	runSuffix := "_" + fileNameRun(firstName) + ".mp4"
+	entries, err := os.ReadDir(filepath.Dir(filepath.Join(fixture.Pool.Path, secondPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var owned []string
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), runSuffix) {
+			owned = append(owned, entry.Name())
+		}
+	}
+	if len(owned) != 1 {
+		t.Fatalf("the same run left %d files on disk, expected exactly 1: %v", len(owned), owned)
+	}
+
+	// The stored identity must describe the file that is actually there. This is
+	// the verdict the storage reconciler applies: if it disagrees, the clip shows
+	// as 损坏 on every page even though it plays fine.
+	var rawID []byte
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT file_identity FROM recording_segments
+		WHERE run_id=(SELECT clip_run_id FROM event_clip_jobs WHERE event_id=$1)`, eventID).Scan(&rawID); err != nil {
+		t.Fatal(err)
+	}
+	var recorded struct {
+		Device, Inode uint64
+		Size          int64
+	}
+	if err := json.Unmarshal(rawID, &recorded); err != nil {
+		t.Fatalf("file_identity is not a JSON identity: %v (%s)", err, rawID)
+	}
+	disk := filepath.Join(fixture.Pool.Path, secondPath)
+	info, err := os.Stat(disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Skip("no inode on this platform")
+	}
+	if recorded.Inode != uint64(stat.Ino) || recorded.Device != uint64(stat.Dev) || recorded.Size != info.Size() {
+		t.Fatalf("stored identity does not describe the file on disk:\n  recorded %+v\n  on disk  inode=%d dev=%d size=%d",
+			recorded, stat.Ino, stat.Dev, info.Size())
+	}
+	// The fragment count accumulates instead of resetting to the newest tail: the
+	// page's "N 段" must describe the whole clip.
+	var fragments int
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT coalesce((media_evidence->>'buffer_fragments')::int,0)
+		FROM recording_segments WHERE run_id=(SELECT clip_run_id FROM event_clip_jobs WHERE event_id=$1)`, eventID).Scan(&fragments); err != nil {
+		t.Fatal(err)
+	}
+	if fragments != 4 {
+		t.Fatalf("clip holds 4 fragments (two per assembly), evidence says %d", fragments)
+	}
+	// The bytes must actually accumulate. A remux that dropped the head would
+	// still produce a larger file than the first assembly in some cases (the ring
+	// shifts forward), so the duration is what proves the whole event is present.
+	probeRunner := probe.Runner{FFprobe: ffprobe}
+	file, err := os.Open(disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := probeRunner.InspectMP4(ctx, file)
+	file.Close()
+	if err != nil {
+		t.Fatalf("the published clip is not a readable MP4: %v", err)
+	}
+	if evidence.Duration < 11*time.Second || evidence.Duration > 13*time.Second {
+		t.Fatalf("clip duration = %v, want about 12s (four 3-second fragments)", evidence.Duration)
+	}
+}
+
+// fileNameRun extracts the run suffix from a clip file name
+// (CH01_20261019_155243_<run>.mp4 -> <run>).
+func fileNameRun(name string) string {
+	trimmed := strings.TrimSuffix(name, ".mp4")
+	parts := strings.Split(trimmed, "_")
+	if len(parts) < 4 {
+		return ""
+	}
+	return parts[len(parts)-1]
+}
+
+// Event clips quarantined by the re-cut defect must be restorable, because the
+// file was never damaged.
+//
+// The defect left size_bytes and file_identity describing the LAST assembly while
+// target_relative_path named the FIRST file, so the reconciler compared a correct
+// file against evidence about a different one. Measured on the live site: 58 event
+// clips reported 损坏 and all 58 files were present. This pass re-reads the
+// identity from the file the index points at.
+func TestRepairRestoresEventClipsMarkedDamaged(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	// A real file on disk is what the repair reads: the inode is the only thing a
+	// file can prove about itself.
+	if err := os.MkdirAll(filepath.Join(fixture.Pool.Path, "recordings"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	clipID, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clipPath := "recordings/" + string(clipID) + ".mp4"
+	clipTarget := filepath.Join(fixture.Pool.Path, clipPath)
+	if err := os.WriteFile(clipTarget, []byte("clip-bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clipInfo, err := os.Stat(clipTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The run must reference a real stream session; fixture.Run is the existing
+	// continuous run whose session this fixture created.
+	work := ".work/event/" + string(runID)
+	var sessionID id.ID
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT stream_session_id FROM recording_runs WHERE id=$1`, fixture.Run).Scan(&sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_runs(id,site_id,channel_id,source_revision_id,stream_session_id,pool_id,work_relative_path,purpose,state)
+		VALUES($1,$2,$3,$4,$5,$6,$7,'event','stopped')`,
+		runID, fixture.Site.Secrets.SiteID, fixture.Channel, fixture.Revision, sessionID, fixture.Pool.ID, work); err != nil {
+		t.Fatal(err)
+	}
+	// The defect's exact shape: correct path, stale size and a foreign identity.
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_segments(id,channel_id,source_revision_id,run_id,pool_id,original_relative_path,target_relative_path,
+		original_start,naming_timezone,utc_offset_seconds,start_at,end_at,size_bytes,file_identity,state,error_code)
+		VALUES($1,$2,$3,$4,$5,$6,$6,clock_timestamp()-interval '5 minutes','UTC',0,
+			clock_timestamp()-interval '5 minutes',clock_timestamp(),$7,'{"Device":1,"Inode":2,"Size":3}','damaged','damaged')`,
+		clipID, fixture.Channel, fixture.Revision, runID, fixture.Pool.ID, clipPath, clipInfo.Size()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_locations(segment_id,pool_id,relative_path,size_bytes,state)
+		VALUES($1,$2,$3,$4,'damaged')`, clipID, fixture.Pool.ID, clipPath, clipInfo.Size()); err != nil {
+		t.Fatal(err)
+	}
+
+	fixture.Service.RepairEventClipDamage(ctx)
+
+	var (
+		state   string
+		size    int64
+		rawID   []byte
+		locSize int64
+		locSt   string
+	)
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT s.state,s.size_bytes,s.file_identity,l.size_bytes,l.state
+		FROM recording_segments s JOIN recording_locations l ON l.segment_id=s.id AND l.pool_id=s.pool_id
+		WHERE s.id=$1`, clipID).Scan(&state, &size, &rawID, &locSize, &locSt); err != nil {
+		t.Fatal(err)
+	}
+	if state != "ready" || locSt != "ready" {
+		t.Fatalf("an intact clip stayed quarantined: segment=%s location=%s", state, locSt)
+	}
+	if size != clipInfo.Size() || locSize != clipInfo.Size() {
+		t.Fatalf("size not realigned with the file: segment=%d location=%d file=%d", size, locSize, clipInfo.Size())
+	}
+	var recorded struct {
+		Device, Inode uint64
+		Size          int64
+	}
+	if err := json.Unmarshal(rawID, &recorded); err != nil {
+		t.Fatalf("repaired identity is not valid JSON: %v (%s)", err, rawID)
+	}
+	stat, ok := clipInfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Skip("no inode on this platform")
+	}
+	if recorded.Inode != uint64(stat.Ino) || recorded.Size != clipInfo.Size() {
+		t.Fatalf("repaired identity describes a different file: recorded %+v, on disk inode=%d size=%d", recorded, stat.Ino, clipInfo.Size())
+	}
+}
+
+// A clip whose file is genuinely gone must stay damaged: the repair exists to
+// correct stale evidence, not to hide loss.
+func TestRepairLeavesMissingClipDamaged(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	runID, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The run must reference a real stream session; fixture.Run is the existing
+	// continuous run whose session this fixture created.
+	work := ".work/event/" + string(runID)
+	var sessionID id.ID
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT stream_session_id FROM recording_runs WHERE id=$1`, fixture.Run).Scan(&sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_runs(id,site_id,channel_id,source_revision_id,stream_session_id,pool_id,work_relative_path,purpose,state)
+		VALUES($1,$2,$3,$4,$5,$6,$7,'event','stopped')`,
+		runID, fixture.Site.Secrets.SiteID, fixture.Channel, fixture.Revision, sessionID, fixture.Pool.ID, work); err != nil {
+		t.Fatal(err)
+	}
+	clipID, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_segments(id,channel_id,source_revision_id,run_id,pool_id,original_relative_path,target_relative_path,
+		original_start,naming_timezone,utc_offset_seconds,start_at,end_at,size_bytes,file_identity,state,error_code)
+		VALUES($1,$2,$3,$4,$5,'recordings/CH01/2026-10-19/gone.mp4','recordings/CH01/2026-10-19/gone.mp4',
+			clock_timestamp()-interval '5 minutes','UTC',0,clock_timestamp()-interval '5 minutes',clock_timestamp(),4096,'{"Device":1,"Inode":2,"Size":4096}','damaged','damaged')`,
+		clipID, fixture.Channel, fixture.Revision, runID, fixture.Pool.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_locations(segment_id,pool_id,relative_path,size_bytes,state)
+		VALUES($1,$2,'recordings/CH01/2026-10-19/gone.mp4',4096,'damaged')`, clipID, fixture.Pool.ID); err != nil {
+		t.Fatal(err)
+	}
+	fixture.Service.RepairEventClipDamage(ctx)
+	var state string
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state FROM recording_segments WHERE id=$1`, clipID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "damaged" {
+		t.Fatalf("a clip with no file was restored to %q; the repair must not hide loss", state)
+	}
+}
+
+// The orphan sweep removes the duplicates the re-cut defect left, and only those.
+//
+// It must never delete the published file: a naming change would otherwise look
+// exactly like a pile of orphans.
+func TestOrphanSweepRemovesDuplicatesKeepsPublished(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	dir := filepath.Join(fixture.Pool.Path, "recordings", "CH01", "2026-10-19")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runID, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	suffix := "_" + strings.ReplaceAll(string(runID), "-", "") + ".mp4"
+	publishedName := "CH01_20261019_155243" + suffix
+	for _, name := range []string{
+		publishedName,
+		"CH01_20261019_155250" + suffix,
+		"CH01_20261019_155257" + suffix,
+		"CH01_20261019_160000_otherrun.mp4",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var sessionID id.ID
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT stream_session_id FROM recording_runs WHERE id=$1`, fixture.Run).Scan(&sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_runs(id,site_id,channel_id,source_revision_id,stream_session_id,pool_id,work_relative_path,purpose,state)
+		VALUES($1,$2,$3,$4,$5,$6,$7,'event','stopped')`,
+		runID, fixture.Site.Secrets.SiteID, fixture.Channel, fixture.Revision, sessionID, fixture.Pool.ID, ".work/event/"+string(runID)); err != nil {
+		t.Fatal(err)
+	}
+	// The segment is created already in the clip run: the publication identity is
+	// immutable by trigger, which is exactly the guard that kept the defect from
+	// renaming published files.
+	segment, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	published := filepath.Join("recordings", "CH01", "2026-10-19", publishedName)
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_segments(id,channel_id,source_revision_id,run_id,pool_id,original_relative_path,target_relative_path,
+		original_start,naming_timezone,utc_offset_seconds,start_at,end_at,size_bytes,state,ready_at)
+		VALUES($1,$2,$3,$4,$5,$6,$6,clock_timestamp()-interval '5 minutes','UTC',0,
+			clock_timestamp()-interval '5 minutes',clock_timestamp(),1024,'ready',clock_timestamp())`,
+		segment, fixture.Channel, fixture.Revision, runID, fixture.Pool.ID, published); err != nil {
+		t.Fatal(err)
+	}
+
+	fixture.Service.SweepEventClipOrphans(ctx)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	if len(names) != 2 {
+		t.Fatalf("expected the published file and the other run's file to survive, got %v", names)
+	}
+	want := map[string]bool{publishedName: true, "CH01_20261019_160000_otherrun.mp4": true}
+	for _, name := range names {
+		if !want[name] {
+			t.Fatalf("the sweep removed the wrong file or missed a duplicate: %v", names)
+		}
+	}
+}
+
+// A truncated file must stay damaged: the repair corrects stale evidence, and a
+// file shorter than the index recorded is evidence of loss, not of staleness.
+// The re-cut defect always wrote a file at least as large as the one it replaced,
+// so nothing it produced can be shorter.
+func TestRepairLeavesTruncatedClipDamaged(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	if err := os.MkdirAll(filepath.Join(fixture.Pool.Path, "recordings"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	clipID, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clipPath := "recordings/" + string(clipID) + ".mp4"
+	target := filepath.Join(fixture.Pool.Path, clipPath)
+	if err := os.WriteFile(target, []byte("short"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sessionID id.ID
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT stream_session_id FROM recording_runs WHERE id=$1`, fixture.Run).Scan(&sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_runs(id,site_id,channel_id,source_revision_id,stream_session_id,pool_id,work_relative_path,purpose,state)
+		VALUES($1,$2,$3,$4,$5,$6,$7,'event','stopped')`,
+		runID, fixture.Site.Secrets.SiteID, fixture.Channel, fixture.Revision, sessionID, fixture.Pool.ID, ".work/event/"+string(runID)); err != nil {
+		t.Fatal(err)
+	}
+	// The index says the clip was 1 MB; the file is 5 bytes.
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_segments(id,channel_id,source_revision_id,run_id,pool_id,original_relative_path,target_relative_path,
+		original_start,naming_timezone,utc_offset_seconds,start_at,end_at,size_bytes,file_identity,state,error_code)
+		VALUES($1,$2,$3,$4,$5,$6,$6,clock_timestamp()-interval '5 minutes','UTC',0,
+			clock_timestamp()-interval '5 minutes',clock_timestamp(),1048576,'{"Device":1,"Inode":2,"Size":1048576}','damaged','damaged')`,
+		clipID, fixture.Channel, fixture.Revision, runID, fixture.Pool.ID, clipPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_locations(segment_id,pool_id,relative_path,size_bytes,state)
+		VALUES($1,$2,$3,1048576,'damaged')`, clipID, fixture.Pool.ID, clipPath); err != nil {
+		t.Fatal(err)
+	}
+	fixture.Service.RepairEventClipDamage(ctx)
+	var state string
+	var size int64
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state,size_bytes FROM recording_segments WHERE id=$1`, clipID).Scan(&state, &size); err != nil {
+		t.Fatal(err)
+	}
+	if state != "damaged" {
+		t.Fatalf("a truncated clip was restored to %q (file %d bytes, index %d); the repair laundered real loss", state, info.Size(), size)
 	}
 }
