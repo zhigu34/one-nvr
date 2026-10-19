@@ -295,6 +295,15 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 				return err
 			}
 		}
+		// The location row is what the storage reconciler walks when it verifies
+		// files and totals usage. Without it the clip is invisible to that pass —
+		// it neither gets checked nor counted, and a deleted file would keep
+		// reading as ready forever.
+		if _, err := tx.Exec(ctx, `INSERT INTO recording_locations(segment_id,pool_id,relative_path,size_bytes)
+			VALUES($1,$2,$3,$4) ON CONFLICT(segment_id,pool_id) DO UPDATE SET size_bytes=EXCLUDED.size_bytes,state='ready',verified_at=clock_timestamp()`,
+			segmentID, poolID, published, info.Size()); err != nil {
+			return err
+		}
 		// The event now has footage of its own, so its verdict becomes linked and
 		// the page can play it.
 		_, err := tx.Exec(ctx, `UPDATE events SET media_state='linked',media_start_at=$2,media_end_at=$3,media_segments=$4,updated_at=clock_timestamp() WHERE id=$1`,
