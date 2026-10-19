@@ -21,6 +21,7 @@ import { CardsSkeleton } from '@/features/foundation/skeletons'
 import { Empty, QueryState, SelectField } from '@/features/foundation/ui'
 import { formatClock, formatMinute, wallClockInput, zoneParts } from '@/features/playback/zone'
 import { cn } from '@/lib/utils'
+import { eventSeconds, missingSnapshotReason } from './snapshot-state'
 
 type Event = Schema<'Event'>
 type Channel = Schema<'Channel'>
@@ -448,6 +449,22 @@ export function Events() {
                             抓拍待同步
                             <span className='text-[10px] opacity-80'>稍后自动核对</span>
                           </span>
+                        ) : missingSnapshotReason(item) === 'too_short' ? (
+                          // The detector never had this picture: it writes
+                          // snapshots while an event runs, and a one-second
+                          // detection can end before the first one lands. Saying
+                          // "无抓拍图像" here would read as a fault and send the
+                          // operator looking for something that does not exist.
+                          <span
+                            className='flex flex-col items-center gap-1.5 px-2 text-center text-xs'
+                            title='事件持续时间短于检测器写入抓拍的最短间隔，因此从未生成这张图；不是抓拍丢失。'
+                          >
+                            <ImageOff aria-hidden className='size-4' />
+                            事件过短，未及抓拍
+                            <span className='text-[10px] opacity-80'>
+                              持续 {eventSeconds(item) ?? 0} 秒
+                            </span>
+                          </span>
                         ) : (
                           <span className='flex flex-col items-center gap-1.5 text-xs'>
                             <ImageOff aria-hidden className='size-4' />
@@ -644,7 +661,9 @@ function EventDetail({
                   ? '抓拍读取失败'
                   : item.snapshot_state === 'pending' && ongoing
                     ? '抓拍生成中'
-                    : '无抓拍图像'}
+                    : missingSnapshotReason(item) === 'too_short'
+                      ? `事件过短（持续 ${eventSeconds(item) ?? 0} 秒），检测器未及写入抓拍`
+                      : '无抓拍图像'}
               </div>
             )}
             <div className='grid grid-cols-2 gap-2 rounded-lg border bg-muted/40 p-3'>

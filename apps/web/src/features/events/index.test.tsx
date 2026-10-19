@@ -490,3 +490,48 @@ test('a partially covered event keeps playback and states the limit', async () =
   await expect.element(screen.getByText(/录像只覆盖事件的一部分/)).toBeVisible()
   client.clear()
 })
+
+// A one-second detection never gets a snapshot: the detector writes them while an
+// event runs, so it can end before the first frame lands. Saying "无抓拍图像"
+// would read as a lost picture and send the operator looking for a fault that
+// does not exist.
+test('a very short event says it was too short rather than missing its picture', async () => {
+  const started = new Date(Date.now() - 60_000).toISOString()
+  const { client } = fixture([], {
+    events: [
+      mediaEvent({
+        started_at: started,
+        ended_at: new Date(Date.parse(started) + 1_000).toISOString(),
+        snapshot_state: 'gone',
+      }),
+    ],
+  })
+  const screen = await view(client)
+  await expect.element(screen.getByText(/事件过短，未及抓拍/)).toBeVisible()
+  await expect.element(screen.getByText(/持续 1 秒/)).toBeVisible()
+  await expect
+    .element(screen.getByText('无抓拍图像'))
+    .not.toBeInTheDocument()
+  client.clear()
+})
+
+// A longer event with no picture is a genuine absence and keeps the old wording:
+// excusing it would hide a real fault.
+test('a longer event without a picture keeps the plain wording', async () => {
+  const started = new Date(Date.now() - 60_000).toISOString()
+  const { client } = fixture([], {
+    events: [
+      mediaEvent({
+        started_at: started,
+        ended_at: new Date(Date.parse(started) + 30_000).toISOString(),
+        snapshot_state: 'gone',
+      }),
+    ],
+  })
+  const screen = await view(client)
+  await expect.element(screen.getByText('无抓拍图像')).toBeVisible()
+  await expect
+    .element(screen.getByText(/事件过短/))
+    .not.toBeInTheDocument()
+  client.clear()
+})
