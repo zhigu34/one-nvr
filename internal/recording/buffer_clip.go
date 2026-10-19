@@ -599,15 +599,19 @@ func (s *Service) RepairEventClipDamage(ctx context.Context) {
 		if statErr != nil {
 			continue
 		}
-		// A file SMALLER than the index recorded is evidence of truncation, not of
-		// stale evidence: the re-cut defect always produced files at least as large
-		// as the one it replaced, so nothing it wrote can be shorter. Keeping these
-		// damaged is what stops this pass from laundering real loss.
+		// A file MUCH smaller than the index recorded is evidence of truncation,
+		// not of stale evidence, and keeping it damaged is what stops this pass
+		// from laundering real loss. The threshold is a ratio rather than "any
+		// difference" because the defect wrote the same event twice: measured on
+		// the site, the two files of one event differed by 0.12% (10901509 vs
+		// 10914971 bytes), which a strict comparison would call truncation. A file
+		// really cut short by a crash is far below the recorded size, and a re-cut
+		// always writes through an atomic rename, so it cannot leave a partial file.
 		var recordedSize int64
 		if err := s.DB.Pool.QueryRow(ctx, `SELECT size_bytes FROM recording_segments WHERE id=$1`, item.Segment).Scan(&recordedSize); err != nil {
 			continue
 		}
-		if info.Size() < recordedSize {
+		if recordedSize > 0 && info.Size()*10 < recordedSize*9 {
 			continue
 		}
 		fileID, err := identity(info)

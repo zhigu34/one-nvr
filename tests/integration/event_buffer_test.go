@@ -870,9 +870,9 @@ func TestOrphanSweepRemovesDuplicatesKeepsPublished(t *testing.T) {
 }
 
 // A truncated file must stay damaged: the repair corrects stale evidence, and a
-// file shorter than the index recorded is evidence of loss, not of staleness.
-// The re-cut defect always wrote a file at least as large as the one it replaced,
-// so nothing it produced can be shorter.
+// file far below the size the index recorded is evidence of loss, not of
+// staleness. The threshold is a ratio because the defect wrote the same event
+// twice and the two files differed by a fraction of a percent.
 func TestRepairLeavesTruncatedClipDamaged(t *testing.T) {
 	fixture := scheduledFixture(t)
 	ctx := context.Background()
@@ -905,7 +905,8 @@ func TestRepairLeavesTruncatedClipDamaged(t *testing.T) {
 		runID, fixture.Site.Secrets.SiteID, fixture.Channel, fixture.Revision, sessionID, fixture.Pool.ID, ".work/event/"+string(runID)); err != nil {
 		t.Fatal(err)
 	}
-	// The index says the clip was 1 MB; the file is 5 bytes.
+	// The index says the clip was 1 MB; the file is 5 bytes — far below the 90%
+	// threshold, so this is loss rather than the defect's two-file variance.
 	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_segments(id,channel_id,source_revision_id,run_id,pool_id,original_relative_path,target_relative_path,
 		original_start,naming_timezone,utc_offset_seconds,start_at,end_at,size_bytes,file_identity,state,error_code)
 		VALUES($1,$2,$3,$4,$5,$6,$6,clock_timestamp()-interval '5 minutes','UTC',0,
@@ -925,5 +926,69 @@ func TestRepairLeavesTruncatedClipDamaged(t *testing.T) {
 	}
 	if state != "damaged" {
 		t.Fatalf("a truncated clip was restored to %q (file %d bytes, index %d); the repair laundered real loss", state, info.Size(), size)
+	}
+}
+
+// The defect wrote the same event twice, so its files differ by a fraction of a
+// percent. The repair must accept that as stale evidence rather than call it
+// truncation — measured on the site: 10901509 bytes on disk against 10914971 in
+// the index for the same clip.
+func TestRepairAcceptsTheDefectsSmallSizeVariance(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	if err := os.MkdirAll(filepath.Join(fixture.Pool.Path, "recordings"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	clipID, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clipPath := "recordings/" + string(clipID) + ".mp4"
+	target := filepath.Join(fixture.Pool.Path, clipPath)
+	payload := make([]byte, 100000)
+	if err := os.WriteFile(target, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sessionID id.ID
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT stream_session_id FROM recording_runs WHERE id=$1`, fixture.Run).Scan(&sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_runs(id,site_id,channel_id,source_revision_id,stream_session_id,pool_id,work_relative_path,purpose,state)
+		VALUES($1,$2,$3,$4,$5,$6,$7,'event','stopped')`,
+		runID, fixture.Site.Secrets.SiteID, fixture.Channel, fixture.Revision, sessionID, fixture.Pool.ID, ".work/event/"+string(runID)); err != nil {
+		t.Fatal(err)
+	}
+	// 0.12% larger than the file on disk, exactly the site's ratio.
+	recorded := info.Size() + info.Size()/800
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_segments(id,channel_id,source_revision_id,run_id,pool_id,original_relative_path,target_relative_path,
+		original_start,naming_timezone,utc_offset_seconds,start_at,end_at,size_bytes,file_identity,state,error_code)
+		VALUES($1,$2,$3,$4,$5,$6,$6,clock_timestamp()-interval '5 minutes','UTC',0,
+			clock_timestamp()-interval '5 minutes',clock_timestamp(),$7,'{}','damaged','damaged')`,
+		clipID, fixture.Channel, fixture.Revision, runID, fixture.Pool.ID, clipPath, recorded); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_locations(segment_id,pool_id,relative_path,size_bytes,state)
+		VALUES($1,$2,$3,$4,'damaged')`, clipID, fixture.Pool.ID, clipPath, recorded); err != nil {
+		t.Fatal(err)
+	}
+	fixture.Service.RepairEventClipDamage(ctx)
+	var state string
+	var size int64
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state,size_bytes FROM recording_segments WHERE id=$1`, clipID).Scan(&state, &size); err != nil {
+		t.Fatal(err)
+	}
+	if state != "ready" {
+		t.Fatalf("a 0.12%% size variance was treated as truncation (state=%s); the defect wrote the same event twice", state)
+	}
+	if size != info.Size() {
+		t.Fatalf("size not realigned with the file: recorded %d, file %d", size, info.Size())
 	}
 }
