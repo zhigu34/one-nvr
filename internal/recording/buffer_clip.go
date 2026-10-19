@@ -73,24 +73,21 @@ func (s *Service) AssembleClips(ctx context.Context) {
 	if s.DB == nil || s.EventCacheDir == "" || s.Probe == nil {
 		return
 	}
-	rows, err := s.DB.Pool.Query(ctx, `SELECT event_id,channel_id,window_start,window_end FROM event_clip_jobs
-		WHERE state='queued' ORDER BY created_at LIMIT 20`)
+	rows, err := s.DB.Pool.Query(ctx, `SELECT j.event_id,j.channel_id,j.window_start,j.window_end,
+			j.segment_id,j.clip_run_id,e.ended_at IS NULL
+		FROM event_clip_jobs j LEFT JOIN events e ON e.id=j.event_id
+		WHERE j.state IN ('queued','growing')
+		ORDER BY (e.ended_at IS NULL) DESC, j.updated_at LIMIT 20`)
 	if err != nil {
 		if ctx.Err() == nil {
 			slog.Warn("clip job scan unavailable", "error", err)
 		}
 		return
 	}
-	type job struct {
-		event   id.ID
-		channel id.ID
-		start   time.Time
-		end     time.Time
-	}
-	var jobs []job
+	var jobs []clipJob
 	for rows.Next() {
-		var item job
-		if err := rows.Scan(&item.event, &item.channel, &item.start, &item.end); err != nil {
+		var item clipJob
+		if err := rows.Scan(&item.Event, &item.Channel, &item.Start, &item.End, &item.Segment, &item.Run, &item.StillOpen); err != nil {
 			rows.Close()
 			return
 		}
@@ -104,24 +101,40 @@ func (s *Service) AssembleClips(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := s.assembleClip(ctx, item.event, item.channel, item.start, item.end); err != nil {
+		if err := s.assembleClip(ctx, item); err != nil {
 			if ctx.Err() == nil {
-				slog.Warn("clip assembly failed", "event", item.event, "error", err)
+				slog.Warn("clip assembly failed", "event", item.Event, "error", err)
 			}
 			_, _ = s.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET state='failed',error_code=$2,updated_at=clock_timestamp() WHERE event_id=$1`,
-				item.event, clipErrorCode(err))
+				item.Event, clipErrorCode(err))
 		}
 	}
 }
 
-// assembleClip copies the covering fragments out of the ring, remuxes them into
-// one file on the channel's pool, and indexes the result.
-func (s *Service) assembleClip(ctx context.Context, eventID, channelID id.ID, from, to time.Time) error {
+// clipJob is one unit of assembly work.
+//
+// Segment and Run are set once the clip exists: while an event runs the clip is
+// re-cut from the accumulated fragments into the same file, so the event always
+// points at one clip that simply gets longer. A row per assembly would leave the
+// page choosing between forty versions of the same minute.
+type clipJob struct {
+	Event     id.ID
+	Channel   id.ID
+	Start     time.Time
+	End       time.Time
+	Segment   *id.ID
+	Run       *id.ID
+	StillOpen bool
+}
+
+// assembleClip cuts (or re-cuts) the clip for one job.
+func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
+	eventID, channelID, from, to := job.Event, job.Channel, job.Start, job.End
 	// Claiming the job first means a crash mid-assembly leaves it 'running'
 	// rather than 'queued', so a retry does not duplicate a partially written
 	// file. The sweeper below requeues stale claims.
 	tag, err := s.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET state='running',updated_at=clock_timestamp()
-		WHERE event_id=$1 AND state='queued'`, eventID)
+		WHERE event_id=$1 AND state IN ('queued','growing')`, eventID)
 	if err != nil {
 		return err
 	}
@@ -151,9 +164,18 @@ func (s *Service) assembleClip(ctx context.Context, eventID, channelID id.ID, fr
 		}
 		return err
 	}
-	runID, err := id.New()
-	if err != nil {
-		return err
+	// Reuse the run when the clip already exists. A second run would leave the
+	// previous file on disk with nothing pointing at it, and the naming rule
+	// derives the target path from the run id — a new id means a new file.
+	runID := id.ID("")
+	if job.Run != nil {
+		runID = *job.Run
+	} else {
+		created, err := id.New()
+		if err != nil {
+			return err
+		}
+		runID = created
 	}
 	work := ".work/event/" + string(runID)
 	root, pool, err := s.Pools.OpenMediaRoot(ctx, poolID)
@@ -201,38 +223,58 @@ func (s *Service) assembleClip(ctx context.Context, eventID, channelID id.ID, fr
 		return err
 	}
 
-	segmentID, err := id.New()
-	if err != nil {
-		return err
-	}
-	relative, err := filepath.Rel(pool.Path, target)
-	if err != nil {
-		return err
+	// Reuse the segment when the clip already exists, so the event keeps pointing
+	// at one clip that grows rather than at a row per assembly.
+	segmentID := id.ID("")
+	if job.Segment != nil {
+		segmentID = *job.Segment
+	} else {
+		created, err := id.New()
+		if err != nil {
+			return err
+		}
+		segmentID = created
 	}
 	workRelative, err := filepath.Rel(pool.Path, staged)
 	if err != nil {
 		workRelative = work
 	}
 	err = s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `INSERT INTO recording_runs(id,site_id,channel_id,source_revision_id,stream_session_id,pool_id,work_relative_path,purpose,state,started_at,ended_at)
-			SELECT $1,ch.site_id,$2,$3,ss.id,$4,$5,'event','stopped',$6,$7
-			FROM channels ch LEFT JOIN LATERAL (
-				SELECT id FROM stream_sessions WHERE channel_id=ch.id AND purpose='main' ORDER BY created_at DESC LIMIT 1
-			) ss ON true WHERE ch.id=$2`,
-			runID, channelID, revisionID, poolID, work, start.UTC(), end.UTC()); err != nil {
-			// A channel with no stream session at all still gets a run; the
-			// session column is nullable for exactly this case.
-			if _, fallbackErr := tx.Exec(ctx, `INSERT INTO recording_runs(id,site_id,channel_id,source_revision_id,pool_id,work_relative_path,purpose,state,started_at,ended_at)
-				SELECT $1,ch.site_id,$2,$3,$4,$5,'event','stopped',$6,$7 FROM channels ch WHERE ch.id=$2`,
-				runID, channelID, revisionID, poolID, work, start.UTC(), end.UTC()); fallbackErr != nil {
-				return fallbackErr
+		if job.Run == nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO recording_runs(id,site_id,channel_id,source_revision_id,stream_session_id,pool_id,work_relative_path,purpose,state,started_at,ended_at)
+				SELECT $1,ch.site_id,$2,$3,ss.id,$4,$5,'event','stopped',$6,$7
+				FROM channels ch LEFT JOIN LATERAL (
+					SELECT id FROM stream_sessions WHERE channel_id=ch.id AND purpose='main' ORDER BY created_at DESC LIMIT 1
+				) ss ON true WHERE ch.id=$2`,
+				runID, channelID, revisionID, poolID, work, start.UTC(), end.UTC()); err != nil {
+				// A channel with no stream session at all still gets a run; the
+				// session column is nullable for exactly this case.
+				if _, fallbackErr := tx.Exec(ctx, `INSERT INTO recording_runs(id,site_id,channel_id,source_revision_id,pool_id,work_relative_path,purpose,state,started_at,ended_at)
+					SELECT $1,ch.site_id,$2,$3,$4,$5,'event','stopped',$6,$7 FROM channels ch WHERE ch.id=$2`,
+					runID, channelID, revisionID, poolID, work, start.UTC(), end.UTC()); fallbackErr != nil {
+					return fallbackErr
+				}
+			}
+		} else {
+			// The row already exists; only its covered span moves.
+			if _, err := tx.Exec(ctx, `UPDATE recording_runs SET started_at=$2,ended_at=$3 WHERE id=$1`, runID, start.UTC(), end.UTC()); err != nil {
+				return err
 			}
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO recording_segments(id,channel_id,source_revision_id,run_id,pool_id,original_relative_path,target_relative_path,
-			original_start,naming_timezone,utc_offset_seconds,start_at,end_at,size_bytes,file_identity,media_evidence,state,time_evidence,ready_at)
-			VALUES($1,$2,$3,$4,$5,$6,$6,$7,$8,$9,$7,$10,$11,$12,$13,'ready','completion',clock_timestamp())`,
-			segmentID, channelID, revisionID, runID, poolID, workRelative, start.UTC(), timezone, frozen.UTCOffsetSeconds, end.UTC(), info.Size(), []byte("{}"), []byte("{}")); err != nil {
-			return err
+		if job.Segment == nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO recording_segments(id,channel_id,source_revision_id,run_id,pool_id,original_relative_path,target_relative_path,
+				original_start,naming_timezone,utc_offset_seconds,start_at,end_at,size_bytes,file_identity,media_evidence,state,time_evidence,ready_at)
+				VALUES($1,$2,$3,$4,$5,$6,$6,$7,$8,$9,$7,$10,$11,$12,$13,'ready','completion',clock_timestamp())`,
+				segmentID, channelID, revisionID, runID, poolID, workRelative, start.UTC(), timezone, frozen.UTCOffsetSeconds, end.UTC(), info.Size(), []byte("{}"), []byte("{}")); err != nil {
+				return err
+			}
+		} else {
+			// The identity columns are immutable by trigger; only the span and the
+			// size describe a clip that is still growing.
+			if _, err := tx.Exec(ctx, `UPDATE recording_segments SET start_at=$2,end_at=$3,size_bytes=$4,ready_at=clock_timestamp() WHERE id=$1`,
+				segmentID, start.UTC(), end.UTC(), info.Size()); err != nil {
+				return err
+			}
 		}
 		// The event now has footage of its own, so its verdict becomes linked and
 		// the page can play it.
@@ -241,7 +283,15 @@ func (s *Service) assembleClip(ctx context.Context, eventID, channelID id.ID, fr
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `UPDATE event_clip_jobs SET state='done',updated_at=clock_timestamp() WHERE event_id=$1`, eventID)
+		// An event that is still running keeps its clip open for the next pass:
+		// the page can already play what exists, and the window extends as
+		// fragments accumulate. A finished event closes the job for good.
+		next := "done"
+		if job.StillOpen {
+			next = "growing"
+		}
+		_, err = tx.Exec(ctx, `UPDATE event_clip_jobs SET state=$2,segment_id=$3,clip_run_id=$4,updated_at=clock_timestamp() WHERE event_id=$1`,
+			eventID, next, segmentID, runID)
 		return err
 	})
 	if err != nil {
@@ -250,7 +300,6 @@ func (s *Service) assembleClip(ctx context.Context, eventID, channelID id.ID, fr
 	}
 	// The work directory held the staged file; the published copy is the segment.
 	_ = os.RemoveAll(outDir)
-	_ = relative
 	return nil
 }
 

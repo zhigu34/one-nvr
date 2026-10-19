@@ -124,7 +124,18 @@ func (s *Service) eventUpsert(ctx context.Context, in upsertInput) error {
 			// reports "window empty" and the event keeps its honest verdict. Only
 			// queueing when a buffer looks active would race the heartbeat and
 			// silently drop footage the buffer actually holds.
-			if link.State == "unavailable" {
+			//
+			// It is also re-queued on updates of an event that is still running,
+			// not only while the verdict is "unavailable": once a clip exists the
+			// verdict becomes linked, and gating on the verdict alone would freeze
+			// the clip at the first assembly — exactly the behaviour that left a
+			// five-minute detection with no footage until it ended.
+			//
+			// A finished event whose ordinary recording already covers it is the
+			// case that must NOT queue: the buffer would produce a second copy of
+			// footage that already exists.
+			needsBuffer := stored.EndedAt == nil || link.State == "unavailable"
+			if needsBuffer {
 				if err := s.queueClipJob(ctx, tx, stored.ID, *stored.ChannelID, stored.StartedAt, stored.EndedAt); err != nil {
 					return err
 				}

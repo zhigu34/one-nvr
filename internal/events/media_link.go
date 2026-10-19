@@ -230,9 +230,31 @@ func (s *Service) queueClipJob(ctx context.Context, tx pgx.Tx, eventID, channelI
 	to := startedAt.Add(PostEventWindow)
 	if endedAt != nil {
 		to = endedAt.Add(PostEventWindow)
+	} else {
+		// The event is still running: its window has to reach the present,
+		// otherwise every update produces the same three seconds and the clip
+		// never grows. The assembler cuts whatever fragments exist, so asking for
+		// a span that extends past the newest one is harmless.
+		now := time.Now().UTC()
+		if now.After(to) {
+			to = now
+		}
 	}
-	_, err := tx.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end)
-		VALUES($1,$2,$3,$4) ON CONFLICT(event_id) DO NOTHING`,
+	// A running event advances its window as messages arrive, so the page can show
+	// the clip growing instead of nothing until the detection ends.
+	//
+	// Only a job that has not finished is advanced: 'done' and 'failed' are
+	// settled answers, and a late duplicate message must not reopen them. A job
+	// already in 'growing' goes back to 'queued' so the next pass re-cuts it — the
+	// clip exists, but its window moved.
+	_, err := tx.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end,state)
+		VALUES($1,$2,$3,$4,'queued')
+		ON CONFLICT(event_id) DO UPDATE SET
+			window_start=EXCLUDED.window_start,
+			window_end=EXCLUDED.window_end,
+			state='queued',
+			updated_at=clock_timestamp()
+		WHERE event_clip_jobs.state IN ('queued','growing')`,
 		eventID, channelID, from.UTC(), to.UTC())
 	return err
 }
