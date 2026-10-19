@@ -271,7 +271,10 @@ func (s *SourceService) GetPolicy(ctx context.Context, p auth.Principal, ch id.I
 		if err := s.Auth.RequireChannelTx(ctx, p, ch, auth.Configure, tx); err != nil {
 			return err
 		}
-		if err := tx.QueryRow(ctx, "SELECT p.mode,c.version FROM recording_policies p JOIN channels c ON c.id=p.channel_id WHERE c.id=$1", ch).Scan(&out.Mode, &out.Version); err != nil {
+		// event_recording rides with the mode: the plan page shows both and both
+		// come from the same row, and a caller that has to make a second request
+		// for the switch is a caller that can act on a stale pair.
+		if err := tx.QueryRow(ctx, "SELECT p.mode,p.event_recording,c.version FROM recording_policies p JOIN channels c ON c.id=p.channel_id WHERE c.id=$1", ch).Scan(&out.Mode, &out.EventRecordingEnabled, &out.Version); err != nil {
 			return err
 		}
 		// Anything the schema allows is reported as-is, including 'planned'.

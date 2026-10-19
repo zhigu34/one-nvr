@@ -409,3 +409,52 @@ func TestClipJobRetentionKeepsLiveWork(t *testing.T) {
 		t.Fatalf("%d jobs remained; settled ones must be swept and live ones kept", remaining)
 	}
 }
+
+// Toggling the event-recording switch must not fail with a version conflict.
+//
+// The caller's token comes from GET recording-policy, which reports
+// channels.version; the first version of this endpoint compared it against
+// recording_policies.version instead. The two counters advance independently, so
+// every toggle returned 409 and the switch could not be turned on at all — the
+// defect the operator saw as "配置已被其他人修改，请刷新后重试".
+func TestEventRecordingToggleUsesTheChannelVersion(t *testing.T) {
+	// testedSource wires Sources; the lighter fixture does not.
+	fixture, _, _, _ := testedSource(t)
+	ctx := context.Background()
+	// The fixture starts with the switch on, so start from off: the point is a
+	// real change, and toggling to the value it already holds is a no-op that
+	// never exercises the version check.
+	if _, err := fixture.DB.Pool.Exec(ctx, "UPDATE recording_policies SET event_recording=false WHERE channel_id=$1", fixture.Channel); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := fixture.Service.Sources.GetPolicy(ctx, fixture.Admin, fixture.Channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.Version < 1 {
+		t.Fatalf("the policy read returned version %d", policy.Version)
+	}
+	if err := fixture.Service.Sources.SetEventRecording(ctx, fixture.Admin, fixture.Channel, true, policy.Version); err != nil {
+		t.Fatalf("toggling with the version the read endpoint returned failed: %v", err)
+	}
+	// The switch is on, and the next read reports it with a NEW version — a
+	// second toggle with the old token must be rejected, or concurrent edits
+	// would silently overwrite each other.
+	after, err := fixture.Service.Sources.GetPolicy(ctx, fixture.Admin, fixture.Channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.EventRecordingEnabled {
+		t.Fatal("the switch did not turn on")
+	}
+	if after.Version == policy.Version {
+		t.Fatal("the version did not advance; a repeat toggle would reuse a stale token")
+	}
+	if err := fixture.Service.Sources.SetEventRecording(ctx, fixture.Admin, fixture.Channel, false, policy.Version); err == nil {
+		t.Fatal("a stale version was accepted")
+	}
+	// And the new token works.
+	if err := fixture.Service.Sources.SetEventRecording(ctx, fixture.Admin, fixture.Channel, false, after.Version); err != nil {
+		t.Fatalf("toggling with the fresh version failed: %v", err)
+	}
+}

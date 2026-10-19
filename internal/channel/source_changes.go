@@ -381,12 +381,22 @@ func (s *SourceService) SetEventRecording(ctx context.Context, p auth.Principal,
 		if err := s.Auth.RequireChannelTx(ctx, p, ch, auth.Configure, tx); err != nil {
 			return err
 		}
+		// The caller's token comes from GET recording-policy, which reports
+		// channels.version — the same one every other channel write uses.
+		// Comparing recording_policies.version here made every toggle fail with
+		// 409: the two counters advance independently and can only match by
+		// coincidence.
+		//
+		// They are read together, and the policy's own counter is kept for the
+		// version history rather than borrowed for the concurrency check.
 		var current bool
-		var version int64
-		if err := tx.QueryRow(ctx, `SELECT event_recording,version FROM recording_policies WHERE channel_id=$1 FOR UPDATE`, ch).Scan(&current, &version); err != nil {
+		var channelVersion, policyVersion int64
+		if err := tx.QueryRow(ctx, `SELECT p.event_recording,c.version,p.version
+			FROM recording_policies p JOIN channels c ON c.id=p.channel_id
+			WHERE p.channel_id=$1 FOR UPDATE OF p,c`, ch).Scan(&current, &channelVersion, &policyVersion); err != nil {
 			return err
 		}
-		if version != expected {
+		if channelVersion != expected {
 			return auth.ErrConflict
 		}
 		if current == enabled {
@@ -394,16 +404,27 @@ func (s *SourceService) SetEventRecording(ctx context.Context, p auth.Principal,
 			// keeps the audit trail from filling with no-op entries.
 			return nil
 		}
-		// The policy version advances with the flag: recording_policy_versions
-		// records event_recording as part of what a version meant, so a change
-		// without a version bump would make history claim the old value.
-		next := version + 1
-		if _, err := tx.Exec(ctx, `UPDATE recording_policies SET event_recording=$2,version=$3 WHERE channel_id=$1`, ch, enabled, next); err != nil {
+		// Two counters move, and they are different things:
+		//
+		//   - recording_policies.version is the policy's own revision. The history
+		//     table keys on it, and REL-03 reads it to explain which policy an
+		//     obligation came from, so the flag change must advance it.
+		//   - channels.version is the concurrency token every channel write shares.
+		//     Leaving it unchanged would let a second toggle reuse the caller's
+		//     stale token, which is exactly what the check above exists to stop.
+		//
+		// The history row is written from the updated policy so it records the new
+		// value rather than the old one.
+		nextPolicy := policyVersion + 1
+		if _, err := tx.Exec(ctx, `UPDATE recording_policies SET event_recording=$2,version=$3 WHERE channel_id=$1`, ch, enabled, nextPolicy); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE channels SET version=version+1 WHERE id=$1`, ch); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO recording_policy_versions(id,channel_id,version,mode,event_recording,effective_at,reason,actor_id)
 			SELECT $1,$2,$3,p.mode,p.event_recording,clock_timestamp(),'policy_apply',$4 FROM recording_policies p WHERE p.channel_id=$2`,
-			mustNewID(), ch, next, p.UserID); err != nil {
+			mustNewID(), ch, nextPolicy, p.UserID); err != nil {
 			return err
 		}
 		return audit.Append(ctx, tx, audit.Entry{
