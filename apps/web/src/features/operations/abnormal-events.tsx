@@ -141,7 +141,7 @@ export function AbnormalEvents({ zone }: { zone: string }) {
                 {item.channel_id && (
                   <Link
                     to='/channels/configure'
-                    search={{ channel: item.channel_id }}
+                    search={{ channel: item.channel_id, tab: '' }}
                     className='underline'
                   >
                     通道

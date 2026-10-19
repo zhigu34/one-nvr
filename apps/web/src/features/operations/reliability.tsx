@@ -227,7 +227,7 @@ export function ReliabilityOperations() {
                         ) : (
                           <Link
                             to='/channels/configure'
-                            search={{ channel: row.channel_id }}
+                            search={{ channel: row.channel_id, tab: '' }}
                             className='underline'
                           >
                             查看详情

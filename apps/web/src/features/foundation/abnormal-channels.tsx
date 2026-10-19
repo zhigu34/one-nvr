@@ -88,7 +88,7 @@ export function AbnormalChannels() {
             >
               <Link
                 to='/channels/configure'
-                search={{ channel: row.channel_id }}
+                search={{ channel: row.channel_id, tab: '' }}
                 className='group inline-flex items-center gap-1.5 hover:underline'
               >
                 <span className='font-mono text-xs text-muted-foreground'>

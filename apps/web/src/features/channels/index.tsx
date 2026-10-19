@@ -719,7 +719,7 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                               )}
                             <Link
                               to='/channels/configure'
-                              search={{ channel: channel.channel_id }}
+                              search={{ channel: channel.channel_id, tab: '' }}
                               aria-label={`配置 ${numberLabel(channel)}`}
                               className='inline-flex h-7 items-center rounded-md border px-2 text-xs font-medium hover:bg-accent'
                             >

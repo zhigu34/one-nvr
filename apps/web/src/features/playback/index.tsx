@@ -709,7 +709,18 @@ function Workspace({
           <span data-testid='playback-timeline-density'>
             密度 <b className='font-medium text-video-chrome-foreground'>{timeline.entries.length}</b> 段
             {timeline.gaps.length > 0 && (
-              <span className='ml-1.5 text-red-400'>缺口 {timeline.gaps.length}</span>
+              // A gap is a recording dropout, and the cause lives on the channel's
+              // reliability tab as a fault. Linking the count is what turns "there
+              // were three gaps" into "here is why" — the previous bare number
+              // left the operator to find that tab themselves.
+              <Link
+                to='/channels/configure'
+                search={{ channel: channelID, tab: 'reliability' }}
+                className='ml-1.5 text-red-400 underline-offset-2 hover:underline'
+                title='查看该通道的可靠性故障记录'
+              >
+                缺口 {timeline.gaps.length} · 看故障
+              </Link>
             )}
           </span>
         ) : (

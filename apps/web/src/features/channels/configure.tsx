@@ -191,7 +191,15 @@ function ChannelPicker({
   )
 }
 
-export function ChannelConfigure({ initialId = '' }: { initialId?: string }) {
+export function ChannelConfigure({
+  initialId = '',
+  initialTab = '',
+}: {
+  initialId?: string
+  // Which tab to open first. Deep links from elsewhere in the product name it,
+  // so a link that says "see the fault history" lands on that tab.
+  initialTab?: string
+}) {
   // One request for the whole page. The previous shape polled one status
   // request per channel and could not show group or enable state at all.
   const summary = useAPI<Schema<'ChannelSummaryPage'>>(
@@ -230,6 +238,7 @@ export function ChannelConfigure({ initialId = '' }: { initialId?: string }) {
                 key={channel.channel_id}
                 channel={channel}
                 onConfigured={setSelected}
+                initialTab={initialTab}
               />
             )}
           </div>
@@ -242,10 +251,17 @@ export function ChannelConfigure({ initialId = '' }: { initialId?: string }) {
 function ConfigureChannel({
   channel,
   onConfigured,
+  initialTab,
 }: {
   channel: Schema<'ChannelSummary'>
   onConfigured: (value: string) => void
+  initialTab?: string
 }) {
+  // Only the two tabs this page has are accepted; anything else falls back to the
+  // first one rather than rendering an empty panel.
+  const [tab, setTab] = useState(
+    initialTab === 'reliability' ? 'reliability' : 'configure'
+  )
   const client = useQueryClient()
   const admin = useAuthStore((s) => s.user?.role === 'admin')
   const id = channel.channel_id
@@ -352,7 +368,7 @@ function ConfigureChannel({
       )}
       {/* The reliability view is a tab of the channel detail rather than a new
           navigation entry: PRD REL-05 says add a tab, not a top-level page. */}
-      <Tabs defaultValue='configure'>
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList className='mb-4'>
           <TabsTrigger value='configure'>连接配置</TabsTrigger>
           <TabsTrigger value='reliability'>可靠性</TabsTrigger>

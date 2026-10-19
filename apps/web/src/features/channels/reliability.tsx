@@ -12,6 +12,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useAPI } from '@/features/foundation/hooks'
+import { ReliabilityTrend } from './reliability-chart'
 import { QueryState, Empty } from '@/features/foundation/ui'
 import {
   BAND_LEGEND,
@@ -69,6 +70,10 @@ export function ChannelReliability({ channelId }: { channelId: string }) {
   )
   const faults = useAPI<PageData<Schema<'ReliabilityFault'>>>(
     `/api/v1/faults?channel_id=${channelId}&${query}`,
+    !!channelId
+  )
+  const trend = useAPI<{ items: Schema<'ReliabilityTrendPoint'>[]; precision: string }>(
+    `/api/v1/channels/${channelId}/reliability/trend?${query}`,
     !!channelId
   )
 
@@ -142,6 +147,11 @@ export function ChannelReliability({ channelId }: { channelId: string }) {
         pending={intervals.isPending}
         error={intervals.error}
         windowEnd={new Date(window.to).getTime()}
+      />
+
+      <ReliabilityTrend
+        points={trend.data?.items || []}
+        pending={trend.isPending}
       />
 
       <CompletenessPanel
