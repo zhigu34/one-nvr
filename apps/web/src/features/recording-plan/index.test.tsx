@@ -257,6 +257,11 @@ test('applying writes the mode for each selected channel', async () => {
     expect(JSON.parse(mutation.init.body as string)).toEqual({
       mode: 'continuous',
     })
+    // A policy write queues a switch job, and the server rejects it without an
+    // idempotency key — a 422 the operator sees as "参数无效". The bar missed
+    // this while the old per-row control carried it through sourceCommand.
+    const headers = new Headers(mutation.init.headers)
+    expect(headers.get('Idempotency-Key')).toBeTruthy()
   }
   setup.client.clear()
 })

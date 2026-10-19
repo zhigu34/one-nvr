@@ -5,6 +5,7 @@ import { ApiError, apiRequest, jsonRequest } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { useAPI, useAction } from '@/features/foundation/hooks'
+import { sourceCommand } from '@/features/channels/api'
 import { cn } from '@/lib/utils'
 import { MANUAL_DURATIONS } from './durations'
 import { remainingLabel } from './manual-format'
@@ -154,9 +155,16 @@ export function PlanConfigBar({
             )
           }
           if (policy.mode !== effectiveMode) {
-            const change = await apiRequest<Schema<'SourceChange'>>(
+            // A policy write is a source change: it queues a switch job, and
+            // the server rejects it without an idempotency key. sourceCommand is
+            // the helper that carries one, which is why the old per-row control
+            // worked and this bar did not.
+            const change = await sourceCommand<Schema<'SourceChange'>>(
               `/api/v1/channels/${channel.id}/recording-policy`,
-              jsonRequest('PUT', { mode: effectiveMode }, policy.version)
+              { mode: effectiveMode },
+              policy.version,
+              undefined,
+              'PUT'
             )
             await settle(change.job_id)
           }
