@@ -41,10 +41,14 @@ import type { EventMark } from './event-marks'
 
 // Track geometry. The ruler is a fixed height because its labels have to line up
 // with the ticks; the two data tracks share the rest.
-const RULER_H = 24
-const RECORDING_H = 30
-const EVENTS_H = 22
-const GAP_H = 3
+// Heights chosen so each layer is legible on its own: the ruler needs room for
+// two lines at midnight (time + date), the recording track needs enough height
+// for its translucent fill to read as a span rather than a line, and the event
+// track must be tall enough that a 3px-wide mark still looks like a block.
+const RULER_H = 30
+const RECORDING_H = 44
+const EVENTS_H = 26
+const GAP_H = 4
 const HEIGHT = RULER_H + GAP_H + RECORDING_H + GAP_H + EVENTS_H
 
 const RULER_TOP = 0
