@@ -635,31 +635,3 @@ function rebuild(
  * control row while the panel belongs *under* it: keeping them in one component
  * forced the panel's container into the row's flex line.
  */
-export function ScheduleEditorToggle({
-  label,
-  open,
-  disabled,
-  onOpen,
-  onClose,
-}: {
-  label: string
-  open: boolean
-  disabled?: boolean
-  onOpen: () => void
-  onClose: () => void
-}) {
-  return (
-    <Button
-      type='button'
-      variant='outline'
-      size='sm'
-      className='h-7 shrink-0 px-2 text-xs'
-      disabled={disabled}
-      aria-label={`${label} ${open ? '收起时段' : '编辑时段'}`}
-      aria-expanded={open}
-      onClick={() => (open ? onClose() : onOpen())}
-    >
-      {open ? '收起时段' : '编辑时段'}
-    </Button>
-  )
-}
