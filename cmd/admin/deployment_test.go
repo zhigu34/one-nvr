@@ -71,3 +71,32 @@ func TestManagedRuntimeEntriesRejectSpoolSymlink(t *testing.T) {
 		})
 	}
 }
+
+// Every managed directory must have a declared owner, and OpenList's must be the
+// uid its image actually runs as.
+//
+// This shipped broken: the loop excluded openlist from chown along with the
+// root-running services, leaving Docker to create it as root:root 700. The
+// container then exited on its first boot with "Current user does not have write
+// and/or execute permissions for the ./data directory". The failure is invisible
+// in every unit test and every compose config check — only the container knows.
+func TestRuntimeOwnersCoverEveryManagedDirectory(t *testing.T) {
+	managed := []string{"", "secrets", "gateway", "tls", "tls/versions", "runtime", "hardware", "postgres", "mqtt", "frigate", "openlist"}
+	for _, name := range managed {
+		if _, ok := runtimeOwners[name]; !ok {
+			t.Fatalf("data directory %q has no declared owner; it would stay root owned", name)
+		}
+	}
+}
+
+func TestOpenListDataDirectoryBelongsToItsImageUser(t *testing.T) {
+	// The official image runs as uid 1001 and checks this at startup.
+	if uid := runtimeOwners["openlist"]; uid != 1001 {
+		t.Fatalf("openlist data must belong to uid 1001, got %d", uid)
+	}
+	// The one-nvr service user must not be used for it: that is the mistake this
+	// table exists to prevent.
+	if uid := runtimeOwners["openlist"]; uid == 10001 {
+		t.Fatal("openlist does not run as the one-nvr user")
+	}
+}

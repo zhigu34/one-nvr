@@ -240,6 +240,33 @@ func replaceFile(path string, data []byte, mode os.FileMode) error {
 	}
 	return os.Rename(f.Name(), path)
 }
+
+// runtimeOwners is the uid each managed data directory belongs to.
+//
+// Each directory belongs to the user that actually writes to it. Getting this
+// wrong is invisible until the container starts and refuses, so the owners are
+// spelled out per service rather than derived by exclusion — the exclusion form
+// is what left OpenList's directory owned by root while the container runs as
+// uid 1001, and it exited on its first boot with "Current user does not have
+// write and/or execute permissions".
+//
+//	openlist  uid 1001 (the image's `openlist` user, v4.1.0+ checks at startup)
+//	postgres, mqtt, frigate  uid 0 (those images run as root)
+//	everything else  uid 10001 (the one-nvr service user)
+var runtimeOwners = map[string]int{
+	"":             10001, // the data root itself
+	"secrets":      10001,
+	"gateway":      10001,
+	"tls":          10001,
+	"tls/versions": 10001,
+	"runtime":      10001,
+	"hardware":     10001,
+	"postgres":     0,
+	"mqtt":         0,
+	"frigate":      0,
+	"openlist":     1001,
+}
+
 func initRuntime() error {
 	c, e := config.Load()
 	if e != nil {
@@ -265,13 +292,19 @@ func initRuntime() error {
 		} else {
 			return e
 		}
-		if name != "postgres" && name != "mqtt" && name != "openlist" && name != "frigate" {
-			if e = os.Chmod(path, 0700); e != nil {
-				return e
-			}
-			if e = os.Chown(path, 10001, 10001); e != nil {
-				return e
-			}
+		if e = os.Chmod(path, 0700); e != nil {
+			return e
+		}
+		uid, ok := runtimeOwners[name]
+		if !ok {
+			return fmt.Errorf("no owner declared for data directory %q", name)
+		}
+		// Re-applied on every deploy, not only on creation: a directory that was
+		// made by Docker for a previous run (or by an older version of this loop
+		// that skipped it) keeps its wrong owner forever otherwise — which is
+		// exactly how a mounted-but-unwritable OpenList data directory shipped.
+		if e = os.Chown(path, uid, uid); e != nil {
+			return e
 		}
 	}
 	secret, e := secrets.Init(root)
