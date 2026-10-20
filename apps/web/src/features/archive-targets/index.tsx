@@ -8,11 +8,12 @@ import { Eye, EyeOff, Plus } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { Checkbox } from '@/components/ui/checkbox'
 import { useAPI } from '@/features/foundation/hooks'
 import { apiErrorText } from '@/features/foundation/api-errors'
 import { Empty, Notices, QueryState, SelectField } from '@/features/foundation/ui'
-import { ChannelOverview, RunStatus } from './archive-run-status'
-import type { ChannelStatus, TargetStatus } from './archive-status'
+import { RunStatus } from './archive-run-status'
+import { MODE_LABEL, coverage, type ChannelStatus, type TargetStatus } from './archive-status'
 
 type Target = Schema<'ArchiveTarget'>
 type Capabilities = Schema<'ArchiveTargetCapabilities'>
@@ -471,12 +472,12 @@ export function ArchiveTargets() {
           nothing useful is buried under 16 rows of dropdowns. Both are about
           the same targets from different sides: this one asks "did it arrive",
           the table asks "where does this channel go". */}
-      <ChannelOverview items={channelStatus.data?.items || []} />
       {admin && !!targets.data?.items.length && (
-        <PolicyTable
+        <ArchivePlan
           channels={channels.data?.items || []}
           targets={targets.data?.items || []}
           policies={policies.data?.items || []}
+          statuses={channelStatus.data?.items || []}
           zone={site.data?.timezone || ''}
         />
       )}
@@ -502,48 +503,113 @@ export function ArchiveTargets() {
   )
 }
 
-function PolicyTable({
+/**
+ * ArchivePlan is the page's single configuration surface, plus a read-only index
+ * of what each channel ended up with.
+ *
+ * Same shape as the recording-plan page, for the same reason: a sixteen-row
+ * table where every row carries a target select, a mode select and a time box is
+ * sixteen places to change one setting, and the operator has to work out per row
+ * which of them they are editing. The bar states the binding once and applies it
+ * to whatever is selected; the table only reports the result.
+ *
+ * Rows are selectable and clicking anywhere on one toggles it, because selecting
+ * is the only thing a row still does.
+ */
+function ArchivePlan({
   channels,
   targets,
   policies,
+  statuses,
   zone,
 }: {
   channels: Schema<'Channel'>[]
   targets: Target[]
   policies: Policy[]
+  statuses: ChannelStatus[]
   zone: string
 }) {
   const client = useQueryClient()
-  const [drafts, setDrafts] = useState<Record<string, Policy>>({})
-  const [rowError, setRowError] = useState('')
-  const byChannel = new Map(policies.map((policy) => [policy.channel_id ?? '', policy]))
   const enabled = targets.filter((target) => target.enabled)
+  const byChannel = new Map(policies.map((policy) => [policy.channel_id ?? '', policy]))
+  const statusByChannel = new Map(statuses.map((item) => [item.channel_id ?? '', item]))
+  const [selected, setSelected] = useState<Record<string, boolean>>({})
+  // Drafts are null until the operator touches the bar. Selecting a single
+  // channel makes the bar echo that channel's saved binding; the echo is a
+  // fallback, never a write, so it cannot clobber a value the operator just set
+  // (the bug that made this page's event switch look dead once before).
+  const [draftTarget, setDraftTarget] = useState<string | null>(null)
+  const [draftMode, setDraftMode] = useState<'manual' | 'immediate' | 'scheduled' | null>(null)
+  const [draftSchedule, setDraftSchedule] = useState<string | null>(null)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [pending, setPending] = useState(false)
 
-  async function save(channelID: string) {
-    const draft = drafts[channelID]
-    if (!draft) return
-    // "scheduled" without a time is not a request the server can honour, and its
-    // rejection reads only "参数无效" — which says nothing about which field is
-    // missing. The empty time box sits right there; name it instead.
-    if ((draft.mode ?? 'manual') === 'scheduled' && !(draft.schedule ?? '').trim()) {
-      setRowError('定时上传需要填写时刻，例如 02:00 或 02:00,14:30。')
+  const chosen = channels.filter((channel) => selected[channel.id ?? ''])
+  const chosenCount = chosen.length
+
+  // Echo a single selected channel's saved binding. With more than one selected
+  // there is no single current value, so the bar keeps what the operator set — a
+  // mixed selection has no state to echo, and showing the first channel's would
+  // be a lie they could act on.
+  const solo = chosenCount === 1 ? chosen[0] : undefined
+  const soloPolicy = solo ? byChannel.get(solo.id ?? '') : undefined
+  const targetID = draftTarget ?? soloPolicy?.target_id ?? enabled[0]?.id ?? ''
+  const mode = draftMode ?? (soloPolicy?.mode as NonNullable<typeof draftMode>) ?? 'manual'
+  const schedule = draftSchedule ?? soloPolicy?.schedule ?? ''
+
+  function toggleAll() {
+    if (chosenCount === channels.length) {
+      setSelected({})
       return
     }
-    setRowError('')
-    try {
-      await apiRequest('/api/v1/archive-policies', jsonRequest('PUT', draft))
-      setDrafts(({ [channelID]: _, ...rest }) => rest)
-      await client.invalidateQueries()
-    } catch (cause) {
-      setRowError(errorText(cause))
-    }
+    setSelected(Object.fromEntries(channels.map((channel) => [channel.id ?? '', true])))
   }
 
-  function draftFor(channelID: string): Policy {
-    return (
-      drafts[channelID] ||
-      byChannel.get(channelID) || { channel_id: channelID, target_id: enabled[0]?.id ?? '', mode: 'manual', schedule: '' }
-    )
+  async function apply() {
+    if (!chosenCount) {
+      setError('请先选择通道')
+      return
+    }
+    if (!targetID) {
+      setError('请选择归档目标')
+      return
+    }
+    // The server rejects this with "参数无效", which does not name the field.
+    if (mode === 'scheduled' && !schedule.trim()) {
+      setError('定时上传需要填写时刻，例如 02:00 或 02:00,14:30。')
+      return
+    }
+    setPending(true)
+    setError('')
+    setNotice('')
+    let done = 0
+    try {
+      // Sequential, not parallel: each write advances the channel's policy row,
+      // and concurrent writes to the same table fight over it. It also keeps the
+      // audit trail in the order the operator selected.
+      for (const channel of chosen) {
+        await apiRequest(
+          '/api/v1/archive-policies',
+          jsonRequest('PUT', {
+            channel_id: channel.id ?? '',
+            target_id: targetID,
+            mode,
+            schedule: mode === 'scheduled' ? schedule.trim() : '',
+          })
+        )
+        done++
+      }
+      setNotice(`${done} 路已应用`)
+      await client.invalidateQueries()
+    } catch (cause) {
+      // Partial success is reported as such: the operator needs to know which
+      // channels still hold the old binding.
+      setError(done > 0 ? `已应用 ${done} 路，其余失败：${errorText(cause)}` : errorText(cause))
+      await client.invalidateQueries()
+    } finally {
+      setPending(false)
+    }
   }
 
   return (
@@ -551,82 +617,139 @@ function PolicyTable({
       <div>
         <h2 className='text-sm font-medium'>通道归档策略</h2>
         <p className='mt-1 text-xs text-muted-foreground'>
-          立即上传＝分片发布即入队；定时上传＝按站点时区{zone ? `（${zone}）` : ''}每日时刻扫描补齐；手动＝只在录像管理页选中后上传。时刻如 02:00 或 02:00,14:30。
+          勾选通道后在下方设置一次并应用，表格只展示当前结果。立即上传＝分片发布即入队；定时上传＝按站点时区
+          {zone ? `（${zone}）` : ''}每日时刻扫描补齐；手动＝只在录像管理页选中后上传。
         </p>
       </div>
-      {rowError && (
+      {/* The single configuration surface. */}
+      <div className='flex flex-wrap items-end gap-2 rounded-lg border bg-muted/30 p-3'>
+        <div className='text-xs text-muted-foreground'>
+          已选 <span className='tabular-nums text-foreground'>{chosenCount}</span> / {channels.length} 路
+        </div>
+        <Button size='sm' variant='outline' onClick={() => setSelected({})} disabled={!chosenCount}>
+          清空
+        </Button>
+        <SelectField
+          ariaLabel='归档目标'
+          value={targetID}
+          onValueChange={(next) => setDraftTarget(next ?? '')}
+          options={enabled.map((target) => ({ value: target.id ?? '', label: target.name ?? '' }))}
+          triggerClassName='h-8 w-40'
+        />
+        <SelectField
+          ariaLabel='上传模式'
+          value={mode}
+          onValueChange={(next) => setDraftMode((next ?? 'manual') as NonNullable<typeof draftMode>)}
+          options={[
+            { value: 'manual', label: '手动' },
+            { value: 'immediate', label: '立即上传' },
+            { value: 'scheduled', label: '定时上传' },
+          ]}
+          triggerClassName='h-8 w-32'
+        />
+        {mode === 'scheduled' && (
+          <Input
+            aria-label='上传时刻'
+            value={schedule}
+            onChange={(event) => setDraftSchedule(event.target.value)}
+            placeholder='02:00 或 02:00,14:30'
+            className='h-8 w-44'
+          />
+        )}
+        <Button size='sm' disabled={pending || !chosenCount} onClick={() => void apply()}>
+          {pending ? '应用中…' : `应用到 ${chosenCount || 0} 路`}
+        </Button>
+      </div>
+      {error && (
         <p role='alert' className='text-sm text-destructive'>
-          {rowError}
+          {error}
         </p>
       )}
-      {/* A real table, not a flex row per channel: 16+ channels stacked as
-          flex rows with per-field labels turned this panel into a wall of
-          wrapped text taller than the page. Column headers say once what each
-          column is; every row is then one line. */}
+      {notice && <p className='text-sm text-emerald-600 dark:text-emerald-400'>{notice}</p>}
       <div className='overflow-x-auto'>
         <table className='w-full text-sm'>
           <thead>
             <tr className='text-left text-xs text-muted-foreground'>
+              <th className='w-8 pb-2 pr-2 font-normal'>
+                <Checkbox
+                  aria-label='全选通道'
+                  checked={channels.length > 0 && chosenCount === channels.length}
+                  onCheckedChange={toggleAll}
+                />
+              </th>
               <th className='pb-2 pr-3 font-normal'>通道</th>
               <th className='pb-2 pr-3 font-normal'>归档目标</th>
               <th className='pb-2 pr-3 font-normal'>上传模式</th>
-              <th className='pb-2 pr-3 font-normal'>时刻</th>
-              <th className='pb-2 font-normal'></th>
+              <th className='pb-2 pr-3 font-normal'>已归档</th>
+              <th className='pb-2 font-normal'>失败</th>
             </tr>
           </thead>
           <tbody>
             {channels.map((channel) => {
               const id = channel.id ?? ''
               const label = `CH${String(channel.channel_no ?? 0).padStart(2, '0')} ${channel.channel_name}`
-              const draft = draftFor(id)
-              const dirty = drafts[id] !== undefined
-              const scheduled = (draft.mode ?? 'manual') === 'scheduled'
+              const policy = byChannel.get(id)
+              const status = statusByChannel.get(id)
+              const cover = coverage(status?.copied, status?.segments)
+              const isSelected = !!selected[id]
               return (
-                <tr key={id} className='border-t'>
+                // The whole row selects: with the controls gone, selecting is the
+                // only thing a row does.
+                <tr
+                  key={id}
+                  className={cn('cursor-pointer border-t', isSelected && 'bg-accent/40')}
+                  onClick={() => setSelected({ ...selected, [id]: !isSelected })}
+                  data-testid='archive-policy-row'
+                >
+                  <td className='py-1.5 pr-2' onClick={(event) => event.stopPropagation()}>
+                    <Checkbox
+                      aria-label={`${label} 选择`}
+                      checked={isSelected}
+                      onCheckedChange={(next) => setSelected({ ...selected, [id]: !!next })}
+                    />
+                  </td>
                   <td className='py-1.5 pr-3 whitespace-nowrap'>{label}</td>
                   <td className='py-1.5 pr-3'>
-                    {/* ariaLabel, not label: the column header already names the
-                        field, and SelectField renders a label as visible text. */}
-                    <SelectField
-                      ariaLabel={`${label} 归档目标`}
-                      value={draft.target_id ?? ''}
-                      onValueChange={(next) => setDrafts({ ...drafts, [id]: { ...draft, target_id: next ?? '' } })}
-                      options={enabled.map((target) => ({ value: target.id ?? '', label: target.name ?? '' }))}
-                      triggerClassName='h-8'
-                    />
-                  </td>
-                  <td className='py-1.5 pr-3'>
-                    <SelectField
-                      ariaLabel={`${label} 上传模式`}
-                      value={draft.mode ?? 'manual'}
-                      onValueChange={(next) => setDrafts({ ...drafts, [id]: { ...draft, mode: (next ?? 'manual') as Policy['mode'] } })}
-                      options={[
-                        { value: 'manual', label: '手动' },
-                        { value: 'immediate', label: '立即上传' },
-                        { value: 'scheduled', label: '定时上传' },
-                      ]}
-                      triggerClassName='h-8'
-                    />
-                  </td>
-                  <td className='py-1.5 pr-3'>
-                    {scheduled ? (
-                      <Input
-                        aria-label={`${label} 上传时刻`}
-                        value={draft.schedule ?? ''}
-                        onChange={(event) => setDrafts({ ...drafts, [id]: { ...draft, schedule: event.target.value } })}
-                        placeholder='02:00'
-                        className='h-8 w-28'
-                      />
+                    {policy ? (
+                      <span>
+                        {status?.target_name || '—'}
+                        {status && !status.target_enabled && (
+                          <span className='ml-1 rounded-full border border-dashed px-1.5 py-0.5 text-[11px] text-muted-foreground'>
+                            已停用
+                          </span>
+                        )}
+                      </span>
                     ) : (
-                      // The slot is always there so the columns stay aligned; it
-                      // is just empty until the mode needs a time.
+                      <span className='text-xs text-muted-foreground'>未归档</span>
+                    )}
+                  </td>
+                  <td className='py-1.5 pr-3'>
+                    {policy ? (
+                      <span>
+                        {MODE_LABEL[policy.mode ?? ''] ?? policy.mode}
+                        {policy.mode === 'scheduled' && policy.schedule && (
+                          <span className='ml-1 font-mono text-xs text-muted-foreground'>{policy.schedule}</span>
+                        )}
+                      </span>
+                    ) : (
+                      <span className='text-xs text-muted-foreground'>—</span>
+                    )}
+                  </td>
+                  <td className='py-1.5 pr-3'>
+                    {cover ? (
+                      <span className='tabular-nums text-xs'>
+                        {cover.copied}/{cover.segments}
+                      </span>
+                    ) : (
                       <span className='text-xs text-muted-foreground'>—</span>
                     )}
                   </td>
                   <td className='py-1.5'>
-                    <Button size='sm' variant='outline' disabled={!dirty} onClick={() => void save(id)}>
-                      保存
-                    </Button>
+                    {(status?.failed ?? 0) > 0 ? (
+                      <span className='text-xs text-red-500'>{status?.failed}</span>
+                    ) : (
+                      <span className='text-xs text-muted-foreground'>—</span>
+                    )}
                   </td>
                 </tr>
               )

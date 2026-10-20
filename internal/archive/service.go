@@ -715,21 +715,32 @@ type ChannelArchiveStatus struct {
 	LocalRetentionHours int `json:"local_retention_hours"`
 }
 
-// ChannelArchiveStatuses reports every archiving channel.
+// ChannelArchiveStatuses reports every channel and its archive binding.
+//
+// Every channel, not just the bound ones: the page shows a row per channel so
+// the table is a complete picture of what is archived and what is not. A channel
+// with no policy carries empty target fields and mode "none", which the page
+// renders as "未归档" rather than omitting the row.
 func (s *Service) ChannelArchiveStatuses(ctx context.Context, p auth.Principal) ([]ChannelArchiveStatus, error) {
 	if err := s.Auth.RequireAdmin(ctx, p); err != nil {
 		return nil, err
 	}
-	rows, err := s.DB.Pool.Query(ctx, `SELECT c.id,c.channel_no,c.channel_name,ap.target_id,t.name,t.enabled,ap.mode,
+	// LEFT JOIN, so an unbound channel keeps its row. The per-target counts are
+	// correlated subqueries: they run once per channel rather than multiplying
+	// rows the way a join onto the copies table would.
+	rows, err := s.DB.Pool.Query(ctx, `SELECT c.id,c.channel_no,c.channel_name,
+			coalesce(ap.target_id, '00000000-0000-0000-0000-000000000000'::uuid),
+			coalesce(t.name,''), coalesce(t.enabled,false),
+			coalesce(ap.mode,'none'),
 			coalesce((SELECT count(*) FROM recording_segments s WHERE s.channel_id=c.id AND s.state='ready'),0),
 			coalesce((SELECT count(*) FROM recording_archive_copies ac JOIN recording_segments s ON s.id=ac.segment_id
 				WHERE s.channel_id=c.id AND s.state='ready' AND ac.target_id=ap.target_id AND ac.state='verified'),0),
 			coalesce((SELECT count(*) FROM recording_archive_copies ac JOIN recording_segments s ON s.id=ac.segment_id
 				WHERE s.channel_id=c.id AND ac.target_id=ap.target_id AND ac.state='failed'),0),
 			(SELECT archive_local_retention_hours FROM sites WHERE id=c.site_id)
-		FROM archive_policies ap
-		JOIN channels c ON c.id=ap.channel_id
-		JOIN archive_targets t ON t.id=ap.target_id
+		FROM channels c
+		LEFT JOIN archive_policies ap ON ap.channel_id=c.id
+		LEFT JOIN archive_targets t ON t.id=ap.target_id
 		ORDER BY c.channel_no`)
 	if err != nil {
 		return nil, err

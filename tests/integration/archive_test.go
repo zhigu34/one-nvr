@@ -478,11 +478,24 @@ func TestChannelArchiveStatusCountsAgainstItsOwnTarget(t *testing.T) {
 	runUploadJob(t, fixture, service, ctx)
 
 	items, err := service.ChannelArchiveStatuses(ctx, fixture.Admin)
-	if err != nil || len(items) != 1 {
-		t.Fatal("the bound channel must be listed", items, err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	item := items[0]
-	if item.ChannelNo != 1 || item.Name == "" {
+	// Every channel is listed, bound or not: the page shows a complete table and
+	// renders an unbound channel as "未归档" rather than leaving a gap.
+	if len(items) == 0 {
+		t.Fatal("no channels listed")
+	}
+	var item archive.ChannelArchiveStatus
+	for _, candidate := range items {
+		if candidate.ChannelNo == 1 {
+			item = candidate
+		}
+	}
+	if item.ChannelID == "" {
+		t.Fatalf("the bound channel must be listed, got %+v", items)
+	}
+	if item.Name == "" {
 		t.Fatal("the row names the channel", item)
 	}
 	if item.Target != "主归档" || !item.TargetEnabled || item.Mode != archive.ModeImmediate {
@@ -497,13 +510,26 @@ func TestChannelArchiveStatusCountsAgainstItsOwnTarget(t *testing.T) {
 		t.Fatal("the site's local archive window must be reported", item)
 	}
 
-	// A channel with no policy is not an archiving channel.
+	// Removing the policy keeps the channel in the list, now with no binding:
+	// the row survives so the table stays one line per channel.
 	if _, err := fixture.DB.Pool.Exec(ctx, `DELETE FROM archive_policies WHERE channel_id=$1`, fixture.Channel); err != nil {
 		t.Fatal(err)
 	}
 	items, err = service.ChannelArchiveStatuses(ctx, fixture.Admin)
-	if err != nil || len(items) != 0 {
-		t.Fatal("an unbound channel is not listed", items, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unbound *archive.ChannelArchiveStatus
+	for i, candidate := range items {
+		if candidate.ChannelNo == 1 {
+			unbound = &items[i]
+		}
+	}
+	if unbound == nil {
+		t.Fatal("an unbound channel must still be listed")
+	}
+	if unbound.Mode != "none" || unbound.Target != "" || unbound.TargetEnabled {
+		t.Fatalf("an unbound channel carries no binding: %+v", *unbound)
 	}
 }
 

@@ -30,6 +30,7 @@ async function setup(
     failStatus?: boolean
     retried?: number
     channels?: unknown[]
+    policies?: unknown[]
     collapsed?: boolean
     openList?: { enabled: boolean; state: string; ui_port?: number } | null
   } = {}
@@ -66,7 +67,8 @@ async function setup(
     }
     if (path.startsWith('/api/v1/archive-targets'))
       return { items: options.targets ?? [], next_cursor: null }
-    if (path.startsWith('/api/v1/archive-policies')) return { items: [] }
+    if (path.startsWith('/api/v1/archive-policies'))
+      return { items: options.policies ?? [] }
     if (path.startsWith('/api/v1/channels'))
       return { items: options.channels ?? [], next_cursor: null }
     if (path.startsWith('/api/v1/site'))
@@ -326,7 +328,8 @@ test('a failed status read is reported instead of rendered as all-clear', async 
   expect(page.getByText('已同步').query()).toBeNull()
 })
 
-test('the channel overview reports coverage and the local retention window', async () => {
+// Coverage moved into the per-channel table, next to the binding it belongs to.
+test('a channel row reports its binding, coverage and failures', async () => {
   const page = await setup({
     targets: [TARGET],
     statuses: [{ target_id: 't1', verified: 3, uploading: 0, failed: 0 }],
@@ -341,20 +344,22 @@ test('the channel overview reports coverage and the local retention window', asy
         mode: 'immediate',
         segments: 8,
         copied: 6,
-        failed: 0,
+        failed: 2,
         local_retention_hours: 48,
       },
     ],
+    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门' }],
+    policies: [{ channel_id: 'c1', target_id: 't1', mode: 'immediate', schedule: '' }],
   })
-  await expect.element(page.getByTestId('archive-channel-overview')).toBeVisible()
   await expect.element(page.getByText('CH01 前门')).toBeVisible()
-  await expect.element(page.getByText('6/8 段已归档')).toBeVisible()
-  await expect.element(page.getByText('48 小时')).toBeVisible()
+  await expect.element(page.getByText('6/8')).toBeVisible()
+  // A failure count is the one number that needs acting on.
+  await expect.element(page.getByText('2', { exact: true })).toBeVisible()
 })
 
-test('a channel with no ready footage gets no coverage bar', async () => {
-  // 0/0 is not 0%: an empty channel has nothing to cover, and a 0% bar would
-  // read as a broken archive.
+test('a channel with nothing archived says so instead of showing zeroes', async () => {
+  // 0/0 is not "0% archived": the channel has nothing to cover, and a row of
+  // zeroes would read as a broken archive.
   const page = await setup({
     targets: [TARGET],
     statuses: [{ target_id: 't1', verified: 0, uploading: 0, failed: 0 }],
@@ -363,89 +368,82 @@ test('a channel with no ready footage gets no coverage bar', async () => {
         channel_id: 'c2',
         channel_no: 2,
         name: '后门',
-        target_id: 't1',
-        target_name: 'NAS 归档',
+        target_id: '',
+        target_name: '',
         target_enabled: false,
-        mode: 'manual',
+        mode: 'none',
         segments: 0,
         copied: 0,
         failed: 0,
         local_retention_hours: 0,
       },
     ],
+    channels: [{ id: 'c2', channel_no: 2, channel_name: '后门' }],
   })
-  await expect.element(page.getByText('本机暂无待归档片段')).toBeVisible()
-  // The disabled target keeps its binding, and that is worth naming.
-  await expect.element(page.getByText('已停用')).toBeVisible()
-  await expect
-    .element(page.getByTestId('archive-channel-row').getByText('未启用'))
-    .toBeVisible()
+  await expect.element(page.getByText('未归档')).toBeVisible()
+  expect(page.getByText('0/0').query()).toBeNull()
 })
 
-// 16+ channels stacked as flex rows with a visible label per dropdown filled
-// the page with wrapped text. The panel is a table now: column headers name the
-// fields once, and every row is one line.
-test('the policy panel is a table with one line per channel', async () => {
+// 16+ channels each carrying a target select, a mode select and a time box was
+// sixteen places to change one setting. The bar configures; the table reports.
+test('the policy table is read only and one line per channel', async () => {
   const page = await setup({
-    targets: [{ id: 't1', name: 'Openlist', enabled: true, username: 'admin' }],
+    targets: [TARGET],
     channels: [
       { id: 'c1', channel_no: 1, channel_name: '前门-左上' },
       { id: 'c2', channel_no: 2, channel_name: '前门-右上' },
     ],
   })
-  // Wait for the target list to settle: the policy panel only renders once a
-  // target exists.
-  await expect.element(page.getByText('Openlist', { exact: true }).first()).toBeVisible()
-  // Column headers, not per-field labels.
-  for (const head of ['通道', '归档目标', '上传模式', '时刻']) {
+  await expect.element(page.getByTestId('archive-target-row')).toBeVisible()
+  // Column headers, once.
+  for (const head of ['通道', '归档目标', '上传模式', '已归档', '失败']) {
     await expect.element(page.getByText(head, { exact: true }).first()).toBeVisible()
   }
-  // Each channel is exactly one row.
-  const rows = page.getByRole('row').elements()
-  // 1 header row + 2 channel rows.
-  expect(rows.length).toBe(3)
-  // The per-field label text must NOT appear as visible text: it was what
-  // wrapped onto extra lines. It survives only as the control's accessible name.
-  expect(page.getByText('CH01 前门-左上 归档目标').query()).toBeNull()
-  await expect.element(page.getByLabelText('CH01 前门-左上 归档目标')).toBeVisible()
+  const rows = page.getByTestId('archive-policy-row').elements()
+  expect(rows.length).toBe(2)
+  // No per-row controls: the only select controls are the two in the bar.
+  const comboboxes = page.getByRole('combobox').elements()
+  expect(comboboxes.length).toBe(2)
+  // Select all, then the bar states the intent once.
+  await userEvent.click(page.getByLabelText('全选通道'))
+  await expect.element(page.getByRole('button', { name: /应用到 2 路/ })).toBeVisible()
 })
 
 // The reading order is what is configured first, then what is running, then the
 // per-channel table. The table is the longest block (one row per channel, 16+
-// rows); anything after it is buried below a screenful of dropdowns.
+// rows); anything after it is buried below a screenful of rows.
 test('the target list comes before the per-channel policy table', async () => {
   const page = await setup({
     targets: [{ id: 't1', name: 'Openlist', enabled: true, username: 'admin' }],
     statuses: [{ target_id: 't1', verified: 1, uploading: 0, failed: 0 }],
-    channelStatus: [
-      {
-        channel_id: 'c1',
-        channel_no: 1,
-        name: '前门-左',
-        target_id: 't1',
-        target_name: 'Openlist',
-        target_enabled: true,
-        mode: 'manual',
-        segments: 2,
-        copied: 1,
-        failed: 0,
-        local_retention_hours: 48,
-      },
-    ],
     channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左' }],
   })
   await expect.element(page.getByTestId('archive-target-row')).toBeVisible()
-  const rows = page.getByTestId('archive-target-row').elements()
-  const overview = page.getByTestId('archive-channel-overview').element()
-  const policyTable = page.getByText('通道归档策略').element()
-  // Document order: target row -> running state -> policy table.
-  expect(rows[0].compareDocumentPosition(overview) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-  expect(overview.compareDocumentPosition(policyTable) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  const row = page.getByTestId('archive-target-row').element()
+  const plan = page.getByText('通道归档策略').element()
+  expect(row.compareDocumentPosition(plan) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 })
 
-// A registered target is what this page is usually opened to look at; the wide
-// three-column form pushed that content down. Collapsed by default, opened by
-// the button, exactly like the storage-pool page.
+// "参数无效" says nothing about which field is missing; the bar names it before
+// sending, and sends nothing.
+test('applying a scheduled policy without a time names the missing field', async () => {
+  const page = await setup({
+    targets: [{ id: 't1', name: 'Openlist', enabled: true, username: 'admin' }],
+    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左' }],
+  })
+  await expect.element(page.getByTestId('archive-target-row')).toBeVisible()
+  await expect.element(page.getByText('CH01 前门-左')).toBeVisible()
+  await userEvent.click(page.getByLabelText('CH01 前门-左 选择'))
+  await userEvent.click(page.getByLabelText('上传模式'))
+  await userEvent.click(await page.getByRole('option', { name: '定时上传' }).first())
+  await userEvent.click(page.getByRole('button', { name: /应用到 1 路/ }))
+  await expect.element(page.getByText(/定时上传需要填写时刻/)).toBeVisible()
+  const puts = calls.request.mock.calls.filter(
+    ([path, init]) => path === '/api/v1/archive-policies' && (init as RequestInit | undefined)?.method === 'PUT'
+  )
+  expect(puts).toHaveLength(0)
+})
+
 test('the registration form is collapsed until asked for', async () => {
   const page = await setup({ collapsed: true })
   const toggle = page.getByRole('button', { name: '登记目标' })
@@ -483,24 +481,3 @@ test('a failed probe keeps the form open', async () => {
   await expect.element(page.getByLabelText('WebDAV URL')).toBeVisible()
 })
 
-// "参数无效" from the server says nothing about which field is missing, and the
-// empty time box sits right there. The page names it before sending.
-test('saving a scheduled policy without a time names the missing field', async () => {
-  const page = await setup({
-    targets: [{ id: 't1', name: 'Openlist', enabled: true, username: 'admin' }],
-    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左' }],
-  })
-  await expect.element(page.getByTestId('archive-target-row')).toBeVisible()
-  // Switch the mode to scheduled, leaving the time empty.
-  await userEvent.click(page.getByLabelText('CH01 前门-左 上传模式'))
-  await userEvent.click(await page.getByRole('option', { name: '定时上传' }).first())
-  // Save.
-  await userEvent.click(page.getByRole('button', { name: '保存' }).first())
-  await expect.element(page.getByText(/定时上传需要填写时刻/)).toBeVisible()
-  // No PUT reached the server: the request would only have been rejected, and
-  // its answer would not have named the field.
-  const puts = calls.request.mock.calls.filter(
-    ([path, init]) => path === '/api/v1/archive-policies' && (init as RequestInit | undefined)?.method === 'PUT'
-  )
-  expect(puts).toHaveLength(0)
-})
