@@ -9,13 +9,17 @@
 -- open, keep feeding the queue. The scheduler now re-scans on every tick and
 -- stops when the window closes.
 
--- Rewrite existing rows BEFORE tightening the constraint, otherwise the rows the
--- old code wrote are rejected by the new rule.
---
--- A single fire time T becomes the one-minute window T..T+1min. That preserves
--- the old behaviour exactly (one trigger, now able to drain up to a tick's
--- ceiling instead of one batch) and stays visibly a point in the editor, so
--- widening it is a deliberate act rather than something this migration guessed.
+-- Drop the old rule FIRST. The rewrite below produces values the old CHECK
+-- rejects (it only allows "HH:MM,HH:MM"), so updating the rows before dropping
+-- it fails with SQLSTATE 23514 — which is exactly what happened on the first
+-- deployment of this migration.
+ALTER TABLE archive_policies DROP CONSTRAINT IF EXISTS archive_policies_schedule_check;
+
+-- Rewrite existing rows to one-minute windows: a single fire time T becomes
+-- T..T+1min. That preserves the old behaviour (the same instant triggers, now
+-- able to drain up to a tick's ceiling instead of one batch) and stays visibly a
+-- point in the editor, so widening it is a deliberate act rather than something
+-- this migration guessed.
 UPDATE archive_policies
 SET schedule = (
   SELECT string_agg(
@@ -33,7 +37,6 @@ WHERE mode = 'scheduled'
 
 -- Windows: HH:MM-HH:MM, optionally several separated by commas. Empty stays
 -- allowed because the non-scheduled modes store no schedule.
-ALTER TABLE archive_policies DROP CONSTRAINT IF EXISTS archive_policies_schedule_check;
 ALTER TABLE archive_policies ADD CONSTRAINT archive_policies_schedule_check
   CHECK (schedule = '' OR schedule ~ '^[0-2][0-9]:[0-5][0-9]-[0-2][0-9]:[0-5][0-9](,[0-2][0-9]:[0-5][0-9]-[0-2][0-9]:[0-5][0-9])*$');
 
