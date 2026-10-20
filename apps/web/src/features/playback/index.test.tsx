@@ -506,3 +506,23 @@ test('frame OSD state badge mounts when playback leaves idle', async () => {
     ).toBe(true)
   )
 })
+
+// The player is one file at a time, so its progress bar spans THAT FILE, not the
+// day. The distinction matters: a bar over 24 hours would misreport what
+// dragging it does, and seeking past the end is the controller's job (it rolls
+// into the next segment).
+test('the player exposes a segment progress bar', async () => {
+  const { view } = await fixture([segment(A, 0, 120)])
+  const bar = view.getByTestId('playback-progress')
+  await expect.element(bar).toBeVisible()
+  const box = bar.element().getBoundingClientRect()
+  // A zero-height bar is an element Playwright calls "not visible": the control
+  // bar wraps, and w-full inside a wrapping flex row needs an explicit height.
+  expect(box.height).toBeGreaterThan(0)
+  // The track must have a real box: a zero-height slider is not clickable, and
+  // Playwright calls it "not visible" for the same reason.
+  const slider = bar.getByRole('slider', { name: '片段内进度' })
+  const track = slider.element().getBoundingClientRect()
+  expect(track.height).toBeGreaterThan(0)
+  expect(track.width).toBeGreaterThan(0)
+})

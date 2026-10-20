@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
@@ -218,6 +218,168 @@ export function Playback({
           playSignal={playSignal}
           toolbar={toolbar}
         />
+      )}
+    </div>
+  )
+}
+
+/**
+ * Progress of the segment on screen, with a draggable handle.
+ *
+ * It reads the media element directly instead of routing currentTime through
+ * React state: `timeupdate` fires four times a second and a state update would
+ * re-render the whole console — including the canvas timeline — for a number
+ * only this bar displays. The element is the source of truth for its own
+ * position anyway.
+ *
+ * The span is ONE segment. The player holds a single file whose duration is that
+ * file's; a bar spanning the whole day would lie about what dragging does. A seek
+ * past the end is handled by the controller, which rolls into the next segment.
+ */
+function SegmentProgress({
+  video,
+  entry,
+  zone,
+  onSeek,
+  disabled,
+}: {
+  video: RefObject<HTMLVideoElement | null>
+  entry: Entry | null
+  zone: string
+  onSeek: (offsetMs: number) => void
+  disabled: boolean
+}) {
+  const trackRef = useRef<HTMLDivElement>(null)
+  const fillRef = useRef<HTMLDivElement>(null)
+  const headRef = useRef<HTMLDivElement>(null)
+  const labelRef = useRef<HTMLSpanElement>(null)
+  const [dragging, setDragging] = useState(false)
+  const dragRef = useRef(false)
+
+  // Paint from the media element on every animation frame while it is playing,
+  // and on seek/metadata events otherwise. Cheap: three style writes, no React.
+  useEffect(() => {
+    let frame = 0
+    let stopped = false
+    const paint = () => {
+      if (stopped) return
+      const media = video.current
+      // `Number.isFinite` does not narrow `undefined` for the type checker, and
+      // duration is NaN until metadata lands — check both explicitly.
+      const duration = media?.duration ?? Number.NaN
+      if (media && Number.isFinite(duration) && duration > 0 && !dragRef.current) {
+        const ratio = Math.min(Math.max(media.currentTime / duration, 0), 1)
+        if (fillRef.current) fillRef.current.style.width = `${ratio * 100}%`
+        if (headRef.current) headRef.current.style.left = `${ratio * 100}%`
+        if (labelRef.current) {
+          labelRef.current.textContent = `${formatDuration(media.currentTime * 1000)} / ${formatDuration(duration * 1000)}`
+        }
+      }
+      frame = requestAnimationFrame(paint)
+    }
+    frame = requestAnimationFrame(paint)
+    return () => {
+      stopped = true
+      cancelAnimationFrame(frame)
+    }
+  }, [video])
+
+  // A fresh segment starts at zero: clear the previous file's extent before its
+  // duration is known, or the handle sits where the last clip ended.
+  useEffect(() => {
+    if (fillRef.current) fillRef.current.style.width = '0%'
+    if (headRef.current) headRef.current.style.left = '0%'
+    if (labelRef.current) labelRef.current.textContent = ''
+  }, [entry?.id])
+
+  const seekFromPointer = (clientX: number) => {
+    const box = trackRef.current?.getBoundingClientRect()
+    const media = video.current
+    const duration = media?.duration ?? Number.NaN
+    if (!box || !media || !Number.isFinite(duration) || duration <= 0) return
+    const ratio = Math.min(Math.max((clientX - box.left) / box.width, 0), 1)
+    if (fillRef.current) fillRef.current.style.width = `${ratio * 100}%`
+    if (headRef.current) headRef.current.style.left = `${ratio * 100}%`
+    onSeek(ratio * duration * 1000)
+  }
+
+  const absolute = entry?.start
+  return (
+    <div
+      data-testid='playback-progress'
+      className={cn(
+        // h-5 is explicit: inside a wrapping flex row a w-full child has no
+        // intrinsic height, and a zero-height element is not clickable (nor, to
+        // Playwright, visible).
+        'flex h-5 w-full items-center gap-2',
+        disabled && 'pointer-events-none opacity-40'
+      )}
+    >
+      <span
+        ref={labelRef}
+        className='w-[104px] shrink-0 text-[10px] tabular-nums text-white/75'
+      />
+      <div
+        ref={trackRef}
+        role='slider'
+        aria-label='片段内进度'
+        aria-valuemin={0}
+        aria-valuemax={100}
+        tabIndex={disabled ? -1 : 0}
+        className='group/progress relative min-w-24 flex-1 cursor-pointer touch-none'
+        style={{ height: 16 }}
+        onPointerDown={(event) => {
+          if (disabled) return
+          event.currentTarget.setPointerCapture(event.pointerId)
+          dragRef.current = true
+          setDragging(true)
+          seekFromPointer(event.clientX)
+        }}
+        onPointerMove={(event) => {
+          if (dragRef.current) seekFromPointer(event.clientX)
+        }}
+        onPointerUp={() => {
+          dragRef.current = false
+          setDragging(false)
+        }}
+        onPointerCancel={() => {
+          dragRef.current = false
+          setDragging(false)
+        }}
+        onKeyDown={(event) => {
+          if (disabled || !absolute) return
+          const media = video.current
+          const duration = media?.duration
+          if (!Number.isFinite(duration ?? NaN) || !duration) return
+          if (event.key === 'ArrowLeft') onSeek(Math.max(0, (media!.currentTime - 5) * 1000))
+          else if (event.key === 'ArrowRight') onSeek(Math.min(duration * 1000, (media!.currentTime + 5) * 1000))
+          else return
+          event.preventDefault()
+        }}
+      >
+        {/* Track: the full segment. Fill: how much has played. */}
+        <div className='absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-white/25' />
+        <div
+          ref={fillRef}
+          className='absolute left-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-red-500'
+          style={{ width: '0%' }}
+        />
+        <div
+          ref={headRef}
+          className={cn(
+            'absolute top-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-red-500 shadow-sm transition-transform',
+            dragging ? 'scale-125' : 'group-hover/progress:scale-125'
+          )}
+          style={{ left: '0%' }}
+        />
+      </div>
+      {entry && (
+        <span
+          className='w-[92px] shrink-0 text-right text-[10px] tabular-nums text-white/50'
+          title={absolute ? `本片段起点 ${formatClock(absolute, zone)}` : undefined}
+        >
+          {absolute ? formatClock(absolute, zone).slice(11, 16) : ''}
+        </span>
       )}
     </div>
   )
@@ -1232,12 +1394,28 @@ return (
                 accessible names — e2e and keyboard users navigate by them. */}
             <div
               className={cn(
-                'absolute inset-x-0 bottom-0 flex flex-wrap items-center gap-1.5 bg-gradient-to-t from-black/85 via-black/60 to-transparent px-3 pb-2.5 pt-8 transition-opacity duration-200',
+                'absolute inset-x-0 bottom-0 flex flex-wrap items-center gap-1.5 bg-gradient-to-t from-black/85 via-black/60 to-transparent px-3 pb-2.5 pt-3 transition-opacity duration-200',
                 state.phase === 'playing'
                   ? 'opacity-0 group-hover/frame:opacity-100 focus-within:opacity-100'
                   : 'opacity-100'
               )}
             >
+              {/* Progress of the segment on screen. It is a SEGMENT scrubber, not
+                  the timeline: the player holds one file at a time, its duration
+                  is the file's, and a bar spanning a whole day would misreport
+                  what dragging it does. Seeking past the end continues into the
+                  next segment via the controller. */}
+              <SegmentProgress
+                video={video}
+                entry={state.entry}
+                zone={zone}
+                onSeek={(offsetMs) => controller.current?.seek(state.entry!.start + offsetMs)}
+                // Disabled only when there is nothing to scrub. Requiring a
+                // playing entry would hide the control exactly when an operator
+                // opens the page and looks for a way to position — the bar is a
+                // locator, not a playback indicator.
+                disabled={noData}
+              />
               <Button
                 size='icon'
                 variant='ghost'
