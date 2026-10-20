@@ -151,6 +151,14 @@ func BuildDeployment(v map[string]string) (Deployment, error) {
 	}
 	common := map[string]string{"ONE_NVR_PUBLIC_URL": c.PublicURL, "ONE_NVR_HTTP_PORT": fmt.Sprint(c.HTTPPort), "ONE_NVR_HTTPS_PORT": fmt.Sprint(c.HTTPSPort), "ONE_NVR_RTC_PORT": fmt.Sprint(c.RTCPort), "ONE_NVR_MEDIA_HOST": c.MediaHost, "ONE_NVR_DATA_DIR": "/data", "ONE_NVR_HARDWARE_PROFILE": c.HardwareProfile, "ONE_NVR_DATABASE_URL": "postgres://one_nvr:" + url.QueryEscape(v["ONE_NVR_POSTGRES_PASSWORD"]) + "@postgres:5432/one_nvr?sslmode=disable", "ONE_NVR_FRIGATE_ENABLE": boolValue(c.FrigateEnabled), "ONE_NVR_OPENLIST_ENABLE": boolValue(c.OpenListEnabled)}
 	common["ONE_NVR_CAMERA_CIDRS"] = c.CameraCIDRs
+	// The console port has to reach the containers, not just the renderer. It is
+	// used for two different things and both need it: publishing the host port
+	// (below) and telling the API where that port is, so the archive page can
+	// build a link to it. Rendering the mapping without passing the value left
+	// the container reading 0 and the page saying "not published" while the port
+	// was published — the same shape as the event-cache size that was mounted but
+	// never passed.
+	common["ONE_NVR_OPENLIST_UI_PORT"] = fmt.Sprint(c.OpenListUIPort)
 	// Every container follows the site zone so its timestamps can be read
 	// against the operator's clock: database logs, recorder job times,
 	// detector events and ZLM's own log lines all agree.

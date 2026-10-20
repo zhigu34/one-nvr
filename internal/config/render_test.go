@@ -312,3 +312,42 @@ func TestOpenListUIPortRequiresTheModule(t *testing.T) {
 		t.Fatal("an out-of-range console port must be refused")
 	}
 }
+
+// The console port is used twice: to publish the host port, and by the API to
+// tell the page where the console is. Rendering the mapping without passing the
+// value satisfies the first and silently breaks the second — the container read
+// 0 and the archive page reported "not published" while the port was published.
+func TestOpenListUIPortReachesTheContainers(t *testing.T) {
+	deployment, err := BuildDeployment(map[string]string{
+		"ONE_NVR_PUBLIC_URL":       "https://192.168.1.10:8443",
+		"ONE_NVR_HTTPS_PORT":       "8443",
+		"ONE_NVR_DATA_DIR":         "/srv/one-nvr",
+		"ONE_NVR_OPENLIST_ENABLE":  "yes",
+		"ONE_NVR_OPENLIST_UI_PORT": "5245",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Both facts, in the same test: the mapping alone is not the feature.
+	if ports := deployment.Services["openlist"].Ports; !reflect.DeepEqual(ports, []string{"5245:5244/tcp"}) {
+		t.Fatalf("the console port must be published, got %v", ports)
+	}
+	for _, name := range []string{"api", "worker"} {
+		if got := deployment.Services[name].Environment["ONE_NVR_OPENLIST_UI_PORT"]; got != "5245" {
+			t.Fatalf("%s must receive the console port so the page can link to it, got %q", name, got)
+		}
+	}
+	// Unset means zero, not a missing key: the API reads it on every start.
+	off, err := BuildDeployment(map[string]string{
+		"ONE_NVR_PUBLIC_URL":      "https://192.168.1.10:8443",
+		"ONE_NVR_HTTPS_PORT":      "8443",
+		"ONE_NVR_DATA_DIR":        "/srv/one-nvr",
+		"ONE_NVR_OPENLIST_ENABLE": "yes",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := off.Services["api"].Environment["ONE_NVR_OPENLIST_UI_PORT"]; got != "0" {
+		t.Fatalf("an unpublished console must read as 0, got %q", got)
+	}
+}
