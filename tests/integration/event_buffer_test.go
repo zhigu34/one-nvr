@@ -1537,17 +1537,23 @@ func TestAbandonedClipJobIsRequeued(t *testing.T) {
 }
 
 // The premise the retention progress guard exists for: a skip leaves the row
-// 'ready', so the same segment is selected again on the next iteration.
+// A missing file settles the row instead of leaving it selectable.
 //
-// A missing file and an identity mismatch both take the deleteStateMissing /
-// deleteStateSkipped path, which returns WITHOUT touching the row. That is what
-// makes an unguarded round loop forever — and because that round sits before the
-// pressure, quota and audit sweeps on the shared ticker, one undeletable file
-// would silently disable the cleanup that keeps the disk from filling.
+// This used to pin the opposite: a skip returned WITHOUT touching the row, so
+// the same segment was selected again on the next iteration, and an unguarded
+// round would loop forever — which is why the retention round carries a
+// no-progress guard.
 //
-// This pins the premise, not the guard: if a future change makes a skip also
-// settle the row, the guard becomes unnecessary rather than harmful.
-func TestSkippedDeletionLeavesTheRowSelectable(t *testing.T) {
+// That premise was the bug in disguise. The candidate query selects
+// `state='ready' ... ORDER BY end_at LIMIT n`, so a row whose file is gone stays
+// at the head of the queue forever and every sweep reports "no safe candidate"
+// while hundreds of deletable segments sit behind it. The fix records the verdict
+// ('missing'), which removes the row from the queue and makes the starvation
+// impossible rather than merely guarded.
+//
+// The no-progress guard stays: it is what stops a round from spinning on
+// identity mismatches, which still leave the row untouched.
+func TestMissingFileSettlesTheRowInsteadOfStarvingTheSweep(t *testing.T) {
 	fixture := scheduledFixture(t)
 	ctx := context.Background()
 	segment := seedSegment(t, fixture, time.Now().UTC().Add(-time.Hour), time.Now().UTC().Add(-59*time.Minute))
@@ -1563,13 +1569,23 @@ func TestSkippedDeletionLeavesTheRowSelectable(t *testing.T) {
 		t.Fatal("a segment with no file reported a successful deletion")
 	}
 
-	// The row must still be 'ready', which is exactly why the sweep re-selects it.
+	// The verdict is recorded, so the candidate query no longer returns this row
+	// and it cannot occupy the head of the queue.
 	var state string
 	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state FROM recording_segments WHERE id=$1`, segment).Scan(&state); err != nil {
 		t.Fatal(err)
 	}
-	if state != "ready" {
-		t.Fatalf("a skipped deletion changed the row to %q; the guard's premise no longer holds", state)
+	if state != "missing" {
+		t.Fatalf("a lost file must be recorded as missing, got %q", state)
+	}
+	// And the same call reports missing rather than looping: a second attempt
+	// finds the row in that state and answers immediately.
+	again, err := fixture.Service.DeleteCorruptLocal(ctx, []id.ID{segment})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again) != 1 || again[0].State != "missing" {
+		t.Fatalf("a repeat attempt is idempotent, got %+v", again)
 	}
 }
 

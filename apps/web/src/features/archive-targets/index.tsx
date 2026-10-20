@@ -11,6 +11,8 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { useAPI } from '@/features/foundation/hooks'
 import { apiErrorText } from '@/features/foundation/api-errors'
 import { Empty, Notices, QueryState, SelectField } from '@/features/foundation/ui'
+import { ChannelOverview, RunStatus } from './archive-run-status'
+import type { ChannelStatus, TargetStatus } from './archive-status'
 
 type Target = Schema<'ArchiveTarget'>
 type Capabilities = Schema<'ArchiveTargetCapabilities'>
@@ -36,6 +38,8 @@ export function ArchiveTargets() {
   const targets = useAPI<PageData<Target>>('/api/v1/archive-targets', admin)
   const channels = useAPI<PageData<Schema<'Channel'>>>('/api/v1/channels?limit=100', admin)
   const policies = useAPI<{ items: Policy[] }>('/api/v1/archive-policies', admin)
+  const targetStatus = useAPI<{ items: TargetStatus[] }>('/api/v1/archive-targets/status', admin, 15_000)
+  const channelStatus = useAPI<{ items: ChannelStatus[] }>('/api/v1/archive-channels', admin, 30_000)
   const site = useAPI<Schema<'Site'>>('/api/v1/site', admin)
   const [form, setForm] = useState(EMPTY_FORM)
   const [editing, setEditing] = useState<string>('')
@@ -111,6 +115,30 @@ export function ArchiveTargets() {
     void probe({ id: target.id })
   }
 
+  /**
+   * retryFailures reports its own count, so it cannot use the shared run()
+   * helper: run() takes a fixed success message, and "已重新排队 N 项" carries a
+   * number only the response knows.
+   */
+  async function retryFailures(targetID: string) {
+    setPending(true)
+    setError('')
+    setNotice('')
+    try {
+      const result = await apiRequest<{ retried: number }>(
+        `/api/v1/archive-targets/${targetID}/retry`,
+        { method: 'POST' }
+      )
+      const count = result.retried ?? 0
+      setNotice(count > 0 ? `已重新排队 ${count} 项上传` : '没有需要重试的项目')
+      refresh()
+    } catch (cause) {
+      setError(errorText(cause))
+    } finally {
+      setPending(false)
+    }
+  }
+
   function edit(target: Target) {
     setEditing(target.id ?? '')
     setForm({
@@ -136,6 +164,14 @@ export function ArchiveTargets() {
       </div>
       <QueryState pending={targets.isPending} error={targets.error} retry={targets.refetch} />
       <Notices notice={notice} error={error} />
+      <RunStatus
+        targets={targets.data?.items || []}
+        statuses={targetStatus.data?.items || []}
+        pending={targetStatus.isPending}
+        failed={!!targetStatus.error}
+        error={targetStatus.error ? errorText(targetStatus.error) : ''}
+        onRetry={(targetID) => void retryFailures(targetID)}
+      />
       <form
         className='grid gap-3 rounded-xl border bg-card p-4'
         onSubmit={(event) => {
@@ -289,6 +325,7 @@ export function ArchiveTargets() {
           zone={site.data?.timezone || ''}
         />
       )}
+      <ChannelOverview items={channelStatus.data?.items || []} />
       {!targets.data?.items.length && !targets.isPending ? (
         /* A compact empty state: the full Empty block is a 64px dashed box, and
            on a fresh install this is the normal state of the page. */

@@ -296,6 +296,18 @@ func TestArchiveUploadRetryAndFailure(t *testing.T) {
 	if errors.As(executeErr, &permanent) {
 		t.Fatal("an unreachable target must stay retryable", executeErr)
 	}
+	// "Retryable" has to mean the job actually goes back to the queue. Returning
+	// nil from the handler would mark the job succeeded while the copy still
+	// says uploading, and nothing would ever pick it up again.
+	var jobState, jobError string
+	var available bool
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state,coalesce(error_code,''),available_at<=clock_timestamp()+interval '31 seconds' FROM jobs WHERE kind='recording.archive_upload'`).
+		Scan(&jobState, &jobError, &available); err != nil {
+		t.Fatal(err)
+	}
+	if jobState != "queued" {
+		t.Fatal("a retryable upload must return to the queue", jobState, jobError)
+	}
 	var state, errorCode string
 	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state,error_code FROM recording_archive_copies WHERE segment_id=$1`, segment.ID).Scan(&state, &errorCode); err != nil {
 		t.Fatal(err)
@@ -306,5 +318,190 @@ func TestArchiveUploadRetryAndFailure(t *testing.T) {
 	// An unknown target is not found.
 	if _, err := service.CreateUploads(ctx, fixture.Admin, "00000000-0000-4000-8000-000000000000", []id.ID{segment.ID}); err == nil {
 		t.Fatal("an unknown target is refused")
+	}
+}
+
+// The run status answers a question the target list cannot: whether uploads
+// are actually working. It has to keep the three states apart, because "idle"
+// (nothing tried) reading as "healthy" is how an archive stays broken for a
+// week with a green page.
+func TestArchiveTargetStatusSeparatesIdleFromFailing(t *testing.T) {
+	fixture := newPublicationFixture(t)
+	ctx := context.Background()
+	service := archive.New(fixture.DB, fixture.Auth, fixture.Site.Secrets, fixture.Service.Pools)
+	segment, err := fixture.Service.Publish(ctx, fixture.Inbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An unreachable target: an upload against it fails for a real reason.
+	target, err := service.RegisterTarget(ctx, fixture.Admin, archive.TargetInput{
+		Name: "主归档", BaseURL: "http://127.0.0.1:1/dav", RemoteRoot: "/one-nvr",
+		Username: "archiver", Password: "dav-secret", CloudRetentionDays: 365, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses, err := service.TargetStatuses(ctx, fixture.Admin)
+	if err != nil || len(statuses) != 1 {
+		t.Fatal("every target has a status row, even with no copies", statuses, err)
+	}
+	if statuses[0].Verified != 0 || statuses[0].Uploading != 0 || statuses[0].Failed != 0 {
+		t.Fatal("a fresh target reports nothing attempted", statuses[0])
+	}
+
+	if _, err := service.CreateUploads(ctx, fixture.Admin, target.ID, []id.ID{segment.ID}); err != nil {
+		t.Fatal(err)
+	}
+	statuses, err = service.TargetStatuses(ctx, fixture.Admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if statuses[0].Uploading != 1 || statuses[0].OldestPendingAt == nil {
+		t.Fatal("a queued copy is visible as pending, with when it was queued", statuses[0])
+	}
+
+	// Drive the job to a terminal failure: the target is unreachable and the
+	// retry budget runs out.
+	repo := jobs.Repository{DB: fixture.DB}
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE jobs SET max_attempts=1 WHERE kind='recording.archive_upload'`); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := repo.Claim(ctx, "recording.archive_upload")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = jobs.Execute(ctx, repo, lease, service.HandleUpload)
+	statuses, err = service.TargetStatuses(ctx, fixture.Admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if statuses[0].Uploading != 0 {
+		t.Fatal("an exhausted upload is no longer in flight", statuses[0])
+	}
+	// The copy stays 'uploading' with a reason while the job retries; once the
+	// job terminalizes, the row is still 'uploading' — which is exactly the
+	// shape the retry path exists for. Either way the failure has to be named.
+	if statuses[0].Failed == 0 && statuses[0].LastError == "" {
+		t.Fatalf("a failed upload must be visible as a failure: %+v", statuses[0])
+	}
+}
+
+// A failed copy used to be a dead end: the job reached a terminal state, and
+// re-selecting the segment read the same terminal job back. The retry path is
+// what makes the failure state non-final.
+func TestArchiveRetryRevivesFailedCopies(t *testing.T) {
+	fixture := newPublicationFixture(t)
+	ctx := context.Background()
+	service := archive.New(fixture.DB, fixture.Auth, fixture.Site.Secrets, fixture.Service.Pools)
+	segment, err := fixture.Service.Publish(ctx, fixture.Inbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := service.RegisterTarget(ctx, fixture.Admin, archive.TargetInput{
+		Name: "主归档", BaseURL: "http://127.0.0.1:1/dav", RemoteRoot: "/one-nvr",
+		Username: "archiver", Password: "dav-secret", CloudRetentionDays: 365, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateUploads(ctx, fixture.Admin, target.ID, []id.ID{segment.ID}); err != nil {
+		t.Fatal(err)
+	}
+	// Force the terminal state the retry path exists for.
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE recording_archive_copies SET state='failed',error_code='upload_failed' WHERE segment_id=$1`, segment.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE jobs SET state='failed',attempt=max_attempts,error_code='handler_failed' WHERE kind='recording.archive_upload'`); err != nil {
+		t.Fatal(err)
+	}
+
+	revived, err := service.RetryFailures(ctx, fixture.Admin, target.ID)
+	if err != nil || revived != 1 {
+		t.Fatal("the failed copy must be queued again", revived, err)
+	}
+	var state string
+	var attempt int
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state FROM recording_archive_copies WHERE segment_id=$1`, segment.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "uploading" {
+		t.Fatal("a revived copy goes back to uploading", state)
+	}
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT attempt FROM jobs WHERE kind='recording.archive_upload'`).Scan(&attempt); err != nil {
+		t.Fatal(err)
+	}
+	// The retry budget belongs to one attempt sequence; asking again starts a
+	// new one, otherwise the very first revival would exhaust immediately.
+	if attempt != 0 {
+		t.Fatal("a manual retry restarts the attempt budget", attempt)
+	}
+	// The job must be claimable again, which is the whole point.
+	repo := jobs.Repository{DB: fixture.DB}
+	if _, err := repo.Claim(ctx, "recording.archive_upload"); err != nil {
+		t.Fatal("the revived job must be claimable", err)
+	}
+
+	// A second call with nothing failed reports zero rather than lying.
+	again, err := service.RetryFailures(ctx, fixture.Admin, target.ID)
+	if err != nil || again != 0 {
+		t.Fatal("an in-flight copy is not retried again", again, err)
+	}
+}
+
+// The channel overview counts against the copies that reached THIS target, so
+// "how much of this channel is archived" is one subtraction.
+func TestChannelArchiveStatusCountsAgainstItsOwnTarget(t *testing.T) {
+	fixture := newPublicationFixture(t)
+	ctx := context.Background()
+	dav := webdavTestServer(t, "archiver", "dav-secret")
+	service := archive.New(fixture.DB, fixture.Auth, fixture.Site.Secrets, fixture.Service.Pools)
+	segment, err := fixture.Service.Publish(ctx, fixture.Inbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := service.RegisterTarget(ctx, fixture.Admin, archive.TargetInput{
+		Name: "主归档", BaseURL: dav.URL, RemoteRoot: "/one-nvr",
+		Username: "archiver", Password: "dav-secret", CloudRetentionDays: 365, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.UpsertPolicy(ctx, fixture.Admin, archive.Policy{
+		ChannelID: fixture.Channel, TargetID: target.ID, Mode: archive.ModeImmediate,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateUploads(ctx, fixture.Admin, target.ID, []id.ID{segment.ID}); err != nil {
+		t.Fatal(err)
+	}
+	runUploadJob(t, fixture, service, ctx)
+
+	items, err := service.ChannelArchiveStatuses(ctx, fixture.Admin)
+	if err != nil || len(items) != 1 {
+		t.Fatal("the bound channel must be listed", items, err)
+	}
+	item := items[0]
+	if item.ChannelNo != 1 || item.Name == "" {
+		t.Fatal("the row names the channel", item)
+	}
+	if item.Target != "主归档" || !item.TargetEnabled || item.Mode != archive.ModeImmediate {
+		t.Fatal("the row carries the binding", item)
+	}
+	if item.Segments != 1 || item.Copied != 1 {
+		t.Fatal("the verified copy counts against the channel", item)
+	}
+	// The local retention window is what a verified copy unlocks; reporting it
+	// next to the count keeps the consequence visible.
+	if item.LocalRetentionHours == 0 {
+		t.Fatal("the site's local archive window must be reported", item)
+	}
+
+	// A channel with no policy is not an archiving channel.
+	if _, err := fixture.DB.Pool.Exec(ctx, `DELETE FROM archive_policies WHERE channel_id=$1`, fixture.Channel); err != nil {
+		t.Fatal(err)
+	}
+	items, err = service.ChannelArchiveStatuses(ctx, fixture.Admin)
+	if err != nil || len(items) != 0 {
+		t.Fatal("an unbound channel is not listed", items, err)
 	}
 }

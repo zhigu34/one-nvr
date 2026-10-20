@@ -1059,6 +1059,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/archive-targets/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["archiveTargetStatuses"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/archive-channels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["archiveChannels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/archive-targets/test": {
         parameters: {
             query?: never;
@@ -1069,6 +1101,23 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["archiveTargetTest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/archive-targets/{id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Re-queues every copy of this target that stopped without finishing. Copies whose job is still queued or running are left alone. */
+        post: operations["archiveTargetRetry"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2545,6 +2594,48 @@ export interface components {
         };
         ArchiveUploadCreated: {
             queued?: components["schemas"]["UUID"][];
+        };
+        ArchiveTargetStatus: {
+            target_id?: components["schemas"]["UUID"];
+            /** @description Copies confirmed present on the target. */
+            verified?: number;
+            /** @description Copies whose upload job is queued or running. */
+            uploading?: number;
+            /** @description Copies still marked uploading whose job has given up. Reported apart from uploading because they look identical in the copies table but will never resume without a retry. */
+            stopped?: number;
+            failed?: number;
+            /** Format: int64 */
+            verified_bytes?: number;
+            /**
+             * Format: date-time
+             * @description When the least recently queued copy was enqueued; null when nothing is waiting.
+             */
+            oldest_pending_at?: string | null;
+            /** @description Error code of the most recent failure; empty when none failed. */
+            last_error?: string;
+        };
+        ArchiveTargetStatusPage: {
+            items?: components["schemas"]["ArchiveTargetStatus"][];
+        };
+        ChannelArchiveStatus: {
+            channel_id?: components["schemas"]["UUID"];
+            channel_no?: number;
+            name?: string;
+            target_id?: components["schemas"]["UUID"];
+            target_name?: string;
+            /** @description A disabled target keeps the binding; its footage then falls back to the site's recording retention. */
+            target_enabled?: boolean;
+            /** @enum {string} */
+            mode?: "manual" | "scheduled" | "immediate";
+            /** @description Ready segments this channel currently holds. */
+            segments?: number;
+            copied?: number;
+            failed?: number;
+            /** @description Hours after which a verified copy lets the local file go; zero means the archive window is disabled. */
+            local_retention_hours?: number;
+        };
+        ChannelArchiveStatusPage: {
+            items?: components["schemas"]["ChannelArchiveStatus"][];
         };
         ArchivePolicy: {
             channel_id?: components["schemas"]["UUID"];
@@ -7143,6 +7234,46 @@ export interface operations {
             };
         };
     };
+    archiveTargetStatuses: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Per-target upload counts. Answers whether the archive is running, not how it is configured. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchiveTargetStatusPage"];
+                };
+            };
+        };
+    };
+    archiveChannels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every channel bound to an archive target, with its footage counts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelArchiveStatusPage"];
+                };
+            };
+        };
+    };
     archiveTargetTest: {
         parameters: {
             query?: never;
@@ -7171,6 +7302,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ArchiveTargetCapabilities"];
+                };
+            };
+        };
+    };
+    archiveTargetRetry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description How many copies were queued again. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        retried?: number;
+                    };
                 };
             };
         };

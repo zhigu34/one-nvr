@@ -162,6 +162,51 @@ func (r *router) requestArchiveUploads(w http.ResponseWriter, q *http.Request, p
 	}{created})
 }
 
+// retryArchiveFailures handles POST /api/v1/archive-targets/{id}/retry: every
+// copy that stopped without finishing is queued again.
+func (r *router) retryArchiveFailures(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	targetID, err := pathID(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	revived, err := r.d.Archive.RetryFailures(q.Context(), p, targetID)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 202, struct {
+		Retried int `json:"retried"`
+	}{revived})
+}
+
+// listArchiveTargetStatuses handles GET /api/v1/archive-targets/status: what
+// each target is actually doing, as opposed to how it is configured.
+func (r *router) listArchiveTargetStatuses(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	items, err := r.d.Archive.TargetStatuses(q.Context(), p)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, struct {
+		Items []archive.TargetStatus `json:"items"`
+	}{items})
+}
+
+// listChannelArchiveStatuses handles GET /api/v1/archive-channels: every
+// channel bound to a target, with its footage counts and the local retention
+// window that applies to it.
+func (r *router) listChannelArchiveStatuses(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	items, err := r.d.Archive.ChannelArchiveStatuses(q.Context(), p)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, struct {
+		Items []archive.ChannelArchiveStatus `json:"items"`
+	}{items})
+}
+
 // listArchivePolicies handles GET /api/v1/archive-policies.
 func (r *router) listArchivePolicies(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
 	policies, err := r.d.Archive.ListPolicies(q.Context(), p)

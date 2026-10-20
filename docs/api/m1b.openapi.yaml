@@ -3998,6 +3998,54 @@
         }
       }
     },
+    "/api/v1/archive-targets/status": {
+      "get": {
+        "operationId": "archiveTargetStatuses",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-target upload counts. Answers whether the archive is running, not how it is configured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchiveTargetStatusPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/archive-channels": {
+      "get": {
+        "operationId": "archiveChannels",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every channel bound to an archive target, with its footage counts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelArchiveStatusPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/archive-targets/test": {
       "post": {
         "operationId": "archiveTargetTest",
@@ -4049,6 +4097,36 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ArchiveTargetCapabilities"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/archive-targets/{id}/retry": {
+      "post": {
+        "operationId": "archiveTargetRetry",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "description": "Re-queues every copy of this target that stopped without finishing. Copies whose job is still queued or running are left alone.",
+        "responses": {
+          "202": {
+            "description": "How many copies were queued again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "retried": {
+                      "type": "integer"
+                    }
+                  }
                 }
               }
             }
@@ -9162,6 +9240,106 @@
             "type": "array",
             "items": {
               "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
+        }
+      },
+      "ArchiveTargetStatus": {
+        "type": "object",
+        "properties": {
+          "target_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "verified": {
+            "type": "integer",
+            "description": "Copies confirmed present on the target."
+          },
+          "uploading": {
+            "type": "integer",
+            "description": "Copies whose upload job is queued or running."
+          },
+          "stopped": {
+            "type": "integer",
+            "description": "Copies still marked uploading whose job has given up. Reported apart from uploading because they look identical in the copies table but will never resume without a retry."
+          },
+          "failed": {
+            "type": "integer"
+          },
+          "verified_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "oldest_pending_at": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "When the least recently queued copy was enqueued; null when nothing is waiting."
+          },
+          "last_error": {
+            "type": "string",
+            "description": "Error code of the most recent failure; empty when none failed."
+          }
+        }
+      },
+      "ArchiveTargetStatusPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArchiveTargetStatus"
+            }
+          }
+        }
+      },
+      "ChannelArchiveStatus": {
+        "type": "object",
+        "properties": {
+          "channel_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "channel_no": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "target_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "target_name": {
+            "type": "string"
+          },
+          "target_enabled": {
+            "type": "boolean",
+            "description": "A disabled target keeps the binding; its footage then falls back to the site's recording retention."
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["manual", "scheduled", "immediate"]
+          },
+          "segments": {
+            "type": "integer",
+            "description": "Ready segments this channel currently holds."
+          },
+          "copied": {
+            "type": "integer"
+          },
+          "failed": {
+            "type": "integer"
+          },
+          "local_retention_hours": {
+            "type": "integer",
+            "description": "Hours after which a verified copy lets the local file go; zero means the archive window is disabled."
+          }
+        }
+      },
+      "ChannelArchiveStatusPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChannelArchiveStatus"
             }
           }
         }

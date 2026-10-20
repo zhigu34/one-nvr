@@ -16,7 +16,17 @@ afterEach(() => {
   useAuthStore.getState().reset()
 })
 
-function setup(options: { targets?: unknown[]; caps?: unknown; failTest?: boolean } = {}) {
+function setup(
+  options: {
+    targets?: unknown[]
+    caps?: unknown
+    failTest?: boolean
+    statuses?: unknown[]
+    channelStatus?: unknown[]
+    failStatus?: boolean
+    retried?: number
+  } = {}
+) {
   useAuthStore.getState().setUser({
     id: 'admin',
     username: 'admin',
@@ -29,6 +39,13 @@ function setup(options: { targets?: unknown[]; caps?: unknown; failTest?: boolea
       if (options.failTest) throw new Error('archive_target_unavailable')
       return options.caps ?? { write: true, read: true, range: true, delete: true }
     }
+    if (path.endsWith('/retry')) return { retried: options.retried ?? 0 }
+    if (path === '/api/v1/archive-targets/status') {
+      if (options.failStatus) throw new Error('unavailable')
+      return { items: options.statuses ?? [] }
+    }
+    if (path === '/api/v1/archive-channels')
+      return { items: options.channelStatus ?? [] }
     if (path.startsWith('/api/v1/archive-targets'))
       return { items: options.targets ?? [], next_cursor: null }
     if (path.startsWith('/api/v1/archive-policies')) return { items: [] }
@@ -118,4 +135,94 @@ test('the empty state is compact rather than a tall dashed block', async () => {
   // Neither the old 64px block padding nor a full-height placeholder: the empty
   // state is the normal state of a fresh install.
   expect(note.className).toContain('py-3.5')
+})
+
+const TARGET = { id: 't1', name: 'NAS 归档', enabled: true, username: 'u', cloud_retention_days: 365 }
+
+test('a target with nothing uploaded does not read as healthy', async () => {
+  // The list alone cannot tell "working" from "never tried"; the run status has
+  // to say the difference rather than print a green tick from zero samples.
+  const page = await setup({
+    targets: [TARGET],
+    statuses: [{ target_id: 't1', verified: 0, uploading: 0, failed: 0 }],
+  })
+  await expect.element(page.getByTestId('archive-run-status')).toBeVisible()
+  await expect.element(page.getByText('尚未上传')).toBeVisible()
+})
+
+test('a failing target shows the reason and offers a retry', async () => {
+  const page = await setup({
+    targets: [TARGET],
+    statuses: [
+      { target_id: 't1', verified: 4, uploading: 0, failed: 7, last_error: 'target_unauthorized' },
+    ],
+    retried: 7,
+  })
+  await expect.element(page.getByText('有失败')).toBeVisible()
+  await expect.element(page.getByText(/目标拒绝当前凭据/)).toBeVisible()
+  await userEvent.click(page.getByRole('button', { name: '重试失败项' }))
+  // The count comes from the response, not from a fixed string.
+  await expect.element(page.getByText('已重新排队 7 项上传')).toBeVisible()
+})
+
+test('a failed status read is reported instead of rendered as all-clear', async () => {
+  const page = await setup({ targets: [TARGET], failStatus: true })
+  await expect.element(page.getByText(/归档运行状态读不到/)).toBeVisible()
+  expect(page.getByText('已同步').query()).toBeNull()
+})
+
+test('the channel overview reports coverage and the local retention window', async () => {
+  const page = await setup({
+    targets: [TARGET],
+    statuses: [{ target_id: 't1', verified: 3, uploading: 0, failed: 0 }],
+    channelStatus: [
+      {
+        channel_id: 'c1',
+        channel_no: 1,
+        name: '前门',
+        target_id: 't1',
+        target_name: 'NAS 归档',
+        target_enabled: true,
+        mode: 'immediate',
+        segments: 8,
+        copied: 6,
+        failed: 0,
+        local_retention_hours: 48,
+      },
+    ],
+  })
+  await expect.element(page.getByTestId('archive-channel-overview')).toBeVisible()
+  await expect.element(page.getByText('CH01 前门')).toBeVisible()
+  await expect.element(page.getByText('6/8 段已归档')).toBeVisible()
+  await expect.element(page.getByText('48 小时')).toBeVisible()
+})
+
+test('a channel with no ready footage gets no coverage bar', async () => {
+  // 0/0 is not 0%: an empty channel has nothing to cover, and a 0% bar would
+  // read as a broken archive.
+  const page = await setup({
+    targets: [TARGET],
+    statuses: [{ target_id: 't1', verified: 0, uploading: 0, failed: 0 }],
+    channelStatus: [
+      {
+        channel_id: 'c2',
+        channel_no: 2,
+        name: '后门',
+        target_id: 't1',
+        target_name: 'NAS 归档',
+        target_enabled: false,
+        mode: 'manual',
+        segments: 0,
+        copied: 0,
+        failed: 0,
+        local_retention_hours: 0,
+      },
+    ],
+  })
+  await expect.element(page.getByText('本机暂无待归档片段')).toBeVisible()
+  // The disabled target keeps its binding, and that is worth naming.
+  await expect.element(page.getByText('已停用')).toBeVisible()
+  await expect
+    .element(page.getByTestId('archive-channel-row').getByText('未启用'))
+    .toBeVisible()
 })

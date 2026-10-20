@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"path"
@@ -26,14 +27,14 @@ import (
 
 // Task failure codes, shared with the jobs table and the drawer.
 const (
-	errTargetGone       = "target_unavailable"
-	errTargetDenied     = "target_unauthorized"
-	errSourceGone       = "source_unavailable"
-	errUploadFailed     = "upload_failed"
-	errVerifyFailed     = "verify_failed"
-	errJobExhausted     = "job_exhausted"
-	uploadConcurrency   = 2
-	maxManualBatch      = 100
+	errTargetGone     = "target_unavailable"
+	errTargetDenied   = "target_unauthorized"
+	errSourceGone     = "source_unavailable"
+	errUploadFailed   = "upload_failed"
+	errVerifyFailed   = "verify_failed"
+	errJobExhausted   = "job_exhausted"
+	uploadConcurrency = 2
+	maxManualBatch    = 100
 )
 
 var (
@@ -471,13 +472,18 @@ func (s *Service) failCopy(ctx context.Context, copyID id.ID, code string) error
 	return &jobs.PermanentFailure{Code: code}
 }
 
-// failRetry keeps the copy uploading (the job will retry with backoff) and
-// records why, so the drawer can show a live reason without lying about state.
+// failRetry keeps the copy uploading and makes the job retry with backoff.
+//
+// The error must be non-nil: returning nil would let jobs.Execute record a
+// completed job while the copy still says 'uploading', and nothing would ever
+// run it again — a transient network failure would park the footage in a state
+// that reads as progress forever.
 func (s *Service) failRetry(ctx context.Context, copyID id.ID, code string) error {
-	_, err := s.DB.Pool.Exec(ctx, `UPDATE recording_archive_copies SET error_code=$2 WHERE id=$1 AND state='uploading'`, copyID, code)
-	return err
+	if _, err := s.DB.Pool.Exec(ctx, `UPDATE recording_archive_copies SET error_code=$2 WHERE id=$1 AND state='uploading'`, copyID, code); err != nil {
+		return err
+	}
+	return fmt.Errorf("archive upload retryable: %s", code)
 }
-
 
 // uploadSource is the slice of segment state the upload kernel needs.
 type uploadSource struct {
@@ -527,4 +533,216 @@ func (s *Service) enqueueUpload(ctx context.Context, tx pgx.Tx, targetID, segmen
 		return false, err
 	}
 	return true, nil
+}
+
+// RetryFailures re-queues every copy of one target that is stopped but not
+// finished, and reports how many it revived.
+//
+// Without this a permanently failed copy is a dead end: the job that carried it
+// reached a terminal state, and re-selecting the segment only re-reads the same
+// dead job (the idempotency key is unchanged), so the page could report
+// "queued" while nothing was ever going to run. Failures that were worth fixing
+// — a target that was down, credentials that were wrong — therefore needed a
+// database edit to recover.
+//
+// Copies still in flight are left alone: the job is queued or running, and
+// resetting it would duplicate an upload that is already moving bytes.
+func (s *Service) RetryFailures(ctx context.Context, p auth.Principal, targetID id.ID) (int, error) {
+	if err := s.Auth.RequireAdmin(ctx, p); err != nil {
+		return 0, err
+	}
+	revived := 0
+	err := s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT c.id,c.segment_id,c.state
+			FROM recording_archive_copies c
+			LEFT JOIN jobs j ON j.kind='recording.archive_upload'
+				AND j.idempotency_key = c.segment_id::text || ':' || c.target_id::text
+			WHERE c.target_id=$1 AND (c.state='failed' OR c.state='uploading')
+			AND (j.id IS NULL OR j.state NOT IN ('queued','running'))`, targetID)
+		if err != nil {
+			return err
+		}
+		type stuck struct {
+			CopyID, SegmentID id.ID
+			State             string
+		}
+		var candidates []stuck
+		for rows.Next() {
+			var item stuck
+			if err := rows.Scan(&item.CopyID, &item.SegmentID, &item.State); err != nil {
+				rows.Close()
+				return err
+			}
+			candidates = append(candidates, item)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, item := range candidates {
+			// A failed copy is revived in place: its object key and size are still
+			// right, and ARC-02's single row per (segment,target) is what later
+			// uploads and expiry cleanup key on.
+			if _, err := tx.Exec(ctx, `UPDATE recording_archive_copies SET state='uploading',error_code=NULL WHERE id=$1`, item.CopyID); err != nil {
+				return err
+			}
+			payload, err := json.Marshal(map[string]any{"copy_id": item.CopyID})
+			if err != nil {
+				return err
+			}
+			// Attempts restart at zero: the retry budget belongs to one attempt
+			// sequence, and the operator asking again is a new sequence.
+			if _, err := tx.Exec(ctx, `UPDATE jobs SET state='queued',attempt=0,available_at=clock_timestamp(),
+				error_code=NULL,lease_expires_at=NULL,fencing_token=NULL,updated_at=clock_timestamp()
+				WHERE kind='recording.archive_upload' AND idempotency_key=$1`, string(item.SegmentID)+":"+string(targetID)); err != nil {
+				return err
+			}
+			if _, err := jobs.Enqueue(ctx, tx, jobs.Input{
+				Kind:           "recording.archive_upload",
+				ObjectID:       item.CopyID,
+				IdempotencyKey: string(item.SegmentID) + ":" + string(targetID),
+				Payload:        payload,
+			}); err != nil && !errors.Is(err, jobs.ErrIdempotencyConflict) {
+				return err
+			}
+			revived++
+		}
+		if revived == 0 {
+			return nil
+		}
+		detailsRaw, _ := json.Marshal(map[string]any{"target_id": targetID, "retried": revived})
+		return audit.Append(ctx, tx, audit.Entry{ActorID: p.UserID, Action: "archive.failures_retried", ObjectID: targetID, Details: detailsRaw})
+	})
+	if err != nil {
+		return 0, err
+	}
+	return revived, nil
+}
+
+// TargetStatus is what one target is actually doing.
+//
+// The target list says how a target is configured; this says whether the archive
+// is working. Without it an operator has to query the copies table by hand to learn
+// that (for example) every upload is failing, and the page looks identical whether
+// the archive is idle, healthy, or broken.
+type TargetStatus struct {
+	TargetID id.ID `json:"target_id"`
+	// Verified, Pending and Failed count COPIES, not segments: one segment archived
+	// twice appears once per target, which is what the per-target rows answer.
+	Verified int `json:"verified"`
+	// Uploading counts copies whose job is genuinely queued or running.
+	// Stopped counts copies still marked 'uploading' whose job has given up —
+	// the job's retry budget ran out. They are reported separately because
+	// they look identical in the copies table but mean opposite things on the
+	// page: one is progress, the other is work that will never resume without
+	// an operator.
+	Uploading int `json:"uploading"`
+	Stopped   int `json:"stopped"`
+	Failed    int `json:"failed"`
+	// VerifiedBytes is the size of the copies that are confirmed present.
+	VerifiedBytes int64 `json:"verified_bytes"`
+	// OldestPendingAt is when the least recently queued copy was enqueued; null
+	// when nothing is waiting. It answers "is the archive keeping up".
+	OldestPendingAt *time.Time `json:"oldest_pending_at"`
+	// LastError is the most recent failure's code, so the page can name the reason
+	// instead of only counting failures.
+	LastError string `json:"last_error"`
+}
+
+// TargetStatuses reports the archive state per target.
+func (s *Service) TargetStatuses(ctx context.Context, p auth.Principal) ([]TargetStatus, error) {
+	if err := s.Auth.RequireAdmin(ctx, p); err != nil {
+		return nil, err
+	}
+	// The job state, not the copy state, decides whether an upload is moving:
+	// failRetry leaves the copy 'uploading' while the job backs off, and a job
+	// that exhausts its attempts leaves that same row behind with nothing left
+	// to run it.
+	rows, err := s.DB.Pool.Query(ctx, `WITH copies AS (
+			SELECT c.id,c.target_id,c.state,c.size_bytes,c.created_at,c.error_code,
+				EXISTS(SELECT 1 FROM jobs j WHERE j.kind='recording.archive_upload'
+					AND j.idempotency_key = c.segment_id::text || ':' || c.target_id::text
+					AND j.state IN ('queued','running')) AS live
+			FROM recording_archive_copies c
+		)
+		SELECT t.id,
+			count(*) FILTER (WHERE k.state='verified'),
+			count(*) FILTER (WHERE k.state='uploading' AND k.live),
+			count(*) FILTER (WHERE k.state='uploading' AND NOT k.live),
+			count(*) FILTER (WHERE k.state='failed'),
+			coalesce(sum(k.size_bytes) FILTER (WHERE k.state='verified'),0),
+			(array_agg(k.created_at ORDER BY k.created_at) FILTER (WHERE k.state='uploading' AND k.live))[1],
+			coalesce((array_agg(coalesce(k.error_code,'') ORDER BY k.created_at DESC) FILTER (WHERE k.state='failed' OR (k.state='uploading' AND NOT k.live)))[1],'')
+		FROM archive_targets t
+		LEFT JOIN copies k ON k.target_id=t.id
+		GROUP BY t.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]TargetStatus, 0)
+	for rows.Next() {
+		var item TargetStatus
+		if err := rows.Scan(&item.TargetID, &item.Verified, &item.Uploading, &item.Stopped, &item.Failed, &item.VerifiedBytes, &item.OldestPendingAt, &item.LastError); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// ChannelArchiveStatus is one archiving channel's binding plus what has happened
+// to its footage.
+type ChannelArchiveStatus struct {
+	ChannelID id.ID  `json:"channel_id"`
+	ChannelNo int    `json:"channel_no"`
+	Name      string `json:"name"`
+	TargetID  id.ID  `json:"target_id"`
+	Target    string `json:"target_name"`
+	// TargetEnabled matters on its own: a disabled target still leaves the binding
+	// in place, and the footage then falls back to the site's recording retention.
+	TargetEnabled bool   `json:"target_enabled"`
+	Mode          string `json:"mode"`
+	// Segments and Copied count the channel's ready segments against the copies
+	// that reached this target, so "is this channel actually archived" is one
+	// subtraction rather than two queries.
+	Segments int `json:"segments"`
+	Copied   int `json:"copied"`
+	Failed   int `json:"failed"`
+	// LocalRetentionHours is the window after which a verified copy lets the local
+	// file go. Zero means the archive window is disabled and the site's recording
+	// retention governs instead.
+	LocalRetentionHours int `json:"local_retention_hours"`
+}
+
+// ChannelArchiveStatuses reports every archiving channel.
+func (s *Service) ChannelArchiveStatuses(ctx context.Context, p auth.Principal) ([]ChannelArchiveStatus, error) {
+	if err := s.Auth.RequireAdmin(ctx, p); err != nil {
+		return nil, err
+	}
+	rows, err := s.DB.Pool.Query(ctx, `SELECT c.id,c.channel_no,c.channel_name,ap.target_id,t.name,t.enabled,ap.mode,
+			coalesce((SELECT count(*) FROM recording_segments s WHERE s.channel_id=c.id AND s.state='ready'),0),
+			coalesce((SELECT count(*) FROM recording_archive_copies ac JOIN recording_segments s ON s.id=ac.segment_id
+				WHERE s.channel_id=c.id AND s.state='ready' AND ac.target_id=ap.target_id AND ac.state='verified'),0),
+			coalesce((SELECT count(*) FROM recording_archive_copies ac JOIN recording_segments s ON s.id=ac.segment_id
+				WHERE s.channel_id=c.id AND ac.target_id=ap.target_id AND ac.state='failed'),0),
+			(SELECT archive_local_retention_hours FROM sites WHERE id=c.site_id)
+		FROM archive_policies ap
+		JOIN channels c ON c.id=ap.channel_id
+		JOIN archive_targets t ON t.id=ap.target_id
+		ORDER BY c.channel_no`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]ChannelArchiveStatus, 0)
+	for rows.Next() {
+		var item ChannelArchiveStatus
+		if err := rows.Scan(&item.ChannelID, &item.ChannelNo, &item.Name, &item.TargetID, &item.Target,
+			&item.TargetEnabled, &item.Mode, &item.Segments, &item.Copied, &item.Failed, &item.LocalRetentionHours); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
