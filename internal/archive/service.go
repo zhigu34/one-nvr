@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"path"
 	"strconv"
@@ -449,6 +450,11 @@ func (s *Service) HandleUpload(ctx context.Context, lease jobs.Lease) (jobs.Resu
 		case errors.Is(err, ErrRemotePathMissing):
 			return jobs.Result{}, s.failCopy(ctx, copyID, errRemotePathMissing)
 		}
+		// Log the verdict every time: the copy row keeps only a code, and the
+		// 1704 retries this path produced left no trace of *why* beyond
+		// "upload_failed".
+		slog.Warn("archive upload failed", "copy", string(copyID), "segment", string(segmentID),
+			"target", string(targetID), "error", err)
 		return jobs.Result{}, s.failRetry(ctx, copyID, errUploadFailed)
 	}
 	// ARC-02 verification floor before anything counts as archived: the object

@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -237,3 +238,46 @@ func TestFailureTraceNamesTheRequestWithoutLeakingTheTarget(t *testing.T) {
 		}
 	}
 }
+
+// A PUT must carry Content-Length. Without it Go sends
+// Transfer-Encoding: chunked, and OpenList's WebDAV handler passes
+// r.ContentLength straight to the storage driver — a chunked upload reaches the
+// driver with size -1 and the upload fails.
+//
+// The reader must be one net/http cannot measure (bytes.Reader and
+// strings.Reader report their own length, which hides the bug): the real path
+// passes io.TeeReader over the source file.
+func TestPutDeclaresContentLength(t *testing.T) {
+	var gotLength int64
+	var chunked bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			gotLength = r.ContentLength
+			chunked = len(r.TransferEncoding) > 0
+			io.Copy(io.Discard, r.Body)
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client, _ := NewClient(server.URL, "/nvr", "user", "pass")
+	payload := bytes.Repeat([]byte("x"), 4096)
+	// opaqueReader hides the length from net/http, exactly like io.TeeReader.
+	if err := client.Put(context.Background(), "k/file.mp4", opaqueReader{r: bytes.NewReader(payload)}, int64(len(payload))); err != nil {
+		t.Fatal(err)
+	}
+	if gotLength != int64(len(payload)) {
+		t.Fatalf("PUT must declare Content-Length %d, got %d", len(payload), gotLength)
+	}
+	if chunked {
+		t.Fatal("a sized PUT must not use chunked transfer encoding; OpenList refuses it")
+	}
+}
+
+// opaqueReader hides its length: net/http falls back to chunked when it cannot
+// measure the body, which is what the real upload path used to do.
+type opaqueReader struct{ r io.Reader }
+
+func (o opaqueReader) Read(p []byte) (int, error) { return o.r.Read(p) }

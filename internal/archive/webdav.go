@@ -105,11 +105,25 @@ func NewClient(baseURL, remoteRoot, username, password string) (*Client, error) 
 }
 
 func (c *Client) request(ctx context.Context, method, url string, body io.Reader, rangeHeader string) (*http.Response, error) {
+	return c.requestSized(ctx, method, url, body, rangeHeader, -1)
+}
+
+// requestSized is request with a known body length.
+//
+// A non-negative size sets Content-Length. Without it Go sends
+// Transfer-Encoding: chunked, because an io.Reader has no length — and a PUT
+// that arrives chunked is refused by servers that read ContentLength directly
+// (OpenList's WebDAV handler does: it passes r.ContentLength to the driver, so a
+// chunked upload reaches the driver with size -1).
+func (c *Client) requestSized(ctx context.Context, method, url string, body io.Reader, rangeHeader string, size int64) (*http.Response, error) {
 	bounded, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(bounded, method, url, body)
 	if err != nil {
 		return nil, ErrTargetUnavailable
+	}
+	if size >= 0 && body != nil {
+		req.ContentLength = size
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/octet-stream")
@@ -239,7 +253,7 @@ func (c *Client) Put(ctx context.Context, key string, body io.Reader, size int64
 	if err := c.ensureCollection(ctx, parentKey(key)); err != nil {
 		return err
 	}
-	response, err := c.request(ctx, http.MethodPut, c.URL(key), body, "")
+	response, err := c.requestSized(ctx, http.MethodPut, c.URL(key), body, "", size)
 	if err != nil {
 		return err
 	}
