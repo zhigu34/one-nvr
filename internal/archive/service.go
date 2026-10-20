@@ -27,14 +27,18 @@ import (
 
 // Task failure codes, shared with the jobs table and the drawer.
 const (
-	errTargetGone     = "target_unavailable"
-	errTargetDenied   = "target_unauthorized"
-	errSourceGone     = "source_unavailable"
-	errUploadFailed   = "upload_failed"
-	errVerifyFailed   = "verify_failed"
-	errJobExhausted   = "job_exhausted"
-	uploadConcurrency = 2
-	maxManualBatch    = 100
+	errTargetGone   = "target_unavailable"
+	errTargetDenied = "target_unauthorized"
+	errSourceGone   = "source_unavailable"
+	errUploadFailed = "upload_failed"
+	errVerifyFailed = "verify_failed"
+	errJobExhausted = "job_exhausted"
+	// The probe's verdicts reach the upload path too: a read-only mount fails a
+	// PUT the same way it fails a probe, and saying "upload failed" hides why.
+	errTargetReadOnly    = "target_read_only"
+	errRemotePathMissing = "remote_path_missing"
+	uploadConcurrency    = 2
+	maxManualBatch       = 100
 )
 
 var (
@@ -433,8 +437,17 @@ func (s *Service) HandleUpload(ctx context.Context, lease jobs.Lease) (jobs.Resu
 	}
 	hasher := sha256.New()
 	if err := client.Put(ctx, objectKey, io.TeeReader(file, hasher), stored); err != nil {
-		if errors.Is(err, ErrTargetDenied) {
+		// Keep the verdict: this used to collapse every PUT failure into
+		// upload_failed, so a read-only mount, a wrong root and a bad credential
+		// all read the same in the drawer — and the retry then repeated it six
+		// times without ever naming the cause.
+		switch {
+		case errors.Is(err, ErrTargetDenied):
 			return jobs.Result{}, s.failCopy(ctx, copyID, errTargetDenied)
+		case errors.Is(err, ErrTargetReadOnly):
+			return jobs.Result{}, s.failCopy(ctx, copyID, errTargetReadOnly)
+		case errors.Is(err, ErrRemotePathMissing):
+			return jobs.Result{}, s.failCopy(ctx, copyID, errRemotePathMissing)
 		}
 		return jobs.Result{}, s.failRetry(ctx, copyID, errUploadFailed)
 	}
