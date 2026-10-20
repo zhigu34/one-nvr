@@ -43,7 +43,13 @@ func archiveFaultWithFields(err error, fields map[string]string) (error, bool) {
 	switch {
 	case errors.Is(err, archive.ErrTargetDenied):
 		mapped = fault.New(422, "archive_target_unauthorized",
-			"WebDAV 账号或密码被拒绝。请确认填的是该 WebDAV 服务的账号，不是其他系统的账号。")
+			"WebDAV 服务拒绝了这组账号密码（HTTP 401）。请确认填的是这个 WebDAV 的账号。")
+	case errors.Is(err, archive.ErrTargetReadOnly):
+		// 403 is not a credential problem: the server accepted the credentials
+		// and refused the write. Saying "password" here is what sent an operator
+		// to re-type a password that demonstrably works.
+		mapped = fault.New(422, "archive_target_read_only",
+			"账号密码已通过（HTTP 403 而非 401），但服务端不允许往这个路径写入。常见原因：该挂载是只读的、后端存储不接受写入，或路径落在只读目录。")
 	case errors.Is(err, archive.ErrRemotePathMissing):
 		mapped = fault.New(422, "archive_remote_path_missing",
 			"地址和账号都通了，但目标路径不存在。请检查「WebDAV URL」和「远端根目录」拼接后的位置在服务端是否真的存在。")

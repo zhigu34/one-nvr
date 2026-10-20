@@ -23,6 +23,8 @@ function setup(
     caps?: unknown
     failTest?: boolean
     failEvidence?: { stage: string; detail: string }
+    failCode?: string
+    failMessage?: string
     statuses?: unknown[]
     channelStatus?: unknown[]
     failStatus?: boolean
@@ -42,8 +44,8 @@ function setup(
       if (options.failTest)
         throw new ApiError(
           422,
-          'archive_target_unauthorized',
-          'WebDAV 账号或密码被拒绝。',
+          options.failCode ?? 'archive_target_unauthorized',
+          options.failMessage ?? 'WebDAV 服务拒绝了这组账号密码（HTTP 401）。',
           '',
           options.failEvidence
         )
@@ -243,7 +245,22 @@ test('a failed probe says so instead of leaving the last result up', async () =>
   await expect.element(page.getByText(/测试失败/)).toBeVisible()
   // The server's own wording reaches the page; the badge no longer invents
   // "连接失败" for every kind of failure.
-  await expect.element(page.getByText(/WebDAV 账号或密码被拒绝/)).toBeVisible()
+  await expect.element(page.getByText(/拒绝了这组账号密码/)).toBeVisible()
+})
+
+// 403 is not a credential problem. An operator whose password demonstrably works
+// was told to check it, because every 4xx used to collapse into "unauthorized".
+test('a read-only target is not reported as a credential problem', async () => {
+  const page = await setup({
+    failTest: true,
+    failCode: 'archive_target_read_only',
+    failMessage: '账号密码已通过（HTTP 403 而非 401），但服务端不允许往这个路径写入。',
+    failEvidence: { stage: 'create-collection', detail: 'HTTP 403' },
+  })
+  await userEvent.click(page.getByRole('button', { name: '测试连接' }))
+  await expect.element(page.getByText(/账号密码已通过/)).toBeVisible()
+  await expect.element(page.getByText(/测试失败 · 创建目录 · HTTP 403/)).toBeVisible()
+  expect(page.getByText(/拒绝了这组账号密码/).query()).toBeNull()
 })
 
 // "connection failed" hides whether the address, the credentials or the root

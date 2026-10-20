@@ -7366,7 +7366,7 @@ export interface operations {
                     "application/json": components["schemas"]["ArchiveTargetCapabilities"];
                 };
             };
-            /** @description The probe reached a verdict: archive_target_unreachable (address), archive_target_unauthorized (credentials), or archive_remote_path_missing (the root does not exist). fields.stage and fields.detail carry the failing step and the HTTP status. */
+            /** @description The probe reached a verdict: archive_target_unreachable (address), archive_target_unauthorized (HTTP 401, credentials), archive_target_read_only (HTTP 403: credentials accepted, the write was refused), or archive_remote_path_missing (the root does not exist). fields.stage and fields.detail carry the failing step and the HTTP status. */
             422: {
                 headers: {
                     [name: string]: unknown;

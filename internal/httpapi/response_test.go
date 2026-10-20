@@ -28,7 +28,7 @@ func TestCanceledRequestIsNotReportedAsAnOutage(t *testing.T) {
 	}
 }
 
-// The three probe verdicts must reach the page as three different messages.
+// The probe verdicts must reach the page as different messages.
 // Every 4xx used to collapse into "unauthorized", which is what sent an operator
 // to re-type a password when the root path was wrong.
 func TestArchiveProbeFailuresAreDistinguished(t *testing.T) {
@@ -39,6 +39,7 @@ func TestArchiveProbeFailuresAreDistinguished(t *testing.T) {
 		status int
 	}{
 		{"credentials", archive.ErrTargetDenied, "archive_target_unauthorized", 422},
+		{"read-only mount", archive.ErrTargetReadOnly, "archive_target_read_only", 422},
 		{"root path", archive.ErrRemotePathMissing, "archive_remote_path_missing", 422},
 		{"address", archive.ErrTargetUnavailable, "archive_target_unreachable", 422},
 	}
@@ -52,6 +53,17 @@ func TestArchiveProbeFailuresAreDistinguished(t *testing.T) {
 			}
 			if body := recorder.Body.String(); !containsCode(body, c.code) {
 				t.Fatalf("expected code %q in %s", c.code, body)
+			}
+			// A 403 must not be worded as a credential problem: the credentials
+			// were accepted, and telling an operator otherwise wastes the one
+			// clue that would have pointed at the mount.
+			if c.code == "archive_target_read_only" {
+				if containsCode(recorder.Body.String(), "密码被拒绝") {
+					t.Fatal("a read-only target must not be described as rejected credentials")
+				}
+				if !containsCode(recorder.Body.String(), "403") {
+					t.Fatal("the read-only message must name the 403 it came from")
+				}
 			}
 			// The blanket 503 wording must never appear for a probe failure: it
 			// says nothing about what to change.

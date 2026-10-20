@@ -19,8 +19,10 @@ func TestProbeSeparatesTheThreeVerifiableFailures(t *testing.T) {
 		status int
 		want   error
 	}{
-		{"unauthorized is the credentials", http.StatusUnauthorized, ErrTargetDenied},
-		{"forbidden is the credentials", http.StatusForbidden, ErrTargetDenied},
+		{"401 is the credentials", http.StatusUnauthorized, ErrTargetDenied},
+		// 403 means the credentials were ACCEPTED and the write was refused.
+		// Merging it into 401 sends an operator to re-type a working password.
+		{"403 is read-only, not bad credentials", http.StatusForbidden, ErrTargetReadOnly},
 		{"404 is a root that does not exist", http.StatusNotFound, ErrRemotePathMissing},
 		// 409 on PUT/MKCOL is WebDAV's "parent collection missing", which for an
 		// operator is the same mistake as a 404 on the root.

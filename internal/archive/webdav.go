@@ -23,6 +23,11 @@ var (
 	// accepted, and the root simply is not there. Reporting it as a credential
 	// problem sends someone to re-type a password that was never wrong.
 	ErrRemotePathMissing = errors.New("archive_remote_path_missing")
+	// ErrTargetReadOnly means the credentials were accepted and the path exists,
+	// but this account may not write there. That is a server-side permission
+	// (a read-only mount, a directory the backing store refuses writes in), not
+	// something re-typing the password can fix.
+	ErrTargetReadOnly = errors.New("archive_target_read_only")
 )
 
 // probeError explains one failure precisely enough to act on, and never more
@@ -156,17 +161,27 @@ func transportReason(err error) string {
 
 // statusError turns one HTTP response into a verdict.
 //
-// The distinction matters downstream: 401/403 is the credentials, 404 is a path
-// that does not exist, and 409 on a PUT means the parent collection is missing —
-// three different mistakes with three different fixes. Every 4xx used to collapse
-// into "unauthorized", which sent operators hunting for a password problem when
-// the address or the root was wrong.
+// 401 and 403 are not the same verdict, which is why they are split here:
+//
+//	401 Unauthorized — the credentials were not accepted. Fix: the password.
+//	403 Forbidden    — the credentials WERE accepted; this account is not allowed
+//	                   to write at this path. Fix: the server-side permissions —
+//	                   a read-only mount, a path the backing store will not
+//	                   accept writes in, or a per-path rule.
+//	404 / 409        — the addressed object or its parent is not there. Fix: the
+//	                   address and the root path.
+//
+// Reporting 403 as a credential problem sends an operator to re-type a password
+// that demonstrably works, which is exactly what happened with a WebDAV mount
+// whose backing storage refused writes.
 func statusError(stage string, status int) error {
 	code := ErrTargetUnavailable
-	switch {
-	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+	switch status {
+	case http.StatusUnauthorized:
 		code = ErrTargetDenied
-	case status == http.StatusNotFound || status == http.StatusConflict:
+	case http.StatusForbidden:
+		code = ErrTargetReadOnly
+	case http.StatusNotFound, http.StatusConflict:
 		// 404 on the addressed object and 409 ("missing parent") are the same
 		// operator mistake: the root does not exist on this server.
 		code = ErrRemotePathMissing
