@@ -171,6 +171,10 @@ type eventReport struct {
 		Score    *float64 `json:"score"`
 		TopScore *float64 `json:"top_score"`
 		Zones    []string `json:"zones"`
+		// Box is [x, y, w, h] in fractions of the frame. The API reports it; the
+		// MQTT envelope does not carry it, which is why this path is the one that
+		// captures geometry for folding duplicate detections.
+		Box []float64 `json:"box"`
 	} `json:"data"`
 }
 
@@ -242,7 +246,11 @@ func (s *Service) applyReport(ctx context.Context, candidate openEvent, report e
 	if report.HasSnapshot {
 		snapshot = "ready"
 	}
-	raw, _ := json.Marshal(map[string]any{"type": "reconcile", "label": report.Label, "camera": report.Camera})
+	rawFields := map[string]any{"type": "reconcile", "label": report.Label, "camera": report.Camera}
+	if len(report.Data.Box) == 4 {
+		rawFields["box"] = report.Data.Box
+	}
+	raw, _ := json.Marshal(rawFields)
 	err := s.eventUpsert(ctx, upsertInput{
 		Camera:        report.Camera,
 		SourceID:      candidate.SourceID,
