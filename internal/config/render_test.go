@@ -252,3 +252,63 @@ func TestEventCacheMountIsOptIn(t *testing.T) {
 		}
 	}
 }
+
+// The bundled console is where OpenList's first administrator account is
+// created, so turning the module on without publishing its port leaves the
+// operator with a container they cannot configure. Publishing stays opt-in for
+// the same reason Frigate's does: it widens the attack surface.
+func TestOpenListUIPortIsOptIn(t *testing.T) {
+	base := map[string]string{
+		"ONE_NVR_PUBLIC_URL":      "https://192.168.1.10:8443",
+		"ONE_NVR_HTTPS_PORT":      "8443",
+		"ONE_NVR_DATA_DIR":        "/srv/one-nvr",
+		"ONE_NVR_OPENLIST_ENABLE": "yes",
+	}
+	deployment, err := BuildDeployment(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ports := deployment.Services["openlist"].Ports; len(ports) != 0 {
+		t.Fatalf("openlist must not publish a host port by default, got %v", ports)
+	}
+
+	withUI := map[string]string{}
+	for k, v := range base {
+		withUI[k] = v
+	}
+	withUI["ONE_NVR_OPENLIST_UI_PORT"] = "5245"
+	deployment, err = BuildDeployment(withUI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ports := deployment.Services["openlist"].Ports
+	if !reflect.DeepEqual(ports, []string{"5245:5244/tcp"}) {
+		t.Fatalf("a configured console port must be published to OpenList's 5244, got %v", ports)
+	}
+}
+
+// A published port for a container that does not ship waits for an interface
+// that can never come up, so it is refused rather than silently ignored.
+func TestOpenListUIPortRequiresTheModule(t *testing.T) {
+	_, err := BuildDeployment(map[string]string{
+		"ONE_NVR_PUBLIC_URL":       "https://192.168.1.10:8443",
+		"ONE_NVR_HTTPS_PORT":       "8443",
+		"ONE_NVR_DATA_DIR":         "/srv/one-nvr",
+		"ONE_NVR_OPENLIST_ENABLE":  "no",
+		"ONE_NVR_OPENLIST_UI_PORT": "5245",
+	})
+	if err == nil {
+		t.Fatal("a console port without the module must be refused")
+	}
+	// Out of range is refused too, same rule as every other port.
+	_, err = BuildDeployment(map[string]string{
+		"ONE_NVR_PUBLIC_URL":       "https://192.168.1.10:8443",
+		"ONE_NVR_HTTPS_PORT":       "8443",
+		"ONE_NVR_DATA_DIR":         "/srv/one-nvr",
+		"ONE_NVR_OPENLIST_ENABLE":  "yes",
+		"ONE_NVR_OPENLIST_UI_PORT": "70000",
+	})
+	if err == nil {
+		t.Fatal("an out-of-range console port must be refused")
+	}
+}

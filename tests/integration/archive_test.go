@@ -22,6 +22,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/jobs"
 	"github.com/zhigu34/one-nvr/internal/media/probe"
+	"github.com/zhigu34/one-nvr/internal/operations"
 )
 
 // webdavTestServer is a minimal in-process WebDAV: PUT/GET/DELETE/MKCOL over
@@ -503,5 +504,68 @@ func TestChannelArchiveStatusCountsAgainstItsOwnTarget(t *testing.T) {
 	items, err = service.ChannelArchiveStatuses(ctx, fixture.Admin)
 	if err != nil || len(items) != 0 {
 		t.Fatal("an unbound channel is not listed", items, err)
+	}
+}
+
+// The archive page offers a link into the bundled console, whose port and state
+// have to come from the deployment. The rule that matters: an expired
+// observation is not evidence, so the link must not claim the console is up.
+func TestBundledOpenListReportsPortAndHonestState(t *testing.T) {
+	_, accounts, _, admin := authFixture(t)
+	fixture := newPublicationFixture(t)
+	ctx := context.Background()
+	service := operations.New(fixture.DB, accounts, false, false)
+	if _, err := service.BundledOpenList(ctx, auth.Principal{Role: "viewer"}); err == nil {
+		t.Fatal("the bundled console is site infrastructure: admin only")
+	}
+
+	// Module off: the console does not exist, and no port is published.
+	got, err := service.BundledOpenList(ctx, admin.Principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Enabled || got.State != "disabled" || got.UIPort != 0 {
+		t.Fatalf("a deployment without the module has no console: %+v", got)
+	}
+
+	// Module on, port published, no observation yet.
+	service = operations.New(fixture.DB, accounts, false, true)
+	service.OpenListUIPort = 5245
+	got, err = service.BundledOpenList(ctx, admin.Principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Enabled || got.UIPort != 5245 {
+		t.Fatalf("the port must reach the page so it can build the link: %+v", got)
+	}
+	if got.State != "unknown" {
+		t.Fatalf("without an observation the console is not proven up, got %q", got.State)
+	}
+
+	// A fresh observation says it answers.
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO component_observations(name,state,reason_code,observed_at,expires_at)
+		VALUES('openlist','healthy','probe_succeeded',clock_timestamp(),clock_timestamp()+interval '30 seconds')
+		ON CONFLICT (name) DO UPDATE SET state='healthy',observed_at=clock_timestamp(),expires_at=clock_timestamp()+interval '30 seconds'`); err != nil {
+		t.Fatal(err)
+	}
+	got, err = service.BundledOpenList(ctx, admin.Principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != "healthy" {
+		t.Fatalf("a fresh healthy observation must be reported, got %q", got.State)
+	}
+
+	// The same row, expired, is not evidence — the page must not link to a
+	// console on the strength of a stale sample.
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE component_observations SET expires_at=clock_timestamp()-interval '1 second' WHERE name='openlist'`); err != nil {
+		t.Fatal(err)
+	}
+	got, err = service.BundledOpenList(ctx, admin.Principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != "unknown" || got.Reason != "observation_expired" {
+		t.Fatalf("an expired observation is unknown, not healthy: %+v", got)
 	}
 }

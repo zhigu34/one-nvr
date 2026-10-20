@@ -238,6 +238,7 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("POST /api/v1/maintenance-windows", r.protected(r.registerMaintenance))
 	r.mux.HandleFunc("GET /api/v1/capabilities", r.protected(r.capabilities))
 	r.mux.HandleFunc("GET /api/v1/operations/components", r.protected(r.components))
+	r.mux.HandleFunc("GET /api/v1/operations/bundled-openlist", r.protected(r.bundledOpenList))
 	r.mux.HandleFunc("GET /api/v1/operations/resources", r.protected(r.resources))
 	// EVT-04: what is broken right now, as a worklist rather than a per-channel
 	// rate. Administrator-only for the same reason the resources endpoint is.

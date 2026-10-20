@@ -1455,6 +1455,54 @@
         }
       }
     },
+    "/api/v1/operations/bundled-openlist": {
+      "get": {
+        "operationId": "bundledOpenList",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "description": "Whether the bundled OpenList console ships, whether it answers, and which host port it is published on. Separate from the capability snapshot, which answers whether cloud archive works and ignores this module switch.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/BundledOpenList"
+                    },
+                    "request_id": {
+                      "$ref": "#/components/schemas/UUID"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "request_id"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Structured error (401/403/404/409/422/501/503)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/operations/components": {
       "get": {
         "operationId": "components",
@@ -3286,6 +3334,28 @@
           "state",
           "reason"
         ],
+        "additionalProperties": false
+      },
+      "BundledOpenList": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "The deployment switch (ONE_NVR_OPENLIST_ENABLE)."
+          },
+          "state": {
+            "type": "string",
+            "enum": ["healthy", "unavailable", "unknown", "disabled"]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "ui_port": {
+            "type": "integer",
+            "description": "Host port the console is published on. Zero means it is not published, so no link can be offered."
+          }
+        },
+        "required": ["enabled", "state", "reason", "ui_port"],
         "additionalProperties": false
       },
       "Component": {

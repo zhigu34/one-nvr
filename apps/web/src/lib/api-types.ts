@@ -261,6 +261,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/operations/bundled-openlist": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Whether the bundled OpenList console ships, whether it answers, and which host port it is published on. Separate from the capability snapshot, which answers whether cloud archive works and ignores this module switch. */
+        get: operations["bundledOpenList"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/operations/components": {
         parameters: {
             query?: never;
@@ -1996,6 +2013,15 @@ export interface components {
              */
             state: "disabled" | "not_configured" | "healthy" | "unavailable" | "not_available";
             reason: string;
+        };
+        BundledOpenList: {
+            /** @description The deployment switch (ONE_NVR_OPENLIST_ENABLE). */
+            enabled: boolean;
+            /** @enum {string} */
+            state: "healthy" | "unavailable" | "unknown" | "disabled";
+            reason: string;
+            /** @description Host port the console is published on. Zero means it is not published, so no link can be offered. */
+            ui_port: number;
         };
         Component: {
             name: string;
@@ -3971,6 +3997,38 @@ export interface operations {
                 };
             };
             /** @description Structured error (401/403/404) */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    bundledOpenList: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["BundledOpenList"];
+                        request_id: components["schemas"]["UUID"];
+                    };
+                };
+            };
+            /** @description Structured error (401/403/404/409/422/501/503) */
             default: {
                 headers: {
                     [name: string]: unknown;

@@ -13,8 +13,17 @@ import (
 )
 
 type Config struct {
-	PublicURL                                                               string
-	HTTPPort, HTTPSPort, RTCPort, FrigateUIPort                             int
+	PublicURL                                   string
+	HTTPPort, HTTPSPort, RTCPort, FrigateUIPort int
+	// OpenListUIPort publishes the bundled OpenList console on the host. Zero
+	// keeps it unpublished, exactly like FrigateUIPort.
+	//
+	// It has to be a published port rather than a proxied path under our origin:
+	// OpenList's console — and the first-run administrator creation that happens
+	// in it — is another product's application, not part of one-nvr's API.
+	// Reverse-proxying it would put its session cookies and upgrades under our
+	// origin to no benefit.
+	OpenListUIPort                                                          int
 	MediaHost, DataDir, DatabaseURL, TLSDir, HardwareProfile, ListenAddress string
 	CameraCIDRs, HookSubnet, Timezone                                       string
 	FrigateEnabled, OpenListEnabled                                         bool
@@ -56,6 +65,16 @@ func (c *Config) Validate() error {
 	// The detector UI port is optional: 0 keeps it unpublished.
 	if c.FrigateUIPort != 0 && (c.FrigateUIPort < 1 || c.FrigateUIPort > 65535) {
 		return fmt.Errorf("FRIGATE_UI port must be 0 or 1–65535")
+	}
+	if c.OpenListUIPort != 0 && (c.OpenListUIPort < 1 || c.OpenListUIPort > 65535) {
+		return fmt.Errorf("OPENLIST_UI port must be 0 or 1–65535")
+	}
+	// Publishing a port for a container that does not ship is a configuration
+	// mistake worth naming: the operator would wait for an interface that can
+	// never come up. Frigate has no such check because its UI port predates this
+	// one; adding it there would reject configurations that already work.
+	if c.OpenListUIPort != 0 && !c.OpenListEnabled {
+		return fmt.Errorf("OPENLIST_UI port requires ONE_NVR_OPENLIST_ENABLE=yes")
 	}
 	u, err := url.Parse(c.PublicURL)
 	if err != nil || u.Host == "" || u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {

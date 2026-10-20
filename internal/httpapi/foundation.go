@@ -123,6 +123,22 @@ func (r *router) components(w http.ResponseWriter, q *http.Request, p auth.Princ
 	respond(w, q, 200, out)
 }
 
+// bundledOpenList handles GET /api/v1/operations/bundled-openlist: whether the
+// bundled console ships, whether it answers, and which host port it is on.
+//
+// A dedicated endpoint rather than a field on the capability snapshot: that
+// snapshot answers "does cloud archive work" and deliberately ignores the module
+// switch, while this answers "can I open the console" — the opposite question.
+// Folding them would make one of the two answers wrong.
+func (r *router) bundledOpenList(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	out, err := r.d.Operations.BundledOpenList(q.Context(), p)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, out)
+}
+
 // resources reports host CPU, memory and load (DASH-02).
 func (r *router) resources(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
 	out, err := r.d.Operations.Resources(q.Context(), p)

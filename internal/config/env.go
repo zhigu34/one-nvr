@@ -84,7 +84,7 @@ func FromValues(v map[string]string) (Config, error) {
 			*target = s
 		}
 	}
-	for k, target := range map[string]*int{"ONE_NVR_HTTP_PORT": &c.HTTPPort, "ONE_NVR_HTTPS_PORT": &c.HTTPSPort, "ONE_NVR_RTC_PORT": &c.RTCPort, "ONE_NVR_FRIGATE_UI_PORT": &c.FrigateUIPort, "ONE_NVR_EVENT_CACHE_MB": &c.EventCacheMB} {
+	for k, target := range map[string]*int{"ONE_NVR_HTTP_PORT": &c.HTTPPort, "ONE_NVR_HTTPS_PORT": &c.HTTPSPort, "ONE_NVR_RTC_PORT": &c.RTCPort, "ONE_NVR_FRIGATE_UI_PORT": &c.FrigateUIPort, "ONE_NVR_OPENLIST_UI_PORT": &c.OpenListUIPort, "ONE_NVR_EVENT_CACHE_MB": &c.EventCacheMB} {
 		if s, ok := v[k]; ok {
 			n, err := strconv.Atoi(s)
 			if err != nil {

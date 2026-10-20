@@ -41,6 +41,8 @@ HTTP 是显式选择：`ONE_NVR_PUBLIC_URL=http://服务器IP:8080`，保持 HTT
 
 诊断检测问题时可用 `ONE_NVR_FRIGATE_UI_PORT`（如 `5001`）把检测服务自带界面暴露到宿主机，重新部署后访问 `http://<NAS>:5001`；留空或 0 表示不暴露。该界面仅供排查，操作仍通过 one-nvr 的「事件」与「检测配置」页。
 
+启用自带 OpenList 时，可用 `ONE_NVR_OPENLIST_UI_PORT`（如 `5245`）把它的配置页发布到宿主机；首次创建 OpenList 管理员账号必须在该页面完成，发布后归档目标页也会直接给出入口。需要 `ONE_NVR_OPENLIST_ENABLE=yes`，否则部署会被拒绝。该端口是明文 HTTP。
+
 报告写 `DATA_DIR/hardware/latest.json`；`.env` 不写入运行结果。有效设备最小覆盖写 `runtime/hardware.compose.json`，`./deploy.sh compose` 会自动加载这个文件；日常配置变更重新运行根目录 deploy.sh。Frigate 模板 `record.enabled=false`，无摄像头时保持无业务检测源，不能误报产生事件。OpenList 仅持久保存自身配置，不默认映射录像根；未来仍允许外部 WebDAV。
 
 ## 验收

@@ -440,6 +440,10 @@ func Run(name string) error {
 		if c.EventCacheMB > 0 {
 			operationsService.EventCacheDir = "/cache"
 		}
+		// The archive page links into the bundled console with this port. It is a
+		// deployment value, so it is set here rather than read from the database:
+		// changing it means recreating the container.
+		operationsService.OpenListUIPort = c.OpenListUIPort
 		// EVT-04: a failed publish is an instant, not a state a sweep can find,
 		// so detection reports it here. A success closes the incident.
 		if detectionService != nil {

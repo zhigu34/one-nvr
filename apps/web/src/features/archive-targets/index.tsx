@@ -27,22 +27,21 @@ const ERROR_CODES: Record<string, string> = {
 const errorText = (error: unknown) => apiErrorText(error, ERROR_CODES)
 
 /**
- * bundledOpenList picks the bundled container out of the component list.
+ * bundledConsoleUrl builds the link into the bundled OpenList console.
  *
- * It returns enabled=false while the list is still loading: the shortcut stays
- * hidden rather than briefly enabled on an unproven answer. Missing row and
- * expired observation both read as 'not proven', which the hint renders as
- * unavailable.
+ * The host comes from the browser, not the server: one-nvr knows only the port
+ * it published, while the address the operator reached it on (a NAS name, an IP,
+ * a tunnel) exists only in the address bar. Reusing the page's own hostname is
+ * therefore the only answer that is right in every deployment.
+ *
+ * The console speaks plain HTTP on its own port, so the URL keeps the page's
+ * scheme out of it — an https page cannot embed or open http content reliably,
+ * but this is a navigation target, not an embed, and the operator's own
+ * deployment decides whether TLS fronts it.
  */
-function bundledOpenList(items: Schema<'Component'>[] | undefined): {
-  enabled: boolean
-  state: string
-} {
-  // Array.isArray, not just a truthiness check: an unexpected response shape
-  // must degrade to "not offered", not take the whole page down with it.
-  const item = Array.isArray(items) ? items.find((entry) => entry.name === 'openlist') : undefined
-  if (!item) return { enabled: false, state: 'unknown' }
-  return { enabled: !!item.enabled, state: item.state ?? 'unknown' }
+function bundledConsoleUrl(hostname: string, port: number | undefined): string {
+  if (!port) return ''
+  return `http://${hostname}:${port}/`
 }
 
 const EMPTY_FORM = { name: '', base_url: '', remote_root: '', username: '', password: '', cloud_retention_days: 365 }
@@ -59,11 +58,11 @@ export function ArchiveTargets() {
   const policies = useAPI<{ items: Policy[] }>('/api/v1/archive-policies', admin)
   const targetStatus = useAPI<{ items: TargetStatus[] }>('/api/v1/archive-targets/status', admin, 15_000)
   const channelStatus = useAPI<{ items: ChannelStatus[] }>('/api/v1/archive-channels', admin, 30_000)
-  // The bundled OpenList is a container, not a feature switch we can read off
-  // the capability snapshot (which answers "is any target reachable"). The
-  // component list carries both the deployment switch and the probe result.
-  const components = useAPI<Schema<'Component'>[]>('/api/v1/operations/components', admin, 30_000)
-  const bundled = bundledOpenList(components.data)
+  // The bundled console's state and published port. Its own endpoint rather than
+  // the component list: the list has no port, and the port is the whole point of
+  // the link below.
+  const bundledQuery = useAPI<Schema<'BundledOpenList'>>('/api/v1/operations/bundled-openlist', admin, 30_000)
+  const bundled = bundledQuery.data
   const site = useAPI<Schema<'Site'>>('/api/v1/site', admin)
   const [form, setForm] = useState(EMPTY_FORM)
   const [editing, setEditing] = useState<string>('')
@@ -249,8 +248,9 @@ export function ArchiveTargets() {
                 nothing unless that container ships, so an always-enabled button
                 would hand the operator a URL that can only fail the probe. */}
             <BundledOpenListHint
-              enabled={bundled.enabled}
-              state={bundled.state}
+              enabled={!!bundled?.enabled}
+              state={bundled?.state ?? 'unknown'}
+              consolePort={bundled?.ui_port ?? 0}
               onFill={() => setForm({ ...form, base_url: OPENLIST_DAV })}
             />
           </label>
@@ -586,10 +586,12 @@ const OPENLIST_DAV = 'http://openlist:5244/dav'
 function BundledOpenListHint({
   enabled,
   state,
+  consolePort,
   onFill,
 }: {
   enabled: boolean
   state: string
+  consolePort: number
   onFill: () => void
 }) {
   if (!enabled || state === 'disabled') {
@@ -600,6 +602,7 @@ function BundledOpenListHint({
     )
   }
   const healthy = state === 'healthy'
+  const consoleURL = bundledConsoleUrl(window.location.hostname, consolePort)
   return (
     <span className='flex flex-wrap items-center gap-2'>
       <button
@@ -617,6 +620,25 @@ function BundledOpenListHint({
       >
         填入 OpenList 默认地址
       </button>
+      {/* The console link is separate from the fill button and does not depend on
+          the container answering: the very first thing an operator has to do is
+          create the administrator account in that console, and before that
+          happens the probe may legitimately report unavailable. Hiding the way in
+          would leave a fresh deployment with no path forward. */}
+      {consoleURL ? (
+        <a
+          href={consoleURL}
+          target='_blank'
+          rel='noreferrer'
+          className='w-fit rounded border px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground hover:bg-accent hover:text-foreground'
+        >
+          打开 OpenList 配置页
+        </a>
+      ) : (
+        <span className='text-[11px] text-muted-foreground'>
+          配置页未发布（设置 <code>ONE_NVR_OPENLIST_UI_PORT</code> 后重新部署即可从这里打开）
+        </span>
+      )}
       {!healthy && (
         <span className='text-[11px] text-amber-600 dark:text-amber-400'>
           自带 OpenList {state === 'unknown' ? '状态未知' : '不可达'}，请先在运维页确认

@@ -36,6 +36,8 @@ channel_no,channel_name,ip,rtsp_port,username,password,main_path,sub_path
 
 基础常驻 5 个容器：gateway（含前端）、api、worker、postgres、zlm。Frigate 开关增加 frigate/mqtt，OpenList 开关增加 openlist；全部启用为 8 个。默认两模块关闭。
 
+启用自带 OpenList 后，首次使用要在它自己的配置页里创建管理员账号——那个页面默认不对外发布。在 `.env` 里设 `ONE_NVR_OPENLIST_UI_PORT`（例如 `5245`）后重新部署，归档目标页就会出现「打开 OpenList 配置页」入口；留空或 0 表示不发布（只把它当纯 WebDAV 后端用）。该端口是明文 HTTP，别直接暴露到公网。
+
 排查检测问题时可以临时把检测服务自带的界面暴露到宿主机：在 `.env` 里设 `ONE_NVR_FRIGATE_UI_PORT`（例如 `5001`），重新部署后访问 `http://<NAS>:5001`。它只用于诊断（看检测器状态、区域、事件流），日常操作仍走 one-nvr 的「事件」「检测配置」页；不需要时留空或设 0，界面即不对外监听。
 
 根目录 `compose.yaml` 是正式运行入口，加载数据目录内自动生成的私有配置和硬件覆盖。内部凭据不写入仓库。日常操作使用脚本加载完整配置：

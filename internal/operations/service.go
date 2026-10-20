@@ -19,6 +19,11 @@ type Service struct {
 	DB                              *database.DB
 	Auth                            *auth.Service
 	FrigateEnabled, OpenListEnabled bool
+	// OpenListUIPort is the host port the bundled OpenList console is published
+	// on, zero when it is not published. The console is where its administrator
+	// account is first created, so an operator needs the number to reach it and
+	// there is no other place the deployment tells anyone.
+	OpenListUIPort int
 	// host is the sampler behind HostResources. It keeps the previous CPU
 	// counters, so it must survive between requests rather than being created
 	// per call — a fresh sampler has nothing to subtract from.
@@ -86,6 +91,48 @@ func (s *Service) Components(ctx context.Context, p auth.Principal) ([]Component
 		return nil, err
 	}
 	return s.Snapshot(ctx)
+}
+
+// BundledOpenList is what the archive page needs to offer a link into the
+// container's own console.
+//
+// It carries the state as well as the port because the link is only worth
+// showing when the console can actually answer, and only meaningful once the
+// operator knows whether it is a first-run or an existing install.
+type BundledOpenList struct {
+	Enabled bool   `json:"enabled"`
+	State   string `json:"state"`
+	Reason  string `json:"reason"`
+	// UIPort is the host port the console is published on; zero means it is not
+	// published, and the page can only say so. It is not a URL: the console is
+	// plain HTTP on a port separate from the gateway, and the host the operator
+	// reached one-nvr on is known to the browser, not to the server.
+	UIPort int `json:"ui_port"`
+}
+
+// BundledOpenList reports the bundled console's state and published port.
+func (s *Service) BundledOpenList(ctx context.Context, p auth.Principal) (BundledOpenList, error) {
+	if err := s.Auth.RequireAdmin(ctx, p); err != nil {
+		return BundledOpenList{}, err
+	}
+	out := BundledOpenList{Enabled: s.OpenListEnabled, UIPort: s.OpenListUIPort, State: "disabled", Reason: "feature_disabled"}
+	if !s.OpenListEnabled {
+		return out, nil
+	}
+	out.State, out.Reason = "unknown", "not_observed"
+	var expires time.Time
+	err := s.DB.Pool.QueryRow(ctx, "SELECT state,reason_code,expires_at FROM component_observations WHERE name='openlist'").Scan(&out.State, &out.Reason, &expires)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return out, nil
+	}
+	if err != nil {
+		return BundledOpenList{}, err
+	}
+	// An expired observation is not evidence, same rule as Snapshot.
+	if !expires.After(time.Now()) {
+		out.State, out.Reason = "unknown", "observation_expired"
+	}
+	return out, nil
 }
 
 // Snapshot is internal; API callers use Components for administrator checks.

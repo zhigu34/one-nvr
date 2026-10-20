@@ -25,7 +25,7 @@ function setup(
     channelStatus?: unknown[]
     failStatus?: boolean
     retried?: number
-    openList?: { enabled: boolean; state: string } | null
+    openList?: { enabled: boolean; state: string; ui_port?: number } | null
   } = {}
 ) {
   useAuthStore.getState().setUser({
@@ -47,20 +47,9 @@ function setup(
     }
     if (path === '/api/v1/archive-channels')
       return { items: options.channelStatus ?? [] }
-    if (path === '/api/v1/operations/components') {
+    if (path === '/api/v1/operations/bundled-openlist') {
       // Default: the module is off, which is the state of a stock deployment.
-      const openList = options.openList ?? { enabled: false, state: 'disabled' }
-      const items = openList
-        ? [
-            {
-              name: 'openlist',
-              enabled: openList.enabled,
-              state: openList.state,
-              reason: openList.enabled ? 'probe_succeeded' : 'feature_disabled',
-            },
-          ]
-        : []
-      return items
+      return options.openList ?? { enabled: false, state: 'disabled', ui_port: 0 }
     }
     if (path.startsWith('/api/v1/archive-targets'))
       return { items: options.targets ?? [], next_cursor: null }
@@ -150,7 +139,7 @@ test('the password can be revealed to check a long token', async () => {
 })
 
 test('the OpenList shortcut fills the bundled container address', async () => {
-  const page = await setup({ openList: { enabled: true, state: 'healthy' } })
+  const page = await setup({ openList: { enabled: true, state: 'healthy', ui_port: 5244 } })
   await userEvent.click(
     page.getByRole('button', { name: '填入 OpenList 默认地址' })
   )
@@ -163,12 +152,40 @@ test('the OpenList shortcut fills the bundled container address', async () => {
 // bundled container ships. Offering it in a deployment without that container
 // hands the operator an address whose only possible outcome is a failed probe.
 test('the shortcut is absent when the bundled OpenList is off', async () => {
-  const page = await setup({ openList: { enabled: false, state: 'disabled' } })
+  const page = await setup({ openList: { enabled: false, state: 'disabled', ui_port: 0 } })
   await expect.element(page.getByText(/未启用自带的 OpenList/)).toBeVisible()
   expect(page.getByRole('button', { name: '填入 OpenList 默认地址' }).query()).toBeNull()
+  // No console link either: there is no console.
+  expect(page.getByText('打开 OpenList 配置页').query()).toBeNull()
   // The rest of the form still works: a self-hosted WebDAV target is the normal
   // case for a deployment without the bundled container.
   await expect.element(page.getByLabelText('WebDAV URL')).toBeVisible()
+})
+
+// The console is where the administrator account is first created, so the way in
+// must be present even when the container has not passed a probe yet — before
+// that account exists it cannot. It only requires that a port was published.
+test('the console link is offered whenever a port is published, healthy or not', async () => {
+  const page = await setup({ openList: { enabled: true, state: 'unavailable', ui_port: 5244 } })
+  const link = page.getByRole('link', { name: '打开 OpenList 配置页' })
+  await expect.element(link).toBeVisible()
+  // The host is the one the operator reached one-nvr on, not a server guess.
+  await expect.element(link).toHaveAttribute('href', 'http://localhost:5244/')
+  // The fill button stays disabled: an unreachable container's private address
+  // would only produce a probe failure later.
+  await expect
+    .element(page.getByRole('button', { name: '填入 OpenList 默认地址' }))
+    .toBeDisabled()
+})
+
+test('the console link is replaced by an explanation when no port is published', async () => {
+  const page = await setup({ openList: { enabled: true, state: 'healthy', ui_port: 0 } })
+  expect(page.getByRole('link', { name: '打开 OpenList 配置页' }).query()).toBeNull()
+  await expect.element(page.getByText(/配置页未发布/)).toBeVisible()
+  // The fill button is still usable: the WebDAV address works without the console.
+  await expect
+    .element(page.getByRole('button', { name: '填入 OpenList 默认地址' }))
+    .toBeEnabled()
 })
 
 test('the shortcut is disabled, with a reason, when the container is not reachable', async () => {

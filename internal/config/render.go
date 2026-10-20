@@ -262,7 +262,16 @@ func BuildDeployment(v map[string]string) (Deployment, error) {
 		if e != nil {
 			return d, e
 		}
-		d.Services["openlist"] = Service{Image: im, Environment: map[string]string{"TZ": c.Timezone}, Volumes: []Mount{mount(filepath.Join(root, "openlist"), "/opt/openlist/data", false)}, Restart: "unless-stopped"}
+		openlist := Service{Image: im, Environment: map[string]string{"TZ": c.Timezone}, Volumes: []Mount{mount(filepath.Join(root, "openlist"), "/opt/openlist/data", false)}, Restart: "unless-stopped"}
+		// The console is where the first administrator account is created, so a
+		// deployment that turns the module on but cannot reach it is stuck at
+		// startup. Still opt-in: publishing a port widens the attack surface, and
+		// the address may be a NAS on a network the operator considers trusted
+		// only from inside.
+		if c.OpenListUIPort != 0 {
+			openlist.Ports = []string{fmt.Sprintf("%d:5244/tcp", c.OpenListUIPort)}
+		}
+		d.Services["openlist"] = openlist
 	}
 	return d, nil
 }
