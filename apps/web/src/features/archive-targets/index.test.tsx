@@ -77,6 +77,31 @@ test('the form labels itself and explains the retention unit', async () => {
     .toHaveAttribute('placeholder', '例如：NAS 归档 / OpenList 云盘备份')
 })
 
+test('the form fields line up across the grid', async () => {
+  // The fields carry different amounts of helper text, so bottom-alignment (or a
+  // taller label row on one field) staggers them: the second row's inputs landed
+  // ~30px below the first, and the password box drifted below its neighbours.
+  // Asserting the grid style alone would not catch it — measure the boxes.
+  const page = await setup()
+  const inputTop = (label: string) =>
+    page.getByLabelText(label).element().getBoundingClientRect().top
+  // Row 1: 名称 / WebDAV URL / 远端根目录.
+  const row1 = [
+    inputTop('归档目标名称'),
+    inputTop('WebDAV URL'),
+    inputTop('远端根目录'),
+  ]
+  expect(Math.max(...row1) - Math.min(...row1)).toBeLessThan(2)
+  // Row 2: 账号 / 密码 / 云端保留. The password field is a flex wrapper with a
+  // reveal button, so it is the one most likely to drift.
+  const row2 = [
+    inputTop('WebDAV 账号'),
+    inputTop('WebDAV 密码'),
+    inputTop('云端保留天数'),
+  ]
+  expect(Math.max(...row2) - Math.min(...row2)).toBeLessThan(2)
+})
+
 test('the password can be revealed to check a long token', async () => {
   const page = await setup()
   const field = page.getByLabelText('WebDAV 密码').element() as HTMLInputElement

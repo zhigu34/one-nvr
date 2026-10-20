@@ -187,7 +187,13 @@ export function ArchiveTargets() {
             密码加密存储
           </span>
         </div>
-        <div className='grid items-end gap-3 md:grid-cols-3'>
+        {/* items-start, not items-end: fields carry different amounts of
+            helper text below the input (the URL shortcut, the retention hint),
+            and bottom-alignment turns that difference into a visible stagger of
+            both the labels and the inputs. Top-alignment keeps every label and
+            every input on one line as long as each label row is one line — which
+            is why the URL shortcut lives below its input. */}
+        <div className='grid items-start gap-3 md:grid-cols-3'>
           <label className='grid gap-2 text-sm'>
             <span>名称</span>
             <Input
@@ -200,24 +206,7 @@ export function ArchiveTargets() {
             />
           </label>
           <label className='grid gap-2 text-sm'>
-            <span className='flex flex-wrap items-center justify-between gap-1'>
-              WebDAV URL
-              {/* OpenList is the module this deployment ships, so its address is
-                  a one-click fill rather than something to look up. */}
-              <button
-                type='button'
-                aria-label='填入 OpenList 默认地址'
-                className='rounded border px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground hover:bg-accent hover:text-foreground'
-                onClick={(event) => {
-                  // The button lives inside the field's <label>: without this the
-                  // click also focuses the input it belongs to.
-                  event.preventDefault()
-                  setForm({ ...form, base_url: OPENLIST_DAV })
-                }}
-              >
-                填入 OpenList 默认地址
-              </button>
-            </span>
+            <span>WebDAV URL</span>
             <Input
               aria-label='WebDAV URL'
               type='url'
@@ -226,6 +215,23 @@ export function ArchiveTargets() {
               required
               placeholder='https://cloud.example.com/dav'
             />
+            {/* The shortcut sits under the input rather than beside the label.
+                Inside the label row it made that one row taller than every
+                other, which pushed this input (and, with it, the whole grid)
+                out of line with its neighbours. */}
+            <button
+              type='button'
+              aria-label='填入 OpenList 默认地址'
+              className='w-fit rounded border px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground hover:bg-accent hover:text-foreground'
+              onClick={(event) => {
+                // The button lives inside the field's <label>: without this the
+                // click also focuses the input it belongs to.
+                event.preventDefault()
+                setForm({ ...form, base_url: OPENLIST_DAV })
+              }}
+            >
+              填入 OpenList 默认地址
+            </button>
           </label>
           <label className='grid gap-2 text-sm'>
             <span>远端根目录</span>
