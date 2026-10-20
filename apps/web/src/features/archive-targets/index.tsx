@@ -26,6 +26,25 @@ const ERROR_CODES: Record<string, string> = {
 
 const errorText = (error: unknown) => apiErrorText(error, ERROR_CODES)
 
+/**
+ * bundledOpenList picks the bundled container out of the component list.
+ *
+ * It returns enabled=false while the list is still loading: the shortcut stays
+ * hidden rather than briefly enabled on an unproven answer. Missing row and
+ * expired observation both read as 'not proven', which the hint renders as
+ * unavailable.
+ */
+function bundledOpenList(items: Schema<'Component'>[] | undefined): {
+  enabled: boolean
+  state: string
+} {
+  // Array.isArray, not just a truthiness check: an unexpected response shape
+  // must degrade to "not offered", not take the whole page down with it.
+  const item = Array.isArray(items) ? items.find((entry) => entry.name === 'openlist') : undefined
+  if (!item) return { enabled: false, state: 'unknown' }
+  return { enabled: !!item.enabled, state: item.state ?? 'unknown' }
+}
+
 const EMPTY_FORM = { name: '', base_url: '', remote_root: '', username: '', password: '', cloud_retention_days: 365 }
 
 /**
@@ -40,6 +59,11 @@ export function ArchiveTargets() {
   const policies = useAPI<{ items: Policy[] }>('/api/v1/archive-policies', admin)
   const targetStatus = useAPI<{ items: TargetStatus[] }>('/api/v1/archive-targets/status', admin, 15_000)
   const channelStatus = useAPI<{ items: ChannelStatus[] }>('/api/v1/archive-channels', admin, 30_000)
+  // The bundled OpenList is a container, not a feature switch we can read off
+  // the capability snapshot (which answers "is any target reachable"). The
+  // component list carries both the deployment switch and the probe result.
+  const components = useAPI<Schema<'Component'>[]>('/api/v1/operations/components', admin, 30_000)
+  const bundled = bundledOpenList(components.data)
   const site = useAPI<Schema<'Site'>>('/api/v1/site', admin)
   const [form, setForm] = useState(EMPTY_FORM)
   const [editing, setEditing] = useState<string>('')
@@ -218,20 +242,17 @@ export function ArchiveTargets() {
             {/* The shortcut sits under the input rather than beside the label.
                 Inside the label row it made that one row taller than every
                 other, which pushed this input (and, with it, the whole grid)
-                out of line with its neighbours. */}
-            <button
-              type='button'
-              aria-label='填入 OpenList 默认地址'
-              className='w-fit rounded border px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground hover:bg-accent hover:text-foreground'
-              onClick={(event) => {
-                // The button lives inside the field's <label>: without this the
-                // click also focuses the input it belongs to.
-                event.preventDefault()
-                setForm({ ...form, base_url: OPENLIST_DAV })
-              }}
-            >
-              填入 OpenList 默认地址
-            </button>
+                out of line with its neighbours.
+
+                It is offered only when the bundled OpenList is actually there.
+                The address it fills is a private service name that resolves to
+                nothing unless that container ships, so an always-enabled button
+                would hand the operator a URL that can only fail the probe. */}
+            <BundledOpenListHint
+              enabled={bundled.enabled}
+              state={bundled.state}
+              onFill={() => setForm({ ...form, base_url: OPENLIST_DAV })}
+            />
           </label>
           <label className='grid gap-2 text-sm'>
             <span>远端根目录</span>
@@ -543,6 +564,67 @@ function PolicyTable({
 
 /** The bundled OpenList container, reachable on the private network. */
 const OPENLIST_DAV = 'http://openlist:5244/dav'
+
+/**
+ * BundledOpenListHint offers the bundled container's address, but only when
+ * there is a container to reach.
+ *
+ * Three states, because "off" and "broken" need different words and only one of
+ * them is something the operator can act on here:
+ *
+ * - the module is off → say so and leave the field to be filled by hand. The
+ *   private address resolves to nothing in that deployment.
+ * - on but not healthy → the button stays visible but disabled, naming the
+ *   reason. Filling a dead address produces a confusing probe failure later,
+ *   which is exactly what this shortcut was added to avoid.
+ * - on and healthy → the one-click fill.
+ *
+ * An unobserved component (state 'unknown', or no row yet) is treated as
+ * unavailable: "we have not proven it works" is not "it works", and the cost of
+ * being wrong here is a target that can never be reached.
+ */
+function BundledOpenListHint({
+  enabled,
+  state,
+  onFill,
+}: {
+  enabled: boolean
+  state: string
+  onFill: () => void
+}) {
+  if (!enabled || state === 'disabled') {
+    return (
+      <span className='text-[11px] text-muted-foreground'>
+        未启用自带的 OpenList（部署时 <code>ONE_NVR_OPENLIST_ENABLE=yes</code> 开启）。请手填你自建的 WebDAV 地址。
+      </span>
+    )
+  }
+  const healthy = state === 'healthy'
+  return (
+    <span className='flex flex-wrap items-center gap-2'>
+      <button
+        type='button'
+        aria-label='填入 OpenList 默认地址'
+        disabled={!healthy}
+        title={healthy ? '填入自带 OpenList 的 WebDAV 地址' : '自带 OpenList 当前不可用'}
+        className='w-fit rounded border px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-muted-foreground'
+        onClick={(event) => {
+          // The button lives inside the field's <label>: without this the click
+          // also focuses the input it belongs to.
+          event.preventDefault()
+          onFill()
+        }}
+      >
+        填入 OpenList 默认地址
+      </button>
+      {!healthy && (
+        <span className='text-[11px] text-amber-600 dark:text-amber-400'>
+          自带 OpenList {state === 'unknown' ? '状态未知' : '不可达'}，请先在运维页确认
+        </span>
+      )}
+    </span>
+  )
+}
 
 /**
  * CapabilityBadges renders the probe result inline, next to the buttons.

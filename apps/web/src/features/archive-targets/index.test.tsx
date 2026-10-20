@@ -25,6 +25,7 @@ function setup(
     channelStatus?: unknown[]
     failStatus?: boolean
     retried?: number
+    openList?: { enabled: boolean; state: string } | null
   } = {}
 ) {
   useAuthStore.getState().setUser({
@@ -46,6 +47,21 @@ function setup(
     }
     if (path === '/api/v1/archive-channels')
       return { items: options.channelStatus ?? [] }
+    if (path === '/api/v1/operations/components') {
+      // Default: the module is off, which is the state of a stock deployment.
+      const openList = options.openList ?? { enabled: false, state: 'disabled' }
+      const items = openList
+        ? [
+            {
+              name: 'openlist',
+              enabled: openList.enabled,
+              state: openList.state,
+              reason: openList.enabled ? 'probe_succeeded' : 'feature_disabled',
+            },
+          ]
+        : []
+      return items
+    }
     if (path.startsWith('/api/v1/archive-targets'))
       return { items: options.targets ?? [], next_cursor: null }
     if (path.startsWith('/api/v1/archive-policies')) return { items: [] }
@@ -134,13 +150,45 @@ test('the password can be revealed to check a long token', async () => {
 })
 
 test('the OpenList shortcut fills the bundled container address', async () => {
-  const page = await setup()
+  const page = await setup({ openList: { enabled: true, state: 'healthy' } })
   await userEvent.click(
     page.getByRole('button', { name: '填入 OpenList 默认地址' })
   )
   await expect
     .element(page.getByLabelText('WebDAV URL'))
     .toHaveValue('http://openlist:5244/dav')
+})
+
+// The shortcut fills a private service name that resolves to nothing unless the
+// bundled container ships. Offering it in a deployment without that container
+// hands the operator an address whose only possible outcome is a failed probe.
+test('the shortcut is absent when the bundled OpenList is off', async () => {
+  const page = await setup({ openList: { enabled: false, state: 'disabled' } })
+  await expect.element(page.getByText(/未启用自带的 OpenList/)).toBeVisible()
+  expect(page.getByRole('button', { name: '填入 OpenList 默认地址' }).query()).toBeNull()
+  // The rest of the form still works: a self-hosted WebDAV target is the normal
+  // case for a deployment without the bundled container.
+  await expect.element(page.getByLabelText('WebDAV URL')).toBeVisible()
+})
+
+test('the shortcut is disabled, with a reason, when the container is not reachable', async () => {
+  const page = await setup({ openList: { enabled: true, state: 'unavailable' } })
+  const button = page.getByRole('button', { name: '填入 OpenList 默认地址' })
+  await expect.element(button).toBeVisible()
+  await expect.element(button).toBeDisabled()
+  await expect.element(page.getByText(/自带 OpenList 不可达/)).toBeVisible()
+  // Clicking does nothing: no address is invented from a dead service.
+  await expect.element(page.getByLabelText('WebDAV URL')).toHaveValue('')
+})
+
+// "We have not managed to prove it works" is not "it works". An unobserved
+// component must not enable a shortcut whose whole promise is a reachable host.
+test('an unobserved container counts as unavailable, not healthy', async () => {
+  const page = await setup({ openList: { enabled: true, state: 'unknown' } })
+  await expect
+    .element(page.getByRole('button', { name: '填入 OpenList 默认地址' }))
+    .toBeDisabled()
+  await expect.element(page.getByText(/状态未知/)).toBeVisible()
 })
 
 // ARC-01 promises the probe verifies write, read, range and delete. A single
