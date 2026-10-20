@@ -544,6 +544,9 @@ function ArchivePlan({
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [pending, setPending] = useState(false)
+  // One row's manual upload at a time, tracked by channel id so the button that
+  // is working can say so while the others stay idle.
+  const [uploading, setUploading] = useState<string>('')
 
   const chosen = channels.filter((channel) => selected[channel.id ?? ''])
   const chosenCount = chosen.length
@@ -609,6 +612,85 @@ function ArchivePlan({
       await client.invalidateQueries()
     } finally {
       setPending(false)
+    }
+  }
+
+  /**
+   * uploadNow pushes one channel's unarchived footage through the existing manual
+   * upload endpoint — the same one the recordings page uses.
+   *
+   * It does not touch the policy: a channel on a 02:00-06:00 window keeps that
+   * window, this is a one-off push for the operator who wants this channel's
+   * footage in the cloud now. No new endpoint exists for it; the recordings list
+   * already reports which segments are ready and not yet archived, and
+   * CreateUploads already accepts up to maxManualBatch of them per request.
+   */
+  async function uploadNow(channelID: string) {
+    const policy = byChannel.get(channelID)
+    const targetID = policy?.target_id ?? ''
+    if (!targetID) {
+      setError('该通道没有绑定归档目标')
+      return
+    }
+    setUploading(channelID)
+    setError('')
+    setNotice('')
+    try {
+      // Page through the channel's recent segments to find what is not archived.
+      // The list is newest-first, so the backlog is what sits after them; a
+      // bounded window keeps this from walking years of footage.
+      const unarchived: string[] = []
+      let cursor = ''
+      // One instant for the whole walk: a moving "end" would let the cursor skip
+      // segments published while the loop runs.
+      const now = new Date()
+      const from = new Date(now.getTime() - 90 * 24 * 3600 * 1000)
+      // 500 per page, at most 20 pages: 10 000 segments, far beyond any backlog
+      // one channel accumulates between uploads.
+      for (let page = 0; page < 20; page++) {
+        const params = new URLSearchParams({
+          channel_id: channelID,
+          start: from.toISOString(),
+          end: now.toISOString(),
+          limit: '500',
+        })
+        if (cursor) params.set('cursor', cursor)
+        const result = await apiRequest<{ items: Schema<'RecordingSegment'>[]; next_cursor: string | null }>(
+          `/api/v1/recordings?${params.toString()}`
+        )
+        for (const segment of result.items) {
+          // ready only: a finalizing or damaged segment has no uploadable bytes.
+          if (segment.state === 'ready' && !segment.archived && segment.id) {
+            unarchived.push(segment.id)
+          }
+        }
+        if (!result.next_cursor) break
+        cursor = result.next_cursor
+      }
+      if (!unarchived.length) {
+        setNotice('该通道没有待上传的录像')
+        return
+      }
+      // CreateUploads caps one request at 100; send in batches so a large backlog
+      // is queued in one action instead of one click per hundred.
+      let queued = 0
+      for (let i = 0; i < unarchived.length; i += 100) {
+        const batch = unarchived.slice(i, i + 100)
+        const response = await apiRequest<{ queued: string[] }>(
+          '/api/v1/recordings/archive',
+          {
+            ...jsonRequest('POST', { target_id: targetID, segment_ids: batch }),
+            headers: { 'Idempotency-Key': `${channelID}:${now.getTime()}:${i}` },
+          }
+        )
+        queued += response.queued?.length ?? 0
+      }
+      setNotice(`已提交 ${queued} 段上传任务`)
+      await client.invalidateQueries()
+    } catch (cause) {
+      setError(errorText(cause))
+    } finally {
+      setUploading('')
     }
   }
 
@@ -681,7 +763,8 @@ function ArchivePlan({
               <th className='pb-2 pr-3 font-normal'>归档目标</th>
               <th className='pb-2 pr-3 font-normal'>上传模式</th>
               <th className='pb-2 pr-3 font-normal'>已归档</th>
-              <th className='pb-2 font-normal'>失败</th>
+              <th className='pb-2 pr-3 font-normal'>失败</th>
+              <th className='pb-2 font-normal'></th>
             </tr>
           </thead>
           <tbody>
@@ -694,6 +777,9 @@ function ArchivePlan({
               // holding 364 local segments is not "0 of 364 archived" — nothing
               // was ever asked for, and showing 0/N reads as a failing archive.
               const cover = policy ? coverage(status?.copied, status?.segments) : null
+              // Something to push: the channel is bound and holds segments that
+              // are not archived yet.
+              const outstanding = !!policy && (status?.segments ?? 0) > (status?.copied ?? 0)
               const isSelected = !!selected[id]
               return (
                 // The whole row selects: with the controls gone, selecting is the
@@ -756,12 +842,27 @@ function ArchivePlan({
                       <span className='text-xs text-muted-foreground'>—</span>
                     )}
                   </td>
-                  <td className='py-1.5'>
+                  <td className='py-1.5 pr-3'>
                     {(status?.failed ?? 0) > 0 ? (
                       <span className='text-xs text-red-500'>{status?.failed}</span>
                     ) : (
                       <span className='text-xs text-muted-foreground'>—</span>
                     )}
+                  </td>
+                  <td className='py-1.5' onClick={(event) => event.stopPropagation()}>
+                    {/* Only where it can do something: a bound target and footage
+                        still outstanding. A channel with everything archived gets
+                        no button rather than one that reports "nothing to do". */}
+                    {policy && outstanding ? (
+                      <Button
+                        size='sm'
+                        variant='outline'
+                        disabled={uploading === id}
+                        onClick={() => void uploadNow(id)}
+                      >
+                        {uploading === id ? '上传中…' : '立即上传'}
+                      </Button>
+                    ) : null}
                   </td>
                 </tr>
               )

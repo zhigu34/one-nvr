@@ -31,6 +31,7 @@ async function setup(
     retried?: number
     channels?: unknown[]
     policies?: unknown[]
+    recordings?: unknown[]
     collapsed?: boolean
     openList?: { enabled: boolean; state: string; ui_port?: number } | null
   } = {}
@@ -61,6 +62,8 @@ async function setup(
     }
     if (path === '/api/v1/archive-channels')
       return { items: options.channelStatus ?? [] }
+    if (path.startsWith('/api/v1/recordings?'))
+      return { items: options.recordings ?? [], next_cursor: null }
     if (path === '/api/v1/operations/bundled-openlist') {
       // Default: the module is off, which is the state of a stock deployment.
       return options.openList ?? { enabled: false, state: 'disabled', ui_port: 0 }
@@ -526,3 +529,104 @@ test('a failed probe keeps the form open', async () => {
   await expect.element(page.getByLabelText('WebDAV URL')).toBeVisible()
 })
 
+
+// A channel on a 02:00-06:00 window holds its backlog until the window opens.
+// The operator who wants this channel's footage in the cloud now needs a way to
+// say so without changing the policy.
+test('a bound channel with footage outstanding offers 立即上传', async () => {
+  const page = await setup({
+    targets: [TARGET],
+    channelStatus: [
+      {
+        channel_id: 'c1', channel_no: 1, name: '前门-左', target_id: 't1', target_name: 'Openlist',
+        target_enabled: true, mode: 'scheduled', segments: 10, copied: 2, failed: 0, local_retention_hours: 48,
+      },
+    ],
+    policies: [{ channel_id: 'c1', target_id: 't1', mode: 'scheduled', schedule: '02:00-06:00' }],
+    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左' }],
+  })
+  await expect.element(page.getByRole('button', { name: '立即上传' })).toBeVisible()
+})
+
+// Nothing to push means no button: a control that answers "nothing to do" is a
+// control that should not be there.
+test('a fully archived channel gets no 立即上传 button', async () => {
+  const page = await setup({
+    targets: [TARGET],
+    channelStatus: [
+      {
+        channel_id: 'c1', channel_no: 1, name: '前门-左', target_id: 't1', target_name: 'Openlist',
+        target_enabled: true, mode: 'immediate', segments: 10, copied: 10, failed: 0, local_retention_hours: 48,
+      },
+    ],
+    policies: [{ channel_id: 'c1', target_id: 't1', mode: 'immediate', schedule: '' }],
+    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左' }],
+  })
+  await expect.element(page.getByText('10/10')).toBeVisible()
+  expect(page.getByRole('button', { name: '立即上传' }).query()).toBeNull()
+})
+
+// The button reuses the manual upload endpoint the recordings page uses; it does
+// not switch the policy, so the window keeps governing later behaviour.
+test('立即上传 queues the unarchived segments through the existing endpoint', async () => {
+  const page = await setup({
+    targets: [TARGET],
+    channelStatus: [
+      {
+        channel_id: 'c1', channel_no: 1, name: '前门-左', target_id: 't1', target_name: 'Openlist',
+        target_enabled: true, mode: 'scheduled', segments: 3, copied: 0, failed: 0, local_retention_hours: 48,
+      },
+    ],
+    policies: [{ channel_id: 'c1', target_id: 't1', mode: 'scheduled', schedule: '02:00-06:00' }],
+    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左' }],
+    recordings: [
+      { id: 's1', state: 'ready', archived: false },
+      { id: 's2', state: 'ready', archived: true },
+      // Not ready: no uploadable bytes yet.
+      { id: 's3', state: 'finalizing', archived: false },
+      { id: 's4', state: 'ready', archived: false },
+    ],
+  })
+  // The fixtures below are the same ones setup() was given; setup() does not
+  // expose its options, and re-mocking is clearer with them in hand.
+  const captured = {
+    targets: [TARGET],
+    channelStatus: [
+      {
+        channel_id: 'c1', channel_no: 1, name: '前门-左', target_id: 't1', target_name: 'Openlist',
+        target_enabled: true, mode: 'scheduled', segments: 3, copied: 0, failed: 0, local_retention_hours: 48,
+      },
+    ],
+    policies: [{ channel_id: 'c1', target_id: 't1', mode: 'scheduled', schedule: '02:00-06:00' }],
+    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左' }],
+  }
+  calls.request.mockClear()
+  calls.request.mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path.startsWith('/api/v1/recordings?') && (!init || init.method === undefined))
+      return {
+        items: [
+          { id: 's1', state: 'ready', archived: false },
+          { id: 's2', state: 'ready', archived: true },
+          { id: 's3', state: 'finalizing', archived: false },
+          { id: 's4', state: 'ready', archived: false },
+        ],
+        next_cursor: null,
+      }
+    if (path === '/api/v1/recordings/archive') return { queued: ['s1', 's4'] }
+    if (path.startsWith('/api/v1/archive-targets')) return { items: captured.targets ?? [], next_cursor: null }
+    if (path.startsWith('/api/v1/archive-policies'))
+      return { items: captured.policies ?? [] }
+    if (path.startsWith('/api/v1/archive-channels'))
+      return { items: captured.channelStatus ?? [] }
+    if (path.startsWith('/api/v1/channels')) return { items: captured.channels ?? [], next_cursor: null }
+    if (path.startsWith('/api/v1/site')) return { timezone: 'Asia/Shanghai', version: 1 }
+    return {}
+  })
+  await userEvent.click(page.getByRole('button', { name: '立即上传' }))
+  await expect.element(page.getByText(/已提交 2 段上传任务/)).toBeVisible()
+  const post = calls.request.mock.calls.find(([path]) => path === '/api/v1/recordings/archive')
+  const body = JSON.parse(String((post?.[1] as RequestInit | undefined)?.body ?? '{}'))
+  // Only ready AND unarchived segments, and the channel's bound target.
+  expect(body.segment_ids.sort()).toEqual(['s1', 's4'])
+  expect(body.target_id).toBe('t1')
+})
