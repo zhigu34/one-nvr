@@ -415,3 +415,44 @@ func TestScheduleWriteRequiresTheCurrentVersion(t *testing.T) {
 		t.Fatalf("the refused write still changed the schedule: %+v", schedule.Windows)
 	}
 }
+
+// A window that crosses midnight is ONE window to the operator, so its stored
+// rows must share one group.
+//
+// Storage keeps one row per local day because that is what makes "is this window
+// open now" a single indexed lookup. The group is what puts them back together:
+// the editor draws one band, and the previous behaviour — a fresh group id per
+// stored row — made 22:00-02:00 appear as two unrelated slots on the page.
+func TestOvernightWindowStaysOneGroup(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	// A Wednesday 22:00 -> Thursday 02:00 window.
+	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel,
+		[]recording.ScheduleWindow{{Weekday: 3, StartMinute: 22 * 60, EndMinute: 26 * 60}}, channelVersion(t, fixture)); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := fixture.DB.Pool.Query(ctx, `SELECT weekday,start_minute,end_minute,g.window_id
+		FROM recording_schedules s JOIN recording_schedule_groups g ON g.schedule_id=s.id
+		WHERE s.channel_id=$1 ORDER BY s.weekday,s.start_minute`, fixture.Channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var stored int
+	groups := map[string]bool{}
+	for rows.Next() {
+		var weekday, start, end int
+		var group string
+		if err := rows.Scan(&weekday, &start, &end, &group); err != nil {
+			t.Fatal(err)
+		}
+		stored++
+		groups[group] = true
+	}
+	if stored != 2 {
+		t.Fatalf("a midnight-crossing window stored %d rows, want 2 (one per local day)", stored)
+	}
+	if len(groups) != 1 {
+		t.Fatalf("the two rows carry %d group ids, want 1: the page would draw two separate slots", len(groups))
+	}
+}

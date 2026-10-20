@@ -177,6 +177,13 @@ func (s *Service) PutSchedule(ctx context.Context, p auth.Principal, channelID i
 	// Normalise first: the editor may send a window that wraps past midnight
 	// (end > 1440), and storage keeps only single-day rows.
 	stored := make([]ScheduleWindow, 0, len(windows))
+	// Which group each stored row belongs to. A window that crosses midnight is
+	// stored as one row per local day, but it is ONE window to the operator — the
+	// editor draws it as a single band. Giving each stored row its own group (the
+	// previous behaviour) made the UI read a 22:00-02:00 window as two unrelated
+	// slots, and the round trip through the editor split it in two.
+	groups := make([]int, 0, len(windows))
+	groupCount := 0
 	for _, w := range windows {
 		if w.EndMinute > 1440 {
 			if w.EndMinute-1440 >= 1440 {
@@ -189,6 +196,10 @@ func (s *Service) PutSchedule(ctx context.Context, p auth.Principal, channelID i
 		} else if err := w.Validate(); err != nil {
 			return ChannelSchedule{}, auth.ErrInvalid
 		}
+		for range SplitOvernight(w) {
+			groups = append(groups, groupCount)
+		}
+		groupCount++
 		stored = append(stored, SplitOvernight(w)...)
 	}
 	// Overlap is rejected here rather than by a constraint: gist exclusion over
@@ -221,11 +232,16 @@ func (s *Service) PutSchedule(ctx context.Context, p auth.Principal, channelID i
 		if _, err := tx.Exec(ctx, "DELETE FROM recording_schedules WHERE channel_id=$1", channelID); err != nil {
 			return err
 		}
-		for _, w := range stored {
-			windowID, err := id.New()
+		// One window_id per ORIGINAL window, shared by every stored row it became.
+		windowIDs := make([]id.ID, groupCount)
+		for gi := range windowIDs {
+			created, err := id.New()
 			if err != nil {
 				return err
 			}
+			windowIDs[gi] = created
+		}
+		for i, w := range stored {
 			rowID, err := id.New()
 			if err != nil {
 				return err
@@ -234,7 +250,7 @@ func (s *Service) PutSchedule(ctx context.Context, p auth.Principal, channelID i
 				rowID, channelID, w.Weekday, w.StartMinute, w.EndMinute); err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, `INSERT INTO recording_schedule_groups(window_id,schedule_id) VALUES($1,$2)`, windowID, rowID); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO recording_schedule_groups(window_id,schedule_id) VALUES($1,$2)`, windowIDs[groups[i]], rowID); err != nil {
 				return err
 			}
 		}

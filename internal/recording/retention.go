@@ -336,11 +336,16 @@ func (s *Service) SweepArchiveLocal(ctx context.Context) {
 // ObservationRetention is how long a source observation outlives its own TTL
 // before the sweep removes it.
 //
-// The row's expires_at (thirty seconds) is what the reader honours; this window
-// only has to be longer than that. Keeping a day means an operator debugging a
-// flapping camera still sees the rows behind the latest state, while the table
-// stays bounded at roughly one day of observations instead of growing forever.
-const ObservationRetention = 24 * time.Hour
+// The row's expires_at (thirty seconds) is what the CURRENT state reader honours,
+// but these rows are also the raw samples behind the reliability layer's interval
+// derivation — PRD REL-06 keeps them for seven days. A shorter window here would
+// win by running first on the shared ticker and silently truncate that history,
+// leaving the reliability package's own seven-day sweep with nothing to delete.
+//
+// Seven days it is, matching reliability.ObservationRetention. The two constants
+// exist in separate packages for dependency reasons; they must stay equal, and
+// TestObservationRetentionMatchesTheReliabilityTier enforces it.
+const ObservationRetention = 7 * 24 * time.Hour
 
 // SweepObservations deletes observation rows past their usefulness.
 //

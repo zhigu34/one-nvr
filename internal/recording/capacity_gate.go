@@ -26,8 +26,13 @@ func (s *Service) capacityFor(ctx context.Context, ch, revision, pool id.ID) (fi
 	if peers != 2 || identities != 1 || filesystem == "" {
 		return out, fault.New(409, "capacity_unknown", "缺少存储池的新鲜容量证据")
 	}
+	// Peers are the channels writing to this pool right now: continuous, or inside
+	// a manual window. A `planned` channel is deliberately NOT a peer — it writes
+	// only inside its windows, and counting it would size the safety line against
+	// channels that are idle at this moment. The manual case is included for the
+	// same reason continuous is: it is a real recording in progress.
 	expected := map[id.ID]id.ID{ch: revision}
-	rows, err := s.DB.Pool.Query(ctx, `SELECT c.id,CASE WHEN sw.id IS NOT NULL THEN sw.new_revision_id ELSE c.current_revision_id END,CASE WHEN sw.id IS NOT NULL THEN sw.new_pool_id ELSE c.storage_pool_id END FROM channels c JOIN recording_policies p ON p.channel_id=c.id LEFT JOIN source_switches sw ON sw.channel_id=c.id AND sw.state IN ('queued','running') WHERE c.enabled AND EXISTS(SELECT 1 FROM storage_pools target_pool WHERE target_pool.id=CASE WHEN sw.id IS NOT NULL THEN sw.new_pool_id ELSE c.storage_pool_id END AND target_pool.enabled) AND CASE WHEN sw.id IS NOT NULL THEN sw.desired_mode ELSE p.mode END='continuous'`)
+	rows, err := s.DB.Pool.Query(ctx, `SELECT c.id,CASE WHEN sw.id IS NOT NULL THEN sw.new_revision_id ELSE c.current_revision_id END,CASE WHEN sw.id IS NOT NULL THEN sw.new_pool_id ELSE c.storage_pool_id END FROM channels c JOIN recording_policies p ON p.channel_id=c.id LEFT JOIN source_switches sw ON sw.channel_id=c.id AND sw.state IN ('queued','running') WHERE c.enabled AND EXISTS(SELECT 1 FROM storage_pools target_pool WHERE target_pool.id=CASE WHEN sw.id IS NOT NULL THEN sw.new_pool_id ELSE c.storage_pool_id END AND target_pool.enabled) AND (CASE WHEN sw.id IS NOT NULL THEN sw.desired_mode ELSE p.mode END='continuous' OR EXISTS(SELECT 1 FROM recording_manual_windows w WHERE w.channel_id=c.id AND w.ended_at IS NULL AND w.expires_at>clock_timestamp()))`)
 	if err != nil {
 		return out, err
 	}
