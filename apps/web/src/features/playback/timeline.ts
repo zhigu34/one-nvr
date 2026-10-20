@@ -27,6 +27,8 @@ export type Entry = {
    * neutral texture and stays out of the blocked count.
    */
   deleted: boolean
+  /** Paint as a fault? False for a deliberate deletion. */
+  fault: boolean
   /** Carried for the player-frame metadata pills; optional because the
    *  placement in this view can be built without it. */
   media?: Segment['media']
@@ -59,13 +61,28 @@ const CHECK_REASON: Record<string, string> = {
   media_unavailable: '文件当前无法读取',
 }
 
-/** Why a segment cannot be handed to the player, or an empty string. */
+/**
+ * Why a segment cannot be handed to the player, or an empty string.
+ *
+ * "Cannot play" and "went wrong" are different questions, and only the first
+ * one decides whether a play button may appear. A deleted segment cannot play —
+ * the bytes are gone — but nothing failed, so the canvas colours it slate
+ * instead of red. Returning '' here would have said it IS playable, which put a
+ * play button on footage that answers 404.
+ */
 export function blockedReason(segment: Segment): string {
-  // A deleted segment is unplayable but not BLOCKED: nothing went wrong, and the
-  // reason is already stated by its own texture and by the selection card.
-  if (segment.state === 'deleted') return ''
   if (segment.state !== 'ready') return STATE_REASON[segment.state]
   return CHECK_REASON[segment.check_state] || ''
+}
+
+/**
+ * Whether the canvas should paint this segment as a fault.
+ *
+ * False for a deliberate deletion: red on the strip means the recording went
+ * wrong, and an operator discarding footage is not a fault.
+ */
+export function isFault(segment: Segment): boolean {
+  return segment.state !== 'ready' && segment.state !== 'deleted'
 }
 
 /**
@@ -90,6 +107,7 @@ export function buildTimeline(
       checkState: segment.check_state,
       blocked: blockedReason(segment),
       deleted: segment.state === 'deleted',
+      fault: isFault(segment),
       media: segment.media,
     }))
     .filter((entry) => Number.isFinite(entry.start) && entry.end > entry.start)
@@ -195,7 +213,12 @@ export function mergeEntries(
     }
   }
   for (const entry of entries) {
+    // Three layers, decided by WHY the segment cannot play:
+    //   deleted — someone removed it; unplayable, not a fault;
+    //   fault   — the recording went wrong (damaged/missing/conflict/...);
+    //   playable— servable.
     if (entry.deleted) absorb(deleted, entry.start, entry.end)
+    else if (entry.fault) absorb(blocked, entry.start, entry.end)
     else if (entry.blocked) absorb(blocked, entry.start, entry.end)
     else absorb(playable, entry.start, entry.end)
   }

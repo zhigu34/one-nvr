@@ -870,8 +870,12 @@ function Workspace({
           受阻片段
         </span>
         <span className='inline-flex items-center gap-1.5'>
+          <span className='size-2 rounded-sm bg-slate-400' />
+          已删除
+        </span>
+        <span className='inline-flex items-center gap-1.5'>
           <span className='size-2 rounded-sm bg-amber-400' />
-          事件（琥珀=待处理）
+          事件
         </span>
         <span className='inline-flex items-center gap-1.5'>
           <span className='size-2 rounded-sm bg-red-500 ring-1 ring-red-300/60' />

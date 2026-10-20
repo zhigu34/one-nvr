@@ -7,6 +7,7 @@ import {
   entryAt,
   formatDuration,
   gapAt,
+  isFault,
   mergeEntries,
   nextPlayableEntry,
   offsetIn,
@@ -149,7 +150,7 @@ describe('view slicing', () => {
   const base = Date.parse('2026-10-12T00:00:00Z')
   const hour = 3_600_000
   const segment = (id: string, from: number, to: number): Entry => ({
-    id, start: base + from * hour, end: base + to * hour, bytes: 1, state: 'ready', checkState: '', blocked: '', deleted: false,
+    id, start: base + from * hour, end: base + to * hour, bytes: 1, state: 'ready', checkState: '', blocked: '', deleted: false, fault: false,
   })
   const full = { entries: [segment('a', 0, 1), segment('b', 2, 3)], gaps: [], from: base, to: base + 4 * hour }
 
@@ -245,9 +246,17 @@ describe('deleted segments', () => {
     media: undefined,
   })
 
-  it('is not reported as blocked', () => {
-    expect(blockedReason(segment('a', 0, 1, 'deleted') as never)).toBe('')
-    expect(blockedReason(segment('b', 0, 1, 'damaged') as never)).not.toBe('')
+  // "Cannot play" and "went wrong" are separate questions. A deleted segment
+  // cannot play — the bytes are gone — so it must still report a reason, or the
+  // page offers a play button on footage that answers 404. What it must NOT do
+  // is count as a fault, which is what the strip's colour reads.
+  it('cannot play, but is not a fault', () => {
+    const deleted = segment('a', 0, 1, 'deleted') as never
+    expect(blockedReason(deleted)).not.toBe('')
+    expect(isFault(deleted)).toBe(false)
+    const damaged = segment('b', 0, 1, 'damaged') as never
+    expect(blockedReason(damaged)).not.toBe('')
+    expect(isFault(damaged)).toBe(true)
   })
 
   it('is merged into its own layer, not the blocked one', () => {
