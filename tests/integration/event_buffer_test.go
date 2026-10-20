@@ -185,8 +185,15 @@ func TestCoveredEventDoesNotQueueAClipJob(t *testing.T) {
 	}
 }
 
-// Assembly with an empty window fails cleanly and records why: the event keeps
-// its honest "no footage" verdict instead of the job retrying forever.
+// Assembly with an empty window records why and stays retryable while the event
+// is young.
+//
+// The earlier version of this test asserted 'failed'. That was the bug: an empty
+// window usually means the ring has not closed a fragment yet — an event detected
+// in the first seconds after a worker restart — and 'failed' is never reopened, so
+// footage arriving moments later was never assembled. Retry is bounded by the
+// ring's keep window (see TestEmptyWindowStaysRetryableForARecentEvent for the old
+// -event side).
 func TestClipAssemblyReportsAnEmptyWindow(t *testing.T) {
 	fixture := scheduledFixture(t)
 	ctx := context.Background()
@@ -208,8 +215,8 @@ func TestClipAssemblyReportsAnEmptyWindow(t *testing.T) {
 	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state,coalesce(error_code,'') FROM event_clip_jobs WHERE event_id=$1`, eventID).Scan(&state, &code); err != nil {
 		t.Fatal(err)
 	}
-	if state != "failed" || code != "window_empty" {
-		t.Fatalf("empty window: state=%q code=%q, want failed/window_empty", state, code)
+	if state != "queued" || code != "window_empty" {
+		t.Fatalf("empty window: state=%q code=%q, want queued/window_empty (retryable, reason recorded)", state, code)
 	}
 }
 
@@ -1526,5 +1533,100 @@ func TestAbandonedClipJobIsRequeued(t *testing.T) {
 	}
 	if state != "running" {
 		t.Fatalf("a live claim was stolen: state=%q", state)
+	}
+}
+
+// The premise the retention progress guard exists for: a skip leaves the row
+// 'ready', so the same segment is selected again on the next iteration.
+//
+// A missing file and an identity mismatch both take the deleteStateMissing /
+// deleteStateSkipped path, which returns WITHOUT touching the row. That is what
+// makes an unguarded round loop forever — and because that round sits before the
+// pressure, quota and audit sweeps on the shared ticker, one undeletable file
+// would silently disable the cleanup that keeps the disk from filling.
+//
+// This pins the premise, not the guard: if a future change makes a skip also
+// settle the row, the guard becomes unnecessary rather than harmful.
+func TestSkippedDeletionLeavesTheRowSelectable(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	segment := seedSegment(t, fixture, time.Now().UTC().Add(-time.Hour), time.Now().UTC().Add(-59*time.Minute))
+	// The index points at a file that is not on disk.
+	outcomes, err := fixture.Service.DeleteCorruptLocal(ctx, []id.ID{segment})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outcomes) != 1 {
+		t.Fatalf("expected one outcome, got %d", len(outcomes))
+	}
+	if outcomes[0].State == "deleted" {
+		t.Fatal("a segment with no file reported a successful deletion")
+	}
+
+	// The row must still be 'ready', which is exactly why the sweep re-selects it.
+	var state string
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state FROM recording_segments WHERE id=$1`, segment).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "ready" {
+		t.Fatalf("a skipped deletion changed the row to %q; the guard's premise no longer holds", state)
+	}
+}
+
+// An empty window is a timing answer, not a verdict, and must stay retryable.
+//
+// The ring may hold nothing yet — an event detected in the first seconds after a
+// worker restart, before the media server closed its first fragment. Marking the
+// job 'failed' made that permanent, because queueClipJob only reopens
+// queued/growing, so footage arriving moments later was never assembled.
+//
+// The retry is bounded by the event's age: a fragment cannot outlive the ring's
+// own keep window, so an older event can never gain one.
+func TestEmptyWindowStaysRetryableForARecentEvent(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	cache := t.TempDir()
+	fixture.Service.EventCacheDir = cache
+	fixture.Service.EventCacheBytes = 64 << 20
+
+	// An empty ring: the cache directory exists, nothing has been written yet.
+	recent := mustID(t)
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO events(id,channel_id,source,source_id,category,score,zones,started_at,snapshot_state,media_state,raw)
+		VALUES($1,$2,'frigate','evt-recent','person',0.5,'[]',clock_timestamp()-interval '10 seconds','gone','unavailable','{}')`, recent, fixture.Channel); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end,state)
+		VALUES($1,$2,$3,$4,'queued')`, recent, fixture.Channel, now.Add(-15*time.Second), now); err != nil {
+		t.Fatal(err)
+	}
+
+	fixture.Service.AssembleClips(ctx)
+
+	var state, code string
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state,coalesce(error_code,'') FROM event_clip_jobs WHERE event_id=$1`, recent).Scan(&state, &code); err != nil {
+		t.Fatal(err)
+	}
+	if state != "queued" {
+		t.Fatalf("a recent event's empty window became %q; the footage arriving later would never be assembled", state)
+	}
+
+	// An OLD event can never gain fragments: the ring has long dropped anything it
+	// could have had, so retrying forever is busywork.
+	old := mustID(t)
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO events(id,channel_id,source,source_id,category,score,zones,started_at,snapshot_state,media_state,raw)
+		VALUES($1,$2,'frigate','evt-old','person',0.5,'[]',clock_timestamp()-interval '30 minutes','gone','unavailable','{}')`, old, fixture.Channel); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end,state)
+		VALUES($1,$2,$3,$4,'queued')`, old, fixture.Channel, now.Add(-31*time.Minute), now.Add(-30*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	fixture.Service.AssembleClips(ctx)
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state FROM event_clip_jobs WHERE event_id=$1`, old).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "failed" {
+		t.Fatalf("an event older than the ring's keep window kept retrying: state=%q", state)
 	}
 }

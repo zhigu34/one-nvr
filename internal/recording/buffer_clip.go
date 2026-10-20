@@ -132,10 +132,42 @@ func (s *Service) AssembleClips(ctx context.Context) {
 			if ctx.Err() == nil {
 				slog.Warn("clip assembly failed", "event", item.Event, "error", err)
 			}
+			// An empty window is a TIMING answer, not a verdict. It means the ring
+			// held nothing for this span yet — typically an event detected in the
+			// first seconds after a worker restart, before the media server has
+			// closed its first fragment. Marking the job 'failed' made that
+			// permanent: queueClipJob only reopens queued/growing, so the footage
+			// that arrives moments later was never assembled.
+			//
+			// It stays queued and the next pass tries again. The lease sweep is what
+			// bounds this: a job whose event ended long ago and whose window stayed
+			// empty is retried, not abandoned forever, because failed rows are not
+			// reopened at all.
+			if errors.Is(err, errClipWindowEmpty) && s.eventIsRecent(ctx, item.Event) {
+				_, _ = s.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET state='queued',error_code=$2,updated_at=clock_timestamp() WHERE event_id=$1`,
+					item.Event, clipErrorCode(err))
+				continue
+			}
 			_, _ = s.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET state='failed',error_code=$2,updated_at=clock_timestamp() WHERE event_id=$1`,
 				item.Event, clipErrorCode(err))
 		}
 	}
+}
+
+// windowRetryAge bounds how long an empty window keeps being retried. Fragments
+// for a recent event may still be arriving; an event older than the ring's own
+// retention can never gain them, so retrying would be busywork. The value is the
+// ring's keep window, which is by definition the longest a fragment can wait.
+const windowRetryAge = BufferKeepSeconds * time.Second
+
+// eventIsRecent reports whether an event is young enough that its fragments might
+// still land.
+func (s *Service) eventIsRecent(ctx context.Context, eventID id.ID) bool {
+	var recent bool
+	if err := s.DB.Pool.QueryRow(ctx, `SELECT started_at > clock_timestamp()-make_interval(secs => $2) FROM events WHERE id=$1`, eventID, windowRetryAge.Seconds()).Scan(&recent); err != nil {
+		return false
+	}
+	return recent
 }
 
 // clipJob is one unit of assembly work.
