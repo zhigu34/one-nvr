@@ -617,7 +617,7 @@ function ArchivePlan({
       <div>
         <h2 className='text-sm font-medium'>通道归档策略</h2>
         <p className='mt-1 text-xs text-muted-foreground'>
-          勾选通道后在下方设置一次并应用，表格只展示当前结果。立即上传＝持续把未归档的录像传上去；定时上传＝只在指定时段内上传，时段外排队等待；手动＝只在录像管理页选中后上传。时段按站点时区
+          勾选通道后在下方设置一次并应用，表格只展示当前结果。实时上传＝持续把未归档的录像传上去（含历史积压），不受时段限制；定时上传＝只在指定时段内上传，时段外排队等待；手动＝只在录像管理页选中后上传。时段按站点时区
           {zone ? `（${zone}）` : ''}计算。
         </p>
       </div>
@@ -642,7 +642,7 @@ function ArchivePlan({
           onValueChange={(next) => setDraftMode((next ?? 'manual') as NonNullable<typeof draftMode>)}
           options={[
             { value: 'manual', label: '手动' },
-            { value: 'immediate', label: '立即上传' },
+            { value: 'immediate', label: '实时上传' },
             { value: 'scheduled', label: '定时上传' },
           ]}
           triggerClassName='h-8 w-32'

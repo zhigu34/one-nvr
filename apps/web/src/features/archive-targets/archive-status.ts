@@ -106,6 +106,6 @@ export function coverage(copied: number | undefined, segments: number | undefine
 
 export const MODE_LABEL: Record<string, string> = {
   manual: '手动',
-  immediate: '立即上传',
+  immediate: '实时上传',
   scheduled: '定时上传',
 }

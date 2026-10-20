@@ -440,6 +440,20 @@ test('the policy table is read only and one line per channel', async () => {
   await expect.element(page.getByRole('button', { name: /应用到 2 路/ })).toBeVisible()
 })
 
+// "Immediate" describes a moment, but the mode keeps uploading — including the
+// backlog it finds. "实时上传" says what it does; the stored value stays
+// `immediate` so nothing else has to change.
+test('the always-on mode is named for what it does', async () => {
+  const page = await setup({
+    targets: [{ id: 't1', name: 'Openlist', enabled: true, username: 'admin' }],
+    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左' }],
+  })
+  await expect.element(page.getByTestId('archive-target-row')).toBeVisible()
+  await userEvent.click(page.getByLabelText('上传模式'))
+  await expect.element(page.getByRole('option', { name: '实时上传' })).toBeVisible()
+  expect(page.getByRole('option', { name: '立即上传' }).query()).toBeNull()
+})
+
 // The reading order is what is configured first, then what is running, then the
 // per-channel table. The table is the longest block (one row per channel, 16+
 // rows); anything after it is buried below a screenful of rows.
