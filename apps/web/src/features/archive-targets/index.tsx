@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '@/stores/auth-store'
-import { apiRequest, jsonRequest } from '@/lib/api-client'
+import { apiRequest, ApiError, jsonRequest } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Eye, EyeOff } from 'lucide-react'
@@ -20,8 +20,11 @@ type Policy = Schema<'ArchivePolicy'>
 
 const ERROR_CODES: Record<string, string> = {
   archive_target_referenced: '该目标已有归档副本，只能停用不能删除',
-  archive_target_unavailable: '归档目标当前不可达',
-  archive_target_unauthorized: '归档目标拒绝当前凭据',
+  // The three probe verdicts are NOT mapped here on purpose: the server words
+  // them with the stage and evidence it observed, and re-wording them in the
+  // browser would throw that away. A local entry for the same code silently wins
+  // over the server's message (see apiErrorText), which is how "连接失败" used to
+  // hide whether the address, the credentials, or the root path was wrong.
 }
 
 const errorText = (error: unknown) => apiErrorText(error, ERROR_CODES)
@@ -72,6 +75,8 @@ export function ArchiveTargets() {
   // Inline test feedback. The result used to be a transient notice; a capsule
   // that stays put lets the operator compare it against the form they edited.
   const [testState, setTestState] = useState<'idle' | 'running' | 'failed'>('idle')
+  // What the failing step was and what the server answered, when it told us.
+  const [testEvidence, setTestEvidence] = useState<{ stage: string; detail: string } | null>(null)
   const [showPassword, setShowPassword] = useState(false)
   const [pending, setPending] = useState(false)
   const [deleting, setDeleting] = useState<Target | null>(null)
@@ -117,12 +122,14 @@ export function ArchiveTargets() {
     setNotice('')
     setTestState('running')
     setCaps(null)
+    setTestEvidence(null)
     try {
       const result = await apiRequest<Capabilities>('/api/v1/archive-targets/test', jsonRequest('POST', body))
       setCaps(result)
       setTestState('idle')
     } catch (cause) {
       setTestState('failed')
+      setTestEvidence(evidenceOf(cause))
       setError(errorText(cause))
     } finally {
       setPending(false)
@@ -345,7 +352,7 @@ export function ArchiveTargets() {
               取消编辑
             </Button>
           )}
-          <CapabilityBadges caps={caps} state={testState} />
+          <CapabilityBadges caps={caps} state={testState} evidence={testEvidence} />
         </div>
       </form>
       {admin && !!targets.data?.items.length && (
@@ -656,23 +663,53 @@ function BundledOpenListHint({
  * individually means a target that cannot DELETE (and therefore cannot support
  * cloud expiry) is visibly incomplete rather than quietly "OK".
  */
+/**
+ * evidenceOf pulls the failing stage out of an ApiError.
+ *
+ * The server reports it as fields.stage / fields.detail, so the badge can say
+ * "写入失败 · HTTP 409" next to the sentence explaining what to change. A code
+ * with no evidence simply yields null and the badge stays terse.
+ */
+function evidenceOf(error: unknown): { stage: string; detail: string } | null {
+  if (!(error instanceof ApiError)) return null
+  const stage = error.fields?.stage ?? ''
+  const detail = error.fields?.detail ?? ''
+  if (!stage && !detail) return null
+  return { stage, detail }
+}
+
+const STAGE_LABEL: Record<string, string> = {
+  connect: '连接地址',
+  'create-collection': '创建目录',
+  write: '写入',
+  read: '读取',
+  'read-back': '回读校验',
+  delete: '删除',
+}
+
 function CapabilityBadges({
   caps,
   state,
+  evidence,
 }: {
   caps: Capabilities | null
   state: 'idle' | 'running' | 'failed'
+  evidence: { stage: string; detail: string } | null
 }) {
   if (state === 'running') {
     return <span className='text-xs text-muted-foreground'>测试中…</span>
   }
   if (state === 'failed') {
+    // "连接失败" alone hides whether the address, the credentials or the root
+    // path was wrong; the stage is what makes the message actionable.
+    const stage = evidence ? (STAGE_LABEL[evidence.stage] ?? evidence.stage) : ''
     return (
       <span
         role='status'
         className='rounded-full border border-red-500/30 bg-red-500/10 px-2 py-0.5 text-xs text-red-500'
       >
-        连接失败
+        测试失败{stage ? ` · ${stage}` : ''}
+        {evidence?.detail ? ` · ${evidence.detail}` : ''}
       </span>
     )
   }

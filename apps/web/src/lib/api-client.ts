@@ -17,7 +17,13 @@ export class ApiError extends Error {
     public status: number,
     public code: string,
     message: string,
-    public requestId = ''
+    public requestId = '',
+    /**
+     * Structured evidence the server attached to the failure. Archive probes put
+     * the failing stage and the HTTP status here ("write", "HTTP 409"), which is
+     * the difference between "connection failed" and knowing what to change.
+     */
+    public fields: Record<string, string> = {}
   ) {
     super(message)
   }
@@ -52,7 +58,7 @@ export async function apiRequest<T>(
     throw new ApiError(401, 'session_changed', '会话已改变，请重新加载')
   let envelope: {
     data?: T
-    error?: { code?: string; message?: string }
+    error?: { code?: string; message?: string; fields?: Record<string, string> }
     request_id?: string
   }
   try {
@@ -74,8 +80,9 @@ export async function apiRequest<T>(
     throw new ApiError(
       response.status,
       envelope.error?.code || 'service_error',
-      envelope.error?.message || '服务暂时不可用',
-      envelope.request_id
+      envelope.error?.message || '服务返回了一个未说明原因的失败',
+      envelope.request_id,
+      envelope.error?.fields || {}
     )
   }
   const data = envelope.data

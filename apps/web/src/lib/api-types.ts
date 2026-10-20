@@ -2597,6 +2597,10 @@ export interface components {
             range?: boolean;
             /** @description A target without delete permission cannot run cloud expiry cleanup. */
             delete?: boolean;
+            /** @description When the probe failed: the step that failed (connect, create-collection, write, read, read-back, delete). */
+            stage?: string;
+            /** @description When the probe failed: the evidence observed, such as the HTTP status. Never contains the URL or credentials. */
+            detail?: string;
         };
         ArchiveTarget: {
             id?: components["schemas"]["UUID"];
@@ -7360,6 +7364,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ArchiveTargetCapabilities"];
+                };
+            };
+            /** @description The probe reached a verdict: archive_target_unreachable (address), archive_target_unauthorized (credentials), or archive_remote_path_missing (the root does not exist). fields.stage and fields.detail carry the failing step and the HTTP status. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
         };

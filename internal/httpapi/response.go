@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"github.com/zhigu34/one-nvr/internal/archive"
 	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/fault"
 	"github.com/zhigu34/one-nvr/internal/id"
@@ -26,8 +28,46 @@ func respond(w http.ResponseWriter, r *http.Request, status int, data any) {
 	}{data, requestID(r)})
 }
 func requestID(r *http.Request) id.ID { v, _ := r.Context().Value(requestKey{}).(id.ID); return v }
+
+// archiveFault turns an archive probe failure into a message that names the
+// actual problem. The three verdicts have three different fixes, so collapsing
+// them into one wording is what makes an operator re-type a correct password.
+func archiveFault(err error) (error, bool) {
+	return archiveFaultWithFields(err, nil)
+}
+
+// archiveFaultWithFields is the same mapping with evidence attached. The probe
+// endpoint uses it so the failure's stage and HTTP status reach the page.
+func archiveFaultWithFields(err error, fields map[string]string) (error, bool) {
+	var mapped *fault.Error
+	switch {
+	case errors.Is(err, archive.ErrTargetDenied):
+		mapped = fault.New(422, "archive_target_unauthorized",
+			"WebDAV 账号或密码被拒绝。请确认填的是该 WebDAV 服务的账号，不是其他系统的账号。")
+	case errors.Is(err, archive.ErrRemotePathMissing):
+		mapped = fault.New(422, "archive_remote_path_missing",
+			"地址和账号都通了，但目标路径不存在。请检查「WebDAV URL」和「远端根目录」拼接后的位置在服务端是否真的存在。")
+	case errors.Is(err, archive.ErrTargetUnavailable):
+		mapped = fault.New(422, "archive_target_unreachable",
+			"连不上 WebDAV 地址。请检查主机名与端口（容器内应填服务名，如 http://openlist:5244/dav，不能用 127.0.0.1）。")
+	default:
+		return nil, false
+	}
+	if len(fields) > 0 {
+		mapped.Fields = fields
+	}
+	return mapped, true
+}
 func fail(w http.ResponseWriter, r *http.Request, err error) {
 	var f *fault.Error
+	// A request the caller abandoned is not a server fault. Browsers cancel
+	// in-flight fetches on navigation and on query invalidation, and answering
+	// that with "service temporarily unavailable" puts a red banner in front of
+	// an operator for something that already stopped mattering. Nothing is
+	// written: the connection is gone.
+	if errors.Is(err, context.Canceled) || errors.Is(r.Context().Err(), context.Canceled) {
+		return
+	}
 	if errors.Is(err, secrets.ErrCredentialUnavailable) {
 		err = fault.New(503, "credential_unavailable", "摄像头凭据无法解密，请检查持久密钥")
 	}
@@ -36,6 +76,13 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 	// of falling through to the blanket 503 below.
 	if errors.Is(err, storage.ErrMediaProof) {
 		err = fault.New(409, "zlm_write_evidence_unavailable", "存储池检查未通过，请先运行存储池检查")
+	}
+	// Archive probes already say precisely what went wrong; turning them into a
+	// generic 503 (or, worse, leaving the reason only in the log) means the
+	// operator cannot tell a wrong address from a wrong password from a wrong
+	// root path. Each becomes its own message with the stage it failed in.
+	if mapped, ok := archiveFault(err); ok {
+		err = mapped
 	}
 	if !errors.As(err, &f) {
 		// An unrecognised error becomes a generic 503, which tells the operator

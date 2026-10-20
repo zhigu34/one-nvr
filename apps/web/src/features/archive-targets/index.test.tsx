@@ -3,6 +3,7 @@ import { afterEach, expect, test, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
 import { useAuthStore } from '@/stores/auth-store'
+import { ApiError } from '@/lib/api-client'
 import { ArchiveTargets } from './index'
 import '@/styles/index.css'
 
@@ -21,6 +22,7 @@ function setup(
     targets?: unknown[]
     caps?: unknown
     failTest?: boolean
+    failEvidence?: { stage: string; detail: string }
     statuses?: unknown[]
     channelStatus?: unknown[]
     failStatus?: boolean
@@ -37,7 +39,14 @@ function setup(
   })
   calls.request.mockImplementation(async (path: string) => {
     if (path === '/api/v1/archive-targets/test') {
-      if (options.failTest) throw new Error('archive_target_unavailable')
+      if (options.failTest)
+        throw new ApiError(
+          422,
+          'archive_target_unauthorized',
+          'WebDAV 账号或密码被拒绝。',
+          '',
+          options.failEvidence
+        )
       return options.caps ?? { write: true, read: true, range: true, delete: true }
     }
     if (path.endsWith('/retry')) return { retried: options.retried ?? 0 }
@@ -231,7 +240,21 @@ test('an incomplete probe names the capability that failed', async () => {
 test('a failed probe says so instead of leaving the last result up', async () => {
   const page = await setup({ failTest: true })
   await userEvent.click(page.getByRole('button', { name: '测试连接' }))
-  await expect.element(page.getByText('连接失败')).toBeVisible()
+  await expect.element(page.getByText(/测试失败/)).toBeVisible()
+  // The server's own wording reaches the page; the badge no longer invents
+  // "连接失败" for every kind of failure.
+  await expect.element(page.getByText(/WebDAV 账号或密码被拒绝/)).toBeVisible()
+})
+
+// "connection failed" hides whether the address, the credentials or the root
+// path was wrong. The stage the server reported is what makes it actionable.
+test('a failed probe names the step that failed and what the server said', async () => {
+  const page = await setup({
+    failTest: true,
+    failEvidence: { stage: 'write', detail: 'HTTP 409' },
+  })
+  await userEvent.click(page.getByRole('button', { name: '测试连接' }))
+  await expect.element(page.getByText(/测试失败 · 写入 · HTTP 409/)).toBeVisible()
 })
 
 test('the empty state is compact rather than a tall dashed block', async () => {

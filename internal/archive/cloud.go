@@ -104,10 +104,10 @@ func (s *Service) OpenCloudSegment(ctx context.Context, p auth.Principal, segmen
 		if err := tx.QueryRow(ctx, `SELECT start_at,end_at FROM recording_segments WHERE id=$1`, segmentID).Scan(&start, &end); err != nil {
 			return err
 		}
-		var baseURL, username, keyID string
+		var baseURL, remoteRoot, username, keyID string
 		var nonce, ciphertext []byte
-		if err := tx.QueryRow(ctx, `SELECT base_url,username,credential_key_id,password_nonce,password_ciphertext FROM archive_targets WHERE id=$1 AND enabled`, targetID).
-			Scan(&baseURL, &username, &keyID, &nonce, &ciphertext); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT base_url,remote_root,username,credential_key_id,password_nonce,password_ciphertext FROM archive_targets WHERE id=$1 AND enabled`, targetID).
+			Scan(&baseURL, &remoteRoot, &username, &keyID, &nonce, &ciphertext); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return auth.ErrNotFound
 			}
@@ -117,7 +117,7 @@ func (s *Service) OpenCloudSegment(ctx context.Context, p auth.Principal, segmen
 		if err != nil {
 			return ErrCloudUnavailable
 		}
-		client, err := NewClient(baseURL, username, string(plain))
+		client, err := NewClient(baseURL, remoteRoot, username, string(plain))
 		if err != nil {
 			return ErrCloudUnavailable
 		}

@@ -4091,6 +4091,16 @@
           }
         },
         "responses": {
+          "422": {
+            "description": "The probe reached a verdict: archive_target_unreachable (address), archive_target_unauthorized (credentials), or archive_remote_path_missing (the root does not exist). fields.stage and fields.detail carry the failing step and the HTTP status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "200": {
             "description": "Verified capabilities; missing delete means expiry cleanup is unavailable.",
             "content": {
@@ -9165,6 +9175,14 @@
           "delete": {
             "type": "boolean",
             "description": "A target without delete permission cannot run cloud expiry cleanup."
+          },
+          "stage": {
+            "type": "string",
+            "description": "When the probe failed: the step that failed (connect, create-collection, write, read, read-back, delete)."
+          },
+          "detail": {
+            "type": "string",
+            "description": "When the probe failed: the evidence observed, such as the HTTP status. Never contains the URL or credentials."
           }
         }
       },

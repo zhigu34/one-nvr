@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -17,16 +18,44 @@ var (
 	ErrTargetUnavailable = errors.New("archive_target_unavailable")
 	ErrTargetDenied      = errors.New("archive_target_unauthorized")
 	ErrObjectMissing     = errors.New("archive_object_missing")
+	// ErrRemotePathMissing is its own verdict because the operator's fix is
+	// different from the other two: the server answered, the credentials were
+	// accepted, and the root simply is not there. Reporting it as a credential
+	// problem sends someone to re-type a password that was never wrong.
+	ErrRemotePathMissing = errors.New("archive_remote_path_missing")
 )
+
+// probeError explains one failure precisely enough to act on, and never more
+// precisely than the evidence allows.
+type probeError struct {
+	// Code is one of the sentinel verdicts above; Is() makes errors.Is work
+	// against the sentinel while the detailed text still carries the stage.
+	Code  error
+	Stage string
+	// Detail is a short, non-secret diagnostic: the HTTP status, or the reason
+	// the transport failed. No URL, no credentials.
+	Detail string
+}
+
+func (e *probeError) Error() string { return e.Code.Error() + ": " + e.Stage + ": " + e.Detail }
+
+// Is lets every existing errors.Is(err, ErrTargetDenied) keep working.
+func (e *probeError) Is(target error) bool { return target == e.Code }
 
 // Capabilities reports what one probe could actually verify. A missing DELETE
 // must surface as such, never as a fully healthy target: the expiry sweeper
 // depends on it.
+//
+// Failure names the stage and the raw evidence when the probe failed, so the
+// page can show "write: HTTP 409" next to the plain-language verdict instead of
+// an opaque "connection failed".
 type Capabilities struct {
-	Write bool `json:"write"`
-	Read  bool `json:"read"`
-	Range bool `json:"range"`
-	Delete bool `json:"delete"`
+	Write  bool   `json:"write"`
+	Read   bool   `json:"read"`
+	Range  bool   `json:"range"`
+	Delete bool   `json:"delete"`
+	Stage  string `json:"stage,omitempty"`
+	Detail string `json:"detail,omitempty"`
 }
 
 const probeTimeout = 30 * time.Second
@@ -43,10 +72,21 @@ type Client struct {
 
 // NewClient validates the URL and returns a client whose requests are bounded
 // per call. The password arrives decrypted and never leaves this struct.
-func NewClient(baseURL, username, password string) (*Client, error) {
+//
+// remoteRoot is part of the address, not part of the object name: an operator
+// who points WebDAV at http://host/dav and sets the root to /nvr means objects
+// live under http://host/dav/nvr/. Dropping the root (which is what happened
+// before) makes every probe land in the wrong collection — and, on a server that
+// exposes nothing at the bare root, fail in a way that reads like bad
+// credentials.
+func NewClient(baseURL, remoteRoot, username, password string) (*Client, error) {
 	base := strings.TrimRight(baseURL, "/")
 	if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
 		return nil, ErrTargetUnavailable
+	}
+	root := strings.Trim(remoteRoot, "/")
+	if root != "" {
+		base += "/" + root
 	}
 	if username == "" {
 		return nil, ErrTargetDenied
@@ -78,9 +118,60 @@ func (c *Client) request(ctx context.Context, method, url string, body io.Reader
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, ErrTargetUnavailable
+		return nil, &probeError{Code: ErrTargetUnavailable, Stage: "connect", Detail: transportReason(err)}
 	}
 	return response, nil
+}
+
+// transportReason names why the connection failed, without the URL.
+//
+// net/http errors embed the full request URL, which carries the host and port
+// (and, for a proxied request, sometimes credentials). Only the class of failure
+// is reported; it is enough to tell "wrong host" from "server not listening"
+// from "timed out", which are the three things an operator can act on.
+func transportReason(err error) string {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return "主机名无法解析"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "连接超时"
+	}
+	message := err.Error()
+	switch {
+	case strings.Contains(message, "connection refused"):
+		return "连接被拒绝（地址可达但端口没有服务）"
+	case strings.Contains(message, "no such host"):
+		return "主机名无法解析"
+	case strings.Contains(message, "certificate"):
+		return "证书校验失败"
+	case strings.Contains(message, "EOF"):
+		return "连接被中断"
+	}
+	// The class is unknown, so the message is not repeated: it may contain the
+	// URL we are deliberately not storing.
+	return "无法建立连接"
+}
+
+// statusError turns one HTTP response into a verdict.
+//
+// The distinction matters downstream: 401/403 is the credentials, 404 is a path
+// that does not exist, and 409 on a PUT means the parent collection is missing —
+// three different mistakes with three different fixes. Every 4xx used to collapse
+// into "unauthorized", which sent operators hunting for a password problem when
+// the address or the root was wrong.
+func statusError(stage string, status int) error {
+	code := ErrTargetUnavailable
+	switch {
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		code = ErrTargetDenied
+	case status == http.StatusNotFound || status == http.StatusConflict:
+		// 404 on the addressed object and 409 ("missing parent") are the same
+		// operator mistake: the root does not exist on this server.
+		code = ErrRemotePathMissing
+	}
+	return &probeError{Code: code, Stage: stage, Detail: fmt.Sprintf("HTTP %d", status)}
 }
 
 // URL builds the absolute object URL from the target root and object key.
@@ -100,10 +191,10 @@ func (c *Client) Put(ctx context.Context, key string, body io.Reader, size int64
 	defer response.Body.Close()
 	io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
 	if response.StatusCode/100 == 4 {
-		return ErrTargetDenied
+		return statusError("write", response.StatusCode)
 	}
 	if response.StatusCode/100 != 2 {
-		return ErrTargetUnavailable
+		return statusError("write", response.StatusCode)
 	}
 	return nil
 }
@@ -121,11 +212,11 @@ func (c *Client) GetRange(ctx context.Context, key, rangeHeader string) (io.Read
 	}
 	if response.StatusCode/100 == 4 {
 		response.Body.Close()
-		return nil, nil, 0, ErrTargetDenied
+		return nil, nil, 0, statusError("read", response.StatusCode)
 	}
 	if response.StatusCode/100 != 2 {
 		response.Body.Close()
-		return nil, nil, 0, ErrTargetUnavailable
+		return nil, nil, 0, statusError("read", response.StatusCode)
 	}
 	return response.Body, response.Header, response.StatusCode, nil
 }
@@ -142,10 +233,10 @@ func (c *Client) Delete(ctx context.Context, key string) (bool, error) {
 		return false, nil
 	}
 	if response.StatusCode/100 == 4 {
-		return false, ErrTargetDenied
+		return false, statusError("delete", response.StatusCode)
 	}
 	if response.StatusCode/100 != 2 {
-		return false, ErrTargetUnavailable
+		return false, statusError("delete", response.StatusCode)
 	}
 	return true, nil
 }
@@ -159,17 +250,22 @@ func (c *Client) Check(ctx context.Context) (Capabilities, error) {
 	probeKey := fmt.Sprintf("one-nvr-probe/%d.probe", time.Now().UnixNano())
 	payload := []byte("one-nvr archive probe")
 	if err := c.Put(bounded, probeKey, strings.NewReader(string(payload)), int64(len(payload))); err != nil {
-		return caps, err
+		return annotate(caps, err), err
 	}
 	caps.Write = true
 	body, _, status, err := c.GetRange(bounded, probeKey, "")
 	if err != nil {
-		return caps, err
+		return annotate(caps, err), err
 	}
 	readBack, _ := io.ReadAll(io.LimitReader(body, 1<<20))
 	body.Close()
 	if status != http.StatusOK || string(readBack) != string(payload) {
-		return caps, ErrTargetUnavailable
+		// The write succeeded and the read-back did not match: the server
+		// accepted bytes and served something else. That is not a credential or
+		// a path problem, and saying so would send the operator to the wrong place.
+		failure := &probeError{Code: ErrTargetUnavailable, Stage: "read-back",
+			Detail: fmt.Sprintf("HTTP %d, %d bytes returned", status, len(readBack))}
+		return annotate(caps, failure), failure
 	}
 	caps.Read = true
 	ranged, _, _, err := c.GetRange(bounded, probeKey, "bytes=0-4")
@@ -182,10 +278,22 @@ func (c *Client) Check(ctx context.Context) (Capabilities, error) {
 	}
 	deleted, err := c.Delete(bounded, probeKey)
 	if err != nil {
-		return caps, nil
+		// Cleanup failing is reported through the capability flags, not as a
+		// failed probe: everything the archive needs was already proven.
+		return annotate(caps, err), nil
 	}
 	caps.Delete = deleted
 	return caps, nil
+}
+
+// annotate copies the failure's stage and detail into the capabilities so the
+// page can show what the server actually said.
+func annotate(caps Capabilities, err error) Capabilities {
+	var probe *probeError
+	if errors.As(err, &probe) {
+		caps.Stage, caps.Detail = probe.Stage, probe.Detail
+	}
+	return caps
 }
 
 // ensureCollection MKCOLs every missing ancestor of the key, top down.
@@ -208,13 +316,7 @@ func (c *Client) ensureCollection(ctx context.Context, collection string) error 
 		response.Body.Close()
 		// 405 means it already exists; both are fine.
 		if response.StatusCode/100 != 2 && response.StatusCode != http.StatusMethodNotAllowed {
-			if response.StatusCode == 409 {
-				return ErrTargetUnavailable
-			}
-			if response.StatusCode/100 == 4 {
-				return ErrTargetDenied
-			}
-			return ErrTargetUnavailable
+			return statusError("create-collection", response.StatusCode)
 		}
 	}
 	return nil

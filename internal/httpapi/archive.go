@@ -128,6 +128,20 @@ func (r *router) testArchiveTarget(w http.ResponseWriter, q *http.Request, p aut
 	}
 	caps, err := r.d.Archive.TestTarget(q.Context(), p, targetIDOrEmpty(in.ID), draft)
 	if err != nil {
+		// The verdict goes in the message; the evidence rides along as fields so
+		// the page can show which step failed and what the server answered
+		// ("write" + "HTTP 409") instead of only the conclusion.
+		fields := map[string]string{}
+		if caps.Stage != "" {
+			fields["stage"] = caps.Stage
+		}
+		if caps.Detail != "" {
+			fields["detail"] = caps.Detail
+		}
+		if mapped, ok := archiveFaultWithFields(err, fields); ok {
+			fail(w, q, mapped)
+			return
+		}
 		fail(w, q, err)
 		return
 	}

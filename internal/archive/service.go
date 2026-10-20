@@ -248,12 +248,12 @@ func checkJSON(state string, caps Capabilities) []byte {
 // from the submitted settings (so a target can be tested before registering).
 func (s *Service) clientFor(ctx context.Context, targetID id.ID, draft *TargetInput) (*Client, error) {
 	if draft != nil {
-		return NewClient(draft.BaseURL, draft.Username, draft.Password)
+		return NewClient(draft.BaseURL, draft.RemoteRoot, draft.Username, draft.Password)
 	}
-	var baseURL, username, keyID string
+	var baseURL, remoteRoot, username, keyID string
 	var nonce, ciphertext []byte
-	err := s.DB.Pool.QueryRow(ctx, `SELECT base_url,username,credential_key_id,password_nonce,password_ciphertext FROM archive_targets WHERE id=$1`, targetID).
-		Scan(&baseURL, &username, &keyID, &nonce, &ciphertext)
+	err := s.DB.Pool.QueryRow(ctx, `SELECT base_url,remote_root,username,credential_key_id,password_nonce,password_ciphertext FROM archive_targets WHERE id=$1`, targetID).
+		Scan(&baseURL, &remoteRoot, &username, &keyID, &nonce, &ciphertext)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, auth.ErrNotFound
 	}
@@ -264,17 +264,17 @@ func (s *Service) clientFor(ctx context.Context, targetID id.ID, draft *TargetIn
 	if err != nil {
 		return nil, ErrTargetUnavailable
 	}
-	return NewClient(baseURL, username, string(plain))
+	return NewClient(baseURL, remoteRoot, username, string(plain))
 }
 
 func validateTargetInput(in TargetInput) error {
 	if len(in.Name) < 1 || len(in.Name) > 64 {
 		return auth.ErrInvalid
 	}
-	if _, err := NewClient(in.BaseURL, in.Username, in.Password); err != nil && in.Password == "" {
+	if _, err := NewClient(in.BaseURL, in.RemoteRoot, in.Username, in.Password); err != nil && in.Password == "" {
 		// An update may keep the stored password; the URL and account still
 		// have to be structurally valid.
-		if _, urlErr := NewClient(in.BaseURL, in.Username, "x"); urlErr != nil {
+		if _, urlErr := NewClient(in.BaseURL, in.RemoteRoot, in.Username, "x"); urlErr != nil {
 			return auth.ErrInvalid
 		}
 	}
@@ -381,11 +381,11 @@ func (s *Service) HandleUpload(ctx context.Context, lease jobs.Lease) (jobs.Resu
 	if state != "uploading" {
 		return jobs.Result{Payload: lease.Payload}, nil
 	}
-	var baseURL, username, keyID string
+	var baseURL, remoteRoot, username, keyID string
 	var nonce, ciphertext []byte
 	var enabled bool
-	if err := s.DB.Pool.QueryRow(ctx, `SELECT base_url,username,credential_key_id,password_nonce,password_ciphertext,enabled FROM archive_targets WHERE id=$1`, targetID).
-		Scan(&baseURL, &username, &keyID, &nonce, &ciphertext, &enabled); err != nil {
+	if err := s.DB.Pool.QueryRow(ctx, `SELECT base_url,remote_root,username,credential_key_id,password_nonce,password_ciphertext,enabled FROM archive_targets WHERE id=$1`, targetID).
+		Scan(&baseURL, &remoteRoot, &username, &keyID, &nonce, &ciphertext, &enabled); err != nil {
 		return jobs.Result{}, err
 	}
 	if !enabled {
@@ -396,7 +396,7 @@ func (s *Service) HandleUpload(ctx context.Context, lease jobs.Lease) (jobs.Resu
 	if err != nil {
 		return jobs.Result{}, s.failCopy(ctx, copyID, errTargetDenied)
 	}
-	client, err := NewClient(baseURL, username, string(plain))
+	client, err := NewClient(baseURL, remoteRoot, username, string(plain))
 	if err != nil {
 		return jobs.Result{}, s.failCopy(ctx, copyID, errTargetDenied)
 	}

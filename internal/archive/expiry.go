@@ -17,13 +17,13 @@ import (
 // row to expired and reports false; anything else returns an error so the
 // cleanup round stops instead of guessing.
 func (s *Service) ConfirmRemoteAvailable(ctx context.Context, segmentID id.ID) (bool, error) {
-	var key, baseURL, username, keyID string
+	var key, baseURL, remoteRoot, username, keyID string
 	var targetID id.ID
 	var nonce, ciphertext []byte
-	err := s.DB.Pool.QueryRow(ctx, `SELECT c.object_key,c.target_id,t.base_url,t.username,t.credential_key_id,t.password_nonce,t.password_ciphertext
+	err := s.DB.Pool.QueryRow(ctx, `SELECT c.object_key,c.target_id,t.base_url,t.remote_root,t.username,t.credential_key_id,t.password_nonce,t.password_ciphertext
 		FROM recording_archive_copies c JOIN archive_targets t ON t.id=c.target_id AND t.enabled
 		WHERE c.segment_id=$1 AND c.state='verified'`, segmentID).
-		Scan(&key, &targetID, &baseURL, &username, &keyID, &nonce, &ciphertext)
+		Scan(&key, &targetID, &baseURL, &remoteRoot, &username, &keyID, &nonce, &ciphertext)
 	if err != nil {
 		return false, err
 	}
@@ -31,7 +31,7 @@ func (s *Service) ConfirmRemoteAvailable(ctx context.Context, segmentID id.ID) (
 	if err != nil {
 		return false, err
 	}
-	client, err := NewClient(baseURL, username, string(plain))
+	client, err := NewClient(baseURL, remoteRoot, username, string(plain))
 	if err != nil {
 		return false, err
 	}
@@ -85,10 +85,10 @@ func (s *Service) SweepCloudExpiry(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		var baseURL, username, keyID string
+		var baseURL, remoteRoot, username, keyID string
 		var nonce, ciphertext []byte
-		if err := s.DB.Pool.QueryRow(ctx, `SELECT base_url,username,credential_key_id,password_nonce,password_ciphertext FROM archive_targets WHERE id=$1 AND enabled`, item.TargetID).
-			Scan(&baseURL, &username, &keyID, &nonce, &ciphertext); err != nil {
+		if err := s.DB.Pool.QueryRow(ctx, `SELECT base_url,remote_root,username,credential_key_id,password_nonce,password_ciphertext FROM archive_targets WHERE id=$1 AND enabled`, item.TargetID).
+			Scan(&baseURL, &remoteRoot, &username, &keyID, &nonce, &ciphertext); err != nil {
 			slog.Warn("cloud expiry target unavailable", "error", err)
 			return
 		}
@@ -98,7 +98,7 @@ func (s *Service) SweepCloudExpiry(ctx context.Context) {
 			slog.Warn("cloud expiry credentials unavailable", "error", err)
 			return
 		}
-		client, err := NewClient(baseURL, username, string(plain))
+		client, err := NewClient(baseURL, remoteRoot, username, string(plain))
 		if err != nil {
 			slog.Warn("cloud expiry client unavailable", "error", err)
 			return

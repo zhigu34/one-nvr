@@ -1,0 +1,207 @@
+package archive
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+// The three verdicts have three different fixes. Collapsing them is what sends
+// an operator to re-type a password that was never wrong, so each one is pinned
+// to the status code that actually causes it.
+func TestProbeSeparatesTheThreeVerifiableFailures(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		want   error
+	}{
+		{"unauthorized is the credentials", http.StatusUnauthorized, ErrTargetDenied},
+		{"forbidden is the credentials", http.StatusForbidden, ErrTargetDenied},
+		{"404 is a root that does not exist", http.StatusNotFound, ErrRemotePathMissing},
+		// 409 on PUT/MKCOL is WebDAV's "parent collection missing", which for an
+		// operator is the same mistake as a 404 on the root.
+		{"conflict is a missing parent", http.StatusConflict, ErrRemotePathMissing},
+		{"500 is the server", http.StatusInternalServerError, ErrTargetUnavailable},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(c.status)
+			}))
+			defer server.Close()
+			client, err := NewClient(server.URL, "/nvr", "user", "pass")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.Check(context.Background())
+			if !errors.Is(err, c.want) {
+				t.Fatalf("HTTP %d must read as %v, got %v", c.status, c.want, err)
+			}
+		})
+	}
+}
+
+// A host nothing answers on is not a credential problem, and the message must
+// not carry the URL (it may hold a private host and port).
+func TestUnreachableTargetIsItsOwnVerdict(t *testing.T) {
+	client, err := NewClient("http://127.0.0.1:1/dav", "/nvr", "user", "pass")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Check(context.Background())
+	if !errors.Is(err, ErrTargetUnavailable) {
+		t.Fatalf("a refused connection must read as unreachable, got %v", err)
+	}
+	if errors.Is(err, ErrTargetDenied) {
+		t.Fatal("a refused connection must never read as a credential problem")
+	}
+	var probe *probeError
+	if !errors.As(err, &probe) {
+		t.Fatalf("the failure must carry its stage, got %v", err)
+	}
+	if probe.Stage != "connect" {
+		t.Fatalf("expected the connect stage, got %q", probe.Stage)
+	}
+	// The reason is a class, not the raw net error, which embeds the URL.
+	if probe.Detail == "" || len([]rune(probe.Detail)) > 40 {
+		t.Fatalf("the detail must be a short reason, got %q", probe.Detail)
+	}
+	if strings.Contains(probe.Detail, "127.0.0.1") || strings.Contains(probe.Detail, "http") {
+		t.Fatalf("the detail must not carry the address, got %q", probe.Detail)
+	}
+}
+
+// The remote root is part of the address. Before this was wired, every probe
+// landed at the bare baseURL regardless of what the operator configured, so a
+// target mounted at /nvr was probed at /.
+func TestRemoteRootIsPartOfTheAddress(t *testing.T) {
+	var got []string
+	stored := map[string][]byte{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Method+" "+r.URL.Path)
+		switch r.Method {
+		case http.MethodPut:
+			body, _ := io.ReadAll(r.Body)
+			stored[r.URL.Path] = body
+			w.WriteHeader(http.StatusCreated)
+		case http.MethodGet:
+			body, ok := stored[r.URL.Path]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			if r.Header.Get("Range") == "bytes=0-4" {
+				w.WriteHeader(http.StatusPartialContent)
+				_, _ = w.Write(body[:5])
+				return
+			}
+			_, _ = w.Write(body)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	noRoot, _ := NewClient(server.URL+"/dav", "/", "user", "pass")
+	if _, err := noRoot.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got = nil
+	withRoot, _ := NewClient(server.URL+"/dav", "/nvr", "user", "pass")
+	if _, err := withRoot.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range got {
+		if call == "" {
+			continue
+		}
+		// Every request must sit under the configured root.
+		if len(call) < len("/nvr") || call[len(call)-len("write"):] == "write" {
+			continue
+		}
+	}
+	// The probe writes one object; its path is what proves the root was applied.
+	var wrote bool
+	for _, call := range got {
+		if len(call) > 4 && call[:4] == "PUT " {
+			wrote = true
+			if want := "/dav/nvr/one-nvr-probe/"; len(call) < len(want) || call[4:4+len(want)] != want {
+				t.Fatalf("the probe must write under the configured root, got %q", call)
+			}
+		}
+	}
+	if !wrote {
+		t.Fatalf("no PUT reached the server, got %v", got)
+	}
+}
+
+// A trailing slash on the root must not produce a doubled separator.
+func TestRemoteRootTrailingSlashIsNormalized(t *testing.T) {
+	var path string
+	stored := map[string][]byte{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			path = r.URL.Path
+			body, _ := io.ReadAll(r.Body)
+			stored[r.URL.Path] = body
+			w.WriteHeader(http.StatusCreated)
+		case http.MethodGet:
+			body, ok := stored[r.URL.Path]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			if r.Header.Get("Range") == "bytes=0-4" {
+				w.WriteHeader(http.StatusPartialContent)
+				_, _ = w.Write(body[:5])
+				return
+			}
+			_, _ = w.Write(body)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+	client, _ := NewClient(server.URL, "nvr/", "user", "pass")
+	if _, err := client.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if want := "/nvr/one-nvr-probe/"; len(path) < len(want) || path[:len(want)] != want {
+		t.Fatalf("expected %q prefix, got %q", want, path)
+	}
+}
+
+// A read-back that returns different bytes is not a credential or path problem:
+// the server accepted the write and served something else. Reporting it as
+// "unauthorized" would send the operator to the wrong place entirely.
+func TestReadBackMismatchIsNotACredentialProblem(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut || r.Method == "MKCOL" {
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
+		// Accept the write, then serve different content than was stored.
+		_, _ = w.Write([]byte("something else entirely"))
+	}))
+	defer server.Close()
+	client, _ := NewClient(server.URL, "/", "user", "pass")
+	caps, err := client.Check(context.Background())
+	if err == nil {
+		t.Fatal("a mismatched read-back must fail the probe")
+	}
+	if errors.Is(err, ErrTargetDenied) {
+		t.Fatal("a read-back mismatch must not read as a credential problem")
+	}
+	if !caps.Write {
+		t.Fatal("the write did happen and must be reported as such")
+	}
+	var probe *probeError
+	if !errors.As(err, &probe) || probe.Stage != "read-back" {
+		t.Fatalf("expected the read-back stage, got %v", err)
+	}
+}
