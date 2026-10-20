@@ -84,7 +84,7 @@ var ImagePins = map[string]string{
 	"zlm":      "zlmediakit/zlmediakit:master@sha256:25ecf6c4a55e72bc495be15c8480f0b0cef58c712e5c9f0596452777b41bf344",
 	"frigate":  "ghcr.io/blakeblackshear/frigate:0.17.2@sha256:d4351369984d4a9e2a49ac59736f6490856a7ea11f7790040746d21496967010",
 	"mqtt":     "eclipse-mosquitto:2.0.22@sha256:199ea8ef2e35ec2b1b37e59cfd1dbae538ed4dfa4a2251a121a52215a6248a21",
-	"openlist": "openlistteam/openlist:v4.2.6@sha256:c555c6e1c8af2aead38ed12ec761ac077fdf046d19cf033414be8e056aec6b64",
+	"openlist": "openlistteam/openlist:v4.2.7@sha256:11b490123d57f88c84ecda46285e1921869cf511da3e5bb4062f183e7e1200b7",
 }
 
 func BuildDeployment(v map[string]string) (Deployment, error) {

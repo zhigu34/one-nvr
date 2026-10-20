@@ -14,11 +14,11 @@
 | ZLMediaKit | `master + 固定 digest` | 基础模块取流与录像 | 沿用 M0 两机每机两路直播/录像/回放的构建 |
 | Frigate | `0.17.2` | 可选智能检测 | 沿用 M0 样本机 N5105 的事件/抓拍验证构建；EPYC 检测未验收 |
 | Mosquitto | `2.0.22` | 可选智能检测的 MQTT | 沿用 M0 消息链路构建 |
-| OpenList | `v4.2.6` | 可选云归档的自带服务 | 仓库与架构已核对，归档链路未测 |
+| OpenList | `v4.2.7` | 可选云归档的自带服务 | 仓库与架构已核对，归档链路未测 |
 
 Go / Node 仅用于构建，不增加常驻容器。API、Worker 与一次性 admin 命令复用同一自建 Go 应用镜像，以 Debian slim 为运行基础；前端构建产物复制到以 Nginx 为基础的自建 gateway 镜像，不单独运行 Node 服务。基础 5 个容器，两模块全部开启 8 个，初始化/迁移执行完退出。
 
-Go 沿用设计的 1.27 系列；Node 采用 24 系列 LTS 构建前端；PostgreSQL 保持已选 17 系列，固定其补丁版本。Go、Node、PostgreSQL 和应用运行基础统一选择 Bookworm 变体，减少构建与运行环境差异。Nginx 正式版选稳定分支 1.30.5。OpenList 使用标准 v4.2.6 镜像。
+Go 沿用设计的 1.27 系列；Node 采用 24 系列 LTS 构建前端；PostgreSQL 保持已选 17 系列，固定其补丁版本。Go、Node、PostgreSQL 和应用运行基础统一选择 Bookworm 变体，减少构建与运行环境差异。Nginx 正式版选稳定分支 1.30.5。OpenList 使用标准 v4.2.7 镜像。
 
 ZLM 当前基线没有记录可对应的语义版本号，直接沿用 M0 构建的 digest；`master@sha256:…` 按 digest 寻址，不随 master 标签更新。Frigate 与 Mosquitto 同样沿用已测构建，不因上游发布新版本自动升级。各部署机器共用同一 Frigate 基础镜像，Intel 核显通过设备映射和硬件配置处理；不凭 CPU 品牌切换 TensorRT 镜像。
 
@@ -35,7 +35,7 @@ nginx:1.30.5-alpine3.24@sha256:0985e772fb9f729e6fa0980da05fca5d9c468e870eed43071
 zlmediakit/zlmediakit:master@sha256:25ecf6c4a55e72bc495be15c8480f0b0cef58c712e5c9f0596452777b41bf344
 ghcr.io/blakeblackshear/frigate:0.17.2@sha256:d4351369984d4a9e2a49ac59736f6490856a7ea11f7790040746d21496967010
 eclipse-mosquitto:2.0.22@sha256:199ea8ef2e35ec2b1b37e59cfd1dbae538ed4dfa4a2251a121a52215a6248a21
-openlistteam/openlist:v4.2.6@sha256:c555c6e1c8af2aead38ed12ec761ac077fdf046d19cf033414be8e056aec6b64
+openlistteam/openlist:v4.2.7@sha256:11b490123d57f88c84ecda46285e1921869cf511da3e5bb4062f183e7e1200b7
 ```
 
 2026-10-03 通过 Docker Hub / GHCR Registry API 读取上述九个引用的 manifest，确认返回的 digest 和 `linux/amd64` 条目。新版本查询具体标签；M0 沿用版本查询已有不可变 digest，以保留当时的实际构建。查询仅读取元数据，没有拉取并启动这些镜像。已核对可拉取的 manifest 不代表正式构建、数据库兼容或云归档验收通过。
