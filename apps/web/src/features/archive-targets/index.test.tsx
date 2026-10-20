@@ -29,6 +29,7 @@ function setup(
     channelStatus?: unknown[]
     failStatus?: boolean
     retried?: number
+    channels?: unknown[]
     openList?: { enabled: boolean; state: string; ui_port?: number } | null
   } = {}
 ) {
@@ -66,7 +67,7 @@ function setup(
       return { items: options.targets ?? [], next_cursor: null }
     if (path.startsWith('/api/v1/archive-policies')) return { items: [] }
     if (path.startsWith('/api/v1/channels'))
-      return { items: [], next_cursor: null }
+      return { items: options.channels ?? [], next_cursor: null }
     if (path.startsWith('/api/v1/site'))
       return { timezone: 'Asia/Shanghai', version: 1 }
     return {}
@@ -372,4 +373,32 @@ test('a channel with no ready footage gets no coverage bar', async () => {
   await expect
     .element(page.getByTestId('archive-channel-row').getByText('未启用'))
     .toBeVisible()
+})
+
+// 16+ channels stacked as flex rows with a visible label per dropdown filled
+// the page with wrapped text. The panel is a table now: column headers name the
+// fields once, and every row is one line.
+test('the policy panel is a table with one line per channel', async () => {
+  const page = await setup({
+    targets: [{ id: 't1', name: 'Openlist', enabled: true, username: 'admin' }],
+    channels: [
+      { id: 'c1', channel_no: 1, channel_name: '前门-左上' },
+      { id: 'c2', channel_no: 2, channel_name: '前门-右上' },
+    ],
+  })
+  // Wait for the target list to settle: the policy panel only renders once a
+  // target exists.
+  await expect.element(page.getByText('Openlist', { exact: true }).first()).toBeVisible()
+  // Column headers, not per-field labels.
+  for (const head of ['通道', '归档目标', '上传模式', '时刻']) {
+    await expect.element(page.getByText(head, { exact: true }).first()).toBeVisible()
+  }
+  // Each channel is exactly one row.
+  const rows = page.getByRole('row').elements()
+  // 1 header row + 2 channel rows.
+  expect(rows.length).toBe(3)
+  // The per-field label text must NOT appear as visible text: it was what
+  // wrapped onto extra lines. It survives only as the control's accessible name.
+  expect(page.getByText('CH01 前门-左上 归档目标').query()).toBeNull()
+  await expect.element(page.getByLabelText('CH01 前门-左上 归档目标')).toBeVisible()
 })

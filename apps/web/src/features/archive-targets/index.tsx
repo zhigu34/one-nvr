@@ -522,48 +522,80 @@ function PolicyTable({
           {rowError}
         </p>
       )}
-      <div className='space-y-2'>
-        {channels.map((channel) => {
-          const id = channel.id ?? ''
-          const label = `CH${String(channel.channel_no ?? 0).padStart(2, '0')} ${channel.channel_name}`
-          const draft = draftFor(id)
-          const dirty = drafts[id] !== undefined
-          return (
-            <div key={id} className='flex flex-wrap items-center gap-2 text-sm'>
-              <span className='w-40 truncate'>{label}</span>
-              <SelectField
-                label={`${label} 归档目标`}
-                value={draft.target_id ?? ''}
-                onValueChange={(next) => setDrafts({ ...drafts, [id]: { ...draft, target_id: next ?? '' } })}
-                options={enabled.map((target) => ({ value: target.id ?? '', label: target.name ?? '' }))}
-                className='w-36'
-              />
-              <SelectField
-                label={`${label} 上传模式`}
-                value={draft.mode ?? 'manual'}
-                onValueChange={(next) => setDrafts({ ...drafts, [id]: { ...draft, mode: (next ?? 'manual') as Policy['mode'] } })}
-                options={[
-                  { value: 'manual', label: '手动' },
-                  { value: 'immediate', label: '立即上传' },
-                  { value: 'scheduled', label: '定时上传' },
-                ]}
-                className='w-28'
-              />
-              {(draft.mode ?? 'manual') === 'scheduled' && (
-                <Input
-                  aria-label={`${label} 上传时刻`}
-                  value={draft.schedule ?? ''}
-                  onChange={(event) => setDrafts({ ...drafts, [id]: { ...draft, schedule: event.target.value } })}
-                  placeholder='02:00'
-                  className='w-28'
-                />
-              )}
-              <Button size='sm' variant='outline' disabled={!dirty} onClick={() => void save(id)}>
-                保存
-              </Button>
-            </div>
-          )
-        })}
+      {/* A real table, not a flex row per channel: 16+ channels stacked as
+          flex rows with per-field labels turned this panel into a wall of
+          wrapped text taller than the page. Column headers say once what each
+          column is; every row is then one line. */}
+      <div className='overflow-x-auto'>
+        <table className='w-full text-sm'>
+          <thead>
+            <tr className='text-left text-xs text-muted-foreground'>
+              <th className='pb-2 pr-3 font-normal'>通道</th>
+              <th className='pb-2 pr-3 font-normal'>归档目标</th>
+              <th className='pb-2 pr-3 font-normal'>上传模式</th>
+              <th className='pb-2 pr-3 font-normal'>时刻</th>
+              <th className='pb-2 font-normal'></th>
+            </tr>
+          </thead>
+          <tbody>
+            {channels.map((channel) => {
+              const id = channel.id ?? ''
+              const label = `CH${String(channel.channel_no ?? 0).padStart(2, '0')} ${channel.channel_name}`
+              const draft = draftFor(id)
+              const dirty = drafts[id] !== undefined
+              const scheduled = (draft.mode ?? 'manual') === 'scheduled'
+              return (
+                <tr key={id} className='border-t'>
+                  <td className='py-1.5 pr-3 whitespace-nowrap'>{label}</td>
+                  <td className='py-1.5 pr-3'>
+                    {/* ariaLabel, not label: the column header already names the
+                        field, and SelectField renders a label as visible text. */}
+                    <SelectField
+                      ariaLabel={`${label} 归档目标`}
+                      value={draft.target_id ?? ''}
+                      onValueChange={(next) => setDrafts({ ...drafts, [id]: { ...draft, target_id: next ?? '' } })}
+                      options={enabled.map((target) => ({ value: target.id ?? '', label: target.name ?? '' }))}
+                      triggerClassName='h-8'
+                    />
+                  </td>
+                  <td className='py-1.5 pr-3'>
+                    <SelectField
+                      ariaLabel={`${label} 上传模式`}
+                      value={draft.mode ?? 'manual'}
+                      onValueChange={(next) => setDrafts({ ...drafts, [id]: { ...draft, mode: (next ?? 'manual') as Policy['mode'] } })}
+                      options={[
+                        { value: 'manual', label: '手动' },
+                        { value: 'immediate', label: '立即上传' },
+                        { value: 'scheduled', label: '定时上传' },
+                      ]}
+                      triggerClassName='h-8'
+                    />
+                  </td>
+                  <td className='py-1.5 pr-3'>
+                    {scheduled ? (
+                      <Input
+                        aria-label={`${label} 上传时刻`}
+                        value={draft.schedule ?? ''}
+                        onChange={(event) => setDrafts({ ...drafts, [id]: { ...draft, schedule: event.target.value } })}
+                        placeholder='02:00'
+                        className='h-8 w-28'
+                      />
+                    ) : (
+                      // The slot is always there so the columns stay aligned; it
+                      // is just empty until the mode needs a time.
+                      <span className='text-xs text-muted-foreground'>—</span>
+                    )}
+                  </td>
+                  <td className='py-1.5'>
+                    <Button size='sm' variant='outline' disabled={!dirty} onClick={() => void save(id)}>
+                      保存
+                    </Button>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
       </div>
     </div>
   )
