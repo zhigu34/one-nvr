@@ -550,6 +550,9 @@ function Workspace({
     })}`,
     !!channelID
   )
+  // Raw marks, in time order. The canvas clusters them against its OWN pixel
+  // width — clustering here would need a width this component does not own, and
+  // a guessed width would fold events that are visibly apart on a wide screen.
   const marksForCanvas = useMemo(
     () => eventMarks(eventsQuery.data?.items || [], viewBounds.start, viewBounds.end),
     [eventsQuery.data, viewBounds.start, viewBounds.end]

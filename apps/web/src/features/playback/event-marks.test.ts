@@ -130,3 +130,36 @@ describe('markLabel', () => {
     expect(markLabel('')).toBe('事件')
   })
 })
+
+
+// The event track answers "when did something happen", so a mark's drawn
+// appearance must not depend on its worklist state. Handle state lives on the
+// events page; putting it on a time axis made an operator wonder whether a
+// hollow block meant a different kind of event.
+test('a mark carries no drawing-relevant state beyond time and category', () => {
+  const [mark] = eventMarks(
+    [
+      {
+        id: 'e1',
+        channel_id: 'c',
+        source: 'frigate',
+        source_id: 's1',
+        category: 'person',
+        score: 0.9,
+        zones: [],
+        started_at: '2026-10-19T10:00:00Z',
+        ended_at: '2026-10-19T10:00:30Z',
+        snapshot_state: 'ready',
+        media_state: 'linked',
+        handle_state: 'handled',
+        version: 1,
+        handling: [],
+      } as never,
+    ],
+    Date.parse('2026-10-19T09:00:00Z'),
+    Date.parse('2026-10-19T11:00:00Z')
+  )
+  expect(mark.at).toBe(Date.parse('2026-10-19T10:00:00Z'))
+  expect(mark.end).toBe(Date.parse('2026-10-19T10:00:30Z'))
+  expect(mark.category).toBe('person')
+})

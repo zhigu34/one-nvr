@@ -16,7 +16,7 @@ import {
   type Entry,
   type Timeline as TimelineData,
 } from './timeline'
-import type { EventMark } from './event-marks'
+import { clusterMarks, type EventMark } from './event-marks'
 
 /**
  * The interactive timeline strip, in three stacked tracks:
@@ -122,7 +122,7 @@ export type TimelineCanvasProps = {
   clock: number
   selected: Entry | null
   disabled: boolean
-  marks: EventMark[]
+  marks: (EventMark & { count?: number })[]
   bracket: { start: number; end: number } | null
   pickMode: boolean
   viewIsFull: boolean
@@ -154,13 +154,13 @@ function timeFor(px: number, from: number, span: number, width: number) {
  * prevent.
  */
 function markAt(
-  marks: EventMark[],
+  marks: (EventMark & { count?: number })[],
   px: number,
   from: number,
   span: number,
   width: number
-): EventMark | null {
-  let best: EventMark | null = null
+): (EventMark & { count?: number }) | null {
+  let best: (EventMark & { count?: number }) | null = null
   for (const mark of marks) {
     const x = xFor(mark.at, from, span, width)
     const drawnW = Math.max(xFor(mark.end, from, span, width) - x, MARK_MIN_W)
@@ -200,7 +200,11 @@ export function TimelineCanvas({
   // Mirrors scrubbingRef for the cursor only: a ref cannot be read during
   // render, and the cursor is render output.
   const [scrubbing, setScrubbing] = useState(false)
-  const [hover, setHover] = useState<{ px: number; at: number; mark: EventMark | null } | null>(null)
+  const [hover, setHover] = useState<{
+    px: number
+    at: number
+    mark: (EventMark & { count?: number }) | null
+  } | null>(null)
   const handleRef = useRef<'start' | 'end' | null>(null)
   const pointerDownRef = useRef<{ x: number; at: number; moved: boolean } | null>(null)
   const scrubbingRef = useRef(false)
@@ -210,6 +214,15 @@ export function TimelineCanvas({
   const merged = useMemo(
     () => mergeEntries(timeline.entries),
     [timeline.entries]
+  )
+  // Clustered against the DRAWN width: 200 events across 24 hours land within a
+  // few pixels of each other, and drawing them individually produces one solid
+  // smear. Clustering keeps "there were events here" readable and reports the
+  // count on hover; it re-folds whenever the width or the view changes, so
+  // zooming in unfolds the cluster.
+  const drawnMarks = useMemo(
+    () => clusterMarks(marks, from, timeline.to, width, 5),
+    [marks, from, timeline.to, width]
   )
 
   // Track container width — the canvas raster and the DOM overlays both need it.
@@ -356,19 +369,14 @@ export function TimelineCanvas({
     }
 
     // --- Event track: one block per mark at its true span, floored to
-    // MARK_MIN_W. Open events are drawn hollow so "still running" is visible
-    // without a second colour.
-    for (const mark of marks) {
+    // MARK_MIN_W. Every mark is drawn the same way: this track answers "when did
+    // something happen", and handle state is a worklist concern that belongs on
+    // the events page, not on a time axis.
+    for (const mark of drawnMarks) {
       const x = xFor(mark.at, from, span, width)
       const w = Math.max(xFor(mark.end, from, span, width) - x, MARK_MIN_W)
-      const color = markColor(mark.category)
-      ctx.fillStyle = color
+      ctx.fillStyle = markColor(mark.category)
       ctx.fillRect(x, EVENTS_TOP + 3, w, EVENTS_H - 7)
-      if (mark.handleState === 'open') {
-        ctx.strokeStyle = 'rgba(11,15,20,0.85)'
-        ctx.lineWidth = 1
-        ctx.strokeRect(x + 0.5, EVENTS_TOP + 3.5, Math.max(w - 1, 1), EVENTS_H - 8)
-      }
       // A cap dot marks the exact start when the block is wider than the floor:
       // the span is [start-5s, end+5s], and the dot is the event itself.
       if (w > 6) {
@@ -376,7 +384,7 @@ export function TimelineCanvas({
         ctx.fillRect(x, EVENTS_TOP + 3, 1, EVENTS_H - 7)
       }
     }
-  }, [width, merged, marks, timeline.from, timeline.to, from, span, selected, viewIsFull, zone, palette])
+  }, [width, merged, drawnMarks, timeline.from, timeline.to, from, span, selected, viewIsFull, zone, palette])
 
   const playheadAt = clock > 0 ? clock : selected?.start
   const playheadX =
@@ -418,7 +426,7 @@ export function TimelineCanvas({
     const hit = pointerAt(event)
     if (!hit || span <= 0) return
     const { px, at, box } = hit
-    const mark = markAt(marks, px, from, span, box.width)
+    const mark = markAt(drawnMarks, px, from, span, box.width)
     setHover({ px, at, mark })
 
     if (scrubbingRef.current && !pickMode) {
@@ -464,7 +472,7 @@ export function TimelineCanvas({
         onPick(hit.at)
         return
       }
-      const mark = markAt(marks, hit.px, from, span, hit.box.width)
+      const mark = markAt(drawnMarks, hit.px, from, span, hit.box.width)
       if (mark) {
         // Clicking an event jumps to the clip that covers its lead-in — the
         // span is [start-5s, end+5s], so playing from its start is what shows
@@ -565,9 +573,15 @@ export function TimelineCanvas({
                 <span className='text-muted-foreground'>
                   {formatClock(hover.mark.at, zone)}
                 </span>
-                <span className='text-muted-foreground'>
-                  持续 {Math.max(1, Math.round((hover.mark.end - hover.mark.at) / 1000))}s
-                </span>
+                {hover.mark.count && hover.mark.count > 1 ? (
+                  <span className='text-muted-foreground'>
+                    {hover.mark.count} 个事件
+                  </span>
+                ) : (
+                  <span className='text-muted-foreground'>
+                    持续 {Math.max(1, Math.round((hover.mark.end - hover.mark.at) / 1000))}s
+                  </span>
+                )}
               </span>
             ) : (
               formatClock(hover.at, zone)
