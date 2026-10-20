@@ -67,7 +67,10 @@ const BLOCKED_FILL = 'rgba(239, 68, 68, 0.28)'
 const BLOCKED_EDGE = '#ef4444'
 // A deliberately deleted segment: slate, not red. It is a gap in what can be
 // played, but nothing failed — red is reserved for the stream going wrong.
-const DELETED_FILL = 'rgba(148, 163, 184, 0.16)'
+// Slate, at a fill strong enough to separate from the hatching behind it: at
+// 16% the deleted spans were indistinguishable from empty track on a dark plate,
+// which is the one thing this layer exists to prevent.
+const DELETED_FILL = 'rgba(148, 163, 184, 0.34)'
 const DELETED_EDGE = '#94a3b8'
 const EVENT_PERSON = '#f59e0b'
 const EVENT_VEHICLE = '#38bdf8'
