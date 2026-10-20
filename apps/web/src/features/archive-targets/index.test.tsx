@@ -384,9 +384,10 @@ test('a channel with nothing archived says so instead of showing zeroes', async 
   expect(page.getByText('0/0').query()).toBeNull()
 })
 
-// An unbound channel can hold hundreds of local segments. Showing "0/364" reads
-// as an archive that is failing, when nothing was ever asked for.
-test('an unbound channel shows no coverage even when it holds footage', async () => {
+// An unbound channel can hold hundreds of local segments. "0/364" reads as a
+// failing archive, but hiding the footage reads as "nothing here" — both wrong.
+// The row states the real fact instead: this much footage, none of it archived.
+test('an unbound channel shows its local footage without faking a ratio', async () => {
   const page = await setup({
     targets: [TARGET],
     channelStatus: [
@@ -406,7 +407,11 @@ test('an unbound channel shows no coverage even when it holds footage', async ()
     ],
     channels: [{ id: 'c3', channel_no: 3, channel_name: '后门-左' }],
   })
-  await expect.element(page.getByText('未归档')).toBeVisible()
+  await expect.element(page.getByText('未归档').first()).toBeVisible()
+  // The footage is stated, so the row is not a blank.
+  await expect.element(page.getByText(/本机 364 段 · 未归档/)).toBeVisible()
+  // But never as a coverage ratio: 0/364 would claim an obligation that does
+  // not exist.
   expect(page.getByText('0/364').query()).toBeNull()
 })
 

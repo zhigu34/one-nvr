@@ -743,6 +743,15 @@ function ArchivePlan({
                       <span className='tabular-nums text-xs'>
                         {cover.copied}/{cover.segments}
                       </span>
+                    ) : (status?.segments ?? 0) > 0 ? (
+                      // Footage exists locally but was never asked to archive.
+                      // It is shown, not hidden: "this channel holds 364
+                      // segments and none of them are archived" is a fact the
+                      // operator needs, while a row of "—" reads as "nothing
+                      // here".
+                      <span className='text-xs text-muted-foreground'>
+                        本机 <span className='tabular-nums text-foreground'>{status?.segments}</span> 段 · 未归档
+                      </span>
                     ) : (
                       <span className='text-xs text-muted-foreground'>—</span>
                     )}
