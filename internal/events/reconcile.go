@@ -134,6 +134,13 @@ func (s *Service) openEvents(ctx context.Context) ([]openEvent, error) {
 			-- It closed but the picture never arrived. The age test uses the
 			-- end, because that is when the detector stopped reporting on it.
 			OR (ended_at IS NOT NULL AND ended_at < clock_timestamp() - $1::interval AND snapshot_state='pending')
+			-- It closed normally but the row has no bounding box. The MQTT envelope
+			-- does not carry one, so the API read is the only source of the geometry
+			-- that lets duplicate detections be folded; without this pass those rows
+			-- would stay unfoldable forever. Bounded to a recent window so the sweep
+			-- does not page through the whole index.
+			OR (ended_at IS NOT NULL AND NOT (raw ? 'box')
+				AND ended_at > clock_timestamp() - interval '2 days')
 		)
 		ORDER BY started_at DESC LIMIT $2`,
 		reconcileMinAge.String(), reconcileBatch)
