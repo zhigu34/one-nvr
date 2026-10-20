@@ -690,7 +690,10 @@ function ArchivePlan({
               const label = `CH${String(channel.channel_no ?? 0).padStart(2, '0')} ${channel.channel_name}`
               const policy = byChannel.get(id)
               const status = statusByChannel.get(id)
-              const cover = coverage(status?.copied, status?.segments)
+              // Only a bound channel has anything to cover. An unbound channel
+              // holding 364 local segments is not "0 of 364 archived" — nothing
+              // was ever asked for, and showing 0/N reads as a failing archive.
+              const cover = policy ? coverage(status?.copied, status?.segments) : null
               const isSelected = !!selected[id]
               return (
                 // The whole row selects: with the controls gone, selecting is the

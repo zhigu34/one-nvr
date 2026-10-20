@@ -384,6 +384,32 @@ test('a channel with nothing archived says so instead of showing zeroes', async 
   expect(page.getByText('0/0').query()).toBeNull()
 })
 
+// An unbound channel can hold hundreds of local segments. Showing "0/364" reads
+// as an archive that is failing, when nothing was ever asked for.
+test('an unbound channel shows no coverage even when it holds footage', async () => {
+  const page = await setup({
+    targets: [TARGET],
+    channelStatus: [
+      {
+        channel_id: 'c3',
+        channel_no: 3,
+        name: '后门-左',
+        target_id: '',
+        target_name: '',
+        target_enabled: false,
+        mode: 'none',
+        segments: 364,
+        copied: 0,
+        failed: 0,
+        local_retention_hours: 48,
+      },
+    ],
+    channels: [{ id: 'c3', channel_no: 3, channel_name: '后门-左' }],
+  })
+  await expect.element(page.getByText('未归档')).toBeVisible()
+  expect(page.getByText('0/364').query()).toBeNull()
+})
+
 // 16+ channels each carrying a target select, a mode select and a time box was
 // sixteen places to change one setting. The bar configures; the table reports.
 test('the policy table is read only and one line per channel', async () => {
