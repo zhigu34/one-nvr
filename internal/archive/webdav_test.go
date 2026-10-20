@@ -207,3 +207,33 @@ func TestReadBackMismatchIsNotACredentialProblem(t *testing.T) {
 		t.Fatalf("expected the read-back stage, got %v", err)
 	}
 }
+
+// A 403 is the one verdict a WebDAV server does not explain, so the trace has to
+// carry what was actually sent. It must not carry the host (site topology) or
+// anything resembling a credential.
+func TestFailureTraceNamesTheRequestWithoutLeakingTheTarget(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("permission denied: mount is read-only"))
+	}))
+	defer server.Close()
+
+	client, _ := NewClient(server.URL+"/dav", "/nvr", "admin", "s3cret")
+	_, err := client.Check(context.Background())
+	if !errors.Is(err, ErrTargetReadOnly) {
+		t.Fatalf("expected read-only, got %v", err)
+	}
+	message := err.Error()
+	// The evidence an operator needs.
+	for _, want := range []string{"MKCOL", "/dav/nvr/one-nvr-probe", "HTTP 403"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("the trace must include %q, got %q", want, message)
+		}
+	}
+	// The things it must never include.
+	for _, secret := range []string{"s3cret", "admin:", "127.0.0.1", "Basic "} {
+		if strings.Contains(message, secret) {
+			t.Fatalf("the trace leaked %q: %q", secret, message)
+		}
+	}
+}

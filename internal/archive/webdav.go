@@ -128,6 +128,46 @@ func (c *Client) request(ctx context.Context, method, url string, body io.Reader
 	return response, nil
 }
 
+// withTrace attaches the request/response trace to a probe error.
+func withTrace(err error, method, url string, status int, body []byte) error {
+	var probe *probeError
+	if errors.As(err, &probe) {
+		probe.Detail += " · " + traceRequest(method, url, status, body)
+	}
+	return err
+}
+
+// traceRequest logs what was actually sent and what came back, for one failing
+// request.
+//
+// A 403 from a WebDAV server is the one verdict the server does not explain: it
+// says "no" without saying which rule said no. Without the method and path that
+// produced it, both sides end up guessing — which is exactly what happened when
+// a mount that accepted manual uploads from its own web UI refused this client.
+// The URL is trimmed to host + path (no query, no credentials), and the body is
+// capped and stripped of anything that looks like a secret.
+func traceRequest(method, url string, status int, body []byte) string {
+	safe := url
+	if i := strings.Index(safe, "?"); i >= 0 {
+		safe = safe[:i]
+	}
+	if i := strings.Index(safe, "://"); i >= 0 {
+		if j := strings.Index(safe[i+3:], "/"); j >= 0 {
+			// Keep the path only: the host is site topology, the path is what the
+			// request is about.
+			safe = safe[i+3+j:]
+		} else {
+			safe = "/"
+		}
+	}
+	snippet := string(body)
+	if len(snippet) > 160 {
+		snippet = snippet[:160] + "…"
+	}
+	snippet = strings.ReplaceAll(snippet, "\n", " ")
+	return fmt.Sprintf("%s %s -> HTTP %d %s", method, safe, status, snippet)
+}
+
 // transportReason names why the connection failed, without the URL.
 //
 // net/http errors embed the full request URL, which carries the host and port
@@ -204,12 +244,9 @@ func (c *Client) Put(ctx context.Context, key string, body io.Reader, size int64
 		return err
 	}
 	defer response.Body.Close()
-	io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
-	if response.StatusCode/100 == 4 {
-		return statusError("write", response.StatusCode)
-	}
+	snippet, _ := io.ReadAll(io.LimitReader(response.Body, 512))
 	if response.StatusCode/100 != 2 {
-		return statusError("write", response.StatusCode)
+		return withTrace(statusError("write", response.StatusCode), "PUT", c.URL(key), response.StatusCode, snippet)
 	}
 	return nil
 }
@@ -225,13 +262,10 @@ func (c *Client) GetRange(ctx context.Context, key, rangeHeader string) (io.Read
 		response.Body.Close()
 		return nil, nil, 0, ErrObjectMissing
 	}
-	if response.StatusCode/100 == 4 {
-		response.Body.Close()
-		return nil, nil, 0, statusError("read", response.StatusCode)
-	}
 	if response.StatusCode/100 != 2 {
+		snippet, _ := io.ReadAll(io.LimitReader(response.Body, 512))
 		response.Body.Close()
-		return nil, nil, 0, statusError("read", response.StatusCode)
+		return nil, nil, 0, withTrace(statusError("read", response.StatusCode), "GET", c.URL(key), response.StatusCode, snippet)
 	}
 	return response.Body, response.Header, response.StatusCode, nil
 }
@@ -243,15 +277,12 @@ func (c *Client) Delete(ctx context.Context, key string) (bool, error) {
 		return false, err
 	}
 	defer response.Body.Close()
-	io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
+	body, _ := io.ReadAll(io.LimitReader(response.Body, 512))
 	if response.StatusCode == 404 {
 		return false, nil
 	}
-	if response.StatusCode/100 == 4 {
-		return false, statusError("delete", response.StatusCode)
-	}
 	if response.StatusCode/100 != 2 {
-		return false, statusError("delete", response.StatusCode)
+		return false, withTrace(statusError("delete", response.StatusCode), "DELETE", c.URL(key), response.StatusCode, body)
 	}
 	return true, nil
 }
@@ -331,7 +362,16 @@ func (c *Client) ensureCollection(ctx context.Context, collection string) error 
 		response.Body.Close()
 		// 405 means it already exists; both are fine.
 		if response.StatusCode/100 != 2 && response.StatusCode != http.StatusMethodNotAllowed {
-			return statusError("create-collection", response.StatusCode)
+			// Keep the server's own words: for a 403 that sentence is usually the
+			// only thing that distinguishes "this mount is read-only" from "this
+			// path is not writable by that account".
+			body, _ := io.ReadAll(io.LimitReader(response.Body, 512))
+			err := statusError("create-collection", response.StatusCode)
+			var probe *probeError
+			if errors.As(err, &probe) {
+				probe.Detail += " · " + traceRequest("MKCOL", c.URL(path), response.StatusCode, body)
+			}
+			return err
 		}
 	}
 	return nil
