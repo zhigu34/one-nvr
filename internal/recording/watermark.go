@@ -215,6 +215,9 @@ func (s *Service) sweepPoolWatermark(ctx context.Context, pool id.ID) {
 // happens is the recorder being blocked.
 func (s *Service) drainPool(ctx context.Context, policy watermarkPolicy) (outcome string, requested, deleted int) {
 	target := policy.targetFreeBytes()
+	// Bytes this round has actually released, used as the progress signal when the
+	// filesystem cannot be measured directly.
+	var released int64
 	for {
 		if ctx.Err() != nil {
 			return "cancelled", requested, deleted
@@ -223,6 +226,26 @@ func (s *Service) drainPool(ctx context.Context, policy watermarkPolicy) (outcom
 		if err != nil || !policy.Known {
 			return "capacity_unknown", requested, deleted
 		}
+		// Progress is judged against what THIS ROUND has freed, added to the
+		// snapshot it started from.
+		//
+		// Re-reading the snapshot alone could never observe progress: it is
+		// refreshed by a ten-second ticker, and this loop finishes whole batches in
+		// milliseconds, so every iteration saw the same number and "not yet at
+		// target" stayed true until the pool was empty — deleting footage inside its
+		// retention window, which is what STO-03 exists to prevent.
+		//
+		// The measured free space is preferred when the pool is readable, because it
+		// is the only figure that reflects this process's own deletions. The estimate
+		// is the fallback, and it errs low: the indexed size is what the file held
+		// when published, so the real filesystem may free slightly less.
+		// The snapshot plus this round's releases. A direct measurement is not used
+		// here on purpose: this process sees the pool's filesystem, but the figure
+		// the policy was evaluated against came from the probes, and mixing the two
+		// would compare a real volume against a reported one. The estimate errs low
+		// (indexed size, not freed blocks), which stops the sweep early rather than
+		// deleting past the target.
+		policy.FreeBytes += released
 		if policy.FreeBytes >= target {
 			return "target_reached", requested, deleted
 		}
@@ -252,6 +275,7 @@ func (s *Service) drainPool(ctx context.Context, policy watermarkPolicy) (outcom
 			}
 			if outcome.State == deleteStateDeleted {
 				roundDeleted++
+				released += outcome.Bytes
 			}
 		}
 		deleted += roundDeleted
@@ -438,7 +462,11 @@ func (s *Service) SweepQuotas(ctx context.Context) {
 	if s.Pools == nil || s.DB == nil {
 		return
 	}
-	rows, err := s.DB.Pool.Query(ctx, `SELECT c.id,c.recording_quota_bytes FROM channels c WHERE c.recording_quota_bytes>0 AND c.enabled ORDER BY c.channel_no`)
+	// No `enabled` filter: a quota says how much of the pool this channel may
+	// occupy, which is a promise about the BYTES, not about whether it is recording
+	// today. Disabling a channel is the normal way to stop recording it, and the
+	// footage already on disk stays inside the same promise.
+	rows, err := s.DB.Pool.Query(ctx, `SELECT c.id,c.recording_quota_bytes FROM channels c WHERE c.recording_quota_bytes>0 ORDER BY c.channel_no`)
 	if err != nil {
 		if ctx.Err() == nil {
 			slog.Warn("quota channel scan unavailable", "error", err)

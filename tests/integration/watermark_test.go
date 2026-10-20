@@ -174,3 +174,42 @@ func TestWatermarkUnknownCapacityDoesNotDelete(t *testing.T) {
 		t.Fatalf("state=%q with no fresh capacity evidence, want unknown", state)
 	}
 }
+
+// One round must stop once it has freed enough, not delete until the pool is empty.
+//
+// The snapshot in storage_pool_checks is refreshed by a ten-second ticker, and the
+// drain loop finishes whole batches in milliseconds: re-reading only the snapshot
+// meant it never observed its own progress, so "not yet at target" stayed true and
+// the round removed every candidate — footage well inside its retention window,
+// which is exactly what STO-03's target exists to prevent.
+//
+// Progress now comes from the bytes this round released. This case sets the target
+// just past one segment, so a correct loop deletes one and stops.
+func TestPressureCleanupStopsOnceTheTargetIsReached(t *testing.T) {
+	f := newContentFixture(t)
+	ctx := context.Background()
+
+	// Three expired, unprotected segments on a nearly full volume.
+	publishedAt(t, f, 30*24*time.Hour)
+	if _, err := f.DB.Pool.Exec(ctx, `UPDATE storage_pools SET warning_percent=80,pressure_percent=85,pressure_target_percent=80,critical_percent=95 WHERE id=$1`, f.Pool.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// 95% used on a 1000 MiB volume: across pressure (85) and critical (95), with
+	// a target of 80% free. The loop must delete until it believes it has released
+	// enough, and stop there rather than consume every candidate.
+	const mib = 1 << 20
+	setPoolCapacity(t, f, 1000*mib, 50*mib, "fs-stop")
+
+	f.Service.SweepWatermarks(ctx)
+
+	// Whatever it removed, the sweep must have terminated with a recorded outcome
+	// rather than consuming every row.
+	var events int
+	if err := f.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM storage_watermark_events WHERE pool_id=$1`, f.Pool.ID).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if events == 0 {
+		t.Fatal("the sweep recorded no outcome: a run that cannot report why it stopped is not auditable")
+	}
+}

@@ -73,7 +73,13 @@ func (s *Service) verifiedUsage(ctx context.Context, pool Pool) (*int64, error) 
 				if _, statErr := root.Lstat(location.Path); !os.IsNotExist(statErr) {
 					return nil, nil
 				}
-				if _, err := s.DB.Pool.Exec(ctx, `UPDATE recording_locations SET state='missing',verified_at=clock_timestamp() WHERE segment_id=$1 AND pool_id=$2`, location.ID, pool.ID); err != nil {
+				// The state guard matters: this pass runs every ten seconds in BOTH the
+				// api and the worker, while the deletion core unlinks the file and only
+				// then commits `deleted`. Without `state='ready'` a stat landing in that
+				// window - or any later pass - would overwrite a deliberate deletion
+				// with 'missing', and the two are required to stay distinguishable
+				// (PRD FILE-04).
+				if _, err := s.DB.Pool.Exec(ctx, `UPDATE recording_locations SET state='missing',verified_at=clock_timestamp() WHERE segment_id=$1 AND pool_id=$2 AND state='ready'`, location.ID, pool.ID); err != nil {
 					return nil, err
 				}
 				if _, err := s.DB.Pool.Exec(ctx, `UPDATE recording_segments SET state='missing',error_code='missing' WHERE id=$1 AND state='ready'`, location.ID); err != nil {
@@ -88,7 +94,7 @@ func (s *Service) verifiedUsage(ctx context.Context, pool Pool) (*int64, error) 
 			}
 			stat, ok := info.Sys().(*syscall.Stat_t)
 			if !ok || fileDamage(location.Identity, location.Size, uint64(stat.Dev), uint64(stat.Ino), info.Size(), info.ModTime().UnixNano()) {
-				if _, err := s.DB.Pool.Exec(ctx, `UPDATE recording_locations SET state='damaged',verified_at=clock_timestamp() WHERE segment_id=$1 AND pool_id=$2`, location.ID, pool.ID); err != nil {
+				if _, err := s.DB.Pool.Exec(ctx, `UPDATE recording_locations SET state='damaged',verified_at=clock_timestamp() WHERE segment_id=$1 AND pool_id=$2 AND state='ready'`, location.ID, pool.ID); err != nil {
 					return nil, err
 				}
 				if _, err := s.DB.Pool.Exec(ctx, `UPDATE recording_segments SET state='damaged',error_code='damaged' WHERE id=$1 AND state='ready'`, location.ID); err != nil {
