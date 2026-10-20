@@ -53,14 +53,29 @@ type Event struct {
 	// The span actually available for playback, which is not the span the
 	// window asked for: a segment boundary lands wherever the keyframe put it.
 	// Null when no footage covers the event.
-	MediaStartAt  *time.Time     `json:"media_start_at"`
-	MediaEndAt    *time.Time     `json:"media_end_at"`
-	MediaSegments int            `json:"media_segments"`
-	HandleState   string         `json:"handle_state"`
-	HandleNote    string         `json:"handle_note"`
-	Version       int64          `json:"version"`
-	ExpiresAt     *time.Time     `json:"expires_at"`
-	Handling      []HandleRecord `json:"handling"`
+	MediaStartAt  *time.Time `json:"media_start_at"`
+	MediaEndAt    *time.Time `json:"media_end_at"`
+	MediaSegments int        `json:"media_segments"`
+	HandleState   string     `json:"handle_state"`
+	HandleNote    string     `json:"handle_note"`
+	// MergedIDs lists the further upstream detections folded into this row.
+	//
+	// The detector tracks each object separately and sometimes assigns a new id
+	// to the same person when it is briefly occluded — the documented failure
+	// mode of frame-to-frame tracking. Three rows for one walk-past is noise, not
+	// information: the operator sees "three events" where one thing happened.
+	//
+	// Folding happens on READ, never in storage. The upstream ids stay indexed in
+	// full, so nothing is lost and the list can still be un-folded if the
+	// clustering ever gets it wrong.
+	MergedIDs []id.ID `json:"merged_ids,omitempty"`
+	// Box is the detector's last reported bounding box for this event, as
+	// fractions of the frame: [x, y, w, h]. Absent for rows stored before the box
+	// was captured, and for events that never reported one.
+	Box       []float64      `json:"box,omitempty"`
+	Version   int64          `json:"version"`
+	ExpiresAt *time.Time     `json:"expires_at"`
+	Handling  []HandleRecord `json:"handling"`
 	// Hits are the rules this event tripped (AI-06), carried on the detail view
 	// so the operator sees why it was flagged without a second request. The
 	// list view stays lean.
@@ -107,17 +122,24 @@ func New(db *database.DB, accounts *auth.Service, frigateURL string, siteID id.I
 	return &Service{DB: db, Auth: accounts, Frigate: strings.TrimRight(frigateURL, "/"), siteID: siteID, now: time.Now}
 }
 
-const eventColumns = `e.id,e.channel_id,e.source_revision_id,e.source,e.source_id,e.category,e.score,e.zones,e.started_at,e.ended_at,e.snapshot_state,e.media_state,e.media_start_at,e.media_end_at,e.media_segments,e.handle_state,e.handle_note,e.version,e.expires_at`
+const eventColumns = `e.id,e.channel_id,e.source_revision_id,e.source,e.source_id,e.category,e.score,e.zones,e.started_at,e.ended_at,e.snapshot_state,e.media_state,e.media_start_at,e.media_end_at,e.media_segments,e.handle_state,e.handle_note,e.version,e.expires_at,e.raw`
 
 func scanEvent(row pgx.Row) (Event, error) {
 	var out Event
-	var zones []byte
-	err := row.Scan(&out.ID, &out.ChannelID, &out.SourceRevisionID, &out.Source, &out.SourceID, &out.Category, &out.Score, &zones, &out.StartedAt, &out.EndedAt, &out.SnapshotState, &out.MediaState, &out.MediaStartAt, &out.MediaEndAt, &out.MediaSegments, &out.HandleState, &out.HandleNote, &out.Version, &out.ExpiresAt)
+	var zones, raw []byte
+	err := row.Scan(&out.ID, &out.ChannelID, &out.SourceRevisionID, &out.Source, &out.SourceID, &out.Category, &out.Score, &zones, &out.StartedAt, &out.EndedAt, &out.SnapshotState, &out.MediaState, &out.MediaStartAt, &out.MediaEndAt, &out.MediaSegments, &out.HandleState, &out.HandleNote, &out.Version, &out.ExpiresAt, &raw)
 	if err != nil {
 		return out, err
 	}
 	out.Zones = []string{}
 	_ = json.Unmarshal(zones, &out.Zones)
+	// The detector's box is read back out of the stored payload: it is what tells
+	// a re-identified person apart from two people in frame at once.
+	var stored struct {
+		Box []float64 `json:"box"`
+	}
+	_ = json.Unmarshal(raw, &stored)
+	out.Box = stored.Box
 	return out, nil
 }
 
@@ -137,6 +159,9 @@ type frigateMessage struct {
 		StartTime    float64  `json:"start_time"`
 		EndTime      *float64 `json:"end_time"`
 		HasSnapshot  bool     `json:"has_snapshot"`
+		Data         struct {
+			Box []float64 `json:"box"`
+		} `json:"data"`
 	} `json:"before"`
 	After struct {
 		ID           string   `json:"id"`
@@ -149,6 +174,14 @@ type frigateMessage struct {
 		StartTime    float64  `json:"start_time"`
 		EndTime      *float64 `json:"end_time"`
 		HasSnapshot  bool     `json:"has_snapshot"`
+		// Data carries the detector's own geometry. box is [x, y, w, h] in
+		// fractions of the frame, and it is the only signal that separates "the
+		// same person was re-identified" (nearly the same place) from "two people
+		// were in frame at once" (different places). Without it, folding
+		// overlapping events would merge two real detections into one.
+		Data struct {
+			Box []float64 `json:"box"`
+		} `json:"data"`
 	} `json:"after"`
 }
 
@@ -183,7 +216,11 @@ func (s *Service) Ingest(ctx context.Context, payload []byte) error {
 	if after.HasSnapshot {
 		snapshotState = "ready"
 	}
-	raw, _ := json.Marshal(map[string]any{"type": message.Type, "label": after.Label, "camera": after.Camera})
+	rawFields := map[string]any{"type": message.Type, "label": after.Label, "camera": after.Camera}
+	if len(after.Data.Box) == 4 {
+		rawFields["box"] = after.Data.Box
+	}
+	raw, _ := json.Marshal(rawFields)
 	err := s.eventUpsert(ctx, upsertInput{
 		Camera:        after.Camera,
 		SourceID:      after.ID,
@@ -295,13 +332,121 @@ func (s *Service) List(ctx context.Context, p auth.Principal, q ListQuery) (Even
 			visible = append(visible, item)
 		}
 	}
-	out.Items = visible
+	out.Items = foldDuplicateDetections(visible)
+	// Truncation happens AFTER folding: splitting a cluster across two pages
+	// would show the same walk-past twice, once on each page.
 	if len(out.Items) > q.Limit {
 		out.Items = out.Items[:q.Limit]
 		cursor := out.Items[len(out.Items)-1].ID
 		out.NextCursor = &cursor
 	}
 	return out, nil
+}
+
+// foldDuplicateDetections merges a channel's overlapping same-category events
+// into the first one, newest-first input preserved.
+//
+// Why this exists: the detector tracks each object separately and assigns a new
+// id when a person is briefly occluded — its own documentation names occlusion
+// as the case where ids get reassigned. The result is two or three rows for one
+// walk-past, all overlapping in time, which an operator reads as "three things
+// happened". Measured on this site: 288 of 825 events in 24 hours overlapped
+// another event on the same channel.
+//
+// The fold is deliberately conservative, because a wrong merge hides a real
+// detection:
+//
+//   - same channel — two cameras are never one event;
+//   - same category — a person and a car at the same moment are two things;
+//   - overlapping in time — sequential events stay separate;
+//   - nearly the same place — see below.
+//
+// The position test is what makes this safe. Measured on this site, overlapping
+// pairs split cleanly into two groups: dx ≈ 0.01 (one person re-identified after
+// a brief occlusion) and dx ≈ 0.11–0.22 (two people genuinely in frame
+// together). Without it, "two people walked past" collapses into one event and a
+// real detection disappears from the list.
+//
+// A row with no box (stored before boxes were captured) does not fold and is not
+// folded into: guessing that it is the same subject would be exactly the error
+// this rule exists to avoid.
+//
+// The upstream ids are kept in MergedIDs, so the list states how many were
+// folded and the original rows remain in the index.
+func absFloat(value float64) float64 {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
+func foldDuplicateDetections(items []Event) []Event {
+	if len(items) < 2 {
+		return items
+	}
+	// A 0-length event still occupies an instant; give it a window so it can be
+	// folded like any other.
+	const gap = 2 * time.Second
+	// samePlaceTolerance is the horizontal/vertical distance, as a fraction of
+	// the frame, within which two detections are the same subject. 0.08 is half
+	// the smallest gap measured between two genuinely different people (0.11).
+	const samePlaceTolerance = 0.08
+	end := func(item Event) time.Time {
+		if item.EndedAt != nil && item.EndedAt.After(item.StartedAt) {
+			return *item.EndedAt
+		}
+		return item.StartedAt.Add(gap)
+	}
+	out := make([]Event, 0, len(items))
+	for _, item := range items {
+		if item.ChannelID == nil {
+			out = append(out, item)
+			continue
+		}
+		merged := false
+		for at := range out {
+			group := &out[at]
+			if group.ChannelID == nil || *group.ChannelID != *item.ChannelID {
+				continue
+			}
+			if group.Category != item.Category {
+				continue
+			}
+			// Overlap (or touch within the tolerance) in either direction: input
+			// is newest-first, so the item usually starts before the group ends.
+			if item.StartedAt.After(end(*group)) || end(item).Before(group.StartedAt) {
+				continue
+			}
+			// Position: the same subject reappears where it was. Both boxes must be
+			// known; an unknown box never folds.
+			if len(group.Box) < 2 || len(item.Box) < 2 {
+				continue
+			}
+			if absFloat(group.Box[0]-item.Box[0]) > samePlaceTolerance ||
+				absFloat(group.Box[1]-item.Box[1]) > samePlaceTolerance {
+				continue
+			}
+			// Fold INTO the group: keep the earliest start and the latest end so
+			// the merged row covers what was actually observed.
+			if item.StartedAt.Before(group.StartedAt) {
+				group.StartedAt = item.StartedAt
+			}
+			if candidate := end(item); candidate.After(*group.EndedAt) || group.EndedAt == nil {
+				group.EndedAt = &candidate
+			}
+			group.MergedIDs = append(group.MergedIDs, item.ID)
+			// A group's own hits can grow when a duplicate carried more.
+			if item.Score > group.Score {
+				group.Score = item.Score
+			}
+			merged = true
+			break
+		}
+		if !merged {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 // Get returns one event with its handling trail, grant-checked.

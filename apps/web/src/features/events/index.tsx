@@ -511,6 +511,18 @@ export function Events() {
                           {item.zones.join('/')}
                         </span>
                       ) : null}
+                      {/* The detector re-identifies a briefly occluded subject and
+                          emits it as a second event; the list folds those back
+                          into one row. Saying so is what stops "3 events" from
+                          reading as three separate things. */}
+                      {(item.merged_ids?.length ?? 0) > 0 && (
+                        <span
+                          title={`检测器对同一目标重新分配了 ID，已合并 ${item.merged_ids!.length} 条重复事件`}
+                          className='shrink-0 rounded-md border border-border px-1.5 py-0.5 tabular-nums text-muted-foreground'
+                        >
+                          +{item.merged_ids!.length} 合并
+                        </span>
+                      )}
                     </div>
                     <div className='flex shrink-0 items-center gap-2 text-muted-foreground'>
                       <span title={formatClock(Date.parse(item.started_at ?? ''), zone)}>

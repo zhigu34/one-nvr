@@ -9611,6 +9611,20 @@
           "handle_note": {
             "type": "string"
           },
+          "merged_ids": {
+            "type": "array",
+            "description": "Further upstream detections folded into this row. The detector assigns a new id to the same subject after a brief occlusion; overlapping same-category events in nearly the same place are merged for display and their ids listed here. Storage keeps every row.",
+            "items": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          "box": {
+            "type": "array",
+            "description": "The detector's last reported bounding box as fractions of the frame, [x, y, w, h]. Absent when the event never reported one or predates box capture.",
+            "items": {
+              "type": "number"
+            }
+          },
           "version": {
             "type": "integer"
           },

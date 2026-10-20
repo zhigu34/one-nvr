@@ -410,6 +410,12 @@ func Render(base map[string]any, cameras map[string]CameraConfig) ([]byte, error
 				"width":   camera.Width,
 				"height":  camera.Height,
 				"fps":     camera.FPS,
+				// Stationary classification is what stops a jittery box from being
+				// treated as a fresh detection every few frames. Left at Frigate's
+				// default (on); stated here because turning it off is the first
+				// thing someone does when chasing CPU, and the visible symptom is
+				// duplicate events rather than a performance number.
+				"stationary": map[string]any{"classifier": true},
 			},
 			"objects": map[string]any{
 				"track": camera.Labels,

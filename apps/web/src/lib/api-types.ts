@@ -2696,6 +2696,10 @@ export interface components {
             /** @enum {string} */
             handle_state?: "open" | "acknowledged" | "closed" | "false_positive";
             handle_note?: string;
+            /** @description Further upstream detections folded into this row. The detector assigns a new id to the same subject after a brief occlusion; overlapping same-category events in nearly the same place are merged for display and their ids listed here. Storage keeps every row. */
+            merged_ids?: components["schemas"]["UUID"][];
+            /** @description The detector's last reported bounding box as fractions of the frame, [x, y, w, h]. Absent when the event never reported one or predates box capture. */
+            box?: number[];
             version?: number;
             /** Format: date-time */
             expires_at?: string | null;

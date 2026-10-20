@@ -3,6 +3,8 @@ package events
 import (
 	"testing"
 	"time"
+
+	"github.com/zhigu34/one-nvr/internal/id"
 )
 
 func siteClock(t *testing.T, value string) time.Time {
@@ -52,5 +54,68 @@ func TestClockValidation(t *testing.T) {
 		if validClock(value) {
 			t.Fatalf("%q must be refused", value)
 		}
+	}
+}
+
+// Folding duplicates is only safe when position agrees.
+//
+// The detector assigns a new id to the same person after a brief occlusion,
+// producing two overlapping rows for one walk-past. But two people can also be
+// in frame at once, and merging those hides a real detection. Measured on this
+// site the two cases separate cleanly: dx ≈ 0.01 for a re-identification,
+// dx ≈ 0.11–0.22 for two people.
+func TestFoldDuplicateDetectionsNeedsTheSamePlace(t *testing.T) {
+	base := time.Date(2026, 10, 20, 10, 25, 0, 0, time.UTC)
+	ch := id.ID("11111111-1111-4111-8111-111111111111")
+	event := func(idValue string, startSec, endSec float64, x float64) Event {
+		end := base.Add(time.Duration(endSec) * time.Second)
+		start := base.Add(time.Duration(startSec) * time.Second)
+		return Event{
+			ID: id.ID(idValue), ChannelID: &ch, Category: "person", Score: 0.9,
+			StartedAt: start, EndedAt: &end, Box: []float64{x, 0.5, 0.2, 0.3},
+		}
+	}
+
+	// Same place, overlapping: one subject re-identified.
+	same := foldDuplicateDetections([]Event{
+		event("aaaaaaaa-1111-4111-8111-111111111111", 22, 42, 0.59),
+		event("bbbbbbbb-1111-4111-8111-111111111111", 12, 34, 0.58),
+	})
+	if len(same) != 1 {
+		t.Fatalf("same-place overlap did not fold: %d rows", len(same))
+	}
+	if len(same[0].MergedIDs) != 1 {
+		t.Fatalf("the folded id was not reported: %v", same[0].MergedIDs)
+	}
+
+	// Different place, overlapping: two people, must stay apart.
+	apart := foldDuplicateDetections([]Event{
+		event("cccccccc-1111-4111-8111-111111111111", 22, 42, 0.59),
+		event("dddddddd-1111-4111-8111-111111111111", 12, 34, 0.38),
+	})
+	if len(apart) != 2 {
+		t.Fatalf("two people in frame were merged into %d row(s)", len(apart))
+	}
+
+	// No box: cannot tell, so never fold.
+	unknown := foldDuplicateDetections([]Event{
+		event("eeeeeeee-1111-4111-8111-111111111111", 22, 42, 0.59),
+		func() Event {
+			e := event("ffffffff-1111-4111-8111-111111111111", 12, 34, 0.58)
+			e.Box = nil
+			return e
+		}(),
+	})
+	if len(unknown) != 2 {
+		t.Fatalf("a row with no box was folded on a guess")
+	}
+
+	// Sequential, not overlapping: separate events.
+	sequential := foldDuplicateDetections([]Event{
+		event("99999999-1111-4111-8111-111111111111", 60, 80, 0.59),
+		event("88888888-1111-4111-8111-111111111111", 10, 30, 0.59),
+	})
+	if len(sequential) != 2 {
+		t.Fatalf("sequential events were merged")
 	}
 }
