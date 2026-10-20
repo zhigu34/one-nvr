@@ -7,6 +7,7 @@ import {
   entryAt,
   formatDuration,
   gapAt,
+  mergeEntries,
   nextPlayableEntry,
   offsetIn,
   buildTicks,
@@ -148,7 +149,7 @@ describe('view slicing', () => {
   const base = Date.parse('2026-10-12T00:00:00Z')
   const hour = 3_600_000
   const segment = (id: string, from: number, to: number): Entry => ({
-    id, start: base + from * hour, end: base + to * hour, bytes: 1, state: 'ready', checkState: '', blocked: '',
+    id, start: base + from * hour, end: base + to * hour, bytes: 1, state: 'ready', checkState: '', blocked: '', deleted: false,
   })
   const full = { entries: [segment('a', 0, 1), segment('b', 2, 3)], gaps: [], from: base, to: base + 4 * hour }
 
@@ -214,5 +215,58 @@ describe('buildTicks', () => {
   it('refuses degenerate inputs', () => {
     expect(buildTicks(0, 0, 1200, 'Asia/Shanghai')).toEqual([])
     expect(buildTicks(base, base + 3_600_000, 0, 'Asia/Shanghai')).toEqual([])
+  })
+})
+
+// A deleted segment is unplayable but not BLOCKED, and the difference is the
+// whole point: red on this strip means "the recording went wrong". Painting a
+// deliberate deletion red sends an operator hunting for a fault that does not
+// exist, and folding it into the blocked count inflates the failure figure with
+// decisions the operator made on purpose.
+describe('deleted segments', () => {
+  const base = Date.parse('2026-10-12T00:00:00Z')
+  const minute = 60_000
+  const segment = (
+    id: string,
+    from: number,
+    to: number,
+    state: 'ready' | 'deleted' | 'damaged'
+  ) => ({
+    id,
+    channel_id: 'c',
+    source_revision_id: 'r',
+    pool_id: 'p',
+    run_id: 'u',
+    start: new Date(base + from * minute).toISOString(),
+    end: new Date(base + to * minute).toISOString(),
+    bytes: 1,
+    state,
+    check_state: '',
+    media: undefined,
+  })
+
+  it('is not reported as blocked', () => {
+    expect(blockedReason(segment('a', 0, 1, 'deleted') as never)).toBe('')
+    expect(blockedReason(segment('b', 0, 1, 'damaged') as never)).not.toBe('')
+  })
+
+  it('is merged into its own layer, not the blocked one', () => {
+    const timeline = buildTimeline(
+      [segment('a', 0, 1, 'ready'), segment('b', 1, 2, 'deleted')] as never,
+      base,
+      base + 2 * minute
+    )
+    const merged = mergeEntries(timeline.entries)
+    expect(merged.deleted).toHaveLength(1)
+    expect(merged.blocked).toHaveLength(0)
+  })
+
+  it('still counts as coverage, so a deletion is not reported as a gap', () => {
+    const timeline = buildTimeline(
+      [segment('a', 0, 1, 'deleted')] as never,
+      base,
+      base + minute
+    )
+    expect(timeline.gaps).toHaveLength(0)
   })
 })

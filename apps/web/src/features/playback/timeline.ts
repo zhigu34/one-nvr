@@ -17,6 +17,16 @@ export type Entry = {
   checkState: string
   /** Empty when the segment can be served, otherwise the reason it cannot. */
   blocked: string
+  /**
+   * True when the local copy was removed on purpose.
+   *
+   * A deletion is the operator's decision, not a recording fault, so it must not
+   * be painted like one: red is what "the stream failed" looks like, and a
+   * timeline full of red over footage someone chose to discard sends the reader
+   * hunting for a fault that does not exist. Deleted time is drawn as its own
+   * neutral texture and stays out of the blocked count.
+   */
+  deleted: boolean
   /** Carried for the player-frame metadata pills; optional because the
    *  placement in this view can be built without it. */
   media?: Segment['media']
@@ -51,6 +61,9 @@ const CHECK_REASON: Record<string, string> = {
 
 /** Why a segment cannot be handed to the player, or an empty string. */
 export function blockedReason(segment: Segment): string {
+  // A deleted segment is unplayable but not BLOCKED: nothing went wrong, and the
+  // reason is already stated by its own texture and by the selection card.
+  if (segment.state === 'deleted') return ''
   if (segment.state !== 'ready') return STATE_REASON[segment.state]
   return CHECK_REASON[segment.check_state] || ''
 }
@@ -76,6 +89,7 @@ export function buildTimeline(
       state: segment.state,
       checkState: segment.check_state,
       blocked: blockedReason(segment),
+      deleted: segment.state === 'deleted',
       media: segment.media,
     }))
     .filter((entry) => Number.isFinite(entry.start) && entry.end > entry.start)
@@ -158,9 +172,16 @@ export function entryAtAny(timeline: Timeline, at: number): Entry | null {
 export function mergeEntries(
   entries: Entry[],
   toleranceMs = GAP_TOLERANCE_MS
-): { playable: { start: number; end: number }[]; blocked: { start: number; end: number }[] } {
+): {
+  playable: { start: number; end: number }[]
+  blocked: { start: number; end: number }[]
+  deleted: { start: number; end: number }[]
+} {
   const playable: { start: number; end: number }[] = []
   const blocked: { start: number; end: number }[] = []
+  // Deleted spans are merged on their own so the canvas can draw them as a
+  // third, neutral layer: unplayable, but not a fault.
+  const deleted: { start: number; end: number }[] = []
   const absorb = (
     spans: { start: number; end: number }[],
     start: number,
@@ -174,10 +195,11 @@ export function mergeEntries(
     }
   }
   for (const entry of entries) {
-    if (entry.blocked) absorb(blocked, entry.start, entry.end)
+    if (entry.deleted) absorb(deleted, entry.start, entry.end)
+    else if (entry.blocked) absorb(blocked, entry.start, entry.end)
     else absorb(playable, entry.start, entry.end)
   }
-  return { playable, blocked }
+  return { playable, blocked, deleted }
 }
 
 /**

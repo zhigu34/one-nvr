@@ -65,6 +65,10 @@ const RECORDING_FILL = 'rgba(16, 185, 129, 0.22)'
 const RECORDING_EDGE = '#10b981'
 const BLOCKED_FILL = 'rgba(239, 68, 68, 0.28)'
 const BLOCKED_EDGE = '#ef4444'
+// A deliberately deleted segment: slate, not red. It is a gap in what can be
+// played, but nothing failed — red is reserved for the stream going wrong.
+const DELETED_FILL = 'rgba(148, 163, 184, 0.16)'
+const DELETED_EDGE = '#94a3b8'
 const EVENT_PERSON = '#f59e0b'
 const EVENT_VEHICLE = '#38bdf8'
 const EVENT_OTHER = '#c084fc'
@@ -359,6 +363,9 @@ export function TimelineCanvas({
       ctx.fillRect(x, RECORDING_TOP + 1, w, RECORDING_H - 1)
       ctx.fillStyle = edge
       ctx.fillRect(x, RECORDING_TOP + 1, w, 2)
+    }
+    for (const piece of merged.deleted) {
+      drawSpan(piece.start, piece.end, DELETED_FILL, DELETED_EDGE)
     }
     for (const piece of merged.blocked) {
       drawSpan(piece.start, piece.end, BLOCKED_FILL, BLOCKED_EDGE)
