@@ -2672,7 +2672,7 @@ export interface components {
             target_id?: components["schemas"]["UUID"];
             /** @enum {string} */
             mode?: "manual" | "scheduled" | "immediate";
-            /** @description Comma-separated HH:MM list in the site timezone; scheduled mode only. */
+            /** @description Comma-separated HH:MM-HH:MM windows in the site timezone; scheduled mode only. The scheduler keeps enqueueing unarchived segments while a window is open and waits when closed. A window crossing midnight is written 22:00-02:00. */
             schedule?: string;
         };
         ArchivePolicyPage: {

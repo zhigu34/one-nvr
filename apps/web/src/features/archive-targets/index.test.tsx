@@ -380,7 +380,7 @@ test('a channel with nothing archived says so instead of showing zeroes', async 
     ],
     channels: [{ id: 'c2', channel_no: 2, channel_name: '后门' }],
   })
-  await expect.element(page.getByText('未归档')).toBeVisible()
+  await expect.element(page.getByText('未归档').first()).toBeVisible()
   expect(page.getByText('0/0').query()).toBeNull()
 })
 
@@ -468,7 +468,7 @@ test('applying a scheduled policy without a time names the missing field', async
   await userEvent.click(page.getByLabelText('上传模式'))
   await userEvent.click(await page.getByRole('option', { name: '定时上传' }).first())
   await userEvent.click(page.getByRole('button', { name: /应用到 1 路/ }))
-  await expect.element(page.getByText(/定时上传需要填写时刻/)).toBeVisible()
+  await expect.element(page.getByText(/定时上传需要填写时间段/)).toBeVisible()
   const puts = calls.request.mock.calls.filter(
     ([path, init]) => path === '/api/v1/archive-policies' && (init as RequestInit | undefined)?.method === 'PUT'
   )

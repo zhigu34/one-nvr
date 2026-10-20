@@ -577,7 +577,7 @@ function ArchivePlan({
     }
     // The server rejects this with "参数无效", which does not name the field.
     if (mode === 'scheduled' && !schedule.trim()) {
-      setError('定时上传需要填写时刻，例如 02:00 或 02:00,14:30。')
+      setError('定时上传需要填写时间段，例如 02:00-06:00（该时段内持续上传）。')
       return
     }
     setPending(true)
@@ -617,8 +617,8 @@ function ArchivePlan({
       <div>
         <h2 className='text-sm font-medium'>通道归档策略</h2>
         <p className='mt-1 text-xs text-muted-foreground'>
-          勾选通道后在下方设置一次并应用，表格只展示当前结果。立即上传＝分片发布即入队；定时上传＝按站点时区
-          {zone ? `（${zone}）` : ''}每日时刻扫描补齐；手动＝只在录像管理页选中后上传。
+          勾选通道后在下方设置一次并应用，表格只展示当前结果。立即上传＝持续把未归档的录像传上去；定时上传＝只在指定时段内上传，时段外排队等待；手动＝只在录像管理页选中后上传。时段按站点时区
+          {zone ? `（${zone}）` : ''}计算。
         </p>
       </div>
       {/* The single configuration surface. */}
@@ -649,10 +649,10 @@ function ArchivePlan({
         />
         {mode === 'scheduled' && (
           <Input
-            aria-label='上传时刻'
+            aria-label='上传时间段'
             value={schedule}
             onChange={(event) => setDraftSchedule(event.target.value)}
-            placeholder='02:00 或 02:00,14:30'
+            placeholder='02:00-06:00'
             className='h-8 w-44'
           />
         )}

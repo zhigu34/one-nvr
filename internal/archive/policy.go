@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -22,9 +21,9 @@ import (
 // that message does not say which field is missing.
 var (
 	ErrScheduleRequired = fault.New(422, "archive_schedule_required",
-		"定时上传需要在「时刻」填写具体时间，例如 02:00 或 02:00,14:30")
+		"定时上传需要填写时间段，例如 02:00-06:00（该时段内持续上传）")
 	ErrScheduleFormat = fault.New(422, "archive_schedule_invalid",
-		"「时刻」格式应为 HH:MM，多个时刻用逗号分隔，例如 02:00,14:30")
+		"时间段格式应为 HH:MM-HH:MM，多个时段用逗号分隔，例如 02:00-06:00,18:00-20:00；跨午夜写 22:00-02:00")
 )
 
 // Archive modes (ARC-08). manual is the zero policy: uploads happen only when
@@ -36,22 +35,13 @@ const (
 	ModeImmediate = "immediate"
 )
 
-// sweepBatch bounds one scheduled trigger. ARC-08: one trigger only enqueues;
-// a backlog keeps draining through the ordinary job retries afterwards.
+// sweepBatch is how many segments one transaction enqueues. It bounds the
+// transaction, not the drain: an open window keeps issuing batches.
 const sweepBatch = 100
 
-// digits reports whether s is all ASCII digits, so "ab:cd" cannot pass as a time.
-func digits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
-}
+// sweepCeiling stops one tick from queueing an unbounded number of jobs. The
+// next tick continues, so this paces the drain rather than capping it.
+const sweepCeiling = 2000
 
 // Policy is one channel's archive binding.
 type Policy struct {
@@ -93,15 +83,8 @@ func (s *Service) UpsertPolicy(ctx context.Context, p auth.Principal, in Policy)
 		return Policy{}, auth.ErrInvalid
 	}
 	if in.Mode == ModeScheduled {
-		if strings.TrimSpace(in.Schedule) == "" {
-			return Policy{}, ErrScheduleRequired
-		}
-		for _, fire := range strings.Split(in.Schedule, ",") {
-			// HH:MM, and neither half may be blank: "2:00" and "02:0" are what a
-			// hand-typed time looks like before it is finished.
-			if len(fire) != 5 || fire[2] != ':' || !digits(fire[:2]) || !digits(fire[3:]) {
-				return Policy{}, ErrScheduleFormat
-			}
+		if _, err := ParseWindows(in.Schedule); err != nil {
+			return Policy{}, err
 		}
 	} else if in.Schedule != "" {
 		return Policy{}, auth.ErrInvalid
@@ -178,73 +161,102 @@ func (s *Service) EnqueueForPublication(ctx context.Context, tx pgx.Tx, channelI
 	return err
 }
 
-// SweepSchedules runs every worker tick: for each scheduled policy whose site
-// clock has reached one of its fire times today and whose ledger row is free,
-// claim the slot and enqueue every not-yet-archived ready segment. One trigger
-// only enqueues; the job queue drains the backlog (ARC-08).
+// SweepSchedules runs every worker tick. For each policy that is due right now,
+// it keeps enqueueing not-yet-archived ready segments until nothing is left.
+//
+// Scheduled policies are due only inside their windows. That replaced the old
+// daily trigger, which could enqueue one bounded batch per day — a channel
+// holding a thousand overnight segments needed ten days to drain.
+//
+// Immediate policies are always due. "Immediate" means keep uploading, not only
+// new segments, so a channel switched to it drains its backlog instead of
+// leaving the history stranded.
 func (s *Service) SweepSchedules(ctx context.Context) {
-	policies, err := s.DB.Pool.Query(ctx, `SELECT p.channel_id,p.target_id,p.schedule,s.timezone FROM archive_policies p
+	rows, err := s.DB.Pool.Query(ctx, `SELECT p.channel_id,p.target_id,p.mode,p.schedule,s.timezone FROM archive_policies p
 		JOIN archive_targets t ON t.id=p.target_id JOIN channels c ON c.id=p.channel_id JOIN sites s ON s.id=c.site_id
-		WHERE p.mode='scheduled' AND t.enabled`)
+		WHERE p.mode IN ('scheduled','immediate') AND t.enabled`)
 	if err != nil {
 		if ctx.Err() == nil {
 			slog.Warn("archive schedule scan unavailable")
 		}
 		return
 	}
-	type scheduled struct {
+	type policy struct {
 		ChannelID, TargetID id.ID
+		Mode                string
 		Schedule            string
 		Zone                string
 	}
-	var due []scheduled
-	for policies.Next() {
-		var item scheduled
-		if err := policies.Scan(&item.ChannelID, &item.TargetID, &item.Schedule, &item.Zone); err != nil {
-			policies.Close()
+	var policies []policy
+	for rows.Next() {
+		var item policy
+		if err := rows.Scan(&item.ChannelID, &item.TargetID, &item.Mode, &item.Schedule, &item.Zone); err != nil {
+			rows.Close()
 			return
 		}
-		due = append(due, item)
+		policies = append(policies, item)
 	}
-	policies.Close()
-	for _, item := range due {
-		location, err := time.LoadLocation(item.Zone)
-		if err != nil {
-			continue
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		if ctx.Err() == nil {
+			slog.Warn("archive schedule rows unavailable", "error", err)
 		}
-		now := time.Now().In(location)
-		fireDate := now.Format("2006-01-02")
-		nowHM := now.Format("15:04")
-		for _, fire := range strings.Split(item.Schedule, ",") {
-			fire = strings.TrimSpace(fire)
-			if len(fire) != 5 || fire > nowHM {
+		return
+	}
+	for _, item := range policies {
+		if ctx.Err() != nil {
+			return
+		}
+		if item.Mode == ModeScheduled {
+			open, err := WindowOpenAt(item.Schedule, item.Zone, time.Now())
+			if err != nil || !open {
 				continue
 			}
-			claimed, err := s.claimScheduleSlot(ctx, item.ChannelID, fireDate, fire)
-			if err != nil || !claimed {
-				continue
-			}
-			queued := s.enqueueDueSegments(ctx, item.ChannelID, item.TargetID)
-			_, _ = s.DB.Pool.Exec(ctx, `UPDATE archive_schedule_runs SET queued=$2 WHERE policy_id=$1 AND fire_date=$3 AND fire_time=$4`,
-				item.ChannelID, queued, fireDate, fire)
-			slog.Info("archive schedule fired", "channel", string(item.ChannelID), "fire", fire, "queued", queued)
 		}
+		s.enqueueAllDue(ctx, item.ChannelID, item.TargetID)
 	}
 }
 
-// claimScheduleSlot takes the (policy,date,time) ledger slot; the UNIQUE
-// constraint is the multi-instance fence.
-func (s *Service) claimScheduleSlot(ctx context.Context, channelID id.ID, fireDate, fireTime string) (bool, error) {
-	token, err := id.New()
+// WindowOpenAt reports whether the spec has a window covering now, in the site's
+// timezone. A malformed spec is treated as closed: uploading outside the
+// operator's stated hours is worse than not uploading.
+func WindowOpenAt(spec, zone string, now time.Time) (bool, error) {
+	windows, err := ParseWindows(spec)
 	if err != nil {
 		return false, err
 	}
-	tag, err := s.DB.Pool.Exec(ctx, `INSERT INTO archive_schedule_runs(id,policy_id,fire_date,fire_time) VALUES($1,$2,$3,$4)
-		ON CONFLICT (policy_id,fire_date,fire_time) DO NOTHING`, token, channelID, fireDate, fireTime)
+	location, err := time.LoadLocation(zone)
 	if err != nil {
 		return false, err
 	}
-	return tag.RowsAffected() == 1, nil
+	local := now.In(location)
+	return AnyWindowContains(windows, local.Hour()*60+local.Minute()), nil
+}
+
+// enqueueAllDue keeps enqueueing until nothing further is due, so an open window
+// drains the backlog instead of one bounded batch per trigger.
+//
+// sweepCeiling bounds one tick rather than the drain: the next tick continues
+// where this one stopped while the window is still open, so a large backlog is
+// paced instead of starving every other loop sharing the worker.
+func (s *Service) enqueueAllDue(ctx context.Context, channelID, targetID id.ID) {
+	total := 0
+	for total < sweepCeiling && ctx.Err() == nil {
+		queued := s.enqueueDueSegments(ctx, channelID, targetID)
+		if queued == 0 {
+			return
+		}
+		total += queued
+		// Yield between batches so retention and reconciliation keep running.
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	if total > 0 {
+		slog.Info("archive window enqueued", "channel", string(channelID), "queued", total)
+	}
 }
 
 // enqueueDueSegments enqueues every ready segment of the channel that has no

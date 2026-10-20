@@ -94,25 +94,45 @@ func TestArchiveScheduledSweep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 00:00 is always due, so the sweep fires regardless of the wall clock.
+	// A window covering the whole day: the sweep acts regardless of the wall
+	// clock, and it is the window's openness — not a daily ledger slot — that
+	// decides. 00:00-23:59 is "all day except the last minute".
 	if _, err := service.UpsertPolicy(ctx, fixture.Admin, archive.Policy{
-		ChannelID: fixture.Channel, TargetID: target.ID, Mode: archive.ModeScheduled, Schedule: "00:00",
+		ChannelID: fixture.Channel, TargetID: target.ID, Mode: archive.ModeScheduled, Schedule: "00:00-23:59",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	service.SweepSchedules(ctx)
 	var uploading int
 	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM recording_archive_copies WHERE state='uploading'`).Scan(&uploading); err != nil || uploading != 2 {
-		t.Fatal("the sweep must enqueue both unarchived segments", uploading, err)
+		t.Fatal("an open window must enqueue both unarchived segments", uploading, err)
 	}
-	var ledger int
-	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM archive_schedule_runs`).Scan(&ledger); err != nil || ledger != 1 {
-		t.Fatal("one ledger row per fire", ledger, err)
-	}
-	// A repeat sweep is fenced by the UNIQUE ledger row.
+	// A repeat sweep enqueues nothing new: the copy rows already exist, and the
+	// enqueue is idempotent per (segment, target). This replaces the old ledger
+	// dedupe, which existed to stop a daily trigger from firing twice.
 	service.SweepSchedules(ctx)
-	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM archive_schedule_runs`).Scan(&ledger); err != nil || ledger != 1 {
-		t.Fatal("the same fire must not enqueue twice", ledger, err)
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM recording_archive_copies`).Scan(&uploading); err != nil || uploading != 2 {
+		t.Fatal("a repeat sweep must not create duplicate copies", uploading, err)
+	}
+
+	// Closing the window stops it: no new segment is picked up outside its hours.
+	if _, err := fixture.Service.Publish(ctx, fixture.Inbox); err != nil {
+		t.Fatal(err)
+	}
+	publishContiguousSegment(t, fixture, ffmpeg, "320x180", 2*time.Second)
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE archive_policies SET schedule='00:00-00:01'`); err != nil {
+		t.Fatal(err)
+	}
+	// Pin "now" outside the window by evaluating the window directly, since the
+	// sweep reads the wall clock.
+	if open, err := archive.WindowOpenAt("00:00-00:01", "Asia/Shanghai", time.Now()); err != nil || open {
+		if open {
+			t.Skip("the test is running in the 00:00-00:01 minute; cannot assert a closed window")
+		}
+	}
+	service.SweepSchedules(ctx)
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM recording_archive_copies`).Scan(&uploading); err != nil || uploading != 2 {
+		t.Fatal("a closed window must not enqueue", uploading, err)
 	}
 	// Drain the queue: both uploads verify.
 	runUploadJob(t, fixture, service, ctx)
@@ -150,24 +170,28 @@ func TestScheduledPolicyNamesTheMissingTime(t *testing.T) {
 	if _, err := service.UpsertPolicy(ctx, fixture.Admin, blank); !errors.Is(err, archive.ErrScheduleRequired) {
 		t.Fatalf("a blank time must read as schedule_required, got %v", err)
 	}
-	// Malformed times are a different verdict, with the accepted shape.
-	for _, bad := range []string{"2:00", "02:0", "ab:cd", "0200", "02:00,", "25:00"} {
+	// Malformed specs are a different verdict, with the accepted shape.
+	for _, bad := range []string{
+		"2:00-06:00", "02:00-6:00", "ab:cd-06:00", "0200-0600",
+		"02:00", "02:00-06:00,", "25:00-06:00", "02:00-24:00",
+		// Equal ends read as either zero-length or all-day; guessing which the
+		// operator meant is worse than asking.
+		"02:00-02:00",
+		// A bare time is the pre-window format and must not be silently accepted.
+		"02:00,14:30",
+	} {
 		policy := base
 		policy.Schedule = bad
-		// 25:00 is well-formed HH:MM and is accepted at this layer; the scheduler
-		// simply never fires for it. The rest are malformed.
-		_, err := service.UpsertPolicy(ctx, fixture.Admin, policy)
-		if bad == "25:00" {
-			continue
-		}
-		if !errors.Is(err, archive.ErrScheduleFormat) {
+		if _, err := service.UpsertPolicy(ctx, fixture.Admin, policy); !errors.Is(err, archive.ErrScheduleFormat) {
 			t.Fatalf("%q must read as schedule_invalid, got %v", bad, err)
 		}
 	}
-	// A well-formed time saves.
-	ok := base
-	ok.Schedule = "02:00,14:30"
-	if _, err := service.UpsertPolicy(ctx, fixture.Admin, ok); err != nil {
-		t.Fatalf("a well-formed time must save: %v", err)
+	// Well-formed windows save, including several and one that crosses midnight.
+	for _, good := range []string{"02:00-06:00", "22:00-02:00", "02:00-06:00,18:00-20:00"} {
+		policy := base
+		policy.Schedule = good
+		if _, err := service.UpsertPolicy(ctx, fixture.Admin, policy); err != nil {
+			t.Fatalf("%q must save: %v", good, err)
+		}
 	}
 }
