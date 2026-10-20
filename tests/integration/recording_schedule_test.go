@@ -4,9 +4,11 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/recording"
 )
 
@@ -52,7 +54,7 @@ func TestPlannedChannelOwesOnlyInsideItsWindow(t *testing.T) {
 	today := isoToday()
 	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, []recording.ScheduleWindow{
 		{Weekday: today, StartMinute: 0, EndMinute: 1440},
-	}); err != nil {
+	}, channelVersion(t, fixture)); err != nil {
 		t.Fatal(err)
 	}
 	if err := fixture.Service.ReconcileObligation(ctx, fixture.Channel); err != nil {
@@ -72,7 +74,7 @@ func TestPlannedChannelOwesOnlyInsideItsWindow(t *testing.T) {
 	// Now move the schedule one day away: nothing is scheduled right now.
 	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, []recording.ScheduleWindow{
 		{Weekday: today%7 + 1, StartMinute: 0, EndMinute: 1440},
-	}); err != nil {
+	}, channelVersion(t, fixture)); err != nil {
 		t.Fatal(err)
 	}
 	if err := fixture.Service.ReconcileObligation(ctx, fixture.Channel); err != nil {
@@ -98,7 +100,7 @@ func TestManualWindowOverridesAClosedSchedule(t *testing.T) {
 	today := isoToday()
 	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, []recording.ScheduleWindow{
 		{Weekday: today%7 + 1, StartMinute: 0, EndMinute: 1440},
-	}); err != nil {
+	}, channelVersion(t, fixture)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := fixture.Service.StartManual(ctx, fixture.Admin, fixture.Channel, 10); err != nil {
@@ -130,13 +132,13 @@ func TestOverlappingWindowsAreRejected(t *testing.T) {
 	ctx := context.Background()
 	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, []recording.ScheduleWindow{
 		{Weekday: 1, StartMinute: 8 * 60, EndMinute: 12 * 60},
-	}); err != nil {
+	}, channelVersion(t, fixture)); err != nil {
 		t.Fatal(err)
 	}
 	_, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, []recording.ScheduleWindow{
 		{Weekday: 1, StartMinute: 8 * 60, EndMinute: 12 * 60},
 		{Weekday: 1, StartMinute: 11 * 60, EndMinute: 13 * 60},
-	})
+	}, channelVersion(t, fixture))
 	if err == nil {
 		t.Fatal("overlapping windows accepted")
 	}
@@ -157,7 +159,7 @@ func TestOvernightWindowRoundTrips(t *testing.T) {
 	entered := []recording.ScheduleWindow{
 		{Weekday: 1, StartMinute: 22 * 60, EndMinute: 2*60 + 1440},
 	}
-	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, entered); err != nil {
+	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, entered, channelVersion(t, fixture)); err != nil {
 		t.Fatal(err)
 	}
 	var rows int
@@ -191,7 +193,7 @@ func TestScheduleDoesNotRecordForANonPlannedChannel(t *testing.T) {
 	today := isoToday()
 	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, []recording.ScheduleWindow{
 		{Weekday: today, StartMinute: 0, EndMinute: 1440},
-	}); err != nil {
+	}, channelVersion(t, fixture)); err != nil {
 		t.Fatal(err)
 	}
 	if err := fixture.Service.ReconcileObligation(ctx, fixture.Channel); err != nil {
@@ -214,7 +216,7 @@ func TestScheduleDoesNotRecordForANonPlannedChannel(t *testing.T) {
 func TestEmptyScheduleIsValidAndNeverOwed(t *testing.T) {
 	fixture := scheduledFixture(t)
 	ctx := context.Background()
-	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, nil); err != nil {
+	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, nil, channelVersion(t, fixture)); err != nil {
 		t.Fatal(err)
 	}
 	schedule, err := fixture.Service.GetSchedule(ctx, fixture.Admin, fixture.Channel)
@@ -247,7 +249,7 @@ func TestScheduleEndpointWorksWithTheAPIBareService(t *testing.T) {
 	ctx := context.Background()
 	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, []recording.ScheduleWindow{
 		{Weekday: 1, StartMinute: 8 * 60, EndMinute: 12 * 60},
-	}); err != nil {
+	}, channelVersion(t, fixture)); err != nil {
 		t.Fatal(err)
 	}
 	bare := &recording.Service{DB: fixture.DB, Auth: fixture.Auth, Pools: fixture.Service.Pools}
@@ -271,7 +273,7 @@ func TestScheduleWriteWorksWithTheAPIBareService(t *testing.T) {
 	bare := &recording.Service{DB: fixture.DB, Auth: fixture.Auth, Pools: fixture.Service.Pools}
 	if _, err := bare.PutSchedule(ctx, fixture.Admin, fixture.Channel, []recording.ScheduleWindow{
 		{Weekday: 2, StartMinute: 22 * 60, EndMinute: 2*60 + 1440},
-	}); err != nil {
+	}, channelVersion(t, fixture)); err != nil {
 		t.Fatalf("the API's bare service cannot write a schedule: %v", err)
 	}
 	var rows int
@@ -326,7 +328,7 @@ func TestPlannedChannelIsAProbeCandidate(t *testing.T) {
 	today := isoToday()
 	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, []recording.ScheduleWindow{
 		{Weekday: today, StartMinute: 0, EndMinute: 1440},
-	}); err != nil {
+	}, channelVersion(t, fixture)); err != nil {
 		t.Fatal(err)
 	}
 	// Expire whatever evidence exists so the pool only qualifies through demand.
@@ -350,7 +352,7 @@ func TestPlannedChannelIsAProbeCandidate(t *testing.T) {
 
 	// Outside the window it is NOT demand: an empty schedule means no reason to
 	// record, and probing then would be work with no purpose.
-	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, nil); err != nil {
+	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, nil, channelVersion(t, fixture)); err != nil {
 		t.Fatal(err)
 	}
 	candidates, err = fixture.Service.IdlePoolCandidates(ctx)
@@ -361,5 +363,55 @@ func TestPlannedChannelIsAProbeCandidate(t *testing.T) {
 		if candidate == fixture.Pool.ID {
 			t.Fatal("a planned channel with no window open was still treated as demand")
 		}
+	}
+}
+
+// channelVersion reads the channel's current version, which is the concurrency
+// token every channel write shares.
+func channelVersion(t *testing.T, fixture publishFixture) int64 {
+	t.Helper()
+	var version int64
+	if err := fixture.DB.Pool.QueryRow(context.Background(),
+		"SELECT version FROM channels WHERE id=$1", fixture.Channel).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	return version
+}
+
+// A stale schedule write must be refused, not silently applied.
+//
+// The schedule is a FULL REPLACE: the writer deletes every row and inserts its
+// own. Without a version guard, two operators editing the schedule and the mode at
+// the same time erase each other's whole week — not one field, the entire
+// schedule — and the second write leaves no trace that anything was lost.
+//
+// The token is channels.version, the same one every other channel write uses.
+func TestScheduleWriteRequiresTheCurrentVersion(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	stale := channelVersion(t, fixture)
+
+	// One operator writes and commits.
+	today := isoToday()
+	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel,
+		[]recording.ScheduleWindow{{Weekday: today, StartMinute: 0, EndMinute: 600}}, stale); err != nil {
+		t.Fatal(err)
+	}
+
+	// A second operator, holding the version they read before that write, tries to
+	// replace the week with something else.
+	_, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel,
+		[]recording.ScheduleWindow{{Weekday: today, StartMinute: 700, EndMinute: 800}}, stale)
+	if !errors.Is(err, auth.ErrConflict) {
+		t.Fatalf("a stale schedule write returned %v, want a conflict", err)
+	}
+
+	// The first operator's week must be intact.
+	schedule, err := fixture.Service.GetSchedule(ctx, fixture.Admin, fixture.Channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(schedule.Windows) != 1 || schedule.Windows[0].StartMinute != 0 {
+		t.Fatalf("the refused write still changed the schedule: %+v", schedule.Windows)
 	}
 }

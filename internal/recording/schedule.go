@@ -166,7 +166,14 @@ func (s *Service) scheduleActiveTx(ctx context.Context, tx pgx.Tx, channelID id.
 // is my week", and a partial update would leave windows from an older intent
 // behind with no way to see them. The whole week is validated and written in one
 // transaction, so a rejected week changes nothing.
-func (s *Service) PutSchedule(ctx context.Context, p auth.Principal, channelID id.ID, windows []ScheduleWindow) (ChannelSchedule, error) {
+// PutSchedule replaces a channel's weekly schedule.
+//
+// expectedVersion is the channel version the editor read. Every other channel
+// write in this codebase is guarded the same way; this one was not, so two
+// operators editing the schedule and the mode at the same time silently
+// overwrote each other — the schedule is a full replace, so the loser's whole
+// week disappeared rather than one field.
+func (s *Service) PutSchedule(ctx context.Context, p auth.Principal, channelID id.ID, windows []ScheduleWindow, expectedVersion int64) (ChannelSchedule, error) {
 	// Normalise first: the editor may send a window that wraps past midnight
 	// (end > 1440), and storage keeps only single-day rows.
 	stored := make([]ScheduleWindow, 0, len(windows))
@@ -199,6 +206,18 @@ func (s *Service) PutSchedule(ctx context.Context, p auth.Principal, channelID i
 		if err := s.Auth.RequireChannelTx(ctx, p, channelID, auth.Configure, tx); err != nil {
 			return err
 		}
+		// The row lock is what makes the comparison meaningful: without it a
+		// concurrent writer could commit between the read and the replace.
+		var current int64
+		if err := tx.QueryRow(ctx, "SELECT version FROM channels WHERE id=$1 FOR UPDATE", channelID).Scan(&current); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return auth.ErrNotFound
+			}
+			return err
+		}
+		if current != expectedVersion {
+			return auth.ErrConflict
+		}
 		if _, err := tx.Exec(ctx, "DELETE FROM recording_schedules WHERE channel_id=$1", channelID); err != nil {
 			return err
 		}
@@ -218,6 +237,11 @@ func (s *Service) PutSchedule(ctx context.Context, p auth.Principal, channelID i
 			if _, err := tx.Exec(ctx, `INSERT INTO recording_schedule_groups(window_id,schedule_id) VALUES($1,$2)`, windowID, rowID); err != nil {
 				return err
 			}
+		}
+		// Advance the token. Without this the guard compares against a value that
+		// never moves, so every write succeeds and the lock buys nothing.
+		if _, err := tx.Exec(ctx, "UPDATE channels SET version=version+1 WHERE id=$1", channelID); err != nil {
+			return err
 		}
 		return audit.Append(ctx, tx, audit.Entry{
 			ActorID:  p.UserID,

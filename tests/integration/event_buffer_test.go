@@ -56,7 +56,7 @@ func TestEventBufferRunsOnlyWithoutOrdinaryRecording(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Planned outside its windows counts as "no ordinary recording".
-	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, nil); err != nil {
+	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, nil, channelVersion(t, fixture)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := fixture.DB.Pool.Exec(ctx, "UPDATE recording_policies SET mode='none' WHERE channel_id=$1", fixture.Channel); err != nil {
@@ -1628,5 +1628,53 @@ func TestEmptyWindowStaysRetryableForARecentEvent(t *testing.T) {
 	}
 	if state != "failed" {
 		t.Fatalf("an event older than the ring's keep window kept retrying: state=%q", state)
+	}
+}
+
+// A quarantined segment must be reclaimable.
+//
+// It records the path the file WOULD have been published to, while the file itself
+// is still in the working directory — the publish never happened. deleteOne only
+// looked at Target, so those rows were permanently undeletable: the bytes stayed on
+// disk forever while the index described a publication that never occurred, and no
+// retention or quota sweep could free them.
+func TestQuarantinedSegmentCanBeReclaimed(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	// The file sits in the working directory; the row names a published path that
+	// does not exist. Inserted this way rather than updated: the path columns are
+	// part of the publication identity and a trigger refuses to change them, which
+	// is the same guard that keeps a running system from renaming published media.
+	workPath := ".work/zlm/" + string(fixture.Run) + "/record/one_nvr/s1/2026-10-20/2026-10-20-10-00-00-0.mp4"
+	publishedPath := "recordings/CH01/2026-10-20/CH01_20261020_100000_review.mp4"
+	target := filepath.Join(fixture.Pool.Path, workPath)
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("quarantined-bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	segment, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_segments(id,channel_id,source_revision_id,run_id,pool_id,
+		original_relative_path,target_relative_path,original_start,naming_timezone,utc_offset_seconds,start_at,end_at,
+		size_bytes,file_identity,state,error_code)
+		VALUES($1,$2,$3,$4,$5,$6,$7,clock_timestamp()-interval '1 hour','UTC',0,
+			clock_timestamp()-interval '1 hour',clock_timestamp()-interval '59 minutes',1024,'{}','damaged','media_requires_review')`,
+		segment, fixture.Channel, fixture.Revision, fixture.Run, fixture.Pool.ID, workPath, publishedPath); err != nil {
+		t.Fatal(err)
+	}
+
+	outcomes, err := fixture.Service.DeleteCorruptLocal(ctx, []id.ID{segment})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outcomes) != 1 || outcomes[0].State != "deleted" {
+		t.Fatalf("a quarantined segment could not be reclaimed: %+v", outcomes)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatal("the quarantined file is still on disk after a successful deletion")
 	}
 }

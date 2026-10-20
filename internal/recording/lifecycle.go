@@ -196,7 +196,21 @@ func (s *Service) deleteOne(ctx context.Context, actor id.ID, segmentID id.ID, r
 	defer root.Close()
 	// Verify the published identity before unlinking: a path that no longer
 	// matches its record must not authorize deleting whatever now sits there.
-	file, err := storage.OpenMediaFile(root, item.Target)
+	//
+	// A quarantined segment is the exception: it records the path the file WOULD
+	// have been published to, while the file itself is still in the working
+	// directory. Without the fallback those rows are permanently undeletable —
+	// deleteOne only ever looks at Target, so the bytes stay on disk forever while
+	// the index reports a publication that never happened.
+	target := item.Target
+	file, err := storage.OpenMediaFile(root, target)
+	if err != nil {
+		if _, statErr := root.Lstat(target); os.IsNotExist(statErr) && item.Original != "" && item.Original != target {
+			if fallback, fallbackErr := storage.OpenMediaFile(root, item.Original); fallbackErr == nil {
+				file, err, target = fallback, nil, item.Original
+			}
+		}
+	}
 	if err != nil {
 		if _, statErr := root.Lstat(item.Target); os.IsNotExist(statErr) {
 			return DeleteOutcome{SegmentID: segmentID, State: deleteStateMissing, Reason: "missing"}, nil
@@ -218,7 +232,7 @@ func (s *Service) deleteOne(ctx context.Context, actor id.ID, segmentID id.ID, r
 	}
 	releaseBytes := info.Size()
 	file.Close()
-	if err := root.Remove(item.Target); err != nil {
+	if err := root.Remove(target); err != nil {
 		if os.IsNotExist(err) {
 			return DeleteOutcome{SegmentID: segmentID, State: deleteStateMissing, Reason: "missing"}, nil
 		}

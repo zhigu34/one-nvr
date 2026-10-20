@@ -204,7 +204,14 @@ func (r *router) setChannelSchedule(w http.ResponseWriter, q *http.Request, p au
 		fail(w, q, err)
 		return
 	}
-	out, err := r.d.Recordings.PutSchedule(q.Context(), p, ch, in.Windows)
+	// The schedule is a full replace, so without a version two editors silently
+	// erase each other's week. Same If-Match contract as every other channel write.
+	version, err := expectedVersion(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	out, err := r.d.Recordings.PutSchedule(q.Context(), p, ch, in.Windows, version)
 	if err != nil {
 		if errors.Is(err, recording.ErrScheduleOverlap) {
 			fail(w, q, fault.New(409, "schedule_overlap", "同一星期几的时段不能重叠"))
