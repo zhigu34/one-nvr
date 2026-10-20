@@ -281,3 +281,58 @@ func TestPutDeclaresContentLength(t *testing.T) {
 type opaqueReader struct{ r io.Reader }
 
 func (o opaqueReader) Read(p []byte) (int, error) { return o.r.Read(p) }
+
+// Two uploads creating the same collection at once is normal: uploads run
+// concurrently and every shared parent is raced on. OpenList answers the loser
+// with 423 Locked. Treating that as a failure made five segments fail with
+// "create-collection" while the collection plainly existed.
+func TestConcurrentCollectionCreationIsNotAFailure(t *testing.T) {
+	var propfinded bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "MKCOL":
+			// Losing the race.
+			w.WriteHeader(http.StatusLocked)
+		case "PROPFIND":
+			// The winner created it; it is there.
+			propfinded = true
+			w.WriteHeader(207)
+		case http.MethodPut:
+			io.Copy(io.Discard, r.Body)
+			w.WriteHeader(http.StatusCreated)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	client, _ := NewClient(server.URL, "/nvr", "user", "pass")
+	payload := []byte("hello")
+	if err := client.Put(context.Background(), "a/b/file.mp4", bytes.NewReader(payload), int64(len(payload))); err != nil {
+		t.Fatalf("a locked collection that exists must not fail the upload: %v", err)
+	}
+	if !propfinded {
+		t.Fatal("the client must confirm the collection exists before giving up")
+	}
+}
+
+// A 423 whose collection does NOT exist is a real failure: something holds a
+// lock the client cannot satisfy.
+func TestLockedCollectionThatIsMissingStillFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "MKCOL":
+			w.WriteHeader(http.StatusLocked)
+		case "PROPFIND":
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+	client, _ := NewClient(server.URL, "/nvr", "user", "pass")
+	err := client.Put(context.Background(), "a/b/file.mp4", bytes.NewReader([]byte("hi")), 2)
+	if err == nil {
+		t.Fatal("a locked collection that is missing must fail")
+	}
+}

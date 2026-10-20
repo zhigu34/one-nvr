@@ -374,6 +374,18 @@ func (c *Client) ensureCollection(ctx context.Context, collection string) error 
 		}
 		io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
 		response.Body.Close()
+		// 423 Locked is what several WebDAV servers (OpenList included) answer
+		// when two clients create the same collection at the same time: the
+		// losing MKCOL is refused while the winner's is in flight. Uploads run
+		// concurrently, so every collection deep enough to be shared will hit
+		// it. The collection is not the goal — having it exist is — so confirm
+		// that and move on.
+		if response.StatusCode == http.StatusLocked {
+			if c.collectionExists(ctx, path) {
+				continue
+			}
+			return statusError("create-collection", response.StatusCode)
+		}
 		// 405 means it already exists; both are fine.
 		if response.StatusCode/100 != 2 && response.StatusCode != http.StatusMethodNotAllowed {
 			// Keep the server's own words: for a 403 that sentence is usually the
@@ -389,6 +401,20 @@ func (c *Client) ensureCollection(ctx context.Context, collection string) error 
 		}
 	}
 	return nil
+}
+
+// collectionExists asks the server whether a collection is there, which is the
+// question a refused MKCOL leaves open.
+func (c *Client) collectionExists(ctx context.Context, collection string) bool {
+	response, err := c.request(ctx, "PROPFIND", c.URL(collection), nil, "")
+	if err != nil {
+		return false
+	}
+	defer response.Body.Close()
+	io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
+	// 207 Multi-Status is PROPFIND's success; some servers answer 200 with the
+	// collection body instead.
+	return response.StatusCode == 207 || response.StatusCode == http.StatusOK
 }
 
 func parentKey(key string) string {
