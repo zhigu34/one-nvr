@@ -213,6 +213,15 @@ func (s *Service) deleteOne(ctx context.Context, actor id.ID, segmentID id.ID, r
 	}
 	if err != nil {
 		if _, statErr := root.Lstat(item.Target); os.IsNotExist(statErr) {
+			// Record the verdict, not just the answer. Leaving the row 'ready'
+			// kept it in every candidate query — which select `state='ready' ...
+			// ORDER BY end_at LIMIT n` — so a single file lost outside one-nvr
+			// occupied the head of the queue forever and every sweep reported
+			// "no safe candidate" while hundreds of deletable segments sat behind
+			// it. That is starvation, not an infinite loop, and it is silent.
+			if err := s.markMissing(ctx, segmentID); err != nil {
+				return DeleteOutcome{}, err
+			}
 			return DeleteOutcome{SegmentID: segmentID, State: deleteStateMissing, Reason: "missing"}, nil
 		}
 		return DeleteOutcome{}, err
@@ -234,6 +243,9 @@ func (s *Service) deleteOne(ctx context.Context, actor id.ID, segmentID id.ID, r
 	file.Close()
 	if err := root.Remove(target); err != nil {
 		if os.IsNotExist(err) {
+			if markErr := s.markMissing(ctx, segmentID); markErr != nil {
+				return DeleteOutcome{}, markErr
+			}
 			return DeleteOutcome{SegmentID: segmentID, State: deleteStateMissing, Reason: "missing"}, nil
 		}
 		return DeleteOutcome{}, err
@@ -308,4 +320,23 @@ func (s *Service) SetProtection(ctx context.Context, p auth.Principal, segmentID
 		return nil
 	})
 	return out, err
+}
+
+// markMissing records that the indexed file is gone.
+//
+// It is what takes the row out of the candidate set. A file that disappears
+// outside one-nvr (a remount, a manual cleanup, a pool that came back empty) would
+// otherwise stay 'ready' forever: every sweep selects it first, finds no file, and
+// reports no progress — so the segments behind it are never reached.
+//
+// 'missing' is not a claim about the footage, it is a claim about the file, and the
+// storage reconciler writes the same state when it makes the same observation.
+func (s *Service) markMissing(ctx context.Context, segmentID id.ID) error {
+	if _, err := s.DB.Pool.Exec(ctx, `UPDATE recording_segments SET state='missing',error_code='missing'
+		WHERE id=$1 AND state='ready'`, segmentID); err != nil {
+		return err
+	}
+	_, err := s.DB.Pool.Exec(ctx, `UPDATE recording_locations SET state='missing',verified_at=clock_timestamp()
+		WHERE segment_id=$1 AND state='ready'`, segmentID)
+	return err
 }

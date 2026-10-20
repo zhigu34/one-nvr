@@ -172,7 +172,12 @@ func (s *Service) SweepExportArtifacts(ctx context.Context) {
 // the sweep deterministically instead of waiting for the interval, and so an
 // operator-facing trigger can reuse it later.
 func (s *Service) SweepRetention(ctx context.Context) {
-	if s.Auth == nil || s.Pools == nil || s.DB == nil {
+	// No Auth check: this sweep acts on the site's behalf, not a user's. deleteLocal
+	// takes an empty actor precisely for that case. Requiring Auth here meant the
+	// whole pass returned on its first line in the worker, where the service is
+	// built without it — so a site configured to keep 30 days kept everything
+	// forever, silently, with the setting visible and audited on the page.
+	if s.Pools == nil || s.DB == nil {
 		return
 	}
 	days, err := s.retentionDays(ctx)
@@ -264,7 +269,9 @@ type ArchiveLocalGate func(ctx context.Context, segmentID id.ID) (bool, error)
 // core — free of protection, task pins and playback leases. The plain days-
 // based retention keeps governing unbound channels.
 func (s *Service) SweepArchiveLocal(ctx context.Context) {
-	if s.Auth == nil || s.Pools == nil || s.DB == nil || s.ArchiveLocalGate == nil {
+	// Same reasoning as SweepRetention: an archive-driven cleanup is a site policy,
+	// not an operator action.
+	if s.Pools == nil || s.DB == nil || s.ArchiveLocalGate == nil {
 		return
 	}
 	var hours int
