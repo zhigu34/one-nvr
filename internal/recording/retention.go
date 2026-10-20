@@ -245,8 +245,20 @@ func (s *Service) retentionDays(ctx context.Context) (int, error) {
 // The age cutoff carries the freshness delay as well, so a segment that just
 // finished is never a candidate.
 func (s *Service) expiredSegments(ctx context.Context, cutoff time.Time, limit int) ([]id.ID, error) {
-	rows, err := s.DB.Pool.Query(ctx, `SELECT s.id FROM recording_segments s JOIN storage_pools p ON p.id=s.pool_id WHERE s.state='ready' AND NOT s.protected AND s.end_at<$1 AND p.enabled
-		AND NOT EXISTS(SELECT 1 FROM archive_policies ap WHERE ap.channel_id=s.channel_id) ORDER BY s.end_at LIMIT $2`, cutoff, limit)
+	// 'damaged' is included: a quarantined file cannot be played, cannot be
+	// accounted for, and cannot be selected by any other sweep — so leaving it out
+	// meant those bytes occupied the pool until an operator ran the admin purge by
+	// hand. Retention is about keeping footage for a period, not about keeping
+	// unreadable bytes forever; a protected segment is still skipped.
+	rows, err := s.DB.Pool.Query(ctx, `SELECT s.id FROM recording_segments s JOIN storage_pools p ON p.id=s.pool_id WHERE s.state IN ('ready','damaged') AND NOT s.protected AND s.end_at<$1 AND p.enabled
+		-- Only a LIVE archive obligation excludes a channel from age retention:
+		-- there must be a policy AND its target must be enabled. Requiring only the
+		-- policy row meant a channel whose target was later disabled fell out of
+		-- both this sweep (excluded here) and the archive sweep (which requires
+		-- t.enabled) — nothing could ever reclaim it.
+		AND NOT EXISTS(SELECT 1 FROM archive_policies ap JOIN archive_targets t ON t.id=ap.target_id AND t.enabled
+			WHERE ap.channel_id=s.channel_id)
+		ORDER BY s.end_at LIMIT $2`, cutoff, limit)
 	if err != nil {
 		return nil, err
 	}

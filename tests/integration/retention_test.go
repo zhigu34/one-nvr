@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/zhigu34/one-nvr/internal/id"
 )
 
 // The retention sweep must run without an Auth service.
@@ -143,5 +145,63 @@ func TestMissingSegmentIsRestoredWhenTheFileReturns(t *testing.T) {
 	}
 	if segState != "ready" || locState != "ready" {
 		t.Fatalf("the file returned but the index still says segment=%q location=%q", segState, locState)
+	}
+}
+
+// A damaged segment follows the retention policy like any other.
+//
+// It cannot be played, cannot be accounted for, and no other sweep selects it —
+// so before this it occupied the pool until an operator ran the admin purge by
+// hand. Retention is about how long footage is kept, not about keeping unreadable
+// bytes forever.
+//
+// A protected segment is still skipped: that is what the lock means, and it is the
+// only exemption.
+func TestDamagedSegmentFollowsRetentionUnlessProtected(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	fixture.Service.Auth = nil
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE sites SET recording_retention_days=1`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Two expired segments: one damaged, one damaged and protected.
+	damaged := seedSegment(t, fixture, time.Now().UTC().Add(-72*time.Hour), time.Now().UTC().Add(-71*time.Hour))
+	locked := seedSegment(t, fixture, time.Now().UTC().Add(-73*time.Hour), time.Now().UTC().Add(-72*time.Hour))
+	for _, segment := range []id.ID{damaged, locked} {
+		path := "recordings/" + string(segment) + ".mp4"
+		target := filepath.Join(fixture.Pool.Path, path)
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, []byte("bytes"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_locations(segment_id,pool_id,relative_path,size_bytes,state)
+			VALUES($1,$2,$3,1024,'ready') ON CONFLICT(segment_id,pool_id) DO NOTHING`, segment, fixture.Pool.ID, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE recording_segments SET state='damaged',error_code='damaged' WHERE id=$1`, damaged); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE recording_segments SET state='damaged',error_code='damaged',protected=true WHERE id=$1`, locked); err != nil {
+		t.Fatal(err)
+	}
+
+	fixture.Service.SweepRetention(ctx)
+
+	var damagedState, lockedState string
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state FROM recording_segments WHERE id=$1`, damaged).Scan(&damagedState); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state FROM recording_segments WHERE id=$1`, locked).Scan(&lockedState); err != nil {
+		t.Fatal(err)
+	}
+	if damagedState != "deleted" {
+		t.Fatalf("an expired damaged segment stayed %q; its bytes are unreachable by any other sweep", damagedState)
+	}
+	if lockedState != "damaged" {
+		t.Fatalf("a PROTECTED damaged segment was %q; the lock must be the only exemption", lockedState)
 	}
 }

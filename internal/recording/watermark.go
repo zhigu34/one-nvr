@@ -314,13 +314,18 @@ const watermarkBatch = 50
 // destroy footage that was never uploaded.
 func (s *Service) oldestSafeSegments(ctx context.Context, pool id.ID, limit int) ([]watermarkCandidate, error) {
 	rows, err := s.DB.Pool.Query(ctx, `SELECT s.id FROM recording_segments s
-		WHERE s.pool_id=$1 AND s.state='ready' AND NOT s.protected
+		WHERE s.pool_id=$1 AND s.state IN ('ready','damaged') AND NOT s.protected
 		AND s.end_at < clock_timestamp() - $2::interval
 		AND NOT EXISTS(SELECT 1 FROM recording_export_sources es JOIN recording_exports e ON e.id=es.export_id WHERE es.segment_id=s.id AND e.state IN ('queued','running'))
 		AND NOT EXISTS(SELECT 1 FROM recording_archive_copies c WHERE c.segment_id=s.id AND c.state='uploading')
 		AND NOT EXISTS(SELECT 1 FROM recording_playback_leases l WHERE l.segment_id=s.id AND l.lease_expires_at>clock_timestamp())
 		AND (
-			NOT EXISTS(SELECT 1 FROM archive_policies ap WHERE ap.channel_id=s.channel_id)
+			-- A policy whose target is disabled is not a live obligation: nothing will
+			-- upload these bytes, so holding the local copy protects nothing. Without
+			-- the join such a channel was excluded here AND by the archive sweep
+			-- (which requires t.enabled), leaving its footage unreclaimable by any path.
+			NOT EXISTS(SELECT 1 FROM archive_policies ap JOIN archive_targets t ON t.id=ap.target_id AND t.enabled
+				WHERE ap.channel_id=s.channel_id)
 			OR EXISTS(SELECT 1 FROM archive_policies ap JOIN recording_archive_copies c ON c.segment_id=s.id
 				WHERE ap.channel_id=s.channel_id AND c.state='verified'
 				AND (c.cloud_expires_at IS NULL OR c.cloud_expires_at>clock_timestamp())
@@ -506,7 +511,7 @@ func (s *Service) sweepChannelQuota(ctx context.Context, channel id.ID, quota in
 			return
 		}
 		var used int64
-		if err := s.DB.Pool.QueryRow(ctx, `SELECT coalesce(sum(size_bytes),0) FROM recording_segments WHERE channel_id=$1 AND state='ready'`, channel).Scan(&used); err != nil {
+		if err := s.DB.Pool.QueryRow(ctx, `SELECT coalesce(sum(size_bytes),0) FROM recording_segments WHERE channel_id=$1 AND state IN ('ready','damaged')`, channel).Scan(&used); err != nil {
 			if ctx.Err() == nil {
 				slog.Warn("quota usage unavailable", "channel", string(channel), "error", err)
 			}
@@ -544,13 +549,15 @@ func (s *Service) sweepChannelQuota(ctx context.Context, channel id.ID, quota in
 // way around the archive safe-copy gate or a playback lease.
 func (s *Service) oldestSafeSegmentsForChannel(ctx context.Context, channel id.ID, limit int) ([]watermarkCandidate, error) {
 	rows, err := s.DB.Pool.Query(ctx, `SELECT s.id FROM recording_segments s
-		WHERE s.channel_id=$1 AND s.state='ready' AND NOT s.protected
+		WHERE s.channel_id=$1 AND s.state IN ('ready','damaged') AND NOT s.protected
 		AND s.end_at < clock_timestamp() - $2::interval
 		AND NOT EXISTS(SELECT 1 FROM recording_export_sources es JOIN recording_exports e ON e.id=es.export_id WHERE es.segment_id=s.id AND e.state IN ('queued','running'))
 		AND NOT EXISTS(SELECT 1 FROM recording_archive_copies c WHERE c.segment_id=s.id AND c.state='uploading')
 		AND NOT EXISTS(SELECT 1 FROM recording_playback_leases l WHERE l.segment_id=s.id AND l.lease_expires_at>clock_timestamp())
 		AND (
-			NOT EXISTS(SELECT 1 FROM archive_policies ap WHERE ap.channel_id=s.channel_id)
+			-- Same rule as the pressure path: only an enabled target owes anything.
+			NOT EXISTS(SELECT 1 FROM archive_policies ap JOIN archive_targets t ON t.id=ap.target_id AND t.enabled
+				WHERE ap.channel_id=s.channel_id)
 			OR EXISTS(SELECT 1 FROM recording_archive_copies c JOIN archive_policies ap ON ap.channel_id=s.channel_id
 				WHERE c.segment_id=s.id AND c.state='verified'
 				AND (c.cloud_expires_at IS NULL OR c.cloud_expires_at>clock_timestamp())
