@@ -66,8 +66,14 @@ func (s *Service) linkEventMedia(ctx context.Context, tx pgx.Tx, channelID id.ID
 	if endedAt != nil {
 		to = endedAt.Add(PostEventWindow)
 	}
+	// A growing event clip is 'finalizing' until the event ends, and it is still
+	// footage that exists: the page plays it while it grows. Counting only 'ready'
+	// made every MQTT update (~1/sec) overwrite the verdict with 'unavailable'
+	// while the assembler wrote 'linked' every five seconds — the card flickered
+	// between 本机无录像 and 录像生成中 for the whole life of a running event,
+	// which is exactly the case event recording exists for.
 	rows, err := tx.Query(ctx, `SELECT start_at,end_at FROM recording_segments
-		WHERE channel_id=$1 AND state='ready' AND start_at<$3 AND end_at>$2
+		WHERE channel_id=$1 AND state IN ('ready','finalizing') AND start_at<$3 AND end_at>$2
 		ORDER BY start_at`, channelID, from.UTC(), to.UTC())
 	if err != nil {
 		return mediaLink{}, err

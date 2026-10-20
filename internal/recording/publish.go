@@ -40,9 +40,29 @@ func identity(info os.FileInfo) (fileIdentity, error) {
 	}
 	return fileIdentity{Device: uint64(stat.Dev), Inode: uint64(stat.Ino), Size: info.Size(), Modified: info.ModTime().UnixNano()}, nil
 }
+
+// matches reports whether the file is still the one that was published.
+//
+// Device and inode answer "is this the same file"; size answers "is it still
+// whole". mtime is deliberately excluded: it moves whenever a file is copied,
+// restored from a backup, or touched by anything that rewrites metadata, none of
+// which change a byte of footage. Including it meant one moved mtime made a file
+// that the storage reconciler called healthy look damaged to every other reader —
+// playback refused it (409), export refused it, and deletion refused it, so the
+// bytes could never be reclaimed and the pool filled.
+//
+// This is the same verdict storage.fileDamage applies; the two must agree.
 func (f fileIdentity) matches(info os.FileInfo) bool {
 	actual, err := identity(info)
-	return err == nil && actual == f
+	if err != nil {
+		return false
+	}
+	// An all-zero identity is "never captured", not "changed": rows written
+	// before the capture existed must not be judged by fields they never had.
+	if f.Device == 0 && f.Inode == 0 && f.Size == 0 {
+		return true
+	}
+	return actual.Device == f.Device && actual.Inode == f.Inode && actual.Size == f.Size
 }
 
 type publication struct {

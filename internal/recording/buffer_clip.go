@@ -352,19 +352,19 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 	}
 	err = s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
 		if job.Run == nil {
+			// stream_session_id is NOT NULL, so the lateral join must find a real
+			// row: an event clip belongs to the channel, not to a particular session,
+			// and any session of that channel names it well enough. Prefer the live
+			// main session, then the newest one of any state — a channel whose
+			// preview is stopped still produces event clips from its buffer.
 			if _, err := tx.Exec(ctx, `INSERT INTO recording_runs(id,site_id,channel_id,source_revision_id,stream_session_id,pool_id,work_relative_path,purpose,state,started_at,ended_at)
 				SELECT $1,ch.site_id,$2,$3,ss.id,$4,$5,'event','stopped',$6,$7
-				FROM channels ch LEFT JOIN LATERAL (
-					SELECT id FROM stream_sessions WHERE channel_id=ch.id AND purpose='main' ORDER BY created_at DESC LIMIT 1
+				FROM channels ch JOIN LATERAL (
+					SELECT id FROM stream_sessions WHERE channel_id=ch.id
+					ORDER BY (purpose='main') DESC, (state<>'closed') DESC, created_at DESC LIMIT 1
 				) ss ON true WHERE ch.id=$2`,
 				runID, channelID, revisionID, poolID, work, start.UTC(), end.UTC()); err != nil {
-				// A channel with no stream session at all still gets a run; the
-				// session column is nullable for exactly this case.
-				if _, fallbackErr := tx.Exec(ctx, `INSERT INTO recording_runs(id,site_id,channel_id,source_revision_id,pool_id,work_relative_path,purpose,state,started_at,ended_at)
-					SELECT $1,ch.site_id,$2,$3,$4,$5,'event','stopped',$6,$7 FROM channels ch WHERE ch.id=$2`,
-					runID, channelID, revisionID, poolID, work, start.UTC(), end.UTC()); fallbackErr != nil {
-					return fallbackErr
-				}
+				return err
 			}
 		} else {
 			// The row already exists; only its covered span moves. Its start stays at
@@ -472,7 +472,14 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 		return err
 	})
 	if err != nil {
-		_ = os.Remove(target)
+		// Only a FIRST assembly may remove the file on failure. A re-cut renamed the
+		// new bytes over the published path, so the file now on disk is the previous
+		// good clip that the segment row still indexes — removing it destroys the
+		// only copy and leaves the event with nothing to play, even though every
+		// fragment it was built from is still in the parts directory.
+		if job.Segment == nil {
+			_ = os.Remove(target)
+		}
 		return err
 	}
 	// The work directory held the staged file; the published copy is the segment.
@@ -651,6 +658,12 @@ var _ = io.EOF
 // useful while someone might ask "why does this event have no footage", and the
 // answer is stable within a week.
 const EventClipJobRetention = 7 * 24 * time.Hour
+
+// clipJobLease bounds how long a job may sit in 'running' before another pass
+// assumes the worker that claimed it is gone. One assembly is seconds; two
+// minutes only has to be longer than that and shorter than an operator's
+// patience for a missing clip.
+const clipJobLease = 2 * time.Minute
 
 // RepairEventClipDamage restores event clips quarantined by the re-cut defect.
 //
@@ -919,6 +932,26 @@ func clipOrphans(poolPath string, runID id.ID, published string) ([]string, erro
 func (s *Service) SweepEventClipJobs(ctx context.Context) {
 	if s.DB == nil {
 		return
+	}
+	// Requeue jobs abandoned mid-assembly. A worker that dies (or a context
+	// cancelled by SIGTERM) leaves the row in 'running', and nothing else ever
+	// moves it out: the assembly scan only looks at 'queued'/'growing', and the
+	// retention below only removes 'done'/'failed'. The event then never gets a
+	// clip and the row is not even eligible for cleanup.
+	//
+	// The claim is fenced on updated_at so a job that is genuinely still being
+	// assembled is not stolen: one assembly pass is seconds, and the lease is far
+	// longer than that.
+	requeued, err := s.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs
+		SET state='queued',updated_at=clock_timestamp()
+		WHERE state='running' AND updated_at < clock_timestamp()-make_interval(secs => $1)`,
+		clipJobLease.Seconds())
+	if err != nil {
+		if ctx.Err() == nil {
+			slog.Warn("event clip job requeue unavailable", "error", err)
+		}
+	} else if n := requeued.RowsAffected(); n > 0 {
+		slog.Info("event clip jobs requeued", "count", n)
 	}
 	rows, err := s.DB.Pool.Exec(ctx, `DELETE FROM event_clip_jobs
 		WHERE state IN ('done','failed') AND updated_at < clock_timestamp()-make_interval(secs => $1)`,

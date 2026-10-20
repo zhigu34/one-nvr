@@ -71,6 +71,13 @@ func (s *Service) Reconcile(ctx context.Context, ch id.ID) error {
 		return err
 	}
 	if !desired.Enabled || desired.Revision == nil {
+		// Stop the event buffer too. Returning here left the row alive, its
+		// heartbeat kept fresh by TouchBuffers, so re-enabling the channel found a
+		// "live" buffer, skipped the restart — but the proxy had gone with the
+		// channel, and every event then assembled from an empty ring, silently.
+		if err := s.StopBuffer(ctx, e.ChannelID); err != nil {
+			return err
+		}
 		return s.stopSwitchSessions(ctx, e, channel.SwitchWork{}, true)
 	}
 	ss, err := s.currentMain(ctx, e, desired.Revision)

@@ -257,13 +257,27 @@ func WeekdaysOf(windows []ScheduleWindow) []int {
 // instant. It is the single place the switch/policy path asks "should this
 // channel be recording right now", so 'planned' cannot be treated as continuous
 // there while the scheduler treats it as conditional.
+// modeRecordsNow reports whether the channel should be recording right now.
+//
+// It goes through unionMode, the same helper the scheduler and the obligation
+// layer use, so the three cannot disagree. The previous version answered from the
+// stored policy alone: a `manual` case that could never be reached (the column
+// has no such value) and no knowledge of an active manual window. Applying a
+// policy change to a channel that was recording manually therefore decided
+// "nothing should be recording", and the switch's stopping phase stopped a
+// recording REC-04 says must survive.
 func (s *Service) modeRecordsNow(ctx context.Context, channelID id.ID, mode string) (bool, error) {
-	switch mode {
-	case "continuous", "manual":
-		return true, nil
-	case "planned":
-		return s.ScheduleActiveForChannel(ctx, channelID)
-	default:
-		return false, nil
+	manual, err := s.manualActive(ctx, channelID)
+	if err != nil {
+		return false, err
 	}
+	scheduled := false
+	if mode == "planned" {
+		// Only a planned policy consults the schedule; asking for other modes is a
+		// wasted query on every policy write.
+		if scheduled, err = s.ScheduleActiveForChannel(ctx, channelID); err != nil {
+			return false, err
+		}
+	}
+	return unionMode(mode, manual, scheduled) != "none", nil
 }

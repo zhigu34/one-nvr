@@ -26,8 +26,17 @@ type runReceipt struct {
 func (s *Service) receipt(ctx context.Context, runID id.ID) (runReceipt, error) {
 	var receipt runReceipt
 	receipt.Version = 1
-	receipt.NativeTimezone = "UTC"
-	err := s.DB.Pool.QueryRow(ctx, `SELECT r.site_id,r.pool_id,r.id,r.channel_id,r.source_revision_id,r.work_relative_path,r.purpose,ss.vhost,ss.app,ss.stream,r.created_at FROM recording_runs r JOIN stream_sessions ss ON ss.id=r.stream_session_id WHERE r.id=$1 AND r.site_id=$2`, runID, s.siteID).Scan(&receipt.SiteID, &receipt.PoolID, &receipt.RunID, &receipt.ChannelID, &receipt.SourceRevisionID, &receipt.WorkRelativePath, &receipt.Purpose, &receipt.Key.VHost, &receipt.Key.App, &receipt.Key.Stream, &receipt.CreatedAt)
+	// The media server names files in the CONTAINER's local time, and the
+	// deployment sets TZ to the site's zone. Recording it as "UTC" made every
+	// recovered file's start time wrong by the offset (or, worse, pushed it into
+	// the future so the plausibility guard rejected it and the file stayed
+	// 'provisional' — never playable). The buffer path hit the same bug and was
+	// fixed in e43d4c9; this is the other parser of the same naming rule.
+	err := s.DB.Pool.QueryRow(ctx, `SELECT r.site_id,r.pool_id,r.id,r.channel_id,r.source_revision_id,r.work_relative_path,r.purpose,ss.vhost,ss.app,ss.stream,r.created_at,st.timezone
+		FROM recording_runs r
+		JOIN stream_sessions ss ON ss.id=r.stream_session_id
+		JOIN sites st ON st.id=r.site_id
+		WHERE r.id=$1 AND r.site_id=$2`, runID, s.siteID).Scan(&receipt.SiteID, &receipt.PoolID, &receipt.RunID, &receipt.ChannelID, &receipt.SourceRevisionID, &receipt.WorkRelativePath, &receipt.Purpose, &receipt.Key.VHost, &receipt.Key.App, &receipt.Key.Stream, &receipt.CreatedAt, &receipt.NativeTimezone)
 	receipt.CreatedAt = receipt.CreatedAt.UTC()
 	return receipt, err
 }

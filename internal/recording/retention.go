@@ -301,6 +301,13 @@ func (s *Service) SweepArchiveLocal(ctx context.Context) {
 		if err := rows.Err(); err != nil || len(batch) == 0 {
 			return
 		}
+		// A round that deletes nothing must not loop. deleteOne reports a skip
+		// WITHOUT changing the row (a missing file, an identity mismatch), so the
+		// same segments are selected again on the next iteration — forever. That
+		// hang sits before the pressure, quota and audit sweeps on the same
+		// ticker, so a single undeletable segment would silently stop the cleanup
+		// that keeps the disk from filling.
+		deleted := 0
 		for _, segment := range batch {
 			available, err := s.ArchiveLocalGate(ctx, segment)
 			if err != nil {
@@ -311,12 +318,16 @@ func (s *Service) SweepArchiveLocal(ctx context.Context) {
 			if !available {
 				continue
 			}
-			s.deleteLocal(ctx, "", []id.ID{segment}, "retention")
+			for _, outcome := range s.deleteLocal(ctx, "", []id.ID{segment}, "retention") {
+				if outcome.State == deleteStateDeleted {
+					deleted++
+				}
+			}
 			if ctx.Err() != nil {
 				return
 			}
 		}
-		if len(batch) < 50 {
+		if deleted == 0 || len(batch) < 50 {
 			return
 		}
 	}

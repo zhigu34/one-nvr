@@ -29,11 +29,35 @@ import (
 // continuously the evidence could never be refreshed and the manual window
 // could never start.
 func recordingDemandSQL(poolExpr string) string {
+	// The site's own wall clock, computed once per row: every schedule window is
+	// expressed in local minutes, so asking the question in UTC would shift it by
+	// the offset for half the year.
+	const localNow = `(clock_timestamp() AT TIME ZONE st.timezone)`
 	return `EXISTS(SELECT 1 FROM channels c
 	JOIN recording_policies rp ON rp.channel_id=c.id
 	JOIN storage_pools p ON p.id=c.storage_pool_id
+	JOIN sites st ON st.id=c.site_id
 	WHERE c.enabled AND p.enabled AND p.id=` + poolExpr + `
 	  AND (rp.mode='continuous'
+	       -- A planned channel inside one of its windows wants to record too.
+	       -- Omitting this reintroduced the deadlock fbb10d6 fixed for manual
+	       -- windows: the recorder refuses to start without fresh zlm write
+	       -- evidence, that evidence is produced only by a real recording or by
+	       -- this probe, and the probe never ran — so a site whose only reason to
+	       -- record is a weekly schedule recorded nothing, while the obligation
+	       -- layer reported the time as owed.
+	       --
+	       -- This mirrors schedule.ScheduleActiveAt: ISO weekday (Mon=1..Sun=7),
+	       -- half-open [start, end) in local minutes. Both parsers are pinned by
+	       -- a test that compares them against the same clock.
+	       OR (rp.mode='planned' AND EXISTS(
+	             SELECT 1 FROM recording_schedules s
+	             WHERE s.channel_id=c.id
+	               AND s.weekday=EXTRACT(ISODOW FROM ` + localNow + `)::int
+	               AND EXTRACT(HOUR FROM ` + localNow + `)*60
+	                 + EXTRACT(MINUTE FROM ` + localNow + `) >= s.start_minute
+	               AND EXTRACT(HOUR FROM ` + localNow + `)*60
+	                 + EXTRACT(MINUTE FROM ` + localNow + `) < s.end_minute))
 	       OR EXISTS(SELECT 1 FROM recording_manual_windows w
 	                 WHERE w.channel_id=c.id AND w.ended_at IS NULL AND w.expires_at>clock_timestamp())))`
 }

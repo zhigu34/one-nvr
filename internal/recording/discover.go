@@ -18,17 +18,34 @@ import (
 
 var nativeFileName = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]+\.mp4$`)
 
+// nativeStart recovers the recorded start instant from a media server file name.
+//
+// The name is in the CONTAINER's local time, which the deployment sets to the
+// site's zone. Parsing it as UTC put every recovered file off by the offset — and
+// because the plausibility guard below compares against the run's creation time,
+// a positive offset pushed the start into the future and the file stayed
+// 'provisional' (never playable). An unknown zone is a refusal, not a guess: a
+// wrong start time is worse than no recovered segment.
 func nativeStart(receipt runReceipt, relative string) (time.Time, bool) {
 	prefix := receipt.WorkRelativePath + "/record/" + receipt.Key.App + "/" + receipt.Key.Stream + "/"
-	if receipt.NativeTimezone != "UTC" || !strings.HasPrefix(relative, prefix) {
+	if receipt.NativeTimezone == "" || !strings.HasPrefix(relative, prefix) {
+		return time.Time{}, false
+	}
+	zone, err := time.LoadLocation(receipt.NativeTimezone)
+	if err != nil {
 		return time.Time{}, false
 	}
 	parts := strings.Split(strings.TrimPrefix(relative, prefix), "/")
 	if len(parts) != 2 || !nativeFileName.MatchString(parts[1]) {
 		return time.Time{}, false
 	}
-	start, err := time.ParseInLocation("2006-01-02-15-04-05", parts[1][:19], time.UTC)
-	if err != nil || start.Format("2006-01-02") != parts[0] || start.Before(receipt.CreatedAt.Add(-30*time.Second)) || start.After(time.Now().Add(30*time.Second)) {
+	// The directory name is the local DATE, so it is compared in the same zone.
+	start, err := time.ParseInLocation("2006-01-02-15-04-05", parts[1][:19], zone)
+	if err != nil || start.In(zone).Format("2006-01-02") != parts[0] {
+		return time.Time{}, false
+	}
+	start = start.UTC()
+	if start.Before(receipt.CreatedAt.Add(-30*time.Second)) || start.After(time.Now().Add(30*time.Second)) {
 		return time.Time{}, false
 	}
 	return start, true

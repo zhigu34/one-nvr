@@ -308,3 +308,58 @@ func TestPlannedModeCanBeAppliedThroughTheSwitch(t *testing.T) {
 		t.Fatalf("switch recorded %q, want planned", desired)
 	}
 }
+
+// A planned channel inside its window is a reason to run the idle-pool probe.
+//
+// The probe is the only way a pool's zlm write evidence is refreshed on a site
+// where nothing records continuously, and the recorder refuses to start without
+// fresh evidence. Leaving `planned` out of the demand predicate therefore made a
+// weekly schedule unable to record at all — the same deadlock fbb10d6 fixed for
+// manual windows, reintroduced when scheduled recording was added.
+func TestPlannedChannelIsAProbeCandidate(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE recording_policies SET mode='planned' WHERE channel_id=$1`, fixture.Channel); err != nil {
+		t.Fatal(err)
+	}
+	// A window that covers the whole of today, in the site zone the fixture set.
+	today := isoToday()
+	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, []recording.ScheduleWindow{
+		{Weekday: today, StartMinute: 0, EndMinute: 1440},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Expire whatever evidence exists so the pool only qualifies through demand.
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE storage_pool_checks SET expires_at=clock_timestamp()-interval '1 minute' WHERE pool_id=$1`, fixture.Pool.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	candidates, err := fixture.Service.IdlePoolCandidates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, candidate := range candidates {
+		if candidate == fixture.Pool.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("a planned channel inside its window did not make its pool a probe candidate: the zlm evidence can never refresh, so scheduled recording can never start")
+	}
+
+	// Outside the window it is NOT demand: an empty schedule means no reason to
+	// record, and probing then would be work with no purpose.
+	if _, err := fixture.Service.PutSchedule(ctx, fixture.Admin, fixture.Channel, nil); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err = fixture.Service.IdlePoolCandidates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range candidates {
+		if candidate == fixture.Pool.ID {
+			t.Fatal("a planned channel with no window open was still treated as demand")
+		}
+	}
+}

@@ -103,6 +103,18 @@ func (s *Service) EnsureBuffer(ctx context.Context, e *channel.Execution, revisi
 	if err := ensureBufferDir(path); err != nil {
 		return false, err
 	}
+	// Stop any recording this stream may still be running before starting a new
+	// one. A stale row means THIS worker lost its claim, not that the media server
+	// forgot the recording: when a previous worker's process died while ZLM kept
+	// writing, startRecord answers result:false (already recording), which surfaces
+	// as ErrMediaOperation — and because the row was already deleted above, the
+	// channel ends up with no buffer row at all while ZLM keeps filling a ring
+	// nobody reads. Stopping first is idempotent when nothing is running.
+	// StopRecord on a stream that is not recording is refused by the media server;
+	// that is not a failure for this call, which only wants the stream clear.
+	if err := s.Media.StopRecord(ctx, ss.Key); err != nil && !errors.Is(err, zlm.ErrMediaOperation) {
+		slog.Debug("event buffer: stop before start failed", "channel", e.ChannelID, "error", err)
+	}
 	// StartRecord treats the directory as the recording root and appends
 	// record/app/stream/date itself, so the promise about the ring's shape must
 	// account for that nesting.

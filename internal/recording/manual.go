@@ -162,6 +162,16 @@ func manualActiveTx(ctx context.Context, tx pgx.Tx, channelID id.ID) (bool, erro
 	return active, err
 }
 
+// manualActive is manualActiveTx without a transaction, for callers that are not
+// already inside one (the policy-change checks).
+func (s *Service) manualActive(ctx context.Context, channelID id.ID) (bool, error) {
+	var active bool
+	err := s.DB.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM recording_manual_windows
+		WHERE channel_id=$1 AND ended_at IS NULL AND expires_at>clock_timestamp())`,
+		channelID).Scan(&active)
+	return active, err
+}
+
 // SweepManualWindows closes windows whose deadline has passed.
 //
 // The scheduler already ignores expired windows, so this is bookkeeping rather
