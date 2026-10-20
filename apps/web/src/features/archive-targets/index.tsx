@@ -522,6 +522,13 @@ function PolicyTable({
   async function save(channelID: string) {
     const draft = drafts[channelID]
     if (!draft) return
+    // "scheduled" without a time is not a request the server can honour, and its
+    // rejection reads only "参数无效" — which says nothing about which field is
+    // missing. The empty time box sits right there; name it instead.
+    if ((draft.mode ?? 'manual') === 'scheduled' && !(draft.schedule ?? '').trim()) {
+      setRowError('定时上传需要填写时刻，例如 02:00 或 02:00,14:30。')
+      return
+    }
     setRowError('')
     try {
       await apiRequest('/api/v1/archive-policies', jsonRequest('PUT', draft))

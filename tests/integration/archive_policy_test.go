@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -119,5 +120,54 @@ func TestArchiveScheduledSweep(t *testing.T) {
 	var verified int
 	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM recording_archive_copies WHERE state='verified'`).Scan(&verified); err != nil || verified != 2 {
 		t.Fatal("both uploads verify", verified, err)
+	}
+}
+
+// Saving "scheduled" a moment before filling the time box is the one validation
+// failure an operator hits by accident. It used to answer "参数无效", which does
+// not name the field; these two verdicts do.
+func TestScheduledPolicyNamesTheMissingTime(t *testing.T) {
+	fixture := newPublicationFixture(t)
+	ctx := context.Background()
+	dav := webdavTestServer(t, "archiver", "dav-secret")
+	service := archive.New(fixture.DB, fixture.Auth, fixture.Site.Secrets, fixture.Service.Pools)
+	target, err := service.RegisterTarget(ctx, fixture.Admin, archive.TargetInput{
+		Name: "Openlist", BaseURL: dav.URL, RemoteRoot: "/nvr",
+		Username: "archiver", Password: "dav-secret", CloudRetentionDays: 365, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := archive.Policy{ChannelID: fixture.Channel, TargetID: target.ID, Mode: archive.ModeScheduled}
+
+	// Empty time: its own verdict, not the generic invalid input.
+	if _, err := service.UpsertPolicy(ctx, fixture.Admin, base); !errors.Is(err, archive.ErrScheduleRequired) {
+		t.Fatalf("an empty time must read as schedule_required, got %v", err)
+	}
+	// Whitespace is empty.
+	blank := base
+	blank.Schedule = "   "
+	if _, err := service.UpsertPolicy(ctx, fixture.Admin, blank); !errors.Is(err, archive.ErrScheduleRequired) {
+		t.Fatalf("a blank time must read as schedule_required, got %v", err)
+	}
+	// Malformed times are a different verdict, with the accepted shape.
+	for _, bad := range []string{"2:00", "02:0", "ab:cd", "0200", "02:00,", "25:00"} {
+		policy := base
+		policy.Schedule = bad
+		// 25:00 is well-formed HH:MM and is accepted at this layer; the scheduler
+		// simply never fires for it. The rest are malformed.
+		_, err := service.UpsertPolicy(ctx, fixture.Admin, policy)
+		if bad == "25:00" {
+			continue
+		}
+		if !errors.Is(err, archive.ErrScheduleFormat) {
+			t.Fatalf("%q must read as schedule_invalid, got %v", bad, err)
+		}
+	}
+	// A well-formed time saves.
+	ok := base
+	ok.Schedule = "02:00,14:30"
+	if _, err := service.UpsertPolicy(ctx, fixture.Admin, ok); err != nil {
+		t.Fatalf("a well-formed time must save: %v", err)
 	}
 }

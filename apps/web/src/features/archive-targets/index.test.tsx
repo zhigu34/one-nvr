@@ -482,3 +482,25 @@ test('a failed probe keeps the form open', async () => {
   await expect.element(page.getByText(/账号密码已通过/)).toBeVisible()
   await expect.element(page.getByLabelText('WebDAV URL')).toBeVisible()
 })
+
+// "参数无效" from the server says nothing about which field is missing, and the
+// empty time box sits right there. The page names it before sending.
+test('saving a scheduled policy without a time names the missing field', async () => {
+  const page = await setup({
+    targets: [{ id: 't1', name: 'Openlist', enabled: true, username: 'admin' }],
+    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左' }],
+  })
+  await expect.element(page.getByTestId('archive-target-row')).toBeVisible()
+  // Switch the mode to scheduled, leaving the time empty.
+  await userEvent.click(page.getByLabelText('CH01 前门-左 上传模式'))
+  await userEvent.click(await page.getByRole('option', { name: '定时上传' }).first())
+  // Save.
+  await userEvent.click(page.getByRole('button', { name: '保存' }).first())
+  await expect.element(page.getByText(/定时上传需要填写时刻/)).toBeVisible()
+  // No PUT reached the server: the request would only have been rejected, and
+  // its answer would not have named the field.
+  const puts = calls.request.mock.calls.filter(
+    ([path, init]) => path === '/api/v1/archive-policies' && (init as RequestInit | undefined)?.method === 'PUT'
+  )
+  expect(puts).toHaveLength(0)
+})

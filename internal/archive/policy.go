@@ -12,7 +12,19 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/zhigu34/one-nvr/internal/audit"
 	"github.com/zhigu34/one-nvr/internal/auth"
+	"github.com/zhigu34/one-nvr/internal/fault"
 	"github.com/zhigu34/one-nvr/internal/id"
+)
+
+// ErrScheduleRequired and ErrScheduleFormat are their own faults, not the
+// generic "参数无效": a scheduled policy without a time is the one validation
+// failure an operator hits by clicking save a moment before filling the box, and
+// that message does not say which field is missing.
+var (
+	ErrScheduleRequired = fault.New(422, "archive_schedule_required",
+		"定时上传需要在「时刻」填写具体时间，例如 02:00 或 02:00,14:30")
+	ErrScheduleFormat = fault.New(422, "archive_schedule_invalid",
+		"「时刻」格式应为 HH:MM，多个时刻用逗号分隔，例如 02:00,14:30")
 )
 
 // Archive modes (ARC-08). manual is the zero policy: uploads happen only when
@@ -27,6 +39,19 @@ const (
 // sweepBatch bounds one scheduled trigger. ARC-08: one trigger only enqueues;
 // a backlog keeps draining through the ordinary job retries afterwards.
 const sweepBatch = 100
+
+// digits reports whether s is all ASCII digits, so "ab:cd" cannot pass as a time.
+func digits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
 
 // Policy is one channel's archive binding.
 type Policy struct {
@@ -68,13 +93,15 @@ func (s *Service) UpsertPolicy(ctx context.Context, p auth.Principal, in Policy)
 		return Policy{}, auth.ErrInvalid
 	}
 	if in.Mode == ModeScheduled {
-		for _, fire := range strings.Split(in.Schedule, ",") {
-			if len(fire) != 5 || fire[2] != ':' {
-				return Policy{}, auth.ErrInvalid
-			}
+		if strings.TrimSpace(in.Schedule) == "" {
+			return Policy{}, ErrScheduleRequired
 		}
-		if in.Schedule == "" {
-			return Policy{}, auth.ErrInvalid
+		for _, fire := range strings.Split(in.Schedule, ",") {
+			// HH:MM, and neither half may be blank: "2:00" and "02:0" are what a
+			// hand-typed time looks like before it is finished.
+			if len(fire) != 5 || fire[2] != ':' || !digits(fire[:2]) || !digits(fire[3:]) {
+				return Policy{}, ErrScheduleFormat
+			}
 		}
 	} else if in.Schedule != "" {
 		return Policy{}, auth.ErrInvalid
