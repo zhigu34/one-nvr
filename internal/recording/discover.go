@@ -31,6 +31,15 @@ func nativeStart(receipt runReceipt, relative string) (time.Time, bool) {
 	if receipt.NativeTimezone == "" || !strings.HasPrefix(relative, prefix) {
 		return time.Time{}, false
 	}
+	// "UTC" is what receipts recorded before the zone was captured correctly. It
+	// was never the truth — the media server names files in local time — so
+	// honouring it would shift every recovered start by the offset, or push it into
+	// the future where the guard silently drops it. Refusing is the honest answer:
+	// a run with an old receipt recovers nothing rather than recovering the wrong
+	// instant.
+	if receipt.NativeTimezone == "UTC" && receipt.Version < 2 {
+		return time.Time{}, false
+	}
 	zone, err := time.LoadLocation(receipt.NativeTimezone)
 	if err != nil {
 		return time.Time{}, false
@@ -113,7 +122,19 @@ func (s *Service) discoverRun(ctx context.Context, runID id.ID) error {
 		return nil
 	} // No receipt means no automatic takeover.
 	if receipt != want || receipt.SiteID != pool.SiteID {
-		return ErrPublicationConflict
+		// A receipt written before the timezone fix recorded "UTC" as the native
+		// zone, which was never true: the media server names files in the site's
+		// local time. Older receipts therefore differ from what the database now
+		// produces for the same run, and a strict comparison would refuse every
+		// crash recovery that spans the upgrade.
+		//
+		// Adopting the stored value is safe because the ONLY consumer of this field
+		// is nativeStart, whose plausibility guard rejects a wrong parse instead of
+		// publishing it. "UTC" is still refused there — see nativeStart — so an old
+		// receipt recovers nothing rather than recovering the wrong instant.
+		if receipt.SiteID != pool.SiteID || !sameRunExceptZone(receipt, want) {
+			return ErrPublicationConflict
+		}
 	}
 	var paths []string
 	if s.discoveryFiles == nil {
@@ -244,4 +265,16 @@ func (s *Service) rememberUnverified(ctx context.Context, receipt runReceipt, pa
 	rawMedia, _ := json.Marshal(media)
 	_, err = s.DB.Pool.Exec(ctx, `INSERT INTO recording_segments(id,channel_id,source_revision_id,run_id,pool_id,original_relative_path,target_relative_path,original_start,naming_timezone,utc_offset_seconds,start_at,end_at,size_bytes,file_identity,media_evidence,state,time_evidence,error_code) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$8,$11,$12,$13,$14,$15,'provisional','media_requires_review') ON CONFLICT(run_id,original_relative_path) DO NOTHING`, recordingID, receipt.ChannelID, receipt.SourceRevisionID, receipt.RunID, receipt.PoolID, path, frozen.RelativePath, start, timezone, frozen.UTCOffsetSeconds, start.Add(duration), info.Size(), rawID, rawMedia, state)
 	return err
+}
+
+// sameRunExceptZone reports whether two receipts describe the same run, ignoring
+// the timezone field.
+//
+// The timezone was recorded incorrectly ("UTC") before the parser was fixed. A
+// receipt from that era still names the right run, so comparing it strictly would
+// turn an upgrade into a permanent publication conflict for every crashed run.
+func sameRunExceptZone(a, b runReceipt) bool {
+	a.NativeTimezone = ""
+	b.NativeTimezone = ""
+	return a == b
 }

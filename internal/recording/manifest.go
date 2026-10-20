@@ -25,7 +25,10 @@ type runReceipt struct {
 
 func (s *Service) receipt(ctx context.Context, runID id.ID) (runReceipt, error) {
 	var receipt runReceipt
-	receipt.Version = 1
+	// Version 2 records the site's real timezone. Version 1 hardcoded "UTC", which
+	// was never true; nativeStart refuses that value for version-1 receipts rather
+	// than parsing with it.
+	receipt.Version = 2
 	// The media server names files in the CONTAINER's local time, and the
 	// deployment sets TZ to the site's zone. Recording it as "UTC" made every
 	// recovered file's start time wrong by the offset (or, worse, pushed it into

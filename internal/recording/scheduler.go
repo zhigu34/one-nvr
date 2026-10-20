@@ -75,8 +75,12 @@ func (s *Service) Reconcile(ctx context.Context, ch id.ID) error {
 		// heartbeat kept fresh by TouchBuffers, so re-enabling the channel found a
 		// "live" buffer, skipped the restart — but the proxy had gone with the
 		// channel, and every event then assembled from an empty ring, silently.
+		// A buffer that cannot be stopped must not block the session shutdown: the
+		// channel is disabled, and leaving its media sessions running because a
+		// tmpfs cleanup failed is the worse outcome. The failure is logged and the
+		// next tick retries — StopBuffer is idempotent.
 		if err := s.StopBuffer(ctx, e.ChannelID); err != nil {
-			return err
+			slog.Warn("event buffer stop failed", "channel", e.ChannelID, "error", err)
 		}
 		return s.stopSwitchSessions(ctx, e, channel.SwitchWork{}, true)
 	}

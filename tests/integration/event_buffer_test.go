@@ -1483,3 +1483,48 @@ func TestDamagedSegmentCanBeDeleted(t *testing.T) {
 		t.Fatalf("state=%q reason=%q, want deleted/corrupt", state, reason)
 	}
 }
+
+// A clip job abandoned in 'running' must be reclaimed.
+//
+// A worker that dies mid-assembly (or a context cancelled by SIGTERM) leaves the
+// row in 'running'; the assembly scan only looks at queued/growing and retention
+// only removes done/failed, so without a requeue the event never gets a clip and
+// the row is not even eligible for cleanup.
+func TestAbandonedClipJobIsRequeued(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	eventID := mustID(t)
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO events(id,channel_id,source,source_id,category,score,zones,started_at,snapshot_state,media_state,raw)
+		VALUES($1,$2,'frigate','evt-stuck','person',0.5,'[]',clock_timestamp()-interval '5 minutes','gone','pending','{}')`, eventID, fixture.Channel); err != nil {
+		t.Fatal(err)
+	}
+	// A claim from a worker that is gone: 'running', last touched long ago.
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end,state,updated_at)
+		VALUES($1,$2,clock_timestamp()-interval '5 minutes',clock_timestamp()-interval '4 minutes','running',clock_timestamp()-interval '10 minutes')`,
+		eventID, fixture.Channel); err != nil {
+		t.Fatal(err)
+	}
+
+	fixture.Service.SweepEventClipJobs(ctx)
+
+	var state string
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state FROM event_clip_jobs WHERE event_id=$1`, eventID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "queued" {
+		t.Fatalf("an abandoned job stayed %q; the event would never get a clip", state)
+	}
+
+	// A FRESH claim is not stolen: an assembly pass is seconds, and requeueing a
+	// job that is genuinely in progress would assemble the same footage twice.
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET state='running',updated_at=clock_timestamp() WHERE event_id=$1`, eventID); err != nil {
+		t.Fatal(err)
+	}
+	fixture.Service.SweepEventClipJobs(ctx)
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state FROM event_clip_jobs WHERE event_id=$1`, eventID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "running" {
+		t.Fatalf("a live claim was stolen: state=%q", state)
+	}
+}
