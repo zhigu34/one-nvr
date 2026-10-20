@@ -16,10 +16,11 @@ import (
 // those facts project into.
 const (
 	// ObservationRetention keeps raw samples long enough to answer "what exactly
-	// did the sampler see" for a recent incident. The reader only ever wants the
-	// newest row (a thirty-second TTL); this window is for a human investigating
-	// something that happened last week.
-	ObservationRetention = 7 * 24 * time.Hour
+	// did the sampler see" for an incident from today. It is deliberately NOT the
+	// PRD's seven days: that window belongs to the interval tier below, which is
+	// derived from these rows as they arrive and kept for a year. Nothing reads an
+	// older sample, and at sixteen channels a week of them is 1.2 GB.
+	ObservationRetention = 24 * time.Hour
 	// IntervalRetention and FaultRetention are the PRD's 365 days for state,
 	// faults, gaps and verification evidence.
 	IntervalRetention = 365 * 24 * time.Hour

@@ -339,19 +339,17 @@ func (s *Service) SweepArchiveLocal(ctx context.Context) {
 	}
 }
 
-// ObservationRetention is how long a source observation outlives its own TTL
-// before the sweep removes it.
+// ObservationRetention is how long a raw sample outlives its own TTL.
 //
-// The row's expires_at (thirty seconds) is what the CURRENT state reader honours,
-// but these rows are also the raw samples behind the reliability layer's interval
-// derivation — PRD REL-06 keeps them for seven days. A shorter window here would
-// win by running first on the shared ticker and silently truncate that history,
-// leaving the reliability package's own seven-day sweep with nothing to delete.
+// These rows are CURRENT STATE, not history. The row expires thirty seconds after
+// it is written, the status page takes only the newest row per channel and stream,
+// and the reliability layer derives its intervals as each sample arrives — no
+// reader ever goes back for an older row. PRD REL-06's seven days applies to the
+// INTERVAL tier (kept 365 days), not to the samples that produced it.
 //
-// Seven days it is, matching reliability.ObservationRetention. The two constants
-// exist in separate packages for dependency reasons; they must stay equal, and
-// TestObservationRetentionMatchesTheReliabilityTier enforces it.
-const ObservationRetention = 7 * 24 * time.Hour
+// Measured on the live site: 164,084 rows and about 170 MB per day at sixteen
+// channels. A seven-day window is 1.2 GB of rows nothing reads.
+const ObservationRetention = 24 * time.Hour
 
 // SweepObservations deletes observation rows past their usefulness.
 //
