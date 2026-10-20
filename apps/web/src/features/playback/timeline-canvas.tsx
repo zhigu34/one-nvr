@@ -644,14 +644,29 @@ export function TimelineCanvas({
             className='absolute inset-y-0 w-0.5 bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.75)]'
             style={{ transform: `translateX(${playheadX - 1}px)` }}
           />
+          {/* The capsule shows the TIME only. A full clock string is 19
+              characters ("2026-10-19 16:55:00"), which is wider than the clamp
+              that keeps it inside the strip — so `translateX(playheadX - 26)`
+              pushed it past the left edge and `overflow-hidden` cut it down to
+              "2026-". The date belongs on the ruler, where midnight already
+              prints it. */}
+          {/* Anchored to the playhead's right and flipped to its left near the
+              right edge, so the label never leaves the strip whatever its
+              rendered width turns out to be. A fixed clamp cannot do that: it
+              has to guess the text width, and a wrong guess is what produced
+              "2026-". */}
           <div
-            className='absolute flex items-center gap-1 rounded-sm bg-red-500 px-1 py-px text-[10px] font-medium leading-4 tabular-nums text-white shadow-sm'
+            className='absolute whitespace-nowrap rounded-sm bg-red-500 px-1 py-px text-[10px] font-medium leading-4 tabular-nums text-white shadow-sm'
             style={{
-              transform: `translateX(${Math.min(Math.max(playheadX - 26, 0), Math.max(width - 52, 0))}px)`,
-              top: HEIGHT - 18,
+              left: playheadX,
+              top: HEIGHT - 16,
+              transform:
+                playheadX > width - 74
+                  ? 'translateX(calc(-100% - 4px))'
+                  : 'translateX(4px)',
             }}
           >
-            {playheadAt ? formatClock(playheadAt, zone) : '—'}
+            {playheadAt ? formatClock(playheadAt, zone).slice(11) : '—'}
           </div>
         </div>
       )}
