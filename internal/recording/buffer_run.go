@@ -32,12 +32,23 @@ import (
 //
 //   - FragmentSeconds 3: the camera's GOP is 3.3 s, so a smaller request cannot
 //     produce smaller files. Asking for the GOP keeps fragments whole.
-//   - KeepSeconds 30: five seconds of lead-in plus detection latency plus one
-//     fragment of slack. At the measured 3.4 Mbps that is about 13 MB per
-//     channel, so a 512 MB cache holds every channel of a 16-channel site.
+//   - KeepSeconds 120: long enough to hold the tail of a real event, not just the
+//     lead-in plus latency.
+//
+// The first version kept 30 seconds, reasoning from the lead-in window alone.
+// That is the wrong question: the ring is also the ONLY source for the rest of a
+// long event, because a clip is assembled from fragments held in the event's own
+// parts directory and those can only be copied while they are still in the ring.
+// Measured on the live site: of 879 daily events, 191 (22%) ran longer than 30
+// seconds and 43 longer than two minutes, and a 216-second clip ended up with 78
+// seconds of its span backed by no fragment at all.
+//
+// 120 seconds covers the 90th percentile (68s) with room for the trail, at about
+// four times the memory: measured 71 MB for five buffering channels at 30s, so
+// roughly 280 MB at 120s — inside a 512 MB cache with headroom.
 const (
 	BufferFragmentSeconds = 3
-	BufferKeepSeconds     = 30
+	BufferKeepSeconds     = 120
 )
 
 // ErrBufferUnavailable reports that this deployment reserved no memory for the
@@ -74,6 +85,12 @@ func (s *Service) EnsureBuffer(ctx context.Context, e *channel.Execution, revisi
 		return false, err
 	}
 	if running {
+		// The keep window is deployment policy, not part of the recording: a running
+		// buffer picks up a changed value without being restarted (a restart empties
+		// the ring, which is exactly the footage a detection about to arrive needs).
+		if _, err := s.DB.Pool.Exec(ctx, `UPDATE event_buffers SET keep_seconds=$2 WHERE channel_id=$1 AND keep_seconds<>$2`, e.ChannelID, BufferKeepSeconds); err != nil {
+			return true, err
+		}
 		return true, nil
 	}
 	// A stale row means the worker that claimed it is gone and its tmpfs with it.
