@@ -54,10 +54,22 @@ func (s *Service) QueueClip(ctx context.Context, eventID, channelID id.ID, start
 	return err
 }
 
+// clipSettleDelay is how long after an event's end the clip keeps growing.
+//
+// The detector ends an event when it stops recognising the subject, which
+// routinely happens while the person is still in frame — measured on this site,
+// clips ended with the subject mid-stride. Six seconds covers a walk-out at
+// normal pace plus the fragment boundary, and it costs nothing: the clip is
+// already playable while it waits.
+const clipSettleDelay = 6 * time.Second
+
 // PreEventLead and PostEventTrail are the operator-chosen buffer window.
 const (
-	PreEventLead   = 5 * time.Second
-	PostEventTrail = 5 * time.Second
+	PreEventLead = 5 * time.Second
+	// PostEventTrail is longer than the lead: the detector ends an event when it
+	// loses the subject, typically while the person is still walking out of
+	// frame, so the tail has to cover a departure rather than a detection.
+	PostEventTrail = 10 * time.Second
 )
 
 // ClipJobWindow is the span a buffered clip must cover around an event, as the
@@ -77,11 +89,22 @@ func (s *Service) AssembleClips(ctx context.Context) {
 	if s.DB == nil || s.EventCacheDir == "" || s.Probe == nil {
 		return
 	}
+	// An event is still "open" for settle purposes until ClipSettleDelay after it
+	// ended. The detector closes an event when it loses the subject, which is
+	// often while the person is still walking out of frame — finalising at that
+	// instant cut the clip exactly where they were about to leave. Waiting lets
+	// the tail fragments land so the clip covers the departure.
+	//
+	// The delay is a settle delay, not a re-open: ended_at is never rewritten, and
+	// the link window the page shows still ends at the event's own end plus the
+	// trail.
 	rows, err := s.DB.Pool.Query(ctx, `SELECT j.event_id,j.channel_id,j.window_start,j.window_end,
-			j.segment_id,j.clip_run_id,e.ended_at IS NULL
+			j.segment_id,j.clip_run_id,
+			e.ended_at IS NULL OR e.ended_at > clock_timestamp() - $1::interval AS still_open
 		FROM event_clip_jobs j LEFT JOIN events e ON e.id=j.event_id
 		WHERE j.state IN ('queued','growing')
-		ORDER BY (e.ended_at IS NULL) DESC, j.updated_at LIMIT 20`)
+		ORDER BY (e.ended_at IS NULL OR e.ended_at > clock_timestamp() - $1::interval) DESC, j.updated_at LIMIT 20`,
+		clipSettleDelay.String())
 	if err != nil {
 		if ctx.Err() == nil {
 			slog.Warn("clip job scan unavailable", "error", err)

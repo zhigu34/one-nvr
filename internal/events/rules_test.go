@@ -57,65 +57,71 @@ func TestClockValidation(t *testing.T) {
 	}
 }
 
-// Folding duplicates is only safe when position agrees.
+// Folding is time-based, not identity-based.
 //
-// The detector assigns a new id to the same person after a brief occlusion,
-// producing two overlapping rows for one walk-past. But two people can also be
-// in frame at once, and merging those hides a real detection. Measured on this
-// site the two cases separate cleanly: dx ≈ 0.01 for a re-identification,
-// dx ≈ 0.11–0.22 for two people.
-func TestFoldDuplicateDetectionsNeedsTheSamePlace(t *testing.T) {
+// The detector cannot tell one person from another: it re-identifies a subject
+// after a brief occlusion and emits a second event, and three people walking past
+// is three events. The list answers "when was someone there", so a quiet stretch
+// shorter than ActivityGap belongs to the same occurrence whoever it was.
+func TestFoldMergesOneStretchOfActivity(t *testing.T) {
 	base := time.Date(2026, 10, 20, 10, 25, 0, 0, time.UTC)
 	ch := id.ID("11111111-1111-4111-8111-111111111111")
-	event := func(idValue string, startSec, endSec float64, x float64) Event {
-		end := base.Add(time.Duration(endSec) * time.Second)
-		start := base.Add(time.Duration(startSec) * time.Second)
+	other := id.ID("22222222-2222-4222-8222-222222222222")
+	at := func(offset time.Duration) time.Time { return base.Add(offset) }
+	event := func(idValue string, start, end time.Duration, category string, channel id.ID) Event {
+		e := at(end)
+		s := at(start)
 		return Event{
-			ID: id.ID(idValue), ChannelID: &ch, Category: "person", Score: 0.9,
-			StartedAt: start, EndedAt: &end, Box: []float64{x, 0.5, 0.2, 0.3},
+			ID: id.ID(idValue), ChannelID: &channel, Category: category, Score: 0.9,
+			StartedAt: s, EndedAt: &e,
 		}
 	}
 
-	// Same place, overlapping: one subject re-identified.
-	same := foldDuplicateDetections([]Event{
-		event("aaaaaaaa-1111-4111-8111-111111111111", 22, 42, 0.59),
-		event("bbbbbbbb-1111-4111-8111-111111111111", 12, 34, 0.58),
-	})
-	if len(same) != 1 {
-		t.Fatalf("same-place overlap did not fold: %d rows", len(same))
-	}
-	if len(same[0].MergedIDs) != 1 {
-		t.Fatalf("the folded id was not reported: %v", same[0].MergedIDs)
+	// Overlapping: one occurrence.
+	if got := foldDuplicateDetections([]Event{
+		event("aaaaaaaa-1111-4111-8111-111111111111", 12*time.Second, 34*time.Second, "person", ch),
+		event("bbbbbbbb-1111-4111-8111-111111111111", 22*time.Second, 42*time.Second, "person", ch),
+	}); len(got) != 1 {
+		t.Fatalf("overlapping detections did not fold: %d rows", len(got))
 	}
 
-	// Different place, overlapping: two people, must stay apart.
-	apart := foldDuplicateDetections([]Event{
-		event("cccccccc-1111-4111-8111-111111111111", 22, 42, 0.59),
-		event("dddddddd-1111-4111-8111-111111111111", 12, 34, 0.38),
+	// A second person right after the first: still one occurrence.
+	got := foldDuplicateDetections([]Event{
+		event("cccccccc-1111-4111-8111-111111111111", 40*time.Second, 55*time.Second, "person", ch),
+		event("dddddddd-1111-4111-8111-111111111111", 10*time.Second, 30*time.Second, "person", ch),
 	})
-	if len(apart) != 2 {
-		t.Fatalf("two people in frame were merged into %d row(s)", len(apart))
+	if len(got) != 1 {
+		t.Fatalf("a 10s gap between two people was not folded: %d rows", len(got))
+	}
+	if len(got[0].MergedIDs) != 1 {
+		t.Fatalf("the folded id was not reported: %v", got[0].MergedIDs)
+	}
+	// The merged row covers the whole stretch, not just the first detection.
+	if !got[0].StartedAt.Equal(at(10*time.Second)) || !got[0].EndedAt.Equal(at(55*time.Second)) {
+		t.Fatalf("merged span is %v..%v, want 10s..55s", got[0].StartedAt, got[0].EndedAt)
 	}
 
-	// No box: cannot tell, so never fold.
-	unknown := foldDuplicateDetections([]Event{
-		event("eeeeeeee-1111-4111-8111-111111111111", 22, 42, 0.59),
-		func() Event {
-			e := event("ffffffff-1111-4111-8111-111111111111", 12, 34, 0.58)
-			e.Box = nil
-			return e
-		}(),
-	})
-	if len(unknown) != 2 {
-		t.Fatalf("a row with no box was folded on a guess")
+	// Longer than the gap: a separate visit.
+	if got := foldDuplicateDetections([]Event{
+		event("eeeeeeee-1111-4111-8111-111111111111", 90*time.Second, 100*time.Second, "person", ch),
+		event("ffffffff-1111-4111-8111-111111111111", 10*time.Second, 30*time.Second, "person", ch),
+	}); len(got) != 2 {
+		t.Fatalf("visits %v apart were merged", ActivityGap)
 	}
 
-	// Sequential, not overlapping: separate events.
-	sequential := foldDuplicateDetections([]Event{
-		event("99999999-1111-4111-8111-111111111111", 60, 80, 0.59),
-		event("88888888-1111-4111-8111-111111111111", 10, 30, 0.59),
-	})
-	if len(sequential) != 2 {
-		t.Fatalf("sequential events were merged")
+	// Different channels are never one occurrence.
+	if got := foldDuplicateDetections([]Event{
+		event("99999999-1111-4111-8111-111111111111", 10*time.Second, 30*time.Second, "person", ch),
+		event("88888888-1111-4111-8111-111111111111", 12*time.Second, 32*time.Second, "person", other),
+	}); len(got) != 2 {
+		t.Fatal("detections on two channels were merged")
+	}
+
+	// Different categories are different things.
+	if got := foldDuplicateDetections([]Event{
+		event("77777777-1111-4111-8111-111111111111", 10*time.Second, 30*time.Second, "person", ch),
+		event("66666666-1111-4111-8111-111111111111", 12*time.Second, 32*time.Second, "car", ch),
+	}); len(got) != 2 {
+		t.Fatal("a person and a car were merged")
 	}
 }

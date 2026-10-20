@@ -24,11 +24,15 @@ import (
 )
 
 // EventMediaWindow is how far before the event starts and after it ends the
-// footage should reach. Five seconds each side: enough to show what walked into
-// frame and what happened as it left, without dragging in unrelated minutes.
+// footage should reach.
+//
+// Five seconds of lead-in answers "what walked into frame". The trail is longer
+// because the detector ends an event when it loses the subject, which is often
+// while the person is still walking out — a five-second tail cut them off
+// mid-stride. Ten seconds covers the departure at normal walking pace.
 const (
 	PreEventWindow  = 5 * time.Second
-	PostEventWindow = 5 * time.Second
+	PostEventWindow = 10 * time.Second
 )
 
 // mediaLink is the outcome of looking for footage around an event.

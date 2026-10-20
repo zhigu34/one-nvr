@@ -343,59 +343,26 @@ func (s *Service) List(ctx context.Context, p auth.Principal, q ListQuery) (Even
 	return out, nil
 }
 
-// foldDuplicateDetections merges a channel's overlapping same-category events
-// into the first one, newest-first input preserved.
+// foldDuplicateDetections merges a channel's detections that belong to one
+// stretch of activity into a single row.
 //
-// Why this exists: the detector tracks each object separately and assigns a new
-// id when a person is briefly occluded — its own documentation names occlusion
-// as the case where ids get reassigned. The result is two or three rows for one
-// walk-past, all overlapping in time, which an operator reads as "three things
-// happened". Measured on this site: 288 of 825 events in 24 hours overlapped
-// another event on the same channel.
+// The detector cannot tell one person from another: it re-identifies a subject
+// after a brief occlusion and emits a second event, and three people walking
+// past is three events. Neither distinction is useful here — the question the
+// list answers is "when was someone there", not "which person was which". So the
+// rule is time-based: same channel, same category, and no gap longer than
+// ActivityGap collapses into one row covering the whole stretch.
 //
-// The fold is deliberately conservative, because a wrong merge hides a real
-// detection:
-//
-//   - same channel — two cameras are never one event;
-//   - same category — a person and a car at the same moment are two things;
-//   - overlapping in time — sequential events stay separate;
-//   - nearly the same place — see below.
-//
-// The position test is what makes this safe. Measured on this site, overlapping
-// pairs split cleanly into two groups: dx ≈ 0.01 (one person re-identified after
-// a brief occlusion) and dx ≈ 0.11–0.22 (two people genuinely in frame
-// together). Without it, "two people walked past" collapses into one event and a
-// real detection disappears from the list.
-//
-// A row with no box (stored before boxes were captured) does not fold and is not
-// folded into: guessing that it is the same subject would be exactly the error
-// this rule exists to avoid.
+// Position was tried first and rejected. It cannot separate the cases it was
+// meant to: two people standing near each other have nearly the same box, and
+// one person crossing the frame moves far. Measured on this site, position
+// split the same overlapping pairs across both sides of any threshold.
 //
 // The upstream ids are kept in MergedIDs, so the list states how many were
 // folded and the original rows remain in the index.
-func absFloat(value float64) float64 {
-	if value < 0 {
-		return -value
-	}
-	return value
-}
-
 func foldDuplicateDetections(items []Event) []Event {
 	if len(items) < 2 {
 		return items
-	}
-	// A 0-length event still occupies an instant; give it a window so it can be
-	// folded like any other.
-	const gap = 2 * time.Second
-	// samePlaceTolerance is the horizontal/vertical distance, as a fraction of
-	// the frame, within which two detections are the same subject. 0.08 is half
-	// the smallest gap measured between two genuinely different people (0.11).
-	const samePlaceTolerance = 0.08
-	end := func(item Event) time.Time {
-		if item.EndedAt != nil && item.EndedAt.After(item.StartedAt) {
-			return *item.EndedAt
-		}
-		return item.StartedAt.Add(gap)
 	}
 	out := make([]Event, 0, len(items))
 	for _, item := range items {
@@ -412,30 +379,19 @@ func foldDuplicateDetections(items []Event) []Event {
 			if group.Category != item.Category {
 				continue
 			}
-			// Overlap (or touch within the tolerance) in either direction: input
-			// is newest-first, so the item usually starts before the group ends.
-			if item.StartedAt.After(end(*group)) || end(item).Before(group.StartedAt) {
+			// Within ActivityGap of the group's extent in either direction: input
+			// is newest-first, so the item usually starts before the group does.
+			if item.StartedAt.After(group.end().Add(ActivityGap)) ||
+				group.StartedAt.After(endOf(item).Add(ActivityGap)) {
 				continue
 			}
-			// Position: the same subject reappears where it was. Both boxes must be
-			// known; an unknown box never folds.
-			if len(group.Box) < 2 || len(item.Box) < 2 {
-				continue
-			}
-			if absFloat(group.Box[0]-item.Box[0]) > samePlaceTolerance ||
-				absFloat(group.Box[1]-item.Box[1]) > samePlaceTolerance {
-				continue
-			}
-			// Fold INTO the group: keep the earliest start and the latest end so
-			// the merged row covers what was actually observed.
 			if item.StartedAt.Before(group.StartedAt) {
 				group.StartedAt = item.StartedAt
 			}
-			if candidate := end(item); candidate.After(*group.EndedAt) || group.EndedAt == nil {
+			if candidate := endOf(item); candidate.After(group.end()) || group.EndedAt == nil {
 				group.EndedAt = &candidate
 			}
 			group.MergedIDs = append(group.MergedIDs, item.ID)
-			// A group's own hits can grow when a duplicate carried more.
 			if item.Score > group.Score {
 				group.Score = item.Score
 			}
@@ -448,6 +404,26 @@ func foldDuplicateDetections(items []Event) []Event {
 	}
 	return out
 }
+
+// ActivityGap is how long a channel may be quiet before the next detection is
+// treated as a separate occurrence. Thirty seconds covers "someone walked out of
+// frame and came back" and "a second person followed the first" without merging
+// unrelated visits: measured on this site, 169 of 825 daily events sit within ten
+// seconds of the previous one and another 166 overlap outright, while the next
+// cluster starts at 11-30s and is followed by genuine gaps of minutes.
+const ActivityGap = 30 * time.Second
+
+// endOf is the moment an event stopped, or its start when it is still running
+// (a zero-length event still occupies an instant).
+func endOf(item Event) time.Time {
+	if item.EndedAt != nil && item.EndedAt.After(item.StartedAt) {
+		return *item.EndedAt
+	}
+	return item.StartedAt
+}
+
+// end is endOf for a pointer receiver inside the fold loop.
+func (e *Event) end() time.Time { return endOf(*e) }
 
 // Get returns one event with its handling trail, grant-checked.
 func (s *Service) Get(ctx context.Context, p auth.Principal, eventID id.ID) (Event, error) {
