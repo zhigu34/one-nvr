@@ -209,3 +209,60 @@ func TestEventMediaReconcileKeepsRecentPendingEventsPending(t *testing.T) {
 		t.Fatalf("a recent event must stay pending while its segment may still publish, got %q", state)
 	}
 }
+
+// An event whose clip is still growing must stay 'linked', not flip back to
+// 'unavailable'.
+//
+// A running event's clip is 'finalizing' until the event ends — it is footage that
+// exists and the page plays it while it grows. Counting only 'ready' segments made
+// every MQTT update (about one per second) overwrite the verdict with
+// 'unavailable', while the assembler wrote 'linked' every five seconds. The card
+// flickered between 本机无录像 and 录像生成中 for the whole life of a running
+// event — which is exactly the case event recording exists for, since it is only
+// offered on channels with no ordinary recording.
+func TestGrowingClipKeepsTheEventLinked(t *testing.T) {
+	fixture, service := newEventsFixture(t)
+	ctx := context.Background()
+	if err := service.SetMappings(context.Background(), fixture.Admin, map[id.ID]string{fixture.Channel: "front-door"}); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().UTC().Add(-2 * time.Minute)
+	if err := service.Ingest(ctx, frigatePayload("new", "evt-growing-media", "front-door", "person", float64(started.Unix()), nil, nil, false)); err != nil {
+		t.Fatal(err)
+	}
+
+	// A clip assembled from the buffer while the event runs: 'finalizing'.
+	runID, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sessionID id.ID
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT stream_session_id FROM recording_runs WHERE id=$1`, fixture.Run).Scan(&sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_runs(id,site_id,channel_id,source_revision_id,stream_session_id,pool_id,work_relative_path,purpose,state)
+		VALUES($1,$2,$3,$4,$5,$6,$7,'event','stopped')`,
+		runID, fixture.Site.Secrets.SiteID, fixture.Channel, fixture.Revision, sessionID, fixture.Pool.ID, ".work/event/"+string(runID)); err != nil {
+		t.Fatal(err)
+	}
+	segment, err := id.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "recordings/" + string(segment) + ".mp4"
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_segments(id,channel_id,source_revision_id,run_id,pool_id,original_relative_path,target_relative_path,
+		original_start,naming_timezone,utc_offset_seconds,start_at,end_at,size_bytes,file_identity,state)
+		VALUES($1,$2,$3,$4,$5,$6,$6,$7,'UTC',0,$7,clock_timestamp(),1024,'{}','finalizing')`,
+		segment, fixture.Channel, fixture.Revision, runID, fixture.Pool.ID, path, started.Add(-5*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	// A later MQTT update re-evaluates the link. The growing clip must count.
+	if err := service.Ingest(ctx, frigatePayload("update", "evt-growing-media", "front-door", "person", float64(started.Unix()), nil, nil, false)); err != nil {
+		t.Fatal(err)
+	}
+	state, _ := eventMediaState(t, fixture, "evt-growing-media")
+	if state != "linked" && state != "partial" {
+		t.Fatalf("media_state = %q while the clip was still growing; the card would say 本机无录像", state)
+	}
+}

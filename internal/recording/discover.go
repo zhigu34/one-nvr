@@ -274,7 +274,10 @@ func (s *Service) rememberUnverified(ctx context.Context, receipt runReceipt, pa
 // receipt from that era still names the right run, so comparing it strictly would
 // turn an upgrade into a permanent publication conflict for every crashed run.
 func sameRunExceptZone(a, b runReceipt) bool {
-	a.NativeTimezone = ""
-	b.NativeTimezone = ""
+	// Version and timezone are the two fields the fix changed. Everything else —
+	// the IDs, the work path, the stream key, the creation time — identifies the
+	// run, and those must still match exactly.
+	a.NativeTimezone, b.NativeTimezone = "", ""
+	a.Version, b.Version = 0, 0
 	return a == b
 }
