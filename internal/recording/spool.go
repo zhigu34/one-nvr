@@ -213,6 +213,29 @@ func (s *Spool) Drain(ctx context.Context, accept func(context.Context, Completi
 			continue
 		}
 		if err = accept(ctx, c); err != nil {
+			// A permanently invalid completion must not block the queue. This loop
+			// walks the directory in name order, so returning here means the same
+			// file is retried first on every pass: everything behind it waits until
+			// the spool fills to its quota and further completions are dropped.
+			//
+			// The file is renamed aside rather than deleted — it is evidence of a
+			// media-server bug, and an operator may need it — and the loop continues
+			// with the next entry.
+			if errors.Is(err, ErrCompletionInvalid) {
+				quarantine := name + ".invalid"
+				if renameErr := root.Rename(name, quarantine); renameErr != nil {
+					return renameErr
+				}
+				if syncErr := syncDirectory(root); syncErr != nil {
+					return syncErr
+				}
+				if damaged == nil {
+					damaged = ErrCompletionInvalid
+				}
+				continue
+			}
+			// Anything else may be transient (the database being down, a lease
+			// conflict): stop this round and retry the whole queue next time.
 			return err
 		}
 		if err = root.Remove(name); err != nil {

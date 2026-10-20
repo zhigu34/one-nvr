@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/zhigu34/one-nvr/internal/audit"
 	"github.com/zhigu34/one-nvr/internal/channel"
 	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/jobs"
@@ -400,6 +401,32 @@ func (s *Service) finishSwitch(ctx context.Context, e *channel.Execution, w *cha
 		}
 		if _, err := tx.Exec(ctx, "UPDATE source_switches SET state=$2,phase=$3,finished_at=clock_timestamp(),error_code=NULLIF($4,''),fencing_token=$5 WHERE id=$1 AND state='running'", w.ID, state, phase, reason, e.Lease.FencingToken); err != nil {
 			return err
+		}
+		// A rollback and a failure are the outcomes an operator must be able to
+		// find afterwards. The policy version table does not carry them: a rollback
+		// that restores the previous mode changes no mode, so it writes no version
+		// row, and a failed switch may never have reached the policy at all. Without
+		// this entry the only trace was the absence of a successful switch.
+		if phase == "rolled_back" || phase == "failed" {
+			details, err := json.Marshal(map[string]any{"switch_id": string(w.ID), "phase": phase, "reason": reason, "mode": mode})
+			if err != nil {
+				return err
+			}
+			action := "recording.switch_failed"
+			if phase == "rolled_back" {
+				action = "recording.switch_rolled_back"
+			}
+			// A system-initiated switch has no actor; the audit trail records that
+			// as "no user" rather than attributing it to whoever last touched the
+			// channel.
+			if err := audit.Append(ctx, tx, audit.Entry{
+				ActorID:  w.Task.ActorID,
+				Action:   action,
+				ObjectID: e.ChannelID,
+				Details:  details,
+			}); err != nil {
+				return err
+			}
 		}
 		if phase != "failed" {
 			if _, err := tx.Exec(ctx, "UPDATE recording_gaps SET end_at=clock_timestamp() WHERE switch_id=$1 AND end_at IS NULL", w.ID); err != nil {

@@ -147,6 +147,17 @@ func TestSourceSwitchRollbackAndLateTail(t *testing.T) {
 	if err := f.DB.Pool.QueryRow(ctx, "SELECT phase FROM source_switches WHERE job_id=$1", change.JobID).Scan(&phase); err != nil || phase != "rolled_back" {
 		t.Fatal("failed source not rolled back", phase, err)
 	}
+	// A rollback restores the previous mode, so it writes no policy version row —
+	// and a failed switch may never have reached the policy at all. The audit trail
+	// is the only place an operator can find out that a switch was attempted and
+	// undone, so it must carry the outcome.
+	var audited int
+	if err := f.DB.Pool.QueryRow(ctx, "SELECT count(*) FROM audit_logs WHERE action='recording.switch_rolled_back' AND object_id=$1", f.Channel).Scan(&audited); err != nil {
+		t.Fatal(err)
+	}
+	if audited == 0 {
+		t.Fatal("a rollback left no audit entry: the only trace would be the absence of a successful switch")
+	}
 	var count int
 	var restoredRun id.ID
 	if err := f.DB.Pool.QueryRow(ctx, "SELECT count(*) FROM recording_runs WHERE channel_id=$1 AND state='recording'", f.Channel).Scan(&count); err != nil || count != 1 {
