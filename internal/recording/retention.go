@@ -47,6 +47,12 @@ func (s *Service) RunRetention(ctx context.Context) {
 		// ("no buffered footage") rather than work to retry. Keeping them forever
 		// would grow a table nobody reads, one row per detection.
 		s.SweepEventClipJobs(ctx)
+		// The completion inbox is bookkeeping: a row records that a media-server
+		// callback was processed. Its payload is large (the full completion JSON)
+		// and nothing reads an old one, so without this it grows without bound —
+		// measured on the live site at 144,000 diagnostic rows and 60 MB from a
+		// single class of callback.
+		s.SweepHookInbox(ctx)
 		// Event clips quarantined by the re-cut defect carry evidence about a file
 		// that no longer exists; only the file itself can say what its inode is, so
 		// this cannot be a SQL migration. It runs on the same ticker and stops
@@ -378,5 +384,44 @@ func (s *Service) SweepObservations(ctx context.Context) {
 		if tag.RowsAffected() < retentionBatch || ctx.Err() != nil {
 			return
 		}
+	}
+}
+
+// HookInboxRetention keeps settled completions long enough to explain a recording
+// that did not appear, and no longer.
+//
+// Seven days matches the clip-job window: both answer "why is this footage
+// missing", and both stop being useful once the footage itself is gone.
+const HookInboxRetention = 7 * 24 * time.Hour
+
+// SweepHookInbox removes settled inbox rows past the retention window.
+//
+// Only settled states are eligible. 'pending' and 'processing' are live work —
+// deleting one would strand the completion it represents — so they are kept
+// regardless of age, exactly like the clip-job sweep.
+func (s *Service) SweepHookInbox(ctx context.Context) {
+	if s.DB == nil {
+		return
+	}
+	total := int64(0)
+	for {
+		tag, err := s.DB.Pool.Exec(ctx, `DELETE FROM hook_inbox
+			WHERE id IN (SELECT id FROM hook_inbox
+				WHERE state IN ('processed','diagnostic')
+				  AND received_at < clock_timestamp() - make_interval(secs => $1)
+				LIMIT $2)`, HookInboxRetention.Seconds(), retentionBatch)
+		if err != nil {
+			if ctx.Err() == nil {
+				slog.Warn("hook inbox retention unavailable", "error", err)
+			}
+			return
+		}
+		total += tag.RowsAffected()
+		if tag.RowsAffected() < retentionBatch || ctx.Err() != nil {
+			break
+		}
+	}
+	if total > 0 {
+		slog.Info("hook inbox rows swept", "removed", total)
 	}
 }

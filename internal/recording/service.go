@@ -153,6 +153,19 @@ func (s *Service) acceptDB(ctx context.Context, c Completion) error {
 	if s.DB == nil || s.DB.Pool == nil {
 		return ErrCompletionUnavailable
 	}
+	// Ring-buffer fragments are expected traffic, not an anomaly. Their completion
+	// callbacks arrive for every 3-second fragment of every buffering channel —
+	// measured on the live site at about 5,400 per hour — and none of them is a
+	// recording this index should hold: the fragments are disposable by design and
+	// only the assembled clip is published.
+	//
+	// Recording each one as 'unregistered_recording_run' filled hook_inbox with
+	// 144,000 diagnostic rows and 60 MB of payload, growing at roughly 55 MB a day,
+	// with no retention. Accepting the callback without writing anything is the
+	// honest answer: the media server did exactly what it was told.
+	if s.isEventCachePath(c.FilePath) {
+		return nil
+	}
 	bounded, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	return s.DB.WithinTx(bounded, func(tx pgx.Tx) error {
@@ -214,4 +227,17 @@ func (s *Service) DrainSpool(ctx context.Context) error {
 		}
 		return s.acceptDB(ctx, c)
 	})
+}
+
+// isEventCachePath reports whether a completion describes a ring-buffer fragment.
+//
+// The buffer lives on its own mount (the tmpfs named by EventCacheDir), so the
+// prefix is a reliable discriminator: a published recording never carries it.
+func (s *Service) isEventCachePath(path string) bool {
+	if s.EventCacheDir == "" || path == "" {
+		return false
+	}
+	clean := filepath.Clean(path)
+	root := filepath.Clean(s.EventCacheDir)
+	return clean == root || strings.HasPrefix(clean, root+string(filepath.Separator))
 }
