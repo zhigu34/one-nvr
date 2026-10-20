@@ -164,6 +164,8 @@ function markAt(
   for (const mark of marks) {
     const x = xFor(mark.at, from, span, width)
     const drawnW = Math.max(xFor(mark.end, from, span, width) - x, MARK_MIN_W)
+    // A pointer sitting ON a 3px block must find it: the tolerance covers the
+    // block plus a pixel either side, which is the whole drawn footprint.
     if (px >= x - 1 && px <= x + drawnW + 1) {
       // Overlapping marks: prefer the later one so the newest event wins a
       // tie, which is the one an operator is usually chasing.
@@ -220,8 +222,12 @@ export function TimelineCanvas({
   // smear. Clustering keeps "there were events here" readable and reports the
   // count on hover; it re-folds whenever the width or the view changes, so
   // zooming in unfolds the cluster.
+  // 10px, not 5: at 5px the fold was finer than a pointer, so a dense stretch
+  // became a row of 3px islands with gaps between them — hoverable in theory and
+  // impossible in practice. 10px is about the smallest block an operator can
+  // reliably aim at.
   const drawnMarks = useMemo(
-    () => clusterMarks(marks, from, timeline.to, width, 5),
+    () => clusterMarks(marks, from, timeline.to, width, 10),
     [marks, from, timeline.to, width]
   )
 
