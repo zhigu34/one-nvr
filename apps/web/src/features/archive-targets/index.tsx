@@ -4,7 +4,7 @@ import { useAuthStore } from '@/stores/auth-store'
 import { apiRequest, ApiError, jsonRequest } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
-import { Eye, EyeOff } from 'lucide-react'
+import { Eye, EyeOff, Plus } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import { ConfirmDialog } from '@/components/confirm-dialog'
@@ -80,6 +80,10 @@ export function ArchiveTargets() {
   const [showPassword, setShowPassword] = useState(false)
   const [pending, setPending] = useState(false)
   const [deleting, setDeleting] = useState<Target | null>(null)
+  // The form starts collapsed. Editing or a failed probe opens it, because in
+  // both cases the operator's next action is inside it — collapsing the very
+  // field whose error we just reported would hide the fix.
+  const [showForm, setShowForm] = useState(false)
 
   if (!admin)
     return <Empty>归档目标只对管理员开放。</Empty>
@@ -113,6 +117,7 @@ export function ArchiveTargets() {
       }
       setForm(EMPTY_FORM)
       setEditing('')
+      setShowForm(false)
     }, editing ? '归档目标已更新' : '归档目标已登记')
   }
 
@@ -170,6 +175,7 @@ export function ArchiveTargets() {
   }
 
   function edit(target: Target) {
+    setShowForm(true)
     setEditing(target.id ?? '')
     setForm({
       name: target.name ?? '',
@@ -184,13 +190,27 @@ export function ArchiveTargets() {
 
   return (
     <div className='space-y-4'>
-      <div>
-        {/* h2, not h1: this panel sits under the storage workspace, whose tab
-            strip is the page-level navigation. */}
-        <h2 className='text-2xl font-semibold tracking-tight'>归档目标</h2>
-        <p className='mt-1 text-sm text-muted-foreground'>
-          WebDAV 归档目标是录像完成后的异步上传去处，与目录存储池互不替代。
-        </p>
+      <div className='flex flex-wrap items-start justify-between gap-4'>
+        <div>
+          {/* h2, not h1: this panel sits under the storage workspace, whose tab
+              strip is the page-level navigation. */}
+          <h2 className='text-2xl font-semibold tracking-tight'>归档目标</h2>
+          <p className='mt-1 text-sm text-muted-foreground'>
+            WebDAV 归档目标是录像完成后的异步上传去处，与目录存储池互不替代。
+          </p>
+        </div>
+        {/* Collapsed by default, like the storage-pool page: a registered target
+            is what this page is usually opened to look at, and the form is a
+            wide three-column block that pushed that content down the page. */}
+        <Button
+          type='button'
+          variant={showForm ? 'outline' : 'default'}
+          aria-expanded={showForm}
+          onClick={() => setShowForm((value) => !value)}
+        >
+          <Plus aria-hidden className='size-4' />
+          {showForm ? '收起表单' : editing ? '编辑目标' : '登记目标'}
+        </Button>
       </div>
       <QueryState pending={targets.isPending} error={targets.error} retry={targets.refetch} />
       <Notices notice={notice} error={error} />
@@ -202,6 +222,7 @@ export function ArchiveTargets() {
         error={targetStatus.error ? errorText(targetStatus.error) : ''}
         onRetry={(targetID) => void retryFailures(targetID)}
       />
+      {showForm && (
       <form
         className='grid gap-3 rounded-xl border bg-card p-4'
         onSubmit={(event) => {
@@ -355,6 +376,7 @@ export function ArchiveTargets() {
           <CapabilityBadges caps={caps} state={testState} evidence={testEvidence} />
         </div>
       </form>
+      )}
       {/* Order is deliberate: what is already configured comes before adding
           more, and the per-channel policy table comes last. The table is the
           longest block on the page (one row per channel, 16+ rows), so putting

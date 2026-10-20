@@ -17,7 +17,7 @@ afterEach(() => {
   useAuthStore.getState().reset()
 })
 
-function setup(
+async function setup(
   options: {
     targets?: unknown[]
     caps?: unknown
@@ -30,6 +30,7 @@ function setup(
     failStatus?: boolean
     retried?: number
     channels?: unknown[]
+    collapsed?: boolean
     openList?: { enabled: boolean; state: string; ui_port?: number } | null
   } = {}
 ) {
@@ -73,11 +74,17 @@ function setup(
     return {}
   })
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(
+  const page = await render(
     <QueryClientProvider client={client}>
       <ArchiveTargets />
     </QueryClientProvider>
   )
+  // The form starts collapsed. Most tests below are about its fields, so they
+  // open it the way an operator would; the collapse tests pass collapsed: true.
+  if (!options.collapsed) {
+    await userEvent.click(page.getByRole('button', { name: /登记目标|编辑目标/ }))
+  }
+  return page
 }
 
 test('the form labels itself and explains the retention unit', async () => {
@@ -434,4 +441,44 @@ test('the target list comes before the per-channel policy table', async () => {
   // Document order: target row -> running state -> policy table.
   expect(rows[0].compareDocumentPosition(overview) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   expect(overview.compareDocumentPosition(policyTable) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+})
+
+// A registered target is what this page is usually opened to look at; the wide
+// three-column form pushed that content down. Collapsed by default, opened by
+// the button, exactly like the storage-pool page.
+test('the registration form is collapsed until asked for', async () => {
+  const page = await setup({ collapsed: true })
+  const toggle = page.getByRole('button', { name: '登记目标' })
+  await expect.element(toggle).toHaveAttribute('aria-expanded', 'false')
+  expect(page.getByLabelText('WebDAV URL').query()).toBeNull()
+
+  await userEvent.click(toggle)
+  await expect
+    .element(page.getByRole('button', { name: '收起表单' }))
+    .toHaveAttribute('aria-expanded', 'true')
+  await expect.element(page.getByLabelText('WebDAV URL')).toBeVisible()
+})
+
+// Editing happens inside the form, so opening it is part of that action.
+test('editing a target opens the form and fills it', async () => {
+  const page = await setup({
+    collapsed: true,
+    targets: [{ id: 't1', name: 'Openlist', enabled: true, username: 'admin', base_url: 'http://openlist:5244/dav', remote_root: '/nvr' }],
+  })
+  await expect.element(page.getByTestId('archive-target-row')).toBeVisible()
+  await userEvent.click(page.getByRole('button', { name: '编辑' }))
+  await expect.element(page.getByLabelText('归档目标名称')).toHaveValue('Openlist')
+  await expect.element(page.getByLabelText('WebDAV URL')).toHaveValue('http://openlist:5244/dav')
+})
+
+// Collapsing the form would hide the fields whose error was just reported.
+test('a failed probe keeps the form open', async () => {
+  const page = await setup({
+    failTest: true,
+    failCode: 'archive_target_read_only',
+    failMessage: '账号密码已通过（HTTP 403 而非 401），但服务端不允许往这个路径写入。',
+  })
+  await userEvent.click(page.getByRole('button', { name: '测试连接' }))
+  await expect.element(page.getByText(/账号密码已通过/)).toBeVisible()
+  await expect.element(page.getByLabelText('WebDAV URL')).toBeVisible()
 })
