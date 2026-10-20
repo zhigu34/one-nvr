@@ -402,3 +402,36 @@ test('the policy panel is a table with one line per channel', async () => {
   expect(page.getByText('CH01 前门-左上 归档目标').query()).toBeNull()
   await expect.element(page.getByLabelText('CH01 前门-左上 归档目标')).toBeVisible()
 })
+
+// The reading order is what is configured first, then what is running, then the
+// per-channel table. The table is the longest block (one row per channel, 16+
+// rows); anything after it is buried below a screenful of dropdowns.
+test('the target list comes before the per-channel policy table', async () => {
+  const page = await setup({
+    targets: [{ id: 't1', name: 'Openlist', enabled: true, username: 'admin' }],
+    statuses: [{ target_id: 't1', verified: 1, uploading: 0, failed: 0 }],
+    channelStatus: [
+      {
+        channel_id: 'c1',
+        channel_no: 1,
+        name: '前门-左',
+        target_id: 't1',
+        target_name: 'Openlist',
+        target_enabled: true,
+        mode: 'manual',
+        segments: 2,
+        copied: 1,
+        failed: 0,
+        local_retention_hours: 48,
+      },
+    ],
+    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左' }],
+  })
+  await expect.element(page.getByTestId('archive-target-row')).toBeVisible()
+  const rows = page.getByTestId('archive-target-row').elements()
+  const overview = page.getByTestId('archive-channel-overview').element()
+  const policyTable = page.getByText('通道归档策略').element()
+  // Document order: target row -> running state -> policy table.
+  expect(rows[0].compareDocumentPosition(overview) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect(overview.compareDocumentPosition(policyTable) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+})

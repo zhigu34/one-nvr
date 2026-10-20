@@ -355,15 +355,10 @@ export function ArchiveTargets() {
           <CapabilityBadges caps={caps} state={testState} evidence={testEvidence} />
         </div>
       </form>
-      {admin && !!targets.data?.items.length && (
-        <PolicyTable
-          channels={channels.data?.items || []}
-          targets={targets.data?.items || []}
-          policies={policies.data?.items || []}
-          zone={site.data?.timezone || ''}
-        />
-      )}
-      <ChannelOverview items={channelStatus.data?.items || []} />
+      {/* Order is deliberate: what is already configured comes before adding
+          more, and the per-channel policy table comes last. The table is the
+          longest block on the page (one row per channel, 16+ rows), so putting
+          anything after it buries that content below a screenful of dropdowns. */}
       {!targets.data?.items.length && !targets.isPending ? (
         /* A compact empty state: the full Empty block is a 64px dashed box, and
            on a fresh install this is the normal state of the page. */
@@ -449,6 +444,19 @@ export function ArchiveTargets() {
             </div>
           ))}
         </div>
+      )}
+      {/* The longest block on the page sits last, after the target list, so
+          nothing useful is buried under 16 rows of dropdowns. Both are about
+          the same targets from different sides: this one asks "did it arrive",
+          the table asks "where does this channel go". */}
+      <ChannelOverview items={channelStatus.data?.items || []} />
+      {admin && !!targets.data?.items.length && (
+        <PolicyTable
+          channels={channels.data?.items || []}
+          targets={targets.data?.items || []}
+          policies={policies.data?.items || []}
+          zone={site.data?.timezone || ''}
+        />
       )}
       <ConfirmDialog
         open={!!deleting}
