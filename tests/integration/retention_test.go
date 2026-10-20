@@ -93,3 +93,55 @@ func TestMissingFileLeavesTheRetentionQueue(t *testing.T) {
 		t.Fatalf("the deletable segment behind the missing one was never reached: state=%q", presentState)
 	}
 }
+
+// A segment marked missing must be restored when its file comes back.
+//
+// 'missing' was a one-way verdict: the storage reconciler writes it when a stat
+// fails and every later pass selects only state='ready', so the row was never
+// examined again. A pool remounted, a permission fixed, a backup restored — the
+// files were all there while the index said they were gone: playback answered
+// recording_missing, usage skipped them, and no cleanup could reclaim them.
+func TestMissingSegmentIsRestoredWhenTheFileReturns(t *testing.T) {
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	segment := seedSegment(t, fixture, time.Now().UTC().Add(-time.Hour), time.Now().UTC().Add(-59*time.Minute))
+	path := "recordings/" + string(segment) + ".mp4"
+	target := filepath.Join(fixture.Pool.Path, path)
+
+	// The reconciler marked it missing while the file was away.
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE recording_segments SET state='missing',error_code='missing' WHERE id=$1`, segment); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_locations(segment_id,pool_id,relative_path,size_bytes,state)
+		VALUES($1,$2,$3,1024,'missing')`, segment, fixture.Pool.ID, path); err != nil {
+		t.Fatal(err)
+	}
+
+	// Still gone: the repair must leave it alone.
+	fixture.Service.RepairMissingSegments(ctx)
+	var state string
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state FROM recording_segments WHERE id=$1`, segment).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "missing" {
+		t.Fatalf("a segment with no file was restored to %q", state)
+	}
+
+	// The mount comes back and the file is there.
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("footage"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fixture.Service.RepairMissingSegments(ctx)
+
+	var segState, locState string
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT s.state,l.state FROM recording_segments s
+		JOIN recording_locations l ON l.segment_id=s.id WHERE s.id=$1`, segment).Scan(&segState, &locState); err != nil {
+		t.Fatal(err)
+	}
+	if segState != "ready" || locState != "ready" {
+		t.Fatalf("the file returned but the index still says segment=%q location=%q", segState, locState)
+	}
+}

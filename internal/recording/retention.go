@@ -6,7 +6,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/zhigu34/one-nvr/internal/id"
+	"github.com/zhigu34/one-nvr/internal/storage"
 )
 
 // RetentionSweepInterval is how often the worker looks for expired recordings.
@@ -66,6 +68,9 @@ func (s *Service) RunRetention(ctx context.Context) {
 		// The safety net for clips whose event ended while their job was already
 		// settled: nothing re-queues those, so without this they stay finalizing.
 		s.PublishSettledClips(ctx)
+		// A segment marked missing is re-examined here because no other pass looks
+		// at it: the reconciler only walks ready rows.
+		s.RepairMissingSegments(ctx)
 		// Archive-bound channels clean on their own shorter window, gated on a
 		// confirmed remote copy (ARC-05); the gate hook is injected by the
 		// assembly, so without it nothing happens.
@@ -428,5 +433,90 @@ func (s *Service) SweepHookInbox(ctx context.Context) {
 	}
 	if total > 0 {
 		slog.Info("hook inbox rows swept", "removed", total)
+	}
+}
+
+// RepairMissingSegments restores segments whose file came back.
+//
+// 'missing' was a one-way verdict. The storage reconciler writes it when a stat
+// fails, and every subsequent pass selects `state='ready'` — so the row was never
+// examined again. A pool remounted, a permission fixed, a backup restored: the files
+// were all there and the index went on saying they were gone. Playback answered
+// recording_missing, usage accounting skipped them, and no cleanup could reclaim
+// them either.
+//
+// Only the file's presence is checked. A 'damaged' row is NOT restored here: that
+// verdict says the file is present but is not the one that was published, which
+// needs a human decision rather than a retry.
+//
+// Bounded per call, and ordered newest-first: a recent disappearance is the one most
+// likely to be a transient mount problem, and an operator looking at today's footage
+// is the one who will notice.
+func (s *Service) RepairMissingSegments(ctx context.Context) {
+	if s.DB == nil || s.Pools == nil {
+		return
+	}
+	rows, err := s.DB.Pool.Query(ctx, `SELECT s.id,s.pool_id,l.relative_path
+		FROM recording_segments s
+		JOIN recording_locations l ON l.segment_id=s.id AND l.pool_id=s.pool_id
+		WHERE s.state='missing' AND l.state='missing'
+		ORDER BY s.end_at DESC LIMIT 50`)
+	if err != nil {
+		if ctx.Err() == nil {
+			slog.Warn("missing segment repair scan unavailable", "error", err)
+		}
+		return
+	}
+	type candidate struct {
+		Segment id.ID
+		Pool    id.ID
+		Path    string
+	}
+	var candidates []candidate
+	for rows.Next() {
+		var item candidate
+		if err := rows.Scan(&item.Segment, &item.Pool, &item.Path); err != nil {
+			rows.Close()
+			return
+		}
+		candidates = append(candidates, item)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return
+	}
+	restored := 0
+	for _, item := range candidates {
+		if ctx.Err() != nil {
+			return
+		}
+		root, _, err := s.Pools.OpenMediaRoot(ctx, item.Pool)
+		if err != nil {
+			// A pool that cannot be opened is not evidence the file returned.
+			continue
+		}
+		file, openErr := storage.OpenMediaFile(root, item.Path)
+		if openErr == nil {
+			file.Close()
+		}
+		root.Close()
+		if openErr != nil {
+			continue
+		}
+		if err := s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `UPDATE recording_segments SET state='ready',error_code=NULL
+				WHERE id=$1 AND state='missing'`, item.Segment); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `UPDATE recording_locations SET state='ready',verified_at=clock_timestamp()
+				WHERE segment_id=$1 AND state='missing'`, item.Segment)
+			return err
+		}); err != nil {
+			continue
+		}
+		restored++
+	}
+	if restored > 0 {
+		slog.Info("missing segments restored", "count", restored)
 	}
 }
