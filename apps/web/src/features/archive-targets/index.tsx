@@ -266,11 +266,15 @@ export function ArchiveTargets() {
                 className='rounded-r-none'
               />
               {/* WebDAV application passwords are long and easy to mistype; a
-                  reveal toggle is the difference between verifying and guessing. */}
+                  reveal toggle is the difference between verifying and guessing.
+
+                  size='icon' (h-9, matching Input) rather than 'sm' (h-8): the
+                  two are joined into one control by removing the facing borders,
+                  so a 4px height difference shows up as a step in the outline. */}
               <Button
                 type='button'
                 variant='outline'
-                size='sm'
+                size='icon'
                 aria-label={showPassword ? '隐藏密码' : '显示密码'}
                 aria-pressed={showPassword}
                 className='rounded-l-none border-l-0 px-2'

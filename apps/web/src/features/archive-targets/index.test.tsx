@@ -102,6 +102,23 @@ test('the form fields line up across the grid', async () => {
   expect(Math.max(...row2) - Math.min(...row2)).toBeLessThan(2)
 })
 
+test('the reveal button is flush with the password field it belongs to', async () => {
+  // The two are joined into one control by dropping the facing borders, so any
+  // height difference shows up as a step in the outline. size='sm' is h-8 while
+  // Input is h-9, which left the button 4px short and broke the join.
+  const page = await setup()
+  const input = page.getByLabelText('WebDAV 密码').element().getBoundingClientRect()
+  const button = page
+    .getByRole('button', { name: '显示密码' })
+    .element()
+    .getBoundingClientRect()
+  expect(Math.abs(button.height - input.height)).toBeLessThan(0.5)
+  expect(Math.abs(button.top - input.top)).toBeLessThan(0.5)
+  expect(Math.abs(button.bottom - input.bottom)).toBeLessThan(0.5)
+  // Flush, not overlapping or gapped: the step would also be visible as a seam.
+  expect(Math.abs(button.left - input.right)).toBeLessThan(1)
+})
+
 test('the password can be revealed to check a long token', async () => {
   const page = await setup()
   const field = page.getByLabelText('WebDAV 密码').element() as HTMLInputElement
