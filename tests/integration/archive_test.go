@@ -595,3 +595,54 @@ func TestBundledOpenListReportsPortAndHonestState(t *testing.T) {
 		t.Fatalf("an expired observation is unknown, not healthy: %+v", got)
 	}
 }
+
+// A segment whose local copy vanished must reach the cloud fallback, not stop at
+// "not published yet".
+//
+// OpenSegment answered ErrContentNotReady for every non-ready state. missing and
+// damaged are not that: the segment was published and its bytes are gone. Saying
+// "wait" meant the HTTP layer never asked the archive, so a recording with a
+// verified remote copy was unplayable as soon as the local file disappeared.
+func TestMissingLocalCopyReportsMissingNotNotReady(t *testing.T) {
+	fixture := newPublicationFixture(t)
+	ctx := context.Background()
+	dav := webdavTestServer(t, "archiver", "dav-secret")
+	archiveService := archive.New(fixture.DB, fixture.Auth, fixture.Site.Secrets, fixture.Service.Pools)
+	fixture.Service.Probe = probe.Runner{FFmpeg: mediaTestTool(t, "ffmpeg"), FFprobe: mediaTestTool(t, "ffprobe")}
+	segment, err := fixture.Service.Publish(ctx, fixture.Inbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := archiveService.RegisterTarget(ctx, fixture.Admin, archive.TargetInput{
+		Name: "主归档", BaseURL: dav.URL, RemoteRoot: "/one-nvr",
+		Username: "archiver", Password: "dav-secret", CloudRetentionDays: 365, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := archiveService.CreateUploads(ctx, fixture.Admin, target.ID, []id.ID{segment.ID}); err != nil {
+		t.Fatal(err)
+	}
+	runUploadJob(t, fixture, archiveService, ctx)
+
+	// The reconciler marks a vanished file 'missing'; simulate that verdict.
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE recording_segments SET state='missing' WHERE id=$1`, segment.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = fixture.Service.OpenSegment(ctx, fixture.Admin, segment.ID)
+	if !errors.Is(err, recording.ErrContentMissing) {
+		t.Fatalf("a missing local copy must read as missing, got %v", err)
+	}
+	// Which is what lets the HTTP layer serve the verified cloud copy.
+	if errors.Is(err, recording.ErrContentNotReady) {
+		t.Fatal("a missing copy must never read as not-yet-published")
+	}
+	// And the cloud copy is reachable for that segment.
+	cloud, cloudErr := archiveService.OpenCloudSegment(ctx, fixture.Admin, segment.ID)
+	if cloudErr != nil {
+		t.Fatalf("the verified cloud copy must open: %v", cloudErr)
+	}
+	if cloud.Size != segment.Bytes {
+		t.Fatalf("cloud size %d must match the published %d", cloud.Size, segment.Bytes)
+	}
+}

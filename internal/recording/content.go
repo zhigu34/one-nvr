@@ -122,7 +122,19 @@ func (s *Service) OpenSegment(ctx context.Context, p auth.Principal, recordingID
 		// playable; without one the answer is 404 as before.
 		return nil, ErrContentDeleted
 	}
-	if found.State != "ready" {
+	// missing and damaged are distinct verdicts, not "not published yet": the
+	// segment WAS published and its bytes are gone or unverified. Collapsing them
+	// into ErrContentNotReady told the HTTP layer "wait for it", so a verified
+	// cloud copy was never offered and a recording with a healthy remote replica
+	// became unplayable the moment the local file disappeared.
+	switch found.State {
+	case "missing":
+		return nil, ErrContentMissing
+	case "damaged":
+		return nil, ErrContentDamaged
+	case "ready":
+		// Fall through to the file checks below.
+	default:
 		return nil, ErrContentNotReady
 	}
 	root, _, err := s.Pools.OpenMediaRoot(ctx, found.PoolID)

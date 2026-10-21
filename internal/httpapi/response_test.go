@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/zhigu34/one-nvr/internal/archive"
+	"github.com/zhigu34/one-nvr/internal/fault"
 )
 
 // A request the browser abandoned is not a server fault.
@@ -83,4 +84,28 @@ func containsCode(body, code string) bool {
 		}
 		return false
 	})()
+}
+
+// A published segment whose local copy is gone must be offered to the cloud, not
+// reported as "not published yet".
+//
+// OpenSegment used to answer ErrContentNotReady for every state that was not
+// ready. That message means "wait", so the HTTP layer never consulted the
+// archive, and a recording with a healthy remote replica became unplayable the
+// moment its local file disappeared — which is exactly the case ARC-04 exists to
+// cover.
+func TestLostLocalCopyFallsBackToCloud(t *testing.T) {
+	for _, code := range []string{"recording_missing", "recording_damaged", "recording_deleted", "pool_unavailable"} {
+		t.Run(code, func(t *testing.T) {
+			err := fault.New(409, code, "x")
+			if !localFailureSupportsCloud(err) {
+				t.Fatalf("%s must fall back to the verified cloud copy", code)
+			}
+		})
+	}
+	// And "not published yet" must NOT: there is no copy to serve, and asking the
+	// archive would just delay the honest answer.
+	if localFailureSupportsCloud(fault.New(409, "recording_not_ready", "x")) {
+		t.Fatal("a segment that is not published must not consult the archive")
+	}
 }
