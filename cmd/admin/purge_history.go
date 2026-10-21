@@ -349,8 +349,16 @@ func purgeLocalSegments(ctx context.Context, db *database.DB, service *recording
 				// unlink, and the row goes with the rest of the index below.
 				deleted++
 			default:
-				refused[outcome.Reason]++
-				fmt.Printf("local kept %s: %s\n", outcome.SegmentID, outcome.Reason)
+				// The core reports "not_ready" as the STATE and the row's own state
+				// ("finalizing") as the reason. Key the histogram on the verdict, not
+				// the reason, so the caller can tell "unfinished recording" from
+				// "somebody is reading this file" — the two need opposite responses.
+				key := outcome.Reason
+				if outcome.State == "not_ready" {
+					key = "not_ready"
+				}
+				refused[key]++
+				fmt.Printf("local kept %s: %s (%s)\n", outcome.SegmentID, outcome.State, outcome.Reason)
 			}
 		}
 	}
