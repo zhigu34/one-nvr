@@ -155,3 +155,29 @@ func (s *Service) expireCopy(ctx context.Context, segmentID id.ID) {
 		slog.Warn("archive copy reconcile unavailable", "error", err)
 	}
 }
+
+// RemoveObject deletes one remote object by key.
+//
+// It exists for the history purge, which has copy rows but no acting user and no
+// playback context: deleting a cloud object is not a playback operation, and
+// routing it through the playback path would require inventing a principal.
+//
+// The credential is opened here rather than by the caller because the sealed
+// password is the one thing a shell script cannot reproduce. A target that is
+// disabled is still usable for deletion: disabling stops new uploads, and a
+// disabled target whose objects cannot be removed is a leak the operator has no
+// way to close.
+//
+// The returned bool reports whether the object is gone afterwards, counting
+// "was never there" as gone — the desired state is "no object at this key".
+func (s *Service) RemoveObject(ctx context.Context, targetID id.ID, key string) (bool, error) {
+	client, err := s.clientFor(ctx, targetID, nil)
+	if err != nil {
+		return false, err
+	}
+	deleted, err := client.Delete(ctx, key)
+	if err != nil {
+		return false, err
+	}
+	return deleted, nil
+}
