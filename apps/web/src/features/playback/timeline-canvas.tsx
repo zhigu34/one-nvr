@@ -5,7 +5,6 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
-  type WheelEvent as ReactWheelEvent,
 } from 'react'
 import { useTheme } from '@/context/theme-provider'
 import { formatClock } from './zone'
@@ -514,17 +513,36 @@ export function TimelineCanvas({
     else onSeek(snapToPlayable(timeline, hit.at).at)
   }
 
-  const onWheelZoom = (event: ReactWheelEvent<HTMLDivElement>) => {
-    if (disabled) return
-    event.preventDefault()
-    const hit = pointerAt(event)
-    if (!hit) return
-    if (event.shiftKey) {
-      onMoveView(hit.at + (event.deltaY > 0 ? 1 : -1) * span * 0.25)
-    } else {
-      onZoomAt(hit.at, event.deltaY > 0 ? 1.4 : 1 / 1.4)
+  // Wheel zoom is bound natively, not through React's onWheel.
+  //
+  // React registers wheel listeners as PASSIVE at the root, so a
+  // `preventDefault()` inside an onWheel handler does nothing but log
+  // "Unable to preventDefault inside passive event listener invocation" — the
+  // page keeps scrolling underneath the zoom. Binding here with
+  // `{ passive: false }` is what makes the zoom actually hold the viewport.
+  //
+  // The listener is re-attached whenever what it computes from changes, rather
+  // than reading props through a ref (writing a ref during render is what the
+  // react-hooks lint forbids, and for good reason: it makes the handler's
+  // inputs invisible). Re-attaching a single listener costs nothing next to a
+  // render, and `pointerAt` is recreated every render anyway.
+  useEffect(() => {
+    const element = wrapRef.current
+    if (!element) return
+    const listener = (event: WheelEvent) => {
+      if (disabled) return
+      event.preventDefault()
+      const hit = pointerAt(event)
+      if (!hit) return
+      if (event.shiftKey) {
+        onMoveView(hit.at + (event.deltaY > 0 ? 1 : -1) * span * 0.25)
+      } else {
+        onZoomAt(hit.at, event.deltaY > 0 ? 1.4 : 1 / 1.4)
+      }
     }
-  }
+    element.addEventListener('wheel', listener, { passive: false })
+    return () => element.removeEventListener('wheel', listener)
+  })
 
   const bracketPx =
     bracket && bracket.end > bracket.start && span > 0
@@ -551,7 +569,6 @@ export function TimelineCanvas({
         setScrubbing(false)
       }}
       onDoubleClick={onDoubleClick}
-      onWheel={onWheelZoom}
     >
       <canvas
         ref={canvasRef}

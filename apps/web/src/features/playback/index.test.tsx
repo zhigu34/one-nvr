@@ -326,6 +326,47 @@ test('a single click only selects a segment, a double click plays it', async () 
   await playing(A)
 })
 
+// The wheel listener must be registered non-passive, or its preventDefault() is
+// ignored and the page scrolls under the zoom. React's onWheel is passive at the
+// root, so the only way to catch a regression is to assert the registration
+// options of the native listener the canvas installs.
+//
+// Asserting "defaultPrevented" is not enough: passive defaults to false on an
+// element, so a missing option still lets a synthetic event cancel. The option
+// is the thing that differs when the handler moves back to JSX.
+test('wheel zoom is registered non-passive so it can hold the viewport', async () => {
+  const seen: (AddEventListenerOptions | boolean | undefined)[] = []
+  const proto = HTMLElement.prototype
+  const original = proto.addEventListener
+  proto.addEventListener = function (
+    this: HTMLElement,
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: AddEventListenerOptions | boolean
+  ) {
+    // Only options objects are ours: React's delegated listeners pass a boolean
+    // or nothing, and its wheel registration is passive at the root.
+    if (type === 'wheel' && typeof options === 'object') seen.push(options)
+    return original.call(this, type, listener, options)
+  } as typeof proto.addEventListener
+  try {
+    const { view } = await fixture([segment(A, 0, 120)])
+    await expect
+      .element(view.getByTestId('playback-timeline-canvas'))
+      .toBeVisible()
+  } finally {
+    proto.addEventListener = original
+  }
+  // React's internals also register wheel listeners with an options object, so
+  // the assertion is that the canvas's non-passive registration is among them.
+  // Without the explicit option the canvas would produce none, which is exactly
+  // the regression this pins (and how it read before the fix).
+  const nonPassive = seen.filter(
+    (options) => (options as AddEventListenerOptions).passive === false
+  )
+  expect(nonPassive.length).toBeGreaterThan(0)
+})
+
 test('a hole is reported with its bounds and can be crossed only on request', async () => {
   const { view } = await fixture([segment(A, 0, 10), segment(B, 120, 130)])
   // Auto-park lands on the newest segment (B); select A explicitly, then the
