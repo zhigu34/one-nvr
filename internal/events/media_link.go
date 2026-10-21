@@ -304,8 +304,16 @@ func (s *Service) queueClipJob(ctx context.Context, tx pgx.Tx, eventID, channelI
 		}
 	}
 
-	// The newest window on this channel that has not closed yet, locked so two
-	// detections a moment apart extend one window instead of each creating one.
+	// Serialise attach per channel before looking for an open window. A row lock
+	// cannot do this job: on a channel whose last window has closed there is no row
+	// to lock, so two detections arriving within the same instant both find nothing
+	// and both INSERT. Measured on the live site on the first day of this model:
+	// two windows sharing a window_start, one carrying five anchors and one
+	// carrying none — the same seconds of footage cut into two files.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('clip_window:' || $1::text, 170022))`, channelID); err != nil {
+		return err
+	}
+	// The newest window on this channel that has not closed yet.
 	var windowID id.ID
 	var currentEnd time.Time
 	err := tx.QueryRow(ctx, `SELECT id, window_end FROM clip_windows

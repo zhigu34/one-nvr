@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -483,6 +484,61 @@ func TestTwoDetectionsOnOneVisitShareARecording(t *testing.T) {
 	}
 	if !covers {
 		t.Fatal("the recording did not extend to the second event's end plus the trail")
+	}
+}
+
+// Two detections that arrive at the same instant share one recording.
+//
+// A row lock cannot make this safe: on a channel whose last window has closed
+// there is no row to lock, so both transactions see no open window and both
+// INSERT. Measured on the live site on the first day of this model — two windows
+// sharing a window_start, one with five anchors and one with none, the same
+// seconds of footage cut into two files. The fix is a per-channel advisory lock;
+// without it this test sees two windows.
+func TestSimultaneousDetectionsShareOneRecording(t *testing.T) {
+	fixture, service := newEventsFixture(t)
+	ctx := context.Background()
+	if err := service.SetMappings(ctx, fixture.Admin, map[id.ID]string{fixture.Channel: "front-door"}); err != nil {
+		t.Fatal(err)
+	}
+	markBuffering(t, fixture)
+
+	// Both start at the same instant, which is what makes them race: neither can
+	// see the other's uncommitted window row.
+	start := time.Now().UTC().Add(-4 * time.Second).Truncate(time.Second)
+	end := start.Add(2 * time.Second)
+	payloads := make([][]byte, 0, 4)
+	for _, sourceID := range []string{"evt-race-a", "evt-race-b"} {
+		endUnix := float64(end.Unix())
+		payloads = append(payloads,
+			frigatePayload("new", sourceID, "front-door", "person", float64(start.Unix()), &endUnix, nil, false))
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, len(payloads))
+	for _, payload := range payloads {
+		wg.Add(1)
+		go func(body []byte) {
+			defer wg.Done()
+			errs <- service.Ingest(ctx, body)
+		}(payload)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var windows int
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM clip_windows WHERE channel_id=$1`, fixture.Channel).Scan(&windows); err != nil {
+		t.Fatal(err)
+	}
+	if windows != 1 {
+		var detail string
+		_ = fixture.DB.Pool.QueryRow(ctx, `SELECT string_agg(window_start::text||' .. '||window_end::text, ' | ' ORDER BY window_start)
+			FROM clip_windows WHERE channel_id=$1`, fixture.Channel).Scan(&detail)
+		t.Fatalf("two simultaneous detections produced %d recordings, want 1; windows: %s", windows, detail)
 	}
 }
 

@@ -76,6 +76,7 @@ CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真�
   - **`PublishSettledClips` 的条件也换了**：现在要求窗口已过关闭时刻且同通道没有别的开放窗口。`SweepEventClipJobs` 也改成回收 `clip_windows`（`finalizing` 超过租期 → `open`），因为装配状态已经搬家；只扫 job 表会让被放弃的窗口永远卡在 `finalizing`。
   - **测试**：`TestOneActivityStretchProducesOneClip`（一段活动 → 1 个片段）、`TestEventsFarApartStaySeparateClips`（相隔较远 → 2 个窗口）。**这两条走的是 `recording.AttachEvent`，而 worker 实际不调用它** —— 生产路径是 `events.queueClipJob`（因为 events 不能 import recording，同一规则写了第二遍 SQL）。所以另加 `TestTwoDetectionsOnOneVisitShareARecording` / `TestDetectionsFarApartStaySeparateRecordings` 走真实的 `Ingest`；**已验证把延长分支关掉会让前者从 1 个窗口变成 4 个**。
   - **时间基准必须在「现在附近」**：放在过去会让窗口一建立就过期，测的就是另一个分支（这个坑我踩过三次）。另外回放旧事件时，运行中事件的关闭时刻是 `now + 后置`，所以两个相隔一分钟的旧事件会在同一秒被延长到一起——这类测试要直接把 `end_time` 带在 `new` 消息里。
+  - **`FOR UPDATE` 锁不住「还不存在的行」**（部署当天现场就踩到，`0d8a3c1`）：同一通道两个事件在同一瞬间到达时，两笔事务都查不到开放窗口——**因为此刻真的没有**——于是各自 `INSERT`。现场后果是 CH03 出现两个 `window_start` 完全相同的窗口，一个挂 5 个锚点、一个挂 0 个，**同一段画面被切成两个文件**（这正是本次要消灭的现象，只是从另一扇门进来）。修法是每通道的**事务级 advisory lock**（`pg_advisory_xact_lock(hashtextextended('clip_window:'||channel_id))`），**两条路径都要加**（`recording.AttachEvent` 与生产实际走的 `events.queueClipJob`）。`TestSimultaneousDetectionsShareOneRecording` 并发跑两个 `Ingest`，**已验证去掉锁时 5 次里 3 次复现两个窗口**。
   - **未做**：不合并两个已发布的片段（重写已发布文件在这个项目里已经出过五层损坏事故）。
 
 

@@ -74,9 +74,17 @@ func (s *Service) AttachEvent(ctx context.Context, channelID, eventID id.ID, sta
 	var windowID id.ID
 	extended := false
 	err := s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
-		// The newest window that has not closed yet. `FOR UPDATE` because two
-		// detections a moment apart must extend the same window rather than each
-		// read the same row and create two.
+		// Serialise attach per channel. `FOR UPDATE` below cannot do it: it locks
+		// rows that exist, and the whole point of this query is that on a quiet
+		// channel there is no row yet. Two detections arriving together therefore
+		// both found nothing and both INSERTed — measured on the live site as two
+		// windows with the same window_start, one carrying the anchors and one
+		// carrying none, so the same second of footage was cut into two files.
+		if err := lockChannelClipWindow(ctx, tx, channelID); err != nil {
+			return err
+		}
+		// The newest window that has not closed yet. Locked so a concurrent
+		// extension of the same row waits rather than reading a stale close.
 		var currentEnd time.Time
 		err := tx.QueryRow(ctx, `SELECT id, window_end FROM clip_windows
 			WHERE channel_id=$1 AND state IN ('open','finalizing')
@@ -133,5 +141,21 @@ func (s *Service) AttachEvent(ctx context.Context, channelID, eventID id.ID, sta
 // stored event). It returns the window the event landed in.
 func (s *Service) QueueClipWindow(ctx context.Context, eventID, channelID id.ID, startedAt time.Time, endedAt *time.Time) error {
 	_, _, err := s.AttachEvent(ctx, channelID, eventID, startedAt, endedAt)
+	return err
+}
+
+// lockChannelClipWindow takes the per-channel advisory lock that makes
+// "create the window if none is open" safe under concurrency.
+//
+// A plain row lock cannot express this: on a channel whose last window has
+// closed there is no row to lock, so two detections arriving within the same
+// instant both see nothing and both create a window. That happened on the live
+// site on the first day — two windows sharing a window_start, one with five
+// anchors and one with none, the same seconds of footage cut into two files.
+//
+// The key is derived from the channel id so every path that creates a window for
+// this channel serialises on the same value.
+func lockChannelClipWindow(ctx context.Context, tx pgx.Tx, channelID id.ID) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('clip_window:' || $1::text, 170022))`, channelID)
 	return err
 }
