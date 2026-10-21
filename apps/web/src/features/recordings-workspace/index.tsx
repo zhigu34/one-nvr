@@ -189,6 +189,10 @@ export function RecordingsWorkspace({
           active
           onRangeChange={setActiveRange}
           onActiveEntryChange={setActiveSegmentId}
+          // The recording mode decides what an empty stretch means, so the
+          // timeline can say "between events" instead of calling it a gap.
+          recordingMode={summariesMap.get(activeChannel?.id ?? '')?.recording_mode}
+          eventRecording={summariesMap.get(activeChannel?.id ?? '')?.event_recording_enabled}
           playSignal={playSignal}
           toolbar={{
             filesOpen: rightOpen,

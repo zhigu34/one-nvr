@@ -121,6 +121,8 @@ export function Playback({
   layout,
   onRangeChange,
   onActiveEntryChange,
+  recordingMode,
+  eventRecording,
   playSignal,
   toolbar,
 }: {
@@ -150,6 +152,19 @@ export function Playback({
   onRangeChange?: (range: { start: number; end: number }) => void
   // Reports the segment the player currently sits on (parked or playing).
   onActiveEntryChange?: (segmentId: string) => void
+  /**
+   * How this channel records. It decides what an empty stretch MEANS, which is
+   * the one thing the gap count cannot say by itself:
+   *
+   *   continuous — every second should have footage; empty time is a fault.
+   *   none/planned — footage exists only where a detection fired; the empty
+   *                  time between events is expected, not a dropout.
+   *
+   * Absent (the standalone page) means unknown, and the wording then stays
+   * neutral rather than claiming either.
+   */
+  recordingMode?: 'none' | 'continuous' | 'planned'
+  eventRecording?: boolean
   // A play request from the file list; seq disambiguates repeats.
   playSignal?: { id: string; seq: number } | null
   // Toolbar controls for the search row: the shell owns the file drawer and
@@ -215,6 +230,8 @@ export function Playback({
           layout={layout}
           onRangeChange={onRangeChange}
           onActiveEntryChange={onActiveEntryChange}
+          recordingMode={recordingMode}
+          eventRecording={eventRecording}
           playSignal={playSignal}
           toolbar={toolbar}
         />
@@ -397,6 +414,8 @@ function Workspace({
   layout,
   onRangeChange,
   onActiveEntryChange,
+  recordingMode,
+  eventRecording,
   playSignal,
   toolbar,
 }: {
@@ -417,6 +436,19 @@ function Workspace({
       }
   onRangeChange?: (range: { start: number; end: number }) => void
   onActiveEntryChange?: (segmentId: string) => void
+  /**
+   * How this channel records. It decides what an empty stretch MEANS, which is
+   * the one thing the gap count cannot say by itself:
+   *
+   *   continuous — every second should have footage; empty time is a fault.
+   *   none/planned — footage exists only where a detection fired; the empty
+   *                  time between events is expected, not a dropout.
+   *
+   * Absent (the standalone page) means unknown, and the wording then stays
+   * neutral rather than claiming either.
+   */
+  recordingMode?: 'none' | 'continuous' | 'planned'
+  eventRecording?: boolean
   playSignal?: { id: string; seq: number } | null
   toolbar?: {
     filesOpen: boolean
@@ -515,6 +547,39 @@ function Workspace({
     () => sliceView(timeline, viewBounds.start, viewBounds.end),
     [timeline, viewBounds]
   )
+  // What the empty stretches mean depends on how the channel records, so the
+  // sentence is built from the mode rather than guessed:
+  //
+  //   continuous — every second should be recorded; empty time is a dropout.
+  //   otherwise  — footage exists only where a detection fired; the gaps are
+  //                the intervals between events, which is the normal shape of
+  //                event-only recording.
+  const { coveredLabel, gapNote } = useMemo(() => {
+    const coveredMs = timeline.entries.reduce((sum, entry) => sum + (entry.end - entry.start), 0)
+    // Hours and minutes, because "51:12" reads as a clock next to the other
+    // time labels on this row; the point is how much footage exists, not when.
+    const totalMinutes = Math.round(coveredMs / 60000)
+    const covered =
+      totalMinutes >= 60
+        ? `${Math.floor(totalMinutes / 60)} 小时 ${totalMinutes % 60} 分`
+        : totalMinutes >= 1
+          ? `${totalMinutes} 分钟`
+          : `${Math.round(coveredMs / 1000)} 秒`
+    if (!timeline.gaps.length) return { coveredLabel: covered, gapNote: '' }
+    if (recordingMode === 'continuous') {
+      return { coveredLabel: covered, gapNote: `${timeline.gaps.length} 处中断，未录到画面` }
+    }
+    if (recordingMode === 'none' || recordingMode === 'planned') {
+      return {
+        coveredLabel: covered,
+        gapNote: eventRecording
+          ? `${timeline.gaps.length} 段事件之间的空档（未开启连续录像）`
+          : `${timeline.gaps.length} 段空档（该通道未开启录像）`,
+      }
+    }
+    // Unknown mode: state the observable fact and stop there.
+    return { coveredLabel: covered, gapNote: `${timeline.gaps.length} 段空档` }
+  }, [timeline.entries, timeline.gaps, recordingMode, eventRecording])
   // Wheel zoom anchored at the pointer: the millisecond under the cursor
   // stays under it, the way every map and NVR timeline zooms.
   function zoomAt(anchor: number, factor: number) {
@@ -929,29 +994,27 @@ function Workspace({
       <div className='flex items-center justify-between gap-3 text-[11px] tabular-nums text-video-chrome-foreground/50'>
         {timeline.entries.length > 0 ? (
           <span data-testid='playback-timeline-density' className='flex flex-wrap items-center gap-x-1.5'>
-            {/* "密度" and "缺口" were two numbers with no stated relationship,
-                and the gap count was coloured red with "看故障" — which reads as
-                "recording is failing". On a channel with recording switched off
-                the gaps are expected: no recording was ever asked for, so the
-                empty time is not a fault. The labels now say what each number
-                counts and what a gap means. */}
+            {/* Three facts, because the count alone was read as a verdict:
+                how many segments, how much time they actually cover, and what
+                the empty time in between is. "153 段" sounds like plenty until
+                you multiply by twenty seconds — it is 51 minutes of footage in
+                a two-hour window, which is what sparse event recording looks
+                like, not a failure. */}
             <span>
-              本时段有 <b className='font-medium text-video-chrome-foreground'>{timeline.entries.length}</b> 段录像
+              本时段 <b className='font-medium text-video-chrome-foreground'>{timeline.entries.length}</b> 段
+              <span className='text-video-chrome-foreground/70'> · 累计 {coveredLabel}</span>
             </span>
             {timeline.gaps.length > 0 && (
-              <span className='text-video-chrome-foreground/70'>
-                · {timeline.gaps.length} 处没有录像
+              <span className='text-video-chrome-foreground/70' data-testid='playback-gap-note'>
+                · {gapNote}
               </span>
             )}
-            {/* The answer lives on the recording plan page, where the mode is
-                set — not on the reliability tab, which explains dropouts of a
-                recording that was supposed to happen. */}
             <Link
               to='/recording-plan'
               className='text-video-chrome-foreground/60 underline-offset-2 hover:text-video-chrome-foreground hover:underline'
-              title='看该通道的录像模式：模式为「关闭录像」时只有事件触发才产生片段，其余时间本来就没有录像'
+              title='看该通道的录像模式：连续录像时每一秒都该有画面；关闭录像时只有检测到事件才录，事件之间本来就没有画面'
             >
-              为什么没有录像？
+              查看录像模式
             </Link>
           </span>
         ) : (

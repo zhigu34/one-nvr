@@ -271,7 +271,7 @@ test('the index follows the cursor until the window is exhausted', async () => {
   await expect
     .element(view.getByTestId('playback-timeline-canvas'))
     .toBeVisible()
-  await says('本时段有 2 段录像')
+  await says('本时段 2 段')
   expect(document.body.textContent).not.toContain('加载上限')
   expect(recordingCalls()).toHaveLength(2)
 })
@@ -441,7 +441,7 @@ test('the timeline band exposes the canvas strip and a density read', async () =
   await view.getByRole('button', { name: '检索录像' }).click()
   await expect.element(view.getByTestId('playback-timeline-density')).toBeVisible()
   await expect
-    .element(view.getByText(/本时段有 \d+ 段录像/))
+    .element(view.getByText(/本时段 \d+ 段/))
     .toBeVisible()
 })
 
@@ -535,9 +535,9 @@ test('the timeline says what the gap count means instead of calling it a fault',
   const { view } = await fixture([segment(A, 0, 120)])
   await expect.element(view.getByTestId('playback-timeline-density')).toBeVisible()
   const bar = view.getByTestId('playback-timeline-density')
-  await expect.element(bar).toHaveTextContent(/本时段有 \d+ 段录像/)
+  await expect.element(bar).toHaveTextContent(/本时段 \d+ 段/)
   // No "看故障": empty time on a channel that records only events is expected.
   expect(bar.element().textContent).not.toContain('看故障')
   // And the explanation is one click away, pointing at the recording mode.
-  await expect.element(bar.getByRole('link', { name: '为什么没有录像？' })).toBeVisible()
+  await expect.element(bar.getByRole('link', { name: '查看录像模式' })).toBeVisible()
 })
