@@ -316,6 +316,35 @@ func TestConcurrentCollectionCreationIsNotAFailure(t *testing.T) {
 	}
 }
 
+// 409 means the same thing as 423 when uploads race: "the parent I needed was
+// not there a moment ago". OpenList answers 409 on some of these races and 423 on
+// others; both are settled by asking whether the collection exists.
+func TestConflictOnCollectionCreationIsSettledByExistence(t *testing.T) {
+	var propfinded bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "MKCOL":
+			w.WriteHeader(http.StatusConflict)
+		case "PROPFIND":
+			propfinded = true
+			w.WriteHeader(207)
+		case http.MethodPut:
+			io.Copy(io.Discard, r.Body)
+			w.WriteHeader(http.StatusCreated)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+	client, _ := NewClient(server.URL, "/nvr", "user", "pass")
+	if err := client.Put(context.Background(), "a/b/file.mp4", bytes.NewReader([]byte("hi")), 2); err != nil {
+		t.Fatalf("a 409 whose collection exists must not fail the upload: %v", err)
+	}
+	if !propfinded {
+		t.Fatal("the client must confirm the collection exists before failing")
+	}
+}
+
 // A 423 whose collection does NOT exist is a real failure: something holds a
 // lock the client cannot satisfy.
 func TestLockedCollectionThatIsMissingStillFails(t *testing.T) {

@@ -380,25 +380,30 @@ func (c *Client) ensureCollection(ctx context.Context, collection string) error 
 		// concurrently, so every collection deep enough to be shared will hit
 		// it. The collection is not the goal — having it exist is — so confirm
 		// that and move on.
-		if response.StatusCode == http.StatusLocked {
+		// 405 means it already exists; both are fine.
+		if response.StatusCode/100 == 2 || response.StatusCode == http.StatusMethodNotAllowed {
+			continue
+		}
+		// Any other refusal may still mean "it is already there": concurrent
+		// uploads race on the same date directory, and servers answer the losers
+		// with 423 (Locked), 409 (Conflict) or 405 depending on version and
+		// timing. Confirm before calling it a failure — the collection is not the
+		// goal, having it exist is.
+		if response.StatusCode == http.StatusLocked || response.StatusCode == http.StatusConflict {
 			if c.collectionExists(ctx, path) {
 				continue
 			}
-			return statusError("create-collection", response.StatusCode)
 		}
-		// 405 means it already exists; both are fine.
-		if response.StatusCode/100 != 2 && response.StatusCode != http.StatusMethodNotAllowed {
-			// Keep the server's own words: for a 403 that sentence is usually the
-			// only thing that distinguishes "this mount is read-only" from "this
-			// path is not writable by that account".
-			body, _ := io.ReadAll(io.LimitReader(response.Body, 512))
-			err := statusError("create-collection", response.StatusCode)
-			var probe *probeError
-			if errors.As(err, &probe) {
-				probe.Detail += " · " + traceRequest("MKCOL", c.URL(path), response.StatusCode, body)
-			}
-			return err
+		// Still refused: keep the server's own words, because for a 403 that
+		// sentence is usually the only thing that distinguishes "this mount is
+		// read-only" from "this path is not writable by that account".
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 512))
+		failure := statusError("create-collection", response.StatusCode)
+		var probe *probeError
+		if errors.As(failure, &probe) {
+			probe.Detail += " · " + traceRequest("MKCOL", c.URL(path), response.StatusCode, body)
 		}
+		return failure
 	}
 	return nil
 }
