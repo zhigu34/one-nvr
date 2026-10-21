@@ -313,16 +313,29 @@ func (s *Service) queueClipJob(ctx context.Context, tx pgx.Tx, eventID, channelI
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('clip_window:' || $1::text, 170022))`, channelID); err != nil {
 		return err
 	}
-	// The newest window on this channel that has not closed yet.
+	// The newest window on this channel that has not closed yet, plus whether a
+	// still-running event is anchored on it.
 	var windowID id.ID
 	var currentEnd time.Time
-	err := tx.QueryRow(ctx, `SELECT id, window_end FROM clip_windows
-		WHERE channel_id=$1 AND state IN ('open','finalizing')
-		ORDER BY window_end DESC, id LIMIT 1 FOR UPDATE`, channelID).Scan(&windowID, &currentEnd)
+	var hasRunning bool
+	err := tx.QueryRow(ctx, `SELECT w.id, w.window_end,
+			EXISTS(SELECT 1 FROM event_clip_jobs j JOIN events e ON e.id=j.event_id
+			       WHERE j.window_id=w.id AND e.ended_at IS NULL)
+		FROM clip_windows w
+		WHERE w.channel_id=$1 AND w.state IN ('open','finalizing')
+		ORDER BY w.window_end DESC, w.id LIMIT 1 FOR UPDATE`, channelID).Scan(&windowID, &currentEnd, &hasRunning)
 	switch {
-	case err == nil && currentEnd.After(time.Now().UTC()):
-		// Still inside its countdown: extend. window_start never moves — the head
-		// of this recording is what was already recorded.
+	case err == nil && (currentEnd.After(time.Now().UTC()) || hasRunning):
+		// Extend: still counting down, or an event on it is still RUNNING. The
+		// second reason matters because a detector reporting a long event every few
+		// dozen seconds outlives a ten-second trail between messages; the window then
+		// expired, was published, and the next message minted a new one with the same
+		// window_start — measured on the live site as seven files for one five-minute
+		// event, one per minute. A running event means the recording is still being
+		// made; the trail applies once it ends.
+		//
+		// window_start never moves: the head of this recording is what was already
+		// recorded.
 		if _, err := tx.Exec(ctx, `UPDATE clip_windows
 			SET window_end=GREATEST(window_end,$2), state='open', updated_at=clock_timestamp()
 			WHERE id=$1`, windowID, closeAt.UTC()); err != nil {

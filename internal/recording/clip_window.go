@@ -83,16 +83,33 @@ func (s *Service) AttachEvent(ctx context.Context, channelID, eventID id.ID, sta
 		if err := lockChannelClipWindow(ctx, tx, channelID); err != nil {
 			return err
 		}
-		// The newest window that has not closed yet. Locked so a concurrent
-		// extension of the same row waits rather than reading a stale close.
+		// The newest window on this channel that has not closed yet, plus whether a
+		// still-running event is anchored on it. Both are needed to decide
+		// "extend or create", and that decision is the whole rule.
 		var currentEnd time.Time
-		err := tx.QueryRow(ctx, `SELECT id, window_end FROM clip_windows
-			WHERE channel_id=$1 AND state IN ('open','finalizing')
-			ORDER BY window_end DESC, id LIMIT 1 FOR UPDATE`, channelID).Scan(&windowID, &currentEnd)
+		var hasRunning bool
+		err := tx.QueryRow(ctx, `SELECT w.id, w.window_end,
+				EXISTS(SELECT 1 FROM event_clip_jobs j JOIN events e ON e.id=j.event_id
+				       WHERE j.window_id=w.id AND e.ended_at IS NULL)
+			FROM clip_windows w
+			WHERE w.channel_id=$1 AND w.state IN ('open','finalizing')
+			ORDER BY w.window_end DESC, w.id LIMIT 1 FOR UPDATE`, channelID).Scan(&windowID, &currentEnd, &hasRunning)
 		switch {
-		case err == nil && currentEnd.After(time.Now().UTC()):
-			// Still inside its countdown: extend it. window_start never moves —
-			// the head of this recording is whatever was already recorded.
+		case err == nil && (currentEnd.After(time.Now().UTC()) || hasRunning):
+			// Extend. Two reasons qualify:
+			//
+			//   - the window is still inside its countdown, or
+			//   - an event on it is still RUNNING. The countdown is a projection of
+			//     "quiet for trail", and a detector that reports a long event every
+			//     few dozen seconds exceeds a ten-second trail between messages. The
+			//     window then expired, got published, and the next message created a
+			//     new one with the same window_start — measured on the live site as
+			//     seven files for one five-minute event, one per minute. A running
+			//     event means the recording is still being made; the trail only
+			//     applies once it ends.
+			//
+			// window_start never moves: the head of this recording is whatever was
+			// already recorded.
 			if _, err := tx.Exec(ctx, `UPDATE clip_windows
 				SET window_end=GREATEST(window_end,$2), state='open', updated_at=clock_timestamp()
 				WHERE id=$1`, windowID, closeAt.UTC()); err != nil {

@@ -77,6 +77,7 @@ CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真�
   - **测试**：`TestOneActivityStretchProducesOneClip`（一段活动 → 1 个片段）、`TestEventsFarApartStaySeparateClips`（相隔较远 → 2 个窗口）。**这两条走的是 `recording.AttachEvent`，而 worker 实际不调用它** —— 生产路径是 `events.queueClipJob`（因为 events 不能 import recording，同一规则写了第二遍 SQL）。所以另加 `TestTwoDetectionsOnOneVisitShareARecording` / `TestDetectionsFarApartStaySeparateRecordings` 走真实的 `Ingest`；**已验证把延长分支关掉会让前者从 1 个窗口变成 4 个**。
   - **时间基准必须在「现在附近」**：放在过去会让窗口一建立就过期，测的就是另一个分支（这个坑我踩过三次）。另外回放旧事件时，运行中事件的关闭时刻是 `now + 后置`，所以两个相隔一分钟的旧事件会在同一秒被延长到一起——这类测试要直接把 `end_time` 带在 `new` 消息里。
   - **`FOR UPDATE` 锁不住「还不存在的行」**（部署当天现场就踩到，`0d8a3c1`）：同一通道两个事件在同一瞬间到达时，两笔事务都查不到开放窗口——**因为此刻真的没有**——于是各自 `INSERT`。现场后果是 CH03 出现两个 `window_start` 完全相同的窗口，一个挂 5 个锚点、一个挂 0 个，**同一段画面被切成两个文件**（这正是本次要消灭的现象，只是从另一扇门进来）。修法是每通道的**事务级 advisory lock**（`pg_advisory_xact_lock(hashtextextended('clip_window:'||channel_id))`），**两条路径都要加**（`recording.AttachEvent` 与生产实际走的 `events.queueClipJob`）。`TestSimultaneousDetectionsShareOneRecording` 并发跑两个 `Ingest`，**已验证去掉锁时 5 次里 3 次复现两个窗口**。
+  - **运行中的事件必须压住窗口的关闭时刻**（部署当天第二个现场缺陷）：后置是「安静十秒」的意思，而检测器不保证对同一个长事件十秒内必报一次。报得慢一点，窗口就在事件仍在进行时过期、被发布，**下一条消息于是又建一个 `window_start` 相同的窗口**——现场 CH05 一个五分钟的事件留下 **7 个文件、每分钟一个、起点完全相同**。三处都要认「还有事件在跑」：`queueClipJob` / `AttachEvent` 的延长条件、装配的 `still_open`、`PublishSettledClips` 的发布条件。`TestSlowReportsOfOneEventKeepOneRecording` 用「每条消息之间把 `window_end` 推到过去」模拟慢报，**已验证去掉条件时 3 条消息产生 3 个窗口**。
   - **未做**：不合并两个已发布的片段（重写已发布文件在这个项目里已经出过五层损坏事故）。
 
 

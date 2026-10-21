@@ -81,9 +81,17 @@ func (s *Service) AssembleClips(ctx context.Context) {
 	// anchored on it. "Still open" therefore means the window's own close has not
 	// passed the settle delay yet — there is no per-event answer to that question
 	// any more.
+	//
+	// A running event keeps the window open regardless of its close: the detector
+	// can go a minute or more between messages for one long event, which outlives
+	// a ten-second trail. Without this the window expired mid-event, was published,
+	// and the next message started a second recording at the same window_start —
+	// seven files for one five-minute event on the live site.
 	rows, err := s.DB.Pool.Query(ctx, `SELECT w.id,w.channel_id,w.window_start,w.window_end,
 			w.segment_id,w.clip_run_id,
-			w.window_end > clock_timestamp() - $1::interval AS still_open
+			(w.window_end > clock_timestamp() - $1::interval
+			 OR EXISTS(SELECT 1 FROM event_clip_jobs j JOIN events e ON e.id=j.event_id
+			           WHERE j.window_id=w.id AND e.ended_at IS NULL)) AS still_open
 		FROM clip_windows w
 		WHERE w.state IN ('open','finalizing')
 		ORDER BY (w.window_end > clock_timestamp() - $1::interval) DESC, w.updated_at LIMIT 20`,
@@ -842,10 +850,17 @@ func (s *Service) PublishSettledClips(ctx context.Context) {
 	// with several events anchored on one recording, the recording is finished
 	// when its window has passed its close, and a window that is still being
 	// extended must not be published early.
+	//
+	// The running-event clause is the same rule the assembler applies. A long event
+	// whose messages are more than a trail apart leaves its window's close in the
+	// past while the recording is still being made; publishing then produced one
+	// file per message on the live site.
 	tag, err := s.DB.Pool.Exec(ctx, `UPDATE recording_segments s SET state='ready',error_code=NULL,ready_at=clock_timestamp()
 		FROM clip_windows w
 		WHERE w.segment_id=s.id AND s.state='finalizing'
 		  AND w.window_end < clock_timestamp() - interval '1 second'
+		  AND NOT EXISTS(SELECT 1 FROM event_clip_jobs j JOIN events e ON e.id=j.event_id
+		                 WHERE j.window_id=w.id AND e.ended_at IS NULL)
 		  AND NOT EXISTS(SELECT 1 FROM clip_windows newer
 		                 WHERE newer.channel_id=w.channel_id AND newer.id<>w.id AND newer.state='open')`)
 	if err != nil {

@@ -331,6 +331,60 @@ func TestSettledClipJobIsNotReopened(t *testing.T) {
 	}
 }
 
+// A long event whose messages are further apart than the trail keeps ONE
+// recording.
+//
+// The trail is "quiet for ten seconds", and the detector does not promise to
+// report a running event more often than that. When it goes quiet for longer, the
+// window's close passes while the event is still being reported — and the next
+// message, finding a closed window, started a second recording at the same
+// window_start. Measured on the live site as seven files for one five-minute
+// event, one per minute, each with the same head.
+func TestSlowReportsOfOneEventKeepOneRecording(t *testing.T) {
+	fixture, service := newEventsFixture(t)
+	ctx := context.Background()
+	if err := service.SetMappings(ctx, fixture.Admin, map[id.ID]string{fixture.Channel: "front-door"}); err != nil {
+		t.Fatal(err)
+	}
+	markBuffering(t, fixture)
+	// The event is running (no end_time in any payload) and each report is more
+	// than a trail apart. The window is pushed into the past between reports to
+	// model the detector having gone quiet, which is exactly the live condition —
+	// waiting in real time would make this a five-minute test.
+	start := time.Now().UTC().Add(-3 * time.Minute).Truncate(time.Second)
+	for report := 0; report < 3; report++ {
+		if err := service.Ingest(ctx, frigatePayload("update", "evt-slow", "front-door", "person",
+			float64(start.Unix()), nil, nil, false)); err != nil {
+			t.Fatal(err)
+		}
+		// Let the window's close lapse without the event ending.
+		if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE clip_windows
+			SET window_end=clock_timestamp()-interval '30 seconds' WHERE channel_id=$1`, fixture.Channel); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var windows int
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM clip_windows WHERE channel_id=$1`, fixture.Channel).Scan(&windows); err != nil {
+		t.Fatal(err)
+	}
+	if windows != 1 {
+		var detail string
+		_ = fixture.DB.Pool.QueryRow(ctx, `SELECT string_agg(window_start::text||' .. '||window_end::text||' '||state, ' | ' ORDER BY window_start)
+			FROM clip_windows WHERE channel_id=$1`, fixture.Channel).Scan(&detail)
+		t.Fatalf("three slow reports of one running event produced %d recordings, want 1; windows: %s", windows, detail)
+	}
+	// And the recording must still be unpublished: it is still being made.
+	var segState string
+	err := fixture.DB.Pool.QueryRow(ctx, `SELECT coalesce(s.state,'none') FROM clip_windows w
+		LEFT JOIN recording_segments s ON s.id=w.segment_id WHERE w.channel_id=$1`, fixture.Channel).Scan(&segState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if segState == "ready" {
+		t.Fatal("a running event's recording was published; its close lapsed between reports, not its activity")
+	}
+}
+
 func clipJobStateOf(t *testing.T, fixture publishFixture, sourceID string) string {
 	t.Helper()
 	var state string
