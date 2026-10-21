@@ -39,14 +39,18 @@ func (r *router) updateDetectionConfig(w http.ResponseWriter, q *http.Request, p
 		Stream  string   `json:"stream"`
 		FPS     int      `json:"fps"`
 		Labels  []string `json:"labels"`
-		Version int64    `json:"version"`
+		// Optional: an older client that does not send it keeps the stored value
+		// instead of silently resetting the profile to balanced.
+		Sensitivity detection.Sensitivity `json:"sensitivity"`
+		Version     int64                 `json:"version"`
 	}
 	if err := decode(w, q, &in); err != nil {
 		fail(w, q, err)
 		return
 	}
 	config, err := r.d.Detection.Upsert(q.Context(), p, detection.Config{
-		ChannelID: channelID, Enabled: in.Enabled, Stream: in.Stream, FPS: in.FPS, Labels: in.Labels, Version: in.Version,
+		ChannelID: channelID, Enabled: in.Enabled, Stream: in.Stream, FPS: in.FPS, Labels: in.Labels,
+		Sensitivity: in.Sensitivity, Version: in.Version,
 	})
 	if err != nil {
 		fail(w, q, err)

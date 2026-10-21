@@ -327,17 +327,32 @@ function DetectionRow({
   dirty: boolean
   onDirty: (value: boolean) => void
   pending: boolean
-  onSave: (next: { enabled: boolean; stream: string; fps: number; labels: string[] }) => void
+  onSave: (next: {
+    enabled: boolean
+    stream: string
+    fps: number
+    labels: string[]
+    sensitivity: 'sensitive' | 'balanced' | 'strict'
+  }) => void
 }) {
   // The row must follow the stored configuration, not a snapshot taken at
   // mount: the page renders before the config query resolves, and React reuses
   // these component instances once it does, so state seeded from an initially
   // undefined config would silently show defaults for every channel.
-  const [draft, setDraft] = useState<{ enabled: boolean; stream: string; fps: number; labels: string[] } | null>(null)
+  const [draft, setDraft] = useState<{
+    enabled: boolean
+    stream: string
+    fps: number
+    labels: string[]
+    sensitivity: 'sensitive' | 'balanced' | 'strict'
+  } | null>(null)
   const [workbenchOpen, setWorkbenchOpen] = useState(false)
   const enabled = draft?.enabled ?? config?.enabled ?? false
   const stream = draft?.stream ?? config?.stream ?? 'sub'
   const fps = draft?.fps ?? config?.fps ?? 5
+  // Sensitivity decides how readily a detection is called; it is the one
+  // setting an operator changes when the detector is too eager or too shy.
+  const sensitivity = draft?.sensitivity ?? config?.sensitivity ?? 'balanced'
   const selected = draft?.labels ?? config?.labels ?? ['person']
   const label = `CH${String(channel.channel_no ?? 0).padStart(2, '0')} ${channel.channel_name}`
   const extra = selected.filter((value) => !COMMON_LABELS.includes(value))
@@ -355,16 +370,26 @@ function DetectionRow({
   const savedStream = config?.stream ?? 'sub'
   const savedFps = config?.fps ?? 5
   const savedLabels = config?.labels ?? ['person']
+  const savedSensitivity = config?.sensitivity ?? 'balanced'
   const unchanged =
     !draft ||
     (enabled === savedEnabled &&
       stream === savedStream &&
       fps === savedFps &&
+      sensitivity === savedSensitivity &&
       selected.length === savedLabels.length &&
       selected.every((value) => savedLabels.includes(value)))
 
-  function mutate(patch: Partial<{ enabled: boolean; stream: string; fps: number; labels: string[] }>) {
-    setDraft({ enabled, stream, fps, labels: selected, ...patch })
+  function mutate(
+    patch: Partial<{
+      enabled: boolean
+      stream: string
+      fps: number
+      labels: string[]
+      sensitivity: 'sensitive' | 'balanced' | 'strict'
+    }>
+  ) {
+    setDraft({ enabled, stream, fps, labels: selected, sensitivity, ...patch })
     onDirty(true)
   }
 
@@ -439,6 +464,23 @@ function DetectionRow({
           />
         </div>
         <div className='flex items-center gap-2'>
+          <span className='text-xs text-muted-foreground'>灵敏度</span>
+          <SelectField
+            ariaLabel={`${label} 检测灵敏度`}
+            value={sensitivity}
+            disabled={inert}
+            onValueChange={(next) =>
+              mutate({ sensitivity: (next ?? 'balanced') as typeof sensitivity })
+            }
+            options={[
+              { value: 'sensitive', label: '灵敏' },
+              { value: 'balanced', label: '标准' },
+              { value: 'strict', label: '严格' },
+            ]}
+            className='w-20'
+          />
+        </div>
+        <div className='flex items-center gap-2'>
           <span className='text-xs text-muted-foreground'>目标</span>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -506,7 +548,7 @@ function DetectionRow({
             <Button
               size='sm'
               disabled={pending || inert || !selected.length}
-              onClick={() => onSave({ enabled, stream, fps, labels: selected })}
+              onClick={() => onSave({ enabled, stream, fps, labels: selected, sensitivity })}
             >
               保存*
             </Button>

@@ -2757,6 +2757,11 @@ export interface components {
             stream?: "main" | "sub";
             fps?: number;
             labels?: string[];
+            /**
+             * @description How readily the detector calls something a detection. sensitive catches small or brief movement at the cost of more false positives from foliage and shadows; balanced is Frigate's own default; strict requires a clear, sustained target. It renders as a filters block with min_score, threshold and min_area that move together.
+             * @enum {string}
+             */
+            sensitivity?: "sensitive" | "balanced" | "strict";
             version?: number;
         };
         DetectionRevision: {
@@ -7831,6 +7836,11 @@ export interface operations {
                     stream: "main" | "sub";
                     fps: number;
                     labels: string[];
+                    /**
+                     * @description Optional. Omitted keeps the stored profile, so a client that predates this field cannot reset it while saving something else.
+                     * @enum {string}
+                     */
+                    sensitivity?: "sensitive" | "balanced" | "strict";
                     /** @description Expected current version; 0 skips the check. */
                     version?: number;
                 };

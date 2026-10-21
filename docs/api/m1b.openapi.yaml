@@ -4812,6 +4812,15 @@
                       "type": "string"
                     }
                   },
+                  "sensitivity": {
+                    "type": "string",
+                    "enum": [
+                      "sensitive",
+                      "balanced",
+                      "strict"
+                    ],
+                    "description": "Optional. Omitted keeps the stored profile, so a client that predates this field cannot reset it while saving something else."
+                  },
                   "version": {
                     "type": "integer",
                     "description": "Expected current version; 0 skips the check."
@@ -9640,6 +9649,15 @@
             "items": {
               "type": "string"
             }
+          },
+          "sensitivity": {
+            "type": "string",
+            "enum": [
+              "sensitive",
+              "balanced",
+              "strict"
+            ],
+            "description": "How readily the detector calls something a detection. sensitive catches small or brief movement at the cost of more false positives from foliage and shadows; balanced is Frigate's own default; strict requires a clear, sustained target. It renders as a filters block with min_score, threshold and min_area that move together."
           },
           "version": {
             "type": "integer"

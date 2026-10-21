@@ -80,7 +80,7 @@ func (s *Service) cameraConfigs(ctx context.Context) (map[string]CameraConfig, m
 	if err != nil {
 		return nil, nil, err
 	}
-	rows, err := s.DB.Pool.Query(ctx, `SELECT c.id,c.channel_no,d.enabled,d.stream,d.fps,d.labels,
+	rows, err := s.DB.Pool.Query(ctx, `SELECT c.id,c.channel_no,d.enabled,d.stream,d.fps,d.labels,d.sensitivity,
 			COALESCE((SELECT ss.id::text FROM stream_sessions ss WHERE ss.channel_id=c.id AND ss.purpose<>'probe' AND ss.state NOT IN ('closed','failed') ORDER BY ss.generation DESC,ss.created_at DESC LIMIT 1),'') AS session
 		FROM channels c JOIN detection_configs d ON d.channel_id=c.id WHERE d.enabled`)
 	if err != nil {
@@ -95,7 +95,8 @@ func (s *Service) cameraConfigs(ctx context.Context) (map[string]CameraConfig, m
 		var fps int
 		var enabled bool
 		var labels []byte
-		if err := rows.Scan(&channelID, &channelNo, &enabled, &stream, &fps, &labels, &session); err != nil {
+		var sensitivity Sensitivity
+		if err := rows.Scan(&channelID, &channelNo, &enabled, &stream, &fps, &labels, &sensitivity, &session); err != nil {
 			return nil, nil, err
 		}
 		var labelList []string
@@ -120,13 +121,14 @@ func (s *Service) cameraConfigs(ctx context.Context) (map[string]CameraConfig, m
 			return nil, nil, err
 		}
 		cameras[CameraName(channelNo)] = CameraConfig{
-			Enabled:  enabled,
-			InputURL: input,
-			FPS:      fps,
-			Width:    640,
-			Height:   360,
-			Labels:   labelList,
-			Zones:    zones,
+			Enabled:     enabled,
+			InputURL:    input,
+			FPS:         fps,
+			Width:       640,
+			Height:      360,
+			Labels:      labelList,
+			Sensitivity: sensitivity,
+			Zones:       zones,
 		}
 	}
 	if err := rows.Err(); err != nil {

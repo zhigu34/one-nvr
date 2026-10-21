@@ -27,7 +27,11 @@ type Config struct {
 	Stream    string   `json:"stream"`
 	FPS       int      `json:"fps"`
 	Labels    []string `json:"labels"`
-	Version   int64    `json:"version"`
+	// Sensitivity decides how readily a detection is called. Three numbers move
+	// together behind this name (see sensitivity.go); the page asks for the
+	// profile, not for the numbers.
+	Sensitivity Sensitivity `json:"sensitivity"`
+	Version     int64       `json:"version"`
 }
 
 // RuntimeSnapshot is AI-07's capability view: what the detector reports about
@@ -162,7 +166,7 @@ func NewComplete(db *database.DB, accounts *auth.Service, in ServiceConfig) (*Se
 
 // List returns every channel's configuration with defaults filled in.
 func (s *Service) List(ctx context.Context, p auth.Principal) ([]Config, error) {
-	rows, err := s.DB.Pool.Query(ctx, `SELECT c.id, COALESCE(d.enabled,false), COALESCE(d.stream,'sub'), COALESCE(d.fps,5), COALESCE(d.labels,'["person"]'), COALESCE(d.version,1)
+	rows, err := s.DB.Pool.Query(ctx, `SELECT c.id, COALESCE(d.enabled,false), COALESCE(d.stream,'sub'), COALESCE(d.fps,5), COALESCE(d.labels,'["person"]'), COALESCE(d.sensitivity,'balanced'), COALESCE(d.version,1)
 		FROM channels c LEFT JOIN detection_configs d ON d.channel_id=c.id ORDER BY c.channel_no`)
 	if err != nil {
 		return nil, err
@@ -172,7 +176,7 @@ func (s *Service) List(ctx context.Context, p auth.Principal) ([]Config, error) 
 	for rows.Next() {
 		var item Config
 		var labels []byte
-		if err := rows.Scan(&item.ChannelID, &item.Enabled, &item.Stream, &item.FPS, &labels, &item.Version); err != nil {
+		if err := rows.Scan(&item.ChannelID, &item.Enabled, &item.Stream, &item.FPS, &labels, &item.Sensitivity, &item.Version); err != nil {
 			return nil, err
 		}
 		item.Labels = []string{}
@@ -228,6 +232,12 @@ func (s *Service) Upsert(ctx context.Context, p auth.Principal, in Config) (Conf
 	if in.FPS < 1 || in.FPS > 30 {
 		return Config{}, auth.ErrInvalid
 	}
+	// An empty value means "whatever was stored": a client that does not know
+	// about sensitivity must not silently reset the profile when it saves some
+	// other field. A named value must be one of the three profiles.
+	if in.Sensitivity != "" && !in.Sensitivity.Valid() {
+		return Config{}, auth.ErrInvalid
+	}
 	if len(in.Labels) == 0 || len(in.Labels) > len(SupportedLabels) {
 		return Config{}, auth.ErrInvalid
 	}
@@ -250,8 +260,9 @@ func (s *Service) Upsert(ctx context.Context, p auth.Principal, in Config) (Conf
 		var prevEnabled bool
 		var prevStream string
 		var prevVersion int64
-		err := tx.QueryRow(ctx, `SELECT enabled,stream,version FROM detection_configs WHERE channel_id=$1`, in.ChannelID).
-			Scan(&prevEnabled, &prevStream, &prevVersion)
+		var prevSensitivity string
+		err := tx.QueryRow(ctx, `SELECT enabled,stream,COALESCE(sensitivity,'balanced'),version FROM detection_configs WHERE channel_id=$1`, in.ChannelID).
+			Scan(&prevEnabled, &prevStream, &prevSensitivity, &prevVersion)
 		if err == nil {
 			previous = &Config{Enabled: prevEnabled, Stream: prevStream}
 		} else if !errors.Is(err, pgx.ErrNoRows) {
@@ -260,14 +271,22 @@ func (s *Service) Upsert(ctx context.Context, p auth.Principal, in Config) (Conf
 		if in.Version > 0 && previous != nil && in.Version != prevVersion {
 			return ErrConfigConflict
 		}
+		if in.Sensitivity == "" {
+			// Keep what the row already says; a brand-new row starts balanced.
+			if previous != nil {
+				in.Sensitivity = Sensitivity(prevSensitivity)
+			} else {
+				in.Sensitivity = SensitivityBalanced
+			}
+		}
 		labels, err := json.Marshal(in.Labels)
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO detection_configs(channel_id,enabled,stream,fps,labels,version,updated_at)
-			VALUES($1,$2,$3,$4,$5,1,now())
-			ON CONFLICT (channel_id) DO UPDATE SET enabled=$2,stream=$3,fps=$4,labels=$5,version=detection_configs.version+1,updated_at=now()`,
-			in.ChannelID, in.Enabled, in.Stream, in.FPS, labels); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO detection_configs(channel_id,enabled,stream,fps,labels,sensitivity,version,updated_at)
+			VALUES($1,$2,$3,$4,$5,$6,1,now())
+			ON CONFLICT (channel_id) DO UPDATE SET enabled=$2,stream=$3,fps=$4,labels=$5,sensitivity=$6,version=detection_configs.version+1,updated_at=now()`,
+			in.ChannelID, in.Enabled, in.Stream, in.FPS, labels, string(in.Sensitivity)); err != nil {
 			return err
 		}
 		// The generation moves only when the detection source itself changes.
@@ -277,8 +296,8 @@ func (s *Service) Upsert(ctx context.Context, p auth.Principal, in Config) (Conf
 			}
 		}
 		var storedLabels []byte
-		if err := tx.QueryRow(ctx, `SELECT channel_id,enabled,stream,fps,labels,version FROM detection_configs WHERE channel_id=$1`, in.ChannelID).
-			Scan(&out.ChannelID, &out.Enabled, &out.Stream, &out.FPS, &storedLabels, &out.Version); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT channel_id,enabled,stream,fps,labels,sensitivity,version FROM detection_configs WHERE channel_id=$1`, in.ChannelID).
+			Scan(&out.ChannelID, &out.Enabled, &out.Stream, &out.FPS, &storedLabels, &out.Sensitivity, &out.Version); err != nil {
 			return err
 		}
 		out.Labels = []string{}
@@ -417,10 +436,8 @@ func Render(base map[string]any, cameras map[string]CameraConfig) ([]byte, error
 				// duplicate events rather than a performance number.
 				"stationary": map[string]any{"classifier": true},
 			},
-			"objects": map[string]any{
-				"track": camera.Labels,
-			},
-			"zones": renderZones(camera.Zones),
+			"objects": renderObjects(camera),
+			"zones":   renderZones(camera.Zones),
 		}
 	}
 	config["cameras"] = cameraConfig
@@ -435,9 +452,37 @@ type CameraConfig struct {
 	Width    int
 	Height   int
 	Labels   []string
+	// Sensitivity decides the filter thresholds. Empty means balanced, so a
+	// caller that predates this field renders today's behaviour instead of a
+	// zero-score profile that would detect everything.
+	Sensitivity Sensitivity
 	// Zones are the operator's drawings for this channel. The detector performs
 	// the zone semantics; they are handed over, never evaluated here.
 	Zones []zoneRender
+}
+
+// renderObjects builds the `objects` block: what to track, and how readily.
+//
+// The filters block is the whole point of the sensitivity setting. Without it
+// Frigate applies its defaults (min_score 0.5) to every camera, and the site's
+// driveway — a parked scooter plus a car park in frame — both fired on parked
+// objects and missed slow movement. Every tracked label gets the same profile:
+// sensitivity describes the scene, not the object class.
+func renderObjects(camera CameraConfig) map[string]any {
+	objects := map[string]any{"track": camera.Labels}
+	if len(camera.Labels) == 0 {
+		return objects
+	}
+	filters := map[string]any{}
+	for label, profile := range camera.Sensitivity.FilterLabels(camera.Labels) {
+		filters[label] = map[string]any{
+			"min_score": profile.MinScore,
+			"threshold": profile.Threshold,
+			"min_area":  profile.MinArea,
+		}
+	}
+	objects["filters"] = filters
+	return objects
 }
 
 // CameraName is the stable Frigate key of a channel: never derived from the

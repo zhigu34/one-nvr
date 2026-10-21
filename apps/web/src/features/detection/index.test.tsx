@@ -256,3 +256,24 @@ test('a channel without detection says why zones cannot be calibrated', async ()
     document.querySelector<HTMLElement>('[data-testid="zone-canvas"]')?.className
   ).toContain('pointer-events-none')
 })
+
+// Sensitivity is the control an operator reaches for when the detector is too
+// eager or too shy. It must be visible per channel and must travel in the saved
+// payload — a control that renders but is not sent is worse than none.
+test('sensitivity is offered per channel and saved with the rest', async () => {
+  const page = await render(view(fixture(true)))
+  await expect.element(page.getByText('灵敏度').first()).toBeVisible()
+  const select = page.getByLabelText(/检测灵敏度/).first()
+  await expect.element(select).toBeVisible()
+  // Changing it makes the row dirty, which is the only way the save button
+  // appears.
+  await userEvent.click(select)
+  await userEvent.click(await page.getByRole('option', { name: '灵敏' }).first())
+  const save = page.getByRole('button', { name: '保存*' }).first()
+  await userEvent.click(save)
+  const put = calls.request.mock.calls.find(
+    ([path, init]) => String(path).includes('/detection/configs/') && (init as RequestInit | undefined)?.method === 'PUT'
+  )
+  const body = JSON.parse(String((put?.[1] as RequestInit | undefined)?.body ?? '{}'))
+  expect(body.sensitivity).toBe('sensitive')
+})

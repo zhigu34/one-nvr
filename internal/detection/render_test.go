@@ -170,3 +170,83 @@ func TestRenderFollowsInferenceProfile(t *testing.T) {
 		t.Fatalf("the OpenVINO model must match the validated profile, got %v", model)
 	}
 }
+
+// The sensitivity profile must reach Frigate as a filters block. Without it
+// every camera runs on Frigate's defaults (min_score 0.5), which is what made a
+// driveway with a parked scooter both miss slow movement and fire on nothing.
+func TestRenderCarriesTheSensitivityProfile(t *testing.T) {
+	base := map[string]any{
+		"mqtt":      map[string]any{"host": "mqtt"},
+		"detectors": map[string]any{"cpu": map[string]any{"type": "cpu"}},
+		"model":     map[string]any{"path": "/cpu_model.tflite"},
+	}
+	cases := []struct {
+		sensitivity Sensitivity
+		minScore    float64
+		threshold   float64
+		minArea     float64
+	}{
+		{SensitivitySensitive, 0.35, 0.45, 800},
+		{SensitivityBalanced, 0.50, 0.55, 1500},
+		{SensitivityStrict, 0.65, 0.70, 3000},
+	}
+	for _, c := range cases {
+		t.Run(string(c.sensitivity), func(t *testing.T) {
+			cameras := map[string]CameraConfig{
+				"ch01": {Enabled: true, InputURL: "rtsp://zlm:554/one_nvr/s", FPS: 5, Width: 640, Height: 360,
+					Labels: []string{"person", "car"}, Sensitivity: c.sensitivity},
+			}
+			rendered, err := Render(base, cameras)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var config map[string]any
+			if err := json.Unmarshal(rendered, &config); err != nil {
+				t.Fatal(err)
+			}
+			objects := config["cameras"].(map[string]any)["ch01"].(map[string]any)["objects"].(map[string]any)
+			filters, ok := objects["filters"].(map[string]any)
+			if !ok {
+				t.Fatal("objects.filters must be rendered", objects)
+			}
+			// Every tracked label carries the same profile: sensitivity describes
+			// the scene, not the object class.
+			for _, label := range []string{"person", "car"} {
+				block, ok := filters[label].(map[string]any)
+				if !ok {
+					t.Fatalf("%s must have a filter block", label)
+				}
+				if block["min_score"] != c.minScore || block["threshold"] != c.threshold || block["min_area"] != c.minArea {
+					t.Fatalf("%s: want min_score=%v threshold=%v min_area=%v, got %v", label, c.minScore, c.threshold, c.minArea, block)
+				}
+			}
+		})
+	}
+}
+
+// An unset sensitivity renders the balanced profile, never a zero-score one: a
+// zero min_score would detect everything, and an upgrade must not make a camera
+// noisier than the operator configured.
+func TestRenderDefaultsToBalanced(t *testing.T) {
+	base := map[string]any{
+		"mqtt":      map[string]any{"host": "mqtt"},
+		"detectors": map[string]any{"cpu": map[string]any{"type": "cpu"}},
+		"model":     map[string]any{"path": "/cpu_model.tflite"},
+	}
+	cameras := map[string]CameraConfig{
+		"ch01": {Enabled: true, InputURL: "rtsp://zlm:554/one_nvr/s", FPS: 5, Width: 640, Height: 360, Labels: []string{"person"}},
+	}
+	rendered, err := Render(base, cameras)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(rendered, &config); err != nil {
+		t.Fatal(err)
+	}
+	filters := config["cameras"].(map[string]any)["ch01"].(map[string]any)["objects"].(map[string]any)["filters"].(map[string]any)
+	person := filters["person"].(map[string]any)
+	if person["min_score"] != 0.50 {
+		t.Fatalf("an unset sensitivity must render balanced, got %v", person)
+	}
+}
