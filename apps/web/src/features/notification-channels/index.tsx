@@ -24,12 +24,14 @@ const KIND_LABELS: Record<string, string> = {
   inapp: '站内提醒',
   webhook: 'Webhook',
   email: '邮件（SMTP）',
+  wecom: '企业微信',
 }
 
 const KIND_HELP: Record<string, string> = {
   inapp: '事件页内的站内提醒，无需配置，不受冷却限制——每一次命中都会记下来。',
   webhook: '把通知内容 POST 到该地址，带签名与稳定投递 ID，接收端可据此去重。',
   email: '通过你自己的 SMTP 服务器发送邮件。参数顺序与常见 NVR 的「Email」页面一致：先填发件人，再填服务器与认证，最后登记收件人。',
+  wecom: '在值班群里添加一个群机器人，把它的 Webhook 地址粘贴到这里。机器人地址里带着密钥，请当作密码保管。',
 }
 
 type RecipientDraft = { name: string; address: string }
@@ -70,6 +72,7 @@ const EMPTY_FORM = {
   enabled: true,
   email: EMPTY_EMAIL,
   recipients: [] as RecipientDraft[],
+  wecom: { msgType: 'markdown', mentions: '' },
 }
 
 /**
@@ -123,11 +126,18 @@ export function NotificationChannels() {
     const body: Record<string, unknown> = {
       kind: form.kind,
       name: form.name,
-      // The inbox has no endpoint; sending one would be refused by the server's
-      // own constraint rather than silently ignored, so keep it out here.
-      url: form.kind === 'webhook' ? form.url : '',
+      // Both pushing kinds carry a URL: a webhook's endpoint, a group robot's
+      // keyed address. The inbox and email have none, and sending one would be
+      // refused by the server's own constraint rather than silently ignored.
+      url: form.kind === 'webhook' || form.kind === 'wecom' ? form.url : '',
       secret: form.secret,
       enabled: form.enabled,
+    }
+    if (form.kind === 'wecom') {
+      body.wecom = {
+        wecom_msg_type: form.wecom.msgType,
+        wecom_mentions: form.wecom.mentions,
+      }
     }
     if (form.kind === 'email') {
       body.email = {
@@ -189,6 +199,10 @@ export function NotificationChannels() {
         name: row.name ?? '',
         address: row.address ?? '',
       })),
+      wecom: {
+        msgType: channel.wecom?.wecom_msg_type ?? 'markdown',
+        mentions: channel.wecom?.wecom_mentions ?? '',
+      },
     })
     setTestResult('')
   }
@@ -296,6 +310,52 @@ export function NotificationChannels() {
               autoComplete='new-password'
             />
           </label>
+        )}
+        {form.kind === 'wecom' && (
+          <>
+            <label className='grid gap-2 text-sm md:col-span-2'>
+              <span>群机器人 Webhook</span>
+              <Input
+                aria-label='企业微信机器人地址'
+                type='url'
+                value={form.url}
+                onChange={(event) => setForm({ ...form, url: event.target.value })}
+                required
+                placeholder='https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...'
+              />
+              <span className='text-[11px] text-muted-foreground'>
+                群设置 → 群机器人 → 添加机器人，复制它给的地址。地址里的 key 就是凭据。
+              </span>
+            </label>
+            <label className='grid gap-2 text-sm'>
+              <span>消息格式</span>
+              <SelectField
+                ariaLabel='企业微信消息格式'
+                value={form.wecom.msgType}
+                onValueChange={(next) =>
+                  setForm({ ...form, wecom: { ...form.wecom, msgType: next || 'markdown' } })
+                }
+                options={[
+                  { value: 'markdown', label: 'Markdown 文本' },
+                  { value: 'news', label: '图文卡片' },
+                ]}
+              />
+            </label>
+            <label className='grid gap-2 text-sm'>
+              <span>@ 手机号（可留空）</span>
+              <Input
+                aria-label='企业微信提醒手机号'
+                value={form.wecom.mentions}
+                onChange={(event) =>
+                  setForm({ ...form, wecom: { ...form.wecom, mentions: event.target.value } })
+                }
+                placeholder='13800000000,13900000000'
+              />
+              <span className='text-[11px] text-muted-foreground'>
+                留空则不 @ 任何人——每次都 @ 全体，值班群很快就会把机器人静音。
+              </span>
+            </label>
+          </>
         )}
         {form.kind === 'email' && (
           <>
@@ -528,8 +588,19 @@ export function NotificationChannels() {
                 </div>
                 <div className='flex gap-2'>
                   {channel.url && (
-                    <code className='max-w-64 truncate rounded border bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground'>
-                      {channel.url}
+                    <code
+                      className='max-w-64 truncate rounded border bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground'
+                      title={
+                        channel.kind === 'wecom'
+                          ? '机器人地址含密钥，鼠标悬停可见完整值'
+                          : undefined
+                      }
+                    >
+                      {/* A robot URL carries its key in the query string: it is a
+                          credential, and a shoulder-surfer reading the list should
+                          not get a working one. Webhook endpoints are shown as-is
+                          because they are not secret on their own. */}
+                      {channel.kind === 'wecom' ? maskKey(channel.url) : channel.url}
                     </code>
                   )}
                   <Button type='button' size='sm' variant='outline' disabled={pending} onClick={() => test(channel)}>
@@ -550,6 +621,12 @@ export function NotificationChannels() {
                   </Button>
                 </div>
               </div>
+              {channel.wecom && (
+                <p className='mt-2 text-xs text-muted-foreground'>
+                  {channel.wecom.wecom_msg_type === 'news' ? '图文卡片' : 'Markdown 文本'}
+                  {channel.wecom.wecom_mentions ? ` · @ ${channel.wecom.wecom_mentions}` : ' · 不 @ 人'}
+                </p>
+              )}
               {channel.email && (
                 <p className='mt-2 text-xs text-muted-foreground'>
                   {channel.email.sender_address} · {channel.email.smtp_host}:
@@ -633,4 +710,16 @@ export function NotificationChannels() {
       />
     </div>
   )
+}
+
+/**
+ * maskKey hides the query string of a robot URL.
+ *
+ * The whole URL is shown on hover and in the editor (the operator needs it to fix
+ * a typo), but the list — which stays on screen — shows only the host. A robot key
+ * is the only thing standing between a passer-by and the duty group.
+ */
+function maskKey(url: string): string {
+  const [base] = url.split('?')
+  return url.includes('?') ? base + '?key=••••' : base
 }

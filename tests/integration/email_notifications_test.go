@@ -9,6 +9,7 @@ package integration
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/zhigu34/one-nvr/internal/auth"
@@ -249,5 +250,102 @@ func TestEmailChannelManagementRequiresAdmin(t *testing.T) {
 	}
 	if _, err := fixture.notify.ListChannels(ctx, principal); err == nil {
 		t.Fatal("a viewer listed the email channels")
+	}
+}
+
+// A WeCom group robot stores its URL (which carries the key) and its layout.
+func TestWeComChannelRoundTripsItsSettings(t *testing.T) {
+	fixture := newNotifyFixture(t)
+	ctx := context.Background()
+	channel, err := fixture.notify.RegisterChannel(ctx, fixture.fixture.Admin, notify.ChannelInput{
+		Kind:    "wecom",
+		Name:    "值班群",
+		URL:     "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=robot-key",
+		Enabled: true,
+		WeCom:   &notify.WeComConfig{MsgType: "news", Mentions: "13800000000"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if channel.WeCom == nil {
+		t.Fatal("a wecom channel was stored without its settings")
+	}
+	if channel.WeCom.MsgType != "news" || channel.WeCom.Mentions != "13800000000" {
+		t.Fatalf("the robot settings did not round-trip: %+v", *channel.WeCom)
+	}
+	list, err := fixture.notify.ListChannels(ctx, fixture.fixture.Admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range list {
+		if item.ID == channel.ID {
+			if item.WeCom == nil || item.WeCom.MsgType != "news" {
+				t.Fatalf("the list lost the robot settings: %+v", item.WeCom)
+			}
+			if item.URL == "" {
+				t.Fatal("the list lost the robot URL, which is the only way to reach it")
+			}
+		}
+	}
+}
+
+func TestWeComChannelRefusesIncompleteSettings(t *testing.T) {
+	fixture := newNotifyFixture(t)
+	ctx := context.Background()
+	base := func() notify.ChannelInput {
+		return notify.ChannelInput{
+			Kind: "wecom", Name: "值班群",
+			URL:     "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=k",
+			Enabled: true,
+			WeCom:   &notify.WeComConfig{MsgType: "markdown"},
+		}
+	}
+	cases := map[string]func(*notify.ChannelInput){
+		"no URL":       func(in *notify.ChannelInput) { in.URL = "" },
+		"no settings":  func(in *notify.ChannelInput) { in.WeCom = nil },
+		"bad msg type": func(in *notify.ChannelInput) { in.WeCom.MsgType = "text" },
+	}
+	for name, breakIt := range cases {
+		in := base()
+		if in.WeCom != nil {
+			copyWeCom := *in.WeCom
+			in.WeCom = &copyWeCom
+		}
+		breakIt(&in)
+		if _, err := fixture.notify.RegisterChannel(ctx, fixture.fixture.Admin, in); err == nil {
+			t.Fatalf("%s: an undeliverable wecom channel was accepted", name)
+		}
+	}
+}
+
+// The URL carries the robot key: it must not appear in the audit trail.
+func TestWeComRobotKeyNeverEntersTheAuditTrail(t *testing.T) {
+	fixture := newNotifyFixture(t)
+	ctx := context.Background()
+	channel, err := fixture.notify.RegisterChannel(ctx, fixture.fixture.Admin, notify.ChannelInput{
+		Kind: "wecom", Name: "值班群",
+		URL:     "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=robot-secret-key",
+		Enabled: true,
+		WeCom:   &notify.WeComConfig{MsgType: "markdown"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := fixture.fixture.DB.Pool.Query(ctx, `SELECT details::text FROM audit_logs WHERE object_id=$1`, channel.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var details string
+		if err := rows.Scan(&details); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(details, "robot-secret-key") {
+			t.Fatalf("the robot key leaked into the audit trail: %s", details)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
 	}
 }

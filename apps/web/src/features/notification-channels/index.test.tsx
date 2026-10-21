@@ -289,3 +289,67 @@ test('each recipient has its own test button', async () => {
   )
   expect(test).toBeDefined()
 })
+
+// A group robot is one URL plus a layout choice. The form says where to find the
+// URL and warns that it is a credential, because the key is inside it.
+test('the wecom form asks for the robot URL and explains what it is', async () => {
+  signIn()
+  const screen = await render(view(fixture([], ['inapp', 'webhook', 'email', 'wecom'])))
+  await userEvent.click(screen.getByLabelText('渠道类型'))
+  await userEvent.click(await screen.getByRole('option', { name: '企业微信' }).first())
+
+  await expect.element(screen.getByLabelText('企业微信机器人地址')).toBeVisible()
+  await expect.element(screen.getByLabelText('企业微信消息格式')).toBeVisible()
+  await expect.element(screen.getByLabelText('企业微信提醒手机号')).toBeVisible()
+  // The key lives in the URL, so the help text has to say so.
+  await expect.element(screen.getByText(/地址里的 key 就是凭据/)).toBeVisible()
+  // Mentions are opt-in, and the form explains why.
+  await expect.element(screen.getByText(/值班群很快就会把机器人静音/)).toBeVisible()
+})
+
+test('saving a wecom channel sends the robot URL and the layout', async () => {
+  signIn()
+  const screen = await render(view(fixture([], ['inapp', 'webhook', 'email', 'wecom'])))
+  await userEvent.click(screen.getByLabelText('渠道类型'))
+  await userEvent.click(await screen.getByRole('option', { name: '企业微信' }).first())
+
+  await userEvent.fill(screen.getByLabelText('渠道名称').element() as HTMLInputElement, '值班群')
+  await userEvent.fill(
+    screen.getByLabelText('企业微信机器人地址').element() as HTMLInputElement,
+    'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc'
+  )
+  await userEvent.fill(
+    screen.getByLabelText('企业微信提醒手机号').element() as HTMLInputElement,
+    '13800000000'
+  )
+  await userEvent.click(screen.getByRole('button', { name: '添加', exact: true }))
+
+  const post = calls.request.mock.calls.find(
+    ([path, init]) => path === '/api/v1/notification-channels' && (init as RequestInit)?.method === 'POST'
+  )
+  const body = JSON.parse(String((post?.[1] as RequestInit | undefined)?.body ?? '{}'))
+  expect(body.kind).toBe('wecom')
+  expect(body.url).toBe('https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc')
+  expect(body.wecom).toEqual({ wecom_msg_type: 'markdown', wecom_mentions: '13800000000' })
+})
+
+// The robot key is inside the URL. The list stays on screen, so it must not show a
+// working one; the editor still has the real value for fixing a typo.
+test('the wecom robot key is masked in the list', async () => {
+  signIn()
+  const channel = channelFixture({
+    kind: 'wecom',
+    name: '值班群',
+    url: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=robot-secret-key',
+    wecom: { wecom_msg_type: 'markdown', wecom_mentions: '' },
+  })
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  calls.request.mockImplementation(async (path: string) => {
+    if (path === '/api/v1/notification-channels')
+      return { items: [channel], kinds: ['inapp', 'webhook', 'email', 'wecom'] }
+    throw new Error('unexpected path ' + path)
+  })
+  const screen = await render(view(client))
+  await expect.element(screen.getByText(/cgi-bin\/webhook\/send\?key=••••/)).toBeVisible()
+  expect(screen.getByText(/robot-secret-key/).query()).toBeNull()
+})

@@ -64,6 +64,8 @@ type ChannelConfig struct {
 	// Recipients are the mailboxes of an email channel, already resolved by the
 	// service. Empty for other kinds.
 	Recipients []string
+	// WeCom carries the group-robot settings for kind 'wecom'. Nil otherwise.
+	WeCom *WeComConfig
 }
 
 // NewRegistry starts a registry with no kinds. Callers register what they build.
@@ -110,6 +112,8 @@ func DefaultRegistry() *Registry {
 	// the rule bindings and the delivery queue are untouched by it, which is the
 	// property the channel interface exists to keep.
 	registry.Register("email", func(in ChannelConfig) (Channel, error) { return newEmail(in) })
+	// WeCom group robots: one webhook URL, a message layout, optional mentions.
+	registry.Register("wecom", func(in ChannelConfig) (Channel, error) { return newWeCom(in) })
 	return registry
 }
 

@@ -2888,10 +2888,20 @@ export interface components {
         NotificationChannel: {
             id?: components["schemas"]["UUID"];
             /** @enum {string} */
-            kind?: "inapp" | "webhook" | "email";
+            kind?: "inapp" | "webhook" | "email" | "wecom";
             name?: string;
-            /** @description Absent for the built-in inbox and for email, which carries its endpoint in the smtp_* fields. */
+            /** @description Absent for the built-in inbox and for email, which carries its endpoint in the smtp_* fields. For wecom this is the group-robot URL, which carries the robot key — treat it as a credential. */
             url?: string;
+            /** @description Group-robot settings, present for kind 'wecom'. */
+            wecom?: {
+                /**
+                 * @description markdown keeps the facts and both links in one text block; news posts a single card with a link.
+                 * @enum {string}
+                 */
+                wecom_msg_type: "markdown" | "news";
+                /** @description Comma-separated phone numbers to @mention. Empty pings nobody, which is what keeps a busy duty group from muting the robot. */
+                wecom_mentions: string;
+            };
             /** @description SMTP settings, present for kind 'email'. The password is never here: has_secret says one is stored. */
             email?: {
                 /** @description Display name on the From line. */
@@ -8950,7 +8960,7 @@ export interface operations {
             content: {
                 "application/json": {
                     /** @enum {string} */
-                    kind: "inapp" | "webhook" | "email";
+                    kind: "inapp" | "webhook" | "email" | "wecom";
                     name: string;
                     /** @description Required for webhook; absent for the built-in inbox. */
                     url?: string;
@@ -8967,6 +8977,13 @@ export interface operations {
                         smtp_tls: boolean;
                         smtp_auth: boolean;
                         username: string;
+                    };
+                    /** @description Group-robot settings. Required when kind is wecom; ignored otherwise. */
+                    wecom?: {
+                        /** @enum {string} */
+                        wecom_msg_type: "markdown" | "news";
+                        /** @description Comma-separated phone numbers to @mention. */
+                        wecom_mentions: string;
                     };
                     /** @description Mailboxes for an email channel. Omitted on an update keeps the stored list; an explicit empty array is refused. */
                     recipients?: {
@@ -9021,7 +9038,7 @@ export interface operations {
             content: {
                 "application/json": {
                     /** @enum {string} */
-                    kind: "inapp" | "webhook" | "email";
+                    kind: "inapp" | "webhook" | "email" | "wecom";
                     name: string;
                     url?: string;
                     /** @description Empty keeps the stored secret, so renaming does not require re-entering it. */
@@ -9035,6 +9052,13 @@ export interface operations {
                         smtp_tls: boolean;
                         smtp_auth: boolean;
                         username: string;
+                    };
+                    /** @description Group-robot settings. Required when kind is wecom; ignored otherwise. */
+                    wecom?: {
+                        /** @enum {string} */
+                        wecom_msg_type: "markdown" | "news";
+                        /** @description Comma-separated phone numbers to @mention. */
+                        wecom_mentions: string;
                     };
                     /** @description Omitted keeps the stored mailbox list; an explicit empty array is refused. */
                     recipients?: {

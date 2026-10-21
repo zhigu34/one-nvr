@@ -70,8 +70,9 @@ type ChannelView struct {
 	CreatedAt time.Time       `json:"created_at"`
 	// Email settings, present for kind 'email'. The password is never here: it
 	// lives in the sealed secret and HasSecret says whether one exists.
-	Email      *SMTPConfig `json:"email,omitempty"`
-	Recipients []Recipient `json:"recipients,omitempty"`
+	Email      *SMTPConfig  `json:"email,omitempty"`
+	Recipients []Recipient  `json:"recipients,omitempty"`
+	WeCom      *WeComConfig `json:"wecom,omitempty"`
 }
 
 // ChannelInput is a create or update request. Secret is write-only: empty on an
@@ -88,6 +89,8 @@ type ChannelInput struct {
 	// the recipients alone", which is what an update that only renames a channel
 	// needs.
 	Recipients *[]RecipientInput
+	// WeCom carries the group-robot settings for kind 'wecom'.
+	WeCom *WeComConfig
 }
 
 // RecipientInput is one mailbox on an email channel, from the editor.
@@ -97,25 +100,34 @@ type RecipientInput struct {
 }
 
 const channelColumns = `c.id,c.kind,c.name,COALESCE(c.url,''),c.enabled,(octet_length(c.secret_ciphertext)>0),c.last_check,c.version,c.created_at,
-	COALESCE(c.sender_name,''),COALESCE(c.sender_address,''),COALESCE(c.smtp_host,''),COALESCE(c.smtp_port,0),c.smtp_tls,c.smtp_auth,COALESCE(c.smtp_username,'')`
+	COALESCE(c.sender_name,''),COALESCE(c.sender_address,''),COALESCE(c.smtp_host,''),COALESCE(c.smtp_port,0),c.smtp_tls,c.smtp_auth,COALESCE(c.smtp_username,''),
+	COALESCE(c.wecom_msg_type,''),COALESCE(c.wecom_mentions,'')`
 
 func scanChannel(row pgx.Row) (ChannelView, error) {
 	var out ChannelView
 	var senderName, senderAddress, host, username string
 	var port int
 	var useTLS, useAuth bool
+	var wecomMsgType, wecomMentions string
 	err := row.Scan(&out.ID, &out.Kind, &out.Name, &out.URL, &out.Enabled, &out.HasSecret, &out.LastCheck, &out.Version, &out.CreatedAt,
-		&senderName, &senderAddress, &host, &port, &useTLS, &useAuth, &username)
+		&senderName, &senderAddress, &host, &port, &useTLS, &useAuth, &username,
+		&wecomMsgType, &wecomMentions)
 	if err != nil {
 		return out, err
 	}
 	// The SMTP block is reported only where it means something: an inbox with an
 	// empty sender name would otherwise look half-configured.
+	if out.Kind == "wecom" {
+		out.WeCom = &WeComConfig{MsgType: wecomMsgType, Mentions: wecomMentions}
+	}
 	if out.Kind == "email" {
 		out.Email = &SMTPConfig{
 			SenderName: senderName, SenderAddress: senderAddress, Host: host, Port: port,
 			TLS: useTLS, UseAuth: useAuth, Username: username,
 		}
+	}
+	if out.Kind == "wecom" {
+		out.WeCom = &WeComConfig{MsgType: wecomMsgType, Mentions: wecomMentions}
 	}
 	return out, nil
 }
@@ -130,6 +142,15 @@ func validateChannelInput(in ChannelInput, creating bool) error {
 		return nil
 	case "webhook":
 		if in.URL == "" {
+			return ErrChannelInvalid
+		}
+		return nil
+	case "wecom":
+		// The robot URL already contains the key; an empty one cannot deliver.
+		if strings.TrimSpace(in.URL) == "" {
+			return ErrChannelInvalid
+		}
+		if in.WeCom == nil || (in.WeCom.MsgType != "markdown" && in.WeCom.MsgType != "news") {
 			return ErrChannelInvalid
 		}
 		return nil
@@ -220,9 +241,10 @@ func (s *Service) RegisterChannel(ctx context.Context, p auth.Principal, in Chan
 		}
 		insertArgs := []any{channelID, s.siteID, in.Kind, in.Name, url, sealed.KeyID, sealed.Nonce, sealed.Ciphertext, in.Enabled}
 		insertArgs = append(insertArgs, smtpColumns(in.Email)...)
+		insertArgs = append(insertArgs, wecomColumns(in.WeCom)...)
 		if _, err := tx.Exec(ctx, `INSERT INTO notification_channels(id,site_id,kind,name,url,credential_key_id,secret_nonce,secret_ciphertext,enabled,
-			sender_name,sender_address,smtp_host,smtp_port,smtp_tls,smtp_auth,smtp_username)
-			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+			sender_name,sender_address,smtp_host,smtp_port,smtp_tls,smtp_auth,smtp_username,wecom_msg_type,wecom_mentions)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
 			insertArgs...); err != nil {
 			return err
 		}
@@ -285,16 +307,20 @@ func (s *Service) UpdateChannel(ctx context.Context, p auth.Principal, channelID
 			}
 			args := []any{channelID, in.Kind, in.Name, url, in.Enabled, sealed.KeyID, sealed.Nonce, sealed.Ciphertext, expected}
 			args = append(args, smtpColumns(in.Email)...)
+			args = append(args, wecomColumns(in.WeCom)...)
 			if _, err := tx.Exec(ctx, `UPDATE notification_channels SET kind=$2,name=$3,url=$4,enabled=$5,credential_key_id=$6,secret_nonce=$7,secret_ciphertext=$8,
-				sender_name=$10,sender_address=$11,smtp_host=$12,smtp_port=$13,smtp_tls=$14,smtp_auth=$15,smtp_username=$16,version=version+1,updated_at=now()
+				sender_name=$10,sender_address=$11,smtp_host=$12,smtp_port=$13,smtp_tls=$14,smtp_auth=$15,smtp_username=$16,
+				wecom_msg_type=$17,wecom_mentions=$18,version=version+1,updated_at=now()
 				WHERE id=$1 AND version=$9`, args...); err != nil {
 				return err
 			}
 		} else {
 			args := []any{channelID, in.Kind, in.Name, url, in.Enabled, expected}
 			args = append(args, smtpColumns(in.Email)...)
+			args = append(args, wecomColumns(in.WeCom)...)
 			if _, err := tx.Exec(ctx, `UPDATE notification_channels SET kind=$2,name=$3,url=$4,enabled=$5,
-				sender_name=$7,sender_address=$8,smtp_host=$9,smtp_port=$10,smtp_tls=$11,smtp_auth=$12,smtp_username=$13,version=version+1,updated_at=now()
+				sender_name=$7,sender_address=$8,smtp_host=$9,smtp_port=$10,smtp_tls=$11,smtp_auth=$12,smtp_username=$13,
+				wecom_msg_type=$14,wecom_mentions=$15,version=version+1,updated_at=now()
 				WHERE id=$1 AND version=$6`, args...); err != nil {
 				return err
 			}
@@ -416,11 +442,14 @@ func (s *Service) channelConfig(ctx context.Context, channelID id.ID) (ChannelCo
 	var senderName, senderAddress, host, username string
 	var port int
 	var useTLS, useAuth bool
+	var wecomMsgType, wecomMentions string
 	if err := s.DB.Pool.QueryRow(ctx, `SELECT id,kind,name,url,credential_key_id,secret_nonce,secret_ciphertext,
-		COALESCE(sender_name,''),COALESCE(sender_address,''),COALESCE(smtp_host,''),COALESCE(smtp_port,0),smtp_tls,smtp_auth,COALESCE(smtp_username,'')
+		COALESCE(sender_name,''),COALESCE(sender_address,''),COALESCE(smtp_host,''),COALESCE(smtp_port,0),smtp_tls,smtp_auth,COALESCE(smtp_username,''),
+		COALESCE(wecom_msg_type,''),COALESCE(wecom_mentions,'')
 		FROM notification_channels WHERE id=$1 AND site_id=$2`,
 		channelID, s.siteID).Scan(&out.ID, &out.Kind, &out.Name, &url, &keyID, &nonce, &ciphertext,
-		&senderName, &senderAddress, &host, &port, &useTLS, &useAuth, &username); err != nil {
+		&senderName, &senderAddress, &host, &port, &useTLS, &useAuth, &username,
+		&wecomMsgType, &wecomMentions); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return out, auth.ErrNotFound
 		}
@@ -481,6 +510,21 @@ func smtpColumns(cfg *SMTPConfig) []any {
 		nullable(cfg.SenderName), nullable(cfg.SenderAddress), nullable(cfg.Host), port,
 		cfg.TLS, cfg.UseAuth, nullable(cfg.Username),
 	}
+}
+
+// wecomColumns is the same idea for the group-robot settings. It writes NULLs for
+// every other kind, and the table's CHECK relies on that to keep them apart.
+func wecomColumns(cfg *WeComConfig) []any {
+	if cfg == nil {
+		return []any{nil, nil}
+	}
+	nullable := func(v string) any {
+		if strings.TrimSpace(v) == "" {
+			return nil
+		}
+		return strings.TrimSpace(v)
+	}
+	return []any{nullable(cfg.MsgType), nullable(cfg.Mentions)}
 }
 
 // replaceRecipientsTx rewrites an email channel's mailbox list.

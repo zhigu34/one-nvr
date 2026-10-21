@@ -48,6 +48,11 @@ func decodeChannelBody(w http.ResponseWriter, q *http.Request) (notify.ChannelIn
 			UseAuth       bool   `json:"smtp_auth"`
 			Username      string `json:"username"`
 		} `json:"email"`
+		// Group-robot settings, present for kind 'wecom'.
+		WeCom *struct {
+			MsgType  string `json:"wecom_msg_type"`
+			Mentions string `json:"wecom_mentions"`
+		} `json:"wecom"`
 		// Nil means "leave the stored recipients alone"; an empty array clears
 		// them. A rename must not silently unbind every mailbox.
 		Recipients *[]struct {
@@ -80,6 +85,9 @@ func decodeChannelBody(w http.ResponseWriter, q *http.Request) (notify.ChannelIn
 			UseAuth:       in.Email.UseAuth,
 			Username:      in.Email.Username,
 		}
+	}
+	if in.WeCom != nil {
+		input.WeCom = &notify.WeComConfig{MsgType: in.WeCom.MsgType, Mentions: in.WeCom.Mentions}
 	}
 	if in.Recipients != nil {
 		recipients := make([]notify.RecipientInput, 0, len(*in.Recipients))

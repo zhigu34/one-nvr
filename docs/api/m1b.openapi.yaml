@@ -6553,7 +6553,8 @@
                     "enum": [
                       "inapp",
                       "webhook",
-                      "email"
+                      "email",
+                      "wecom"
                     ]
                   },
                   "name": {
@@ -6581,6 +6582,16 @@
                       "username": { "type": "string" }
                     },
                     "required": ["sender_name", "sender_address", "smtp_host", "smtp_port", "smtp_tls", "smtp_auth", "username"],
+                    "additionalProperties": false
+                  },
+                  "wecom": {
+                    "type": "object",
+                    "description": "Group-robot settings. Required when kind is wecom; ignored otherwise.",
+                    "properties": {
+                      "wecom_msg_type": { "type": "string", "enum": ["markdown", "news"] },
+                      "wecom_mentions": { "type": "string", "description": "Comma-separated phone numbers to @mention." }
+                    },
+                    "required": ["wecom_msg_type", "wecom_mentions"],
                     "additionalProperties": false
                   },
                   "recipients": {
@@ -6648,7 +6659,8 @@
                     "enum": [
                       "inapp",
                       "webhook",
-                      "email"
+                      "email",
+                      "wecom"
                     ]
                   },
                   "name": {
@@ -6675,6 +6687,16 @@
                       "username": { "type": "string" }
                     },
                     "required": ["sender_name", "sender_address", "smtp_host", "smtp_port", "smtp_tls", "smtp_auth", "username"],
+                    "additionalProperties": false
+                  },
+                  "wecom": {
+                    "type": "object",
+                    "description": "Group-robot settings. Required when kind is wecom; ignored otherwise.",
+                    "properties": {
+                      "wecom_msg_type": { "type": "string", "enum": ["markdown", "news"] },
+                      "wecom_mentions": { "type": "string", "description": "Comma-separated phone numbers to @mention." }
+                    },
+                    "required": ["wecom_msg_type", "wecom_mentions"],
                     "additionalProperties": false
                   },
                   "recipients": {
@@ -10051,7 +10073,8 @@
             "enum": [
               "inapp",
               "webhook",
-              "email"
+              "email",
+              "wecom"
             ]
           },
           "name": {
@@ -10059,7 +10082,24 @@
           },
           "url": {
             "type": "string",
-            "description": "Absent for the built-in inbox and for email, which carries its endpoint in the smtp_* fields."
+            "description": "Absent for the built-in inbox and for email, which carries its endpoint in the smtp_* fields. For wecom this is the group-robot URL, which carries the robot key — treat it as a credential."
+          },
+          "wecom": {
+            "description": "Group-robot settings, present for kind 'wecom'.",
+            "type": "object",
+            "properties": {
+              "wecom_msg_type": {
+                "type": "string",
+                "enum": ["markdown", "news"],
+                "description": "markdown keeps the facts and both links in one text block; news posts a single card with a link."
+              },
+              "wecom_mentions": {
+                "type": "string",
+                "description": "Comma-separated phone numbers to @mention. Empty pings nobody, which is what keeps a busy duty group from muting the robot."
+              }
+            },
+            "required": ["wecom_msg_type", "wecom_mentions"],
+            "additionalProperties": false
           },
           "email": {
             "description": "SMTP settings, present for kind 'email'. The password is never here: has_secret says one is stored.",
