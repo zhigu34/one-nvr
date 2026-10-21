@@ -131,13 +131,24 @@ export async function apiRequest<T>(
     )
   }
   const data = envelope.data
-  if (
-    data &&
-    typeof data === 'object' &&
-    'csrf_token' in data &&
-    typeof data.csrf_token === 'string'
-  )
-    csrfToken = data.csrf_token
+  // Adopt a CSRF token only from a response that speaks for the CURRENT session.
+  //
+  // setup/status also carries a `csrf_token`, but it is the PRE-auth token: it is
+  // signed for the pre-auth cookie, which login deletes, so `protected` can never
+  // verify it. `_authenticated/route.tsx` calls setup/status on every entry into a
+  // protected route, and taking its token there wiped the session token that
+  // /auth/me had just installed — every write in that tab then failed with
+  // csrf_rejected. That is the 403 the lease heartbeat kept producing: it is not
+  // a timeout, it is a token from the wrong signer.
+  if (path !== '/api/v1/setup/status' && !path.startsWith('/api/v1/setup')) {
+    if (
+      data &&
+      typeof data === 'object' &&
+      'csrf_token' in data &&
+      typeof data.csrf_token === 'string'
+    )
+      csrfToken = data.csrf_token
+  }
   return data as T
 }
 export function jsonRequest(

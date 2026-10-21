@@ -189,6 +189,31 @@ test('a forbidden write is not retried', async () => {
   expect(fetchMock).toHaveBeenCalledTimes(2)
 })
 
+// setup/status carries a PRE-auth token that `protected` can never verify. The
+// authenticated route calls it on every entry, and adopting its token wiped the
+// session token — every write in that tab then failed with csrf_rejected, which
+// is exactly what the playback lease heartbeat kept reporting.
+test('setup/status must not overwrite the session CSRF token', async () => {
+  clearAuthentication()
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { user: {}, csrf_token: 'session-csrf' } }))
+    )
+    .mockResolvedValueOnce(new Response(JSON.stringify({ data: {} })))
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { initialized: true, csrf_token: 'preauth-csrf' } }))
+    )
+    .mockResolvedValueOnce(new Response(JSON.stringify({ data: {} })))
+  vi.stubGlobal('fetch', fetchMock)
+  await apiRequest('/api/v1/recordings/seg-1/lease', { method: 'POST' })
+  await apiRequest('/api/v1/setup/status')
+  await apiRequest('/api/v1/recordings/seg-1/lease', { method: 'POST' })
+  expect(new Headers(fetchMock.mock.calls[1][1].headers).get('X-CSRF-Token')).toBe('session-csrf')
+  // The write after setup/status still carries the SESSION token.
+  expect(new Headers(fetchMock.mock.calls[3][1].headers).get('X-CSRF-Token')).toBe('session-csrf')
+})
+
 test('multipart keeps its browser boundary and CSRF instead of a JSON content type', async () => {
   const fetchMock = vi
     .fn()
