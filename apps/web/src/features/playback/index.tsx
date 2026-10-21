@@ -928,22 +928,31 @@ function Workspace({
           right. Empty windows say so here instead of collapsing the band. */}
       <div className='flex items-center justify-between gap-3 text-[11px] tabular-nums text-video-chrome-foreground/50'>
         {timeline.entries.length > 0 ? (
-          <span data-testid='playback-timeline-density'>
-            密度 <b className='font-medium text-video-chrome-foreground'>{timeline.entries.length}</b> 段
+          <span data-testid='playback-timeline-density' className='flex flex-wrap items-center gap-x-1.5'>
+            {/* "密度" and "缺口" were two numbers with no stated relationship,
+                and the gap count was coloured red with "看故障" — which reads as
+                "recording is failing". On a channel with recording switched off
+                the gaps are expected: no recording was ever asked for, so the
+                empty time is not a fault. The labels now say what each number
+                counts and what a gap means. */}
+            <span>
+              本时段有 <b className='font-medium text-video-chrome-foreground'>{timeline.entries.length}</b> 段录像
+            </span>
             {timeline.gaps.length > 0 && (
-              // A gap is a recording dropout, and the cause lives on the channel's
-              // reliability tab as a fault. Linking the count is what turns "there
-              // were three gaps" into "here is why" — the previous bare number
-              // left the operator to find that tab themselves.
-              <Link
-                to='/channels/configure'
-                search={{ channel: channelID, tab: 'reliability' }}
-                className='ml-1.5 text-red-400 underline-offset-2 hover:underline'
-                title='查看该通道的可靠性故障记录'
-              >
-                缺口 {timeline.gaps.length} · 看故障
-              </Link>
+              <span className='text-video-chrome-foreground/70'>
+                · {timeline.gaps.length} 处没有录像
+              </span>
             )}
+            {/* The answer lives on the recording plan page, where the mode is
+                set — not on the reliability tab, which explains dropouts of a
+                recording that was supposed to happen. */}
+            <Link
+              to='/recording-plan'
+              className='text-video-chrome-foreground/60 underline-offset-2 hover:text-video-chrome-foreground hover:underline'
+              title='看该通道的录像模式：模式为「关闭录像」时只有事件触发才产生片段，其余时间本来就没有录像'
+            >
+              为什么没有录像？
+            </Link>
           </span>
         ) : (
           <span className='text-video-chrome-foreground/60'>
