@@ -782,7 +782,15 @@ function RecordingRow({
     ? `${item.media.width}×${item.media.height} · ${item.media.codec.toUpperCase()}`
     : '—'
   const stateLabel = STATE_LABELS[item.state] || item.state
-  const fillable = item.state === 'ready'
+  // ARC-04: a verified cloud copy keeps the same recording playable after the
+  // local file is deleted, so "ready" is too strict a test for playback. The
+  // backend falls back to the proxy when the local copy is gone.
+  //
+  // Selecting (and therefore deleting, exporting) still requires a local file:
+  // those actions operate on the bytes on this machine.
+  const localMedia = item.state === 'ready'
+  const playable = localMedia || (item.archived && (item.state === 'deleted' || item.state === 'missing'))
+  const fillable = localMedia
   return (
     <div
       ref={rowRef}
@@ -820,7 +828,9 @@ function RecordingRow({
           )}
           {item.archived && (
             <span className='rounded bg-emerald-400/15 px-1.5 py-0.5 text-[10px] text-emerald-400'>
-              本地+云端
+              {/* Where the bytes are, not merely whether a copy exists: a
+                  deleted local file is not "本地". */}
+              {localMedia ? '本地+云端' : '仅云端'}
             </span>
           )}
           <span
@@ -861,7 +871,7 @@ function RecordingRow({
             type='button'
             aria-label={`播放 ${item.id}`}
             aria-pressed={isCurrent}
-            disabled={!fillable}
+            disabled={!playable}
             onClick={onPlay}
             title={isCurrent ? '播放中' : '播放此段'}
             className={cn(

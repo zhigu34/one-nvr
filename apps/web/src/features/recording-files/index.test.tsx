@@ -20,6 +20,8 @@ const CH = '00000000-0000-4000-8000-000000000001'
 const OLD = '00000000-0000-4000-8000-0000000000a1'
 const PROTECTED = '00000000-0000-4000-8000-0000000000a2'
 const GONE = '00000000-0000-4000-8000-0000000000a3'
+const DELETED_CLOUD = '00000000-0000-4000-8000-0000000000a4'
+const DELETED_LOCAL_ONLY = '00000000-0000-4000-8000-0000000000a5'
 
 function segment(
   id: string,
@@ -106,6 +108,10 @@ function fixture(
           segment(OLD),
           segment(PROTECTED, { protected: true }),
           segment(GONE, { state: 'missing', check_state: 'missing' }),
+          // Local copy deleted, verified cloud copy exists: still playable.
+          segment(DELETED_CLOUD, { state: 'deleted', archived: true }),
+          // Local copy deleted, nothing in the cloud.
+          segment(DELETED_LOCAL_ONLY, { state: 'deleted', archived: false }),
         ],
         next_cursor: null,
       }
@@ -160,7 +166,7 @@ function site(retentionDays: number): Schema<'Site'> {
 test('lists recordings with media facts and states, and marks deleted rows unselectable', async () => {
   const setup = fixture()
   const view = await render(setup.view)
-  await expect.element(view.getByTestId('recording-row')).toHaveLength(3)
+  await expect.element(view.getByTestId('recording-row')).toHaveLength(5)
   const first = view.getByTestId('recording-row').nth(0)
   // The card renders the media line with the codec upper-cased.
   await expect.element(first).toHaveTextContent('1920×1080 · H264')
@@ -243,7 +249,7 @@ test('file management is administrator only', async () => {
 test('the row delete icon asks for confirmation and deletes that segment', async () => {
   const setup = fixture()
   const view = await render(setup.view)
-  await expect.element(view.getByTestId('recording-row')).toHaveLength(3)
+  await expect.element(view.getByTestId('recording-row')).toHaveLength(5)
 
   // The row's delete control, by its accessible name (it is an icon button).
   // The row renders its clock in the site zone, so match the prefix.
@@ -263,7 +269,7 @@ test('the row delete icon asks for confirmation and deletes that segment', async
 test('the delete icon is disabled for a segment with no local copy', async () => {
   const setup = fixture()
   const view = await render(setup.view)
-  await expect.element(view.getByTestId('recording-row')).toHaveLength(3)
+  await expect.element(view.getByTestId('recording-row')).toHaveLength(5)
   // The third row is 'missing'.
   const row = view.getByTestId('recording-row').nth(2)
   const trash = row.getByRole('button', { name: /删除本地副本/ })
@@ -282,4 +288,30 @@ test('the row actions are four icon buttons with no text labels', async () => {
     const target = row.getByRole('button', { name: label }).or(row.getByRole('link', { name: label }))
     await expect.element(target).toBeVisible()
   }
+})
+
+// A deleted local copy is not "本地+云端", and it is still playable when the
+// cloud holds a verified copy (ARC-04). Both were wrong: the badge claimed a
+// local copy that no longer existed, and the play button was disabled exactly
+// in the case the cloud fallback was built for.
+test('a deleted segment with a cloud copy says 仅云端 and stays playable', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  await expect.element(view.getByTestId('recording-row')).toHaveLength(5)
+  const row = view.getByTestId('recording-row').nth(3)
+  await expect.element(row).toHaveTextContent('已删除')
+  await expect.element(row).toHaveTextContent('仅云端')
+  expect(row.getByText('本地+云端').query()).toBeNull()
+  // The whole reason the cloud fallback exists: this row plays.
+  await expect.element(row.getByRole('button', { name: /^播放 / })).toBeEnabled()
+})
+
+// Without a cloud copy there is nothing to play.
+test('a deleted segment with no cloud copy is not playable', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  const row = view.getByTestId('recording-row').nth(4)
+  await expect.element(row).toHaveTextContent('已删除')
+  expect(row.getByText('仅云端').query()).toBeNull()
+  await expect.element(row.getByRole('button', { name: /^播放 / })).toBeDisabled()
 })
