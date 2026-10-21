@@ -11,7 +11,6 @@ import {
 } from '@/components/ui/table'
 import { PageTitle, QueryState, Empty } from '@/features/foundation/ui'
 import { useAPI } from '@/features/foundation/hooks'
-import { channelConfigured } from './mode-format'
 import { PolicyRow } from './policy-row'
 import { PlanConfigBar } from './plan-config-bar'
 
@@ -38,10 +37,6 @@ export function RecordingPlan() {
   )
   const site = useAPI<Schema<'Site'>>('/api/v1/site')
   const [selected, setSelected] = useState<Set<string>>(new Set())
-  // Unconfigured rows collapse behind one line by default: sixteen mostly-empty
-  // slots are setup context, not per-channel work, and they pushed the rows an
-  // operator came for below the fold.
-  const [showUnconfigured, setShowUnconfigured] = useState(false)
 
   const items = channels.data?.items || []
   const summaryOf = useMemo(
@@ -58,12 +53,10 @@ export function RecordingPlan() {
       ),
     [pools.data]
   )
-  const configured = items.filter((channel) =>
-    channelConfigured(summaryOf.get(channel.id ?? ''))
-  )
-  const unconfigured = items.filter(
-    (channel) => !channelConfigured(summaryOf.get(channel.id ?? ''))
-  )
+  // Only channels with a camera appear here. A reserved slot cannot record, so a
+  // plan for it is a plan for nothing; the empty slots stay in channel management,
+  // which is where they get filled.
+  const configured = items.filter((channel) => channel.configured)
   // Only a channel the operator may configure can be selected: applying to a
   // channel the server will reject wastes a round trip per channel and reports a
   // failure the operator cannot act on.
@@ -71,11 +64,7 @@ export function RecordingPlan() {
     channel.permissions.includes('configure')
   )
   const chosen = permitted.filter((channel) => selected.has(channel.id))
-  // A collapse that hides selected channels would silently drop them from the
-  // next apply: expanding on selection keeps "what I see" equal to "what runs".
-  const unconfiguredShown =
-    showUnconfigured || unconfigured.some((channel) => selected.has(channel.id))
-  const visibleRows = unconfiguredShown ? items : configured
+  const visibleRows = configured
 
   function toggle(id: string, checked: boolean) {
     setSelected((previous) => {
@@ -175,23 +164,6 @@ export function RecordingPlan() {
               </div>
             )}
           </div>
-          {unconfigured.length > 0 && (
-            <button
-              type='button'
-              className='w-full rounded-xl border border-dashed border-border px-4 py-2.5 text-sm text-muted-foreground hover:bg-accent/40'
-              aria-expanded={unconfiguredShown}
-              onClick={() => setShowUnconfigured((value) => !value)}
-            >
-              {unconfiguredShown
-                ? '收起未配置源通道'
-                : `已隐藏 ${unconfigured.length} 个未配置源通道（${unconfigured
-                    .map(
-                      (channel) =>
-                        `CH${String(channel.channel_no).padStart(2, '0')}`
-                    )
-                    .join('、')}）· 点击展开`}
-            </button>
-          )}
         </>
       )}
     </div>

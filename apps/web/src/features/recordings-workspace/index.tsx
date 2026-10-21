@@ -2,6 +2,7 @@ import { useMemo, useState, useSyncExternalStore } from 'react'
 import { Search } from 'lucide-react'
 import { useNavigate } from '@tanstack/react-router'
 import type { PageData, Schema } from '@/lib/types'
+import { configuredChannels } from '@/features/foundation/channels'
 import { useAPI } from '@/features/foundation/hooks'
 import { Empty, QueryState } from '@/features/foundation/ui'
 import { Input } from '@/components/ui/input'
@@ -58,8 +59,13 @@ export function RecordingsWorkspace({
     '/api/v1/channels?limit=100'
   )
   const site = useAPI<Schema<'Site'>>('/api/v1/site')
-  const channels = (channelsQuery.data?.items || []).filter((channel) =>
-    channel.permissions.includes('playback')
+  // Configured channels only: the rail is a list of cameras you can watch, and a
+  // reserved slot with no source can never produce footage. Channel management is
+  // the one place an empty slot stays visible.
+  const channels = configuredChannels(
+    (channelsQuery.data?.items || []).filter((channel) =>
+      channel.permissions.includes('playback')
+    )
   )
   // The shell owns the channel choice; both panels render from this single id.
   // `resolvedID` holds the operator's pick; `fallbackID` fills in when the

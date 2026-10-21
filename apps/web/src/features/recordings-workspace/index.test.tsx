@@ -49,6 +49,17 @@ function mockCommon() {
             permissions: ['playback'],
             configured: true,
           },
+          {
+            // A reserved slot with no camera: the rail must not offer it.
+            id: '00000000-0000-4000-8000-0000000000e9',
+            channel_no: 3,
+            channel_name: '通道 03',
+            channel_group: '',
+            enabled: true,
+            version: 1,
+            permissions: ['playback'],
+            configured: false,
+          },
         ],
         next_cursor: null,
       }
@@ -114,6 +125,9 @@ test('the recordings workspace renders channels, playback and the file panel sid
   await expect.element(view.getByRole('link', { name: '返回实时预览' })).toBeVisible()
   await expect.element(view.getByTestId('channels-rail')).toBeVisible()
   await expect.element(view.getByRole('button', { name: 'CH01 大门' })).toBeVisible()
+  // The rail lists cameras, not reserved slots: a channel with no source can
+  // never produce footage, and channel management is where it gets filled.
+  expect(view.getByRole('button', { name: /CH03/ }).query()).toBeNull()
   await expect.element(view.getByTestId('playback-console')).toBeVisible()
   // The file rail starts collapsed; the header toggle expands it. Two
   // controls share the label (header chip + collapsed rail strip) — the
