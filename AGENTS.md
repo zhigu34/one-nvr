@@ -64,6 +64,15 @@ CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真�
 
 ## 当前交接快照（2026-10-09）
 
+- **2026-10-21 清空全部历史数据（`purge-history`）**。用户要求「把历史录像文件、事件记录、云端录像全删了」。做成命令而不是「SQL + rm -rf」：
+  - **云端对象只有应用能删**：WebDAV 密码用站点凭据密钥封着（`secrets.State.OpenCredential`），跳过的脚本会报告成功而天翼云上留着 1049 个文件。新增 `archive.Service.RemoveObject`，构造时用 `clientFor` 解封。
+  - **本地文件走 UI 同一套规则**：`recording.DeleteCorruptLocal` 会重核已发布 identity、在导出/上传/播放租约期间拒绝、每文件一条审计。`rm -rf` 拿不到这些，还会留下声称 ready 的行指向已消失的文件。
+  - **顺序**：云端 → 本地文件 → 索引行 → 目录清扫。**必须先停 worker**，否则录制还在产出片段。行删除放目录清扫前（留下的是可见且可自愈的 missing，而不是无声占空间的孤儿）。
+  - **三个外键是跑起来才发现的**：`hook_inbox`、`job_attempts` 对父表都是 NO ACTION，`recording_export_sources` 无级联。两轮现场失败分别暴露 `job_attempts`、以及「not_ready 被误当成冲突」。现在 `TestPurgeHistoryEmptiesMediaAndEventsButKeepsConfiguration` 在真实 schema 上插一条 attempt，去掉对应语句会以同一 SQLSTATE 失败。
+  - **拒绝分两类**：`lease_held`/`pinned_by_export`/`archiving` 是真冲突（有人正在读那些字节），必须停下；`not_ready`（片段还 finalizing）不该停——索引删掉、worker 停掉之后永远不会有人把它做完，目录清扫正是要清它的文件。**匹配的是 state 不是 reason**（我按 reason 匹配，`finalizing` 永远匹配不上，白挡了一轮）。
+  - **保留**：通道、源、存储池、归档目标、策略、计划、规则、用户、审计日志、可靠性历史（138 日汇总 / 166199 分钟 / 370 故障）。抹掉配置就把数据重置变成重装；审计日志是这次删除唯一的凭据（`recording.history_purged` + 每文件一行）。
+  - **现场结果**：本地 1450 个 ready 片段（29 GB）+ 3097 个其它状态全部清空，`/storage/pool-1/{recordings,snapshots,.work}` 均为 0；4919 条事件、1881 个窗口、1804 个 run、1049 个云端对象全部删除；8 个容器健康，gateway 200，worker 重启后 0 error。
+
 - **2026-10-21 事件录像改成「录像为主体、事件为锚点」（迁移 0050）**。用户的原话是规则本身：**一个录像文件里可以包含多个触发事件；事件只是标记与跳转锚点；无录像时触发才生成录像，录像生成中触发则延长录像。**
   - **旧模型是反的**：`event_clip_jobs.event_id` 是主键 → 一个事件最多一个片段 → 两个事件必然两个文件。现场实测 6 小时 162 段活动里 **67 段被切成多个事件，最多 6 个**，所以一次经过就是几个文件、中间是没录的空档。
   - **新表 `clip_windows`**（`window_start` / `window_end` / `state` / `segment_id` / `clip_run_id`）。`event_clip_jobs` 保留（事件重复消息靠它幂等），但角色降为「这个事件属于哪个窗口」，`window_id NOT NULL`。
