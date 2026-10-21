@@ -18,11 +18,41 @@ import (
 // this ceiling stops a wedged process from holding a worker forever.
 const concatTimeout = 15 * time.Minute
 
-// ConcatPart is one input of a stream-copy concatenation. Duration feeds the
-// ffconcat script (so the demuxer timestamps correctly) and the progress ratio.
+// ConcatPart is one input of a stream-copy concatenation.
+//
+// Duration is only a hint for the progress ratio. It is deliberately NOT written
+// into the ffconcat script: the caller's value comes from fragment file names and
+// mtimes, which are whole seconds and therefore wrong by up to a second each.
+// Four fragments whose names say 4+3+3 seconds but whose frames span 13.3 made
+// ffmpeg emit a 606-second timeline with a 237-second hole — a recording that
+// stutters because the player is waiting out a gap that never existed. The real
+// durations are measured from the files instead.
 type ConcatPart struct {
 	Path     string
 	Duration time.Duration
+}
+
+// mediaDuration reads a file's real duration. Used instead of the caller's hint,
+// which for fragments comes from whole-second file names and mtimes.
+func (r Runner) mediaDuration(ctx context.Context, path string) (time.Duration, error) {
+	if r.FFprobe == "" {
+		return 0, ErrProbeFailed
+	}
+	bounded, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(bounded, r.FFprobe, "-v", "error",
+		"-show_entries", "format=duration", "-of", "csv=p=0", path)
+	cmd.WaitDelay = time.Second
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return 0, ErrProbeFailed
+	}
+	seconds, err := strconv.ParseFloat(strings.TrimSpace(stdout.String()), 64)
+	if err != nil || seconds <= 0 {
+		return 0, ErrProbeFailed
+	}
+	return time.Duration(seconds * float64(time.Second)), nil
 }
 
 // ConcatMP4 remuxes whole MP4 files into one output with stream copy. It never
@@ -35,11 +65,24 @@ func (r Runner) ConcatMP4(ctx context.Context, parts []ConcatPart, output string
 		return out, ErrProbeFailed
 	}
 	var total time.Duration
-	for _, part := range parts {
-		if part.Path == "" || part.Duration <= 0 {
+	durations := make([]time.Duration, len(parts))
+	for i, part := range parts {
+		if part.Path == "" {
 			return out, ErrProbeFailed
 		}
-		total += part.Duration
+		// Measure the real duration. The caller's hint cannot be used for the
+		// timeline: see ConcatPart.
+		measured, err := r.mediaDuration(ctx, part.Path)
+		if err != nil || measured <= 0 {
+			// Fall back to the hint so a caller with accurate values still works,
+			// but never silently: a zero here means the concat is skipped.
+			if part.Duration <= 0 {
+				return out, ErrProbeFailed
+			}
+			measured = part.Duration
+		}
+		durations[i] = measured
+		total += measured
 	}
 	list := output + ".ffconcat"
 	script := &strings.Builder{}
@@ -47,8 +90,16 @@ func (r Runner) ConcatMP4(ctx context.Context, parts []ConcatPart, output string
 	for _, part := range parts {
 		// ffconcat quoting: a literal quote closes the quoted region, an
 		// escaped quote and a reopened one carry it forward.
+		//
+		// No `duration` directive, deliberately. The directive tells the
+		// demuxer how long the part occupies the timeline; the measured value
+		// is the container's duration, which includes the last frame's
+		// display time and therefore overshoots the final frame's timestamp by
+		// one frame interval. Writing it left a hole at every seam — measured
+		// as 0.2 s per seam on synthetic 10 fps material and 0.17-0.88 s on
+		// the site's 15 fps fragments. Without the directive ffmpeg derives
+		// each part's span from its frames and the seams close exactly.
 		script.WriteString(fmt.Sprintf("file '%s'\n", strings.ReplaceAll(part.Path, "'", `'\''`)))
-		script.WriteString(fmt.Sprintf("duration %.3f\n", part.Duration.Seconds()))
 	}
 	if err := os.WriteFile(list, []byte(script.String()), 0o600); err != nil {
 		return out, ErrProbeFailed
@@ -57,8 +108,15 @@ func (r Runner) ConcatMP4(ctx context.Context, parts []ConcatPart, output string
 
 	bounded, cancel := context.WithTimeout(ctx, concatTimeout)
 	defer cancel()
+	// `-fflags +genpts` makes the demuxer regenerate packet timestamps from the
+	// frame rate instead of trusting each part's own clock. Every fragment starts
+	// at 0 and ends at its last frame; spliced by their own clocks the seams
+	// leave a gap of one frame interval, which accumulates into the visible
+	// stutter this exists to remove. Regenerating timestamps is still a stream
+	// copy — no frame is re-encoded.
 	cmd := exec.CommandContext(bounded, r.FFmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
-		"-f", "concat", "-safe", "0", "-i", list, "-c", "copy", "-nostats", "-progress", "pipe:1", "-y", output)
+		"-fflags", "+genpts", "-f", "concat", "-safe", "0", "-i", list,
+		"-c", "copy", "-avoid_negative_ts", "make_zero", "-nostats", "-progress", "pipe:1", "-y", output)
 	cmd.WaitDelay = time.Second
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
