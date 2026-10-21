@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -144,22 +145,41 @@ func purgeHistoryCommand(args []string) (bool, error) {
 	fmt.Printf("cloud objects deleted:    %d (failed %d)\n", cloudDeleted, cloudFailed)
 
 	// 2. Local files, through the same core the UI uses.
-	localDeleted, released, localKept := purgeLocalSegments(ctx, db, service)
-	fmt.Printf("local files deleted:      %d (%d MB released, %d kept)\n", localDeleted, released>>20, localKept)
-	if localKept > 0 {
-		// Stop before the directory sweep. A "kept" outcome is a real refusal — a
-		// playback lease, an export reading the file, an upload in flight — and
-		// removing the tree anyway would take the file out from under it, which is
-		// exactly what the deletion core exists to prevent. The operator reruns once
-		// the reason is gone; everything above is already done and idempotent.
-		return true, fmt.Errorf("%d local files were refused by the deletion core; resolve the reason above and rerun", localKept)
+	localDeleted, released, refused := purgeLocalSegments(ctx, db, service)
+	fmt.Printf("local files deleted:      %d (%d MB released)\n", localDeleted, released>>20)
+	if len(refused) > 0 {
+		// A refusal that names a live consumer — a playback lease, an export
+		// reading the file, an upload in flight — is a real conflict: deleting the
+		// tree anyway would take the bytes out from under whoever is reading them.
+		// Refuse to continue and let the operator resolve it.
+		//
+		// "not_ready" is different and must NOT stop the run: it means the row is
+		// still 'finalizing', i.e. a clip whose recording was interrupted. After the
+		// index is gone and the worker is stopped nothing will ever finish it, and
+		// the directory sweep is what removes its file. Stopping here would leave an
+		// abandoned in-progress clip blocking a purge forever.
+		var blockers []string
+		for reason, count := range refused {
+			if reason == "not_ready" {
+				continue
+			}
+			blockers = append(blockers, fmt.Sprintf("%s=%d", reason, count))
+		}
+		if len(blockers) > 0 {
+			return true, fmt.Errorf("deletion refused (%s); stop the consumer and rerun", strings.Join(blockers, ", "))
+		}
+		fmt.Printf("unfinished clips:         %d (their files go with the directory sweep)\n", refused["not_ready"])
 	}
 
-	// 3. The index. Before the directory sweep, not after: the recorder keeps
-	//    producing segments while this runs, and a clip that lands between the row
-	//    delete and the sweep would otherwise leave its file on disk with nothing
-	//    pointing at it. With the rows gone first, the sweep's leftovers are
-	//    unambiguously orphans.
+	// 3. The index. Before the directory sweep, not after.
+	//
+	// The recorder keeps producing while this runs, and neither order is perfectly
+	// atomic against that. Rows first means a segment that lands in between ends up
+	// with a row whose file the sweep then removes — a visible "missing" entry that
+	// the next run deletes. The other order leaves an unreferenced file on disk
+	// that nothing will ever clean: silent, and it wastes the space the operator
+	// asked to reclaim. A visible, self-correcting artefact beats an invisible one,
+	// so this order — and running the command twice converges.
 	if err := recording.PurgeHistoryRows(ctx, db); err != nil {
 		return true, err
 	}
@@ -181,7 +201,6 @@ func purgeHistoryCommand(args []string) (bool, error) {
 		"cloud_deleted":   cloudDeleted,
 		"cloud_failed":    cloudFailed,
 		"local_deleted":   localDeleted,
-		"local_kept":      localKept,
 		"released_bytes":  released,
 		"reclaimed_bytes": reclaimed,
 	})
@@ -189,8 +208,8 @@ func purgeHistoryCommand(args []string) (bool, error) {
 		return true, err
 	}
 	fmt.Println(string(result))
-	if cloudFailed > 0 || localKept > 0 {
-		return true, fmt.Errorf("%d cloud objects and %d local files were not deleted; rerun to retry", cloudFailed, localKept)
+	if cloudFailed > 0 {
+		return true, fmt.Errorf("%d cloud objects could not be deleted; rerun to retry", cloudFailed)
 	}
 	return true, nil
 }
@@ -287,28 +306,29 @@ func purgeCloudCopies(ctx context.Context, db *database.DB, archiver *archive.Se
 // never finish — the same starvation the retention sweeps avoid by ordering on
 // end_at. One pass over a snapshot of the ids terminates whatever the outcomes
 // are, and the rows that were kept are named in the report.
-func purgeLocalSegments(ctx context.Context, db *database.DB, service *recording.Service) (deleted int, released int64, kept int) {
+func purgeLocalSegments(ctx context.Context, db *database.DB, service *recording.Service) (deleted int, released int64, refused map[string]int) {
+	refused = make(map[string]int)
 	rows, err := db.Pool.Query(ctx, `SELECT id FROM recording_segments WHERE state<>'deleted' ORDER BY start_at`)
 	if err != nil {
 		fmt.Printf("segment scan stopped: %v\n", err)
-		return 0, 0, 0
+		return 0, 0, refused
 	}
 	var ids []id.ID
 	for rows.Next() {
 		var segmentID id.ID
 		if err := rows.Scan(&segmentID); err != nil {
 			rows.Close()
-			return 0, released, kept
+			return 0, released, refused
 		}
 		ids = append(ids, segmentID)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, released, kept
+		return 0, released, refused
 	}
 	for start := 0; start < len(ids); start += historyPurgeBatch {
 		if ctx.Err() != nil {
-			return deleted, released, kept
+			return deleted, released, refused
 		}
 		end := start + historyPurgeBatch
 		if end > len(ids) {
@@ -317,7 +337,7 @@ func purgeLocalSegments(ctx context.Context, db *database.DB, service *recording
 		outcomes, err := service.DeleteCorruptLocal(ctx, ids[start:end])
 		if err != nil {
 			fmt.Printf("segment deletion stopped: %v\n", err)
-			return deleted, released, kept
+			return deleted, released, refused
 		}
 		for _, outcome := range outcomes {
 			switch outcome.State {
@@ -329,12 +349,12 @@ func purgeLocalSegments(ctx context.Context, db *database.DB, service *recording
 				// unlink, and the row goes with the rest of the index below.
 				deleted++
 			default:
-				kept++
+				refused[outcome.Reason]++
 				fmt.Printf("local kept %s: %s\n", outcome.SegmentID, outcome.Reason)
 			}
 		}
 	}
-	return deleted, released, kept
+	return deleted, released, refused
 }
 
 // purgeMediaDirectories removes what the index no longer names.
