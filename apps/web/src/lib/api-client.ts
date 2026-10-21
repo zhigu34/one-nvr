@@ -1,7 +1,17 @@
 // Sessions remain in the server's HttpOnly cookie. CSRF lives only in memory.
+//
+// There are TWO tokens and they are not interchangeable:
+//
+//   csrfToken     — derived from the session cookie; what `protected` verifies.
+//   preAuthToken  — issued by setup/status for the pre-auth cookie; what
+//                   `anonymous` verifies (POST /setup and POST /auth/login).
+//
+// Collapsing them was the bug in both directions. Using the pre-auth token for
+// protected writes made every mutation after a page load fail with
+// csrf_rejected; discarding it entirely broke SIGN-IN, because /auth/login is an
+// anonymous route and has nothing else to verify against.
 let csrfToken = ''
-// The token belongs to one session; a login or logout must drop it.
-let sessionCSRF = ''
+let preAuthToken = ''
 let generation = 0
 // getRandomValues is available on ordinary HTTP as well as HTTPS. randomUUID
 // requires a secure context and is absent on a LAN HTTP deployment.
@@ -32,33 +42,46 @@ export class ApiError extends Error {
 }
 export function clearAuthentication() {
   csrfToken = ''
-  sessionCSRF = ''
+  preAuthToken = ''
   generation++
+}
+
+// The anonymous endpoints that verify the PRE-auth token instead of the session's.
+// Both are reachable before anyone is signed in, which is why they cannot use a
+// session-derived value.
+const anonymousPaths = ['/api/v1/setup', '/api/v1/auth/login']
+
+function isAnonymousPath(path: string): boolean {
+  return anonymousPaths.some((prefix) => path === prefix || path.startsWith(prefix + '/'))
+}
+
+/**
+ * loadPreAuthCSRF fetches the pre-auth token for sign-in.
+ *
+ * setup/status issues it together with the pre-auth cookie, and both are needed
+ * by `anonymous`. Cached per page load: the token is valid for ten minutes and
+ * regenerating it on every attempt would invalidate the cookie that must match
+ * it.
+ */
+async function loadPreAuthCSRF() {
+  if (preAuthToken) return
+  await apiRequest<{ csrf_token: string }>('/api/v1/setup/status').catch(() => {})
 }
 
 /**
  * loadSessionCSRF obtains the CSRF token for the CURRENT session.
  *
- * It must not be setup/status. That endpoint issues a PRE-auth token, signed for
- * a cookie that login deletes, and `protected` compares against the session's own
- * token — so every write after a page load (where the in-memory token is empty)
- * was rejected with 403 csrf_rejected. That is exactly what the playback lease
- * heartbeat hit: 30 seconds after a reload, on a network where the request still
- * reached the server.
+ * `/auth/me` is the source: it is a protected GET, needs no CSRF of its own, and
+ * its response carries the token derived from the session cookie. setup/status
+ * cannot serve here — its token is signed for the pre-auth cookie, which login
+ * deletes, so `protected` would reject every later write.
  *
- * `/auth/me` is the right source: it is a protected GET, needs no CSRF, and its
- * response carries the token derived from the session cookie. A 401 there is left
- * to the caller — the write will fail the same way, and the interceptor turns it
- * into the unauthenticated path.
+ * A 401 is left to the caller: the write fails the same way, and the interceptor
+ * turns it into the unauthenticated path.
  */
-async function loadSessionCSRF(started: number) {
-  if (sessionCSRF) {
-    // Another request in this generation already fetched it.
-    csrfToken = sessionCSRF
-    return
-  }
+async function loadSessionCSRF() {
+  if (csrfToken) return
   await apiRequest<{ csrf_token: string }>('/api/v1/auth/me').catch(() => {})
-  if (generation === started) sessionCSRF = csrfToken
 }
 export async function apiRequest<T>(
   path: string,
@@ -70,9 +93,14 @@ export async function apiRequest<T>(
   const started = generation
   const headers = new Headers(init.headers)
   const method = (init.method || 'GET').toUpperCase()
+  // Sign-in and first-run setup verify the PRE-auth token; everything else
+  // verifies the session's. Picking the wrong one is a 403 with no explanation,
+  // which is how both directions of this bug presented.
+  const anonymous = isAnonymousPath(path)
   if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
-    if (!csrfToken) await loadSessionCSRF(started)
-    headers.set('X-CSRF-Token', csrfToken)
+    if (anonymous) await loadPreAuthCSRF()
+    else await loadSessionCSRF()
+    headers.set('X-CSRF-Token', anonymous ? preAuthToken : csrfToken)
     if (init.body instanceof FormData) headers.delete('Content-Type')
     else if (init.body) headers.set('Content-Type', 'application/json')
   }
@@ -118,8 +146,9 @@ export async function apiRequest<T>(
       !csrfRetried &&
       !['GET', 'HEAD', 'OPTIONS'].includes(method)
     ) {
-      sessionCSRF = ''
-      csrfToken = ''
+      // Drop only the token this request used, then try once.
+      if (anonymous) preAuthToken = ''
+      else csrfToken = ''
       return apiRequest<T>(path, init, true)
     }
     throw new ApiError(
@@ -131,23 +160,16 @@ export async function apiRequest<T>(
     )
   }
   const data = envelope.data
-  // Adopt a CSRF token only from a response that speaks for the CURRENT session.
+  // File each token under the authority it actually carries.
   //
-  // setup/status also carries a `csrf_token`, but it is the PRE-auth token: it is
-  // signed for the pre-auth cookie, which login deletes, so `protected` can never
-  // verify it. `_authenticated/route.tsx` calls setup/status on every entry into a
-  // protected route, and taking its token there wiped the session token that
-  // /auth/me had just installed — every write in that tab then failed with
-  // csrf_rejected. That is the 403 the lease heartbeat kept producing: it is not
-  // a timeout, it is a token from the wrong signer.
-  if (path !== '/api/v1/setup/status' && !path.startsWith('/api/v1/setup')) {
-    if (
-      data &&
-      typeof data === 'object' &&
-      'csrf_token' in data &&
-      typeof data.csrf_token === 'string'
-    )
-      csrfToken = data.csrf_token
+  // setup/status issues the PRE-auth token (ten minutes, bound to the pre-auth
+  // cookie that login deletes); /auth/me, /auth/login and friends issue the
+  // session token. Storing either one in the other's slot is what produced both
+  // halves of this bug: protected writes rejected after a page load, and sign-in
+  // rejected outright once the pre-auth token was thrown away.
+  if (data && typeof data === 'object' && 'csrf_token' in data && typeof data.csrf_token === 'string') {
+    if (path === '/api/v1/setup/status') preAuthToken = data.csrf_token
+    else csrfToken = data.csrf_token
   }
   return data as T
 }

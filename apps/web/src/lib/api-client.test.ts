@@ -214,6 +214,38 @@ test('setup/status must not overwrite the session CSRF token', async () => {
   expect(new Headers(fetchMock.mock.calls[3][1].headers).get('X-CSRF-Token')).toBe('session-csrf')
 })
 
+// Sign-in is an ANONYMOUS route: the server verifies the pre-auth token there,
+// not the session's. Throwing the pre-auth token away (the previous fix) broke
+// login entirely — POST /auth/login answered 403 csrf_rejected with no usable
+// message, and nobody could get in.
+test('login sends the pre-auth token, and the session token takes over after', async () => {
+  clearAuthentication()
+  const fetchMock = vi
+    .fn()
+    // 1. setup/status issues the pre-auth token
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { initialized: true, csrf_token: 'preauth-csrf' } }))
+    )
+    // 2. login succeeds and returns the session token
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { user: {}, csrf_token: 'session-csrf' } }))
+    )
+    // 3. a write after login
+    .mockResolvedValueOnce(new Response(JSON.stringify({ data: {} })))
+  vi.stubGlobal('fetch', fetchMock)
+
+  await apiRequest('/api/v1/setup/status')
+  await apiRequest('/api/v1/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ username: 'admin', password: 'x' }),
+  })
+  expect(new Headers(fetchMock.mock.calls[1][1].headers).get('X-CSRF-Token')).toBe('preauth-csrf')
+
+  await apiRequest('/api/v1/recordings/seg-1/lease', { method: 'POST' })
+  // After login the session token is the one that verifies.
+  expect(new Headers(fetchMock.mock.calls[2][1].headers).get('X-CSRF-Token')).toBe('session-csrf')
+})
+
 test('multipart keeps its browser boundary and CSRF instead of a JSON content type', async () => {
   const fetchMock = vi
     .fn()
