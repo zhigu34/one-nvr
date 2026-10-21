@@ -233,30 +233,28 @@ test('nothing clock dependent renders before the site timezone is known', async 
   expect(view.getByRole('button', { name: '检索录像' }).query()).toBeNull()
 })
 
-test('offers only channels with playback permission and parks the newest segment on entry', async () => {
+test('offers only channels with playback permission and selects the newest segment without reading media', async () => {
   const { view, video } = await fixture([segment(A, 0, 120)])
   await expect
     .element(view.getByRole('button', { name: 'CH01 大门' }))
     .toBeVisible()
   expect(document.body.textContent).not.toContain('CH02 仓库')
-  // The entry point auto-loads the newest segment's first frame (paused —
-  // no playback), so the operator sees a picture instead of a black ring.
-  // Motion only ever starts from 播放.
-  await vi.waitFor(() => expect(video().src).toContain(`/api/v1/recordings/${A}/content`))
-  expect(video().paused).toBe(true)
-  expect(document.body.textContent).not.toContain('点击下方时间轴的片段开始回放')
+  // Entering the page SELECTS the newest segment (the timeline highlights it,
+  // the detail strip fills in) but does not load its bytes. Every media read is
+  // an audited playback and pins a 90-second lease; doing that on page entry
+  // filled the audit log with playbacks nobody asked for and blocked deleting
+  // the segment the operator had just opened. Reading is the operator's move.
+  await expect.element(view.getByTestId('playback-selected')).toBeVisible()
+  expect(video().src).not.toContain('/content')
+  expect(document.body.textContent).not.toContain('播放中')
 })
 
 test('an idle workspace shows no fake position and names the channel, not playback', async () => {
   const { view } = await fixture([segment(A, 0, 120)])
   await view.getByRole('button', { name: 'CH01 大门' }).click()
-  // The park attempt publishes a real phase (paused with the frame, or an
-  // explicit error when the headless runner cannot serve the bytes) — never
-  // a fake clock or a phantom "playing".
-  await vi.waitFor(() => {
-    const text = document.body.textContent || ''
-    return text.includes('已定位到片段') || text.includes('资源不存在') || text.includes('播放中断')
-  })
+  // Nothing is read on entry, so the transport stays idle: no fake clock, no
+  // phantom "playing", and the prompt still tells the operator what to do.
+  await expect.element(view.getByTestId('playback-selected')).toBeVisible()
   expect(document.body.textContent).not.toContain('1970-01-01')
   expect(document.body.textContent).not.toContain('播放中')
 })

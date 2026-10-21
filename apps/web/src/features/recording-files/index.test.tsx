@@ -183,6 +183,34 @@ test('lists recordings with media facts and states, and marks deleted rows unsel
     .toBeDisabled()
 })
 
+// A single row's delete must SAY what happened. The notice used to be built
+// before the request ran, so it was always the empty string: the delete worked
+// but reported nothing, and the confirm button looked dead.
+test('a row delete reports its outcome instead of staying silent', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  const trash = view.getByRole('button', { name: /^删除本地副本 / }).first()
+  await userEvent.click(trash)
+  await userEvent.click(view.getByRole('button', { name: '删除', exact: true }))
+  await expect.element(view.getByText(/已删除，释放/)).toBeVisible()
+})
+
+// lease_held is not "try again": a player is reading this exact segment, and
+// the operator has to stop watching first. The raw code said none of that.
+test('a lease-held delete names the player instead of repeating the code', async () => {
+  const setup = fixture({
+    outcomes: [{ segment_id: OLD, state: 'in_use', reason: 'lease_held' }],
+  })
+  const view = await render(setup.view)
+  const trash = view.getByRole('button', { name: /^删除本地副本 / }).first()
+  await userEvent.click(trash)
+  await userEvent.click(view.getByRole('button', { name: '删除', exact: true }))
+  // Two places say it: the notice ("未删除：…") and the per-row reason. Assert
+  // both, so a regression that drops either one is visible.
+  await expect.element(view.getByText(/未删除：正在播放，停下播放后再删/)).toBeVisible()
+  await expect.element(view.getByTestId('delete-outcome')).toHaveTextContent('正在播放，停下播放后再删')
+})
+
 test('deleting the selection shows the confirmation scope and then per-row outcomes', async () => {
   const setup = fixture({
     outcomes: [

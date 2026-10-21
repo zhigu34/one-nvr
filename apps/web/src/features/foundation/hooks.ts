@@ -27,9 +27,19 @@ export function useAction(notify = false) {
   const [pending, setPending] = useState(false),
     [error, setError] = useState(''),
     [notice, setNotice] = useState('')
+  /**
+   * `message` may be a function, evaluated AFTER the action settles.
+   *
+   * Some actions can only describe their outcome once they have run — a batch
+   * delete returns a per-row verdict ("已删除，释放 X" or "未删除：lease_held").
+   * Callers that passed a function had it converted to a string at call time by
+   * a local `let`, so the notice was written as the empty string and the button
+   * appeared to do nothing at all. Accepting the function here removes that
+   * trap: the string is produced at the moment it is known.
+   */
   async function run(
     action: () => Promise<unknown>,
-    message: string,
+    message: string | (() => string),
     refresh = true
   ) {
     if (pending) return false
@@ -38,8 +48,9 @@ export function useAction(notify = false) {
     setNotice('')
     try {
       await action()
-      if (notify && message) notifySuccess(message)
-      else setNotice(message)
+      const text = typeof message === 'function' ? message() : message
+      if (notify && text) notifySuccess(text)
+      else setNotice(text)
       if (refresh) await client.invalidateQueries()
       return true
     } catch (e) {

@@ -739,28 +739,32 @@ function Workspace({
   // rather than disabled for someone who could never use it.
   const canExport = (active?.permissions ?? []).includes('export')
 
-  // When footage arrives and nothing is playing yet, park the playhead on the
-  // newest segment and load its first frame (paused). The operator sees the
-  // picture immediately instead of a black idle ring, and pressing play
-  // starts from a real position.
-  // Auto-park keyed per channel+range: switching channels (or searching a new
-  // window) re-arms the park so the operator always lands on that view's
-  // newest footage instead of the empty idle ring.
+  // When footage arrives and nothing is playing yet, select the newest segment
+  // so the timeline highlights it and the detail strip has something to show.
+  //
+  // It deliberately does NOT load the first frame. Parking the player meant a
+  // media request on every visit to this page, and every read is an audited
+  // playback: the audit log filled with `recording.streamed` rows for someone
+  // who only opened the page, and each visit pinned a 90-second playback lease
+  // that then blocked deleting that very segment ("该片段正在被播放"). Selecting
+  // is a UI decision; reading bytes is the operator's.
+  //
+  // Keyed per channel+range: switching channels (or searching a new window)
+  // re-arms it, so the operator lands on that view's newest footage.
+  // Keyed on the channel and range, but re-armed by selectChannel clearing
+  // `selected`: without that, switching channel left the highlight empty
+  // because the key had not changed and the effect returned early.
   const autoParkRef = useRef('')
   useEffect(() => {
     const parkKey = `${channelID}|${range.start}|${range.end}`
-    if (noData || autoParkRef.current === parkKey) return
+    if (noData || (autoParkRef.current === parkKey && selected)) return
     const newest = [...timeline.entries]
       .filter((entry) => !entry.blocked)
       .sort((a, b) => b.end - a.end)[0]
     if (!newest) return
     autoParkRef.current = parkKey
-    // Load the newest segment's first frame and stop there: the picture is
-    // on screen (paused, no lease running), the playhead sits on the strip,
-    // and 播放 starts motion from this position. No black idle ring.
     setSelected(newest)
-    controller.current?.park(newest.start)
-  }, [noData, timeline.entries, channelID, range])
+  }, [noData, timeline.entries, channelID, range, selected])
   // Event marks for the canvas. The window is the view clamped to the
   // events' 90-day retention — a bounded, honest query (was inside the old
   // Timeline component; hoisted so the canvas owns one draw input).

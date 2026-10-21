@@ -24,6 +24,20 @@ type Segment = Schema<'RecordingSegment'>
 type Stats = Schema<'RecordingStats'>
 type Outcome = Schema<'RecordingDeleteOutcome'>
 
+// The server's reason codes are what it decided, not what the operator can act
+// on. lease_held is the one that matters most: a player is reading this exact
+// segment right now, and the answer is to stop watching, not to click delete
+// again. Kept at module scope so the delete notice and the outcome table cannot
+// drift into two vocabularies for the same verdict.
+const REASON_LABELS: Record<string, string> = {
+  lease_held: '正在播放，停下播放后再删',
+  pinned_by_export: '正在被导出任务使用',
+  archiving: '正在上传云端',
+  protected: '已保护',
+  identity_mismatch: '磁盘上的文件与索引记录不一致',
+  recent: '刚刚发布，稍后再试',
+}
+
 const STATE_LABELS: Record<Segment['state'], string> = {
   finalizing: '写入中',
   ready: '可用',
@@ -292,14 +306,19 @@ export function RecordingFiles({
     message: string | ((value: T) => string)
   ) {
     setOutcomes(null)
-    // The batch delete reports its own outcome per row, so it returns the text
-    // it wants shown rather than making the caller re-derive it from the rows.
-    let summary = typeof message === 'string' ? message : ''
+    // The text is produced from the response, so it can only exist after the
+    // work ran — hence a thunk, evaluated by useAction when the action settles.
+    // Building the string here first (the previous shape) always yielded '' and
+    // the delete reported nothing at all.
+    let value: T | undefined
+    const text = (): string => {
+      if (typeof message === 'string') return message
+      return value === undefined ? '' : message(value)
+    }
     const ok = await action.run(async () => {
-      const value = await work()
-      if (typeof message === 'function') summary = message(value)
+      value = await work()
       return value
-    }, summary)
+    }, text)
     if (ok) {
       setSelected(new Set())
       await client.invalidateQueries()
@@ -347,7 +366,12 @@ export function RecordingFiles({
         text:
           removed.length > 0
             ? `已删除，释放 ${bytes(result.released_bytes)}`
-            : `未删除：${result.items[0]?.reason ?? '原因未知'}`,
+            : (() => {
+                const kept = result.items[0]
+                if (!kept) return '未删除：原因未知'
+                const why = kept.reason ? (REASON_LABELS[kept.reason] ?? kept.reason) : ''
+                return why ? `未删除：${why}` : '未删除'
+              })(),
       }
     }, (value) => value.text)
   }
@@ -776,7 +800,9 @@ function OutcomeTable({ outcomes }: { outcomes: Outcome[] }) {
           <span className='flex-1 truncate'>
             {LABELS[outcome.state] || outcome.state}
             {outcome.reason && outcome.state !== 'deleted' && (
-              <span className='ml-1 text-video-chrome-foreground/50'>（{outcome.reason}）</span>
+              <span className='ml-1 text-video-chrome-foreground/50'>
+                （{REASON_LABELS[outcome.reason] ?? outcome.reason}）
+              </span>
             )}
           </span>
           <span className='tabular-nums text-video-chrome-foreground/80'>
