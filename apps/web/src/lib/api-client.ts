@@ -62,7 +62,8 @@ async function loadSessionCSRF(started: number) {
 }
 export async function apiRequest<T>(
   path: string,
-  init: RequestInit = {}
+  init: RequestInit = {},
+  csrfRetried = false
 ): Promise<T> {
   if (!path.startsWith('/api/v1/') || path.includes('://'))
     throw new ApiError(422, 'invalid_path', 'API 地址无效')
@@ -103,6 +104,23 @@ export async function apiRequest<T>(
     if (response.status === 401) {
       clearAuthentication()
       window.dispatchEvent(new Event('one-nvr:unauthenticated'))
+    }
+    // A 403 on a write is csrf_rejected in every path this API has (the other
+    // 403, `forbidden`, is about the account's grants and retrying would just
+    // fail again). Re-acquire the session's token and try once more: the token
+    // is in memory only, so a reload, a second tab logging in, or a server that
+    // rotated the cookie leaves this page holding one that will never verify.
+    // Without this the operator sees a bare "Failed to load resource" and the
+    // heartbeat that hit it simply stops renewing the lease.
+    if (
+      response.status === 403 &&
+      envelope.error?.code === 'csrf_rejected' &&
+      !csrfRetried &&
+      !['GET', 'HEAD', 'OPTIONS'].includes(method)
+    ) {
+      sessionCSRF = ''
+      csrfToken = ''
+      return apiRequest<T>(path, init, true)
     }
     throw new ApiError(
       response.status,

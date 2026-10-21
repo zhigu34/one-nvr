@@ -113,8 +113,14 @@ export function eventWindowSize(
 ): { start: number; end: number } {
   const RETENTION = 90 * 86_400_000
   const now = Date.now()
-  const end = Math.min(viewEnd, now)
-  const start = Math.max(viewStart, end - RETENTION)
+  // Whole milliseconds. These two numbers become the `start`/`end` query
+  // parameters, and the API parses those with strconv.ParseInt — a fractional
+  // value is a 422. The wheel zoom produces fractions (zoomAt divides a span by
+  // a ratio), so every zoomed view asked for `1792526468706.8572` and got
+  // nothing back. Rounding at the point the value becomes a request keeps the
+  // timeline's own precision untouched.
+  const end = Math.min(Math.floor(viewEnd), now)
+  const start = Math.max(Math.floor(viewStart), end - RETENTION)
   return { start, end }
 }
 

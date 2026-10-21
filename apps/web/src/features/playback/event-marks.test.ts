@@ -80,6 +80,17 @@ describe('eventWindowSize', () => {
     const { start, end } = eventWindowSize(now - 200 * 86_400_000, now)
     expect(end - start).toBeLessThanOrEqual(90 * 86_400_000)
   })
+
+  // The wheel zoom divides a span by a ratio, so a zoomed view window carries
+  // fractions. These become the query's start/end, and the API parses them with
+  // strconv.ParseInt — every zoomed frame was rejected with 422.
+  test('returns whole milliseconds even when the view window does not', () => {
+    const { start, end } = eventWindowSize(1792580.25, 1792588.75)
+    expect(Number.isInteger(start)).toBe(true)
+    expect(Number.isInteger(end)).toBe(true)
+    expect(String(start)).not.toContain('.')
+    expect(String(end)).not.toContain('.')
+  })
 })
 
 describe('clusterMarks', () => {

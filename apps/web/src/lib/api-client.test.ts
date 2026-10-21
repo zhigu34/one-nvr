@@ -135,6 +135,60 @@ test('a write with no cached token bootstraps from the session, not pre-auth', a
   ).toBe('session-csrf')
 })
 
+// A stale in-memory token must recover, not surface as a bare 403. The token
+// lives only in this tab: a reload, a second tab logging in, or a rotated cookie
+// leaves it invalid, and the write that used it (the playback lease heartbeat)
+// would otherwise just stop working.
+test('a csrf_rejected write re-acquires the token and retries once', async () => {
+  clearAuthentication()
+  const fetchMock = vi
+    .fn()
+    // 1. session token for the first attempt
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { user: {}, csrf_token: 'stale-csrf' } }))
+    )
+    // 2. the write is rejected
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: { code: 'csrf_rejected', message: '请求来源或安全令牌无效' } }),
+        { status: 403 }
+      )
+    )
+    // 3. re-acquire
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { user: {}, csrf_token: 'fresh-csrf' } }))
+    )
+    // 4. the retry succeeds
+    .mockResolvedValueOnce(new Response(JSON.stringify({ data: { renewed: true } })))
+  vi.stubGlobal('fetch', fetchMock)
+  await apiRequest('/api/v1/recordings/seg-1/lease', { method: 'POST' })
+  expect(fetchMock).toHaveBeenCalledTimes(4)
+  expect(new Headers(fetchMock.mock.calls[1][1].headers).get('X-CSRF-Token')).toBe('stale-csrf')
+  expect(new Headers(fetchMock.mock.calls[3][1].headers).get('X-CSRF-Token')).toBe('fresh-csrf')
+})
+
+// A `forbidden` 403 is about the account's grants. Retrying cannot change it,
+// and a silent second attempt would double every rejected write.
+test('a forbidden write is not retried', async () => {
+  clearAuthentication()
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { user: {}, csrf_token: 'csrf' } }))
+    )
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: { code: 'forbidden', message: '没有权限执行此操作' } }),
+        { status: 403 }
+      )
+    )
+  vi.stubGlobal('fetch', fetchMock)
+  await expect(apiRequest('/api/v1/site', { method: 'PATCH', body: '{}' })).rejects.toThrow(
+    '没有权限执行此操作'
+  )
+  expect(fetchMock).toHaveBeenCalledTimes(2)
+})
+
 test('multipart keeps its browser boundary and CSRF instead of a JSON content type', async () => {
   const fetchMock = vi
     .fn()
