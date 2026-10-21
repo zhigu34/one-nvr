@@ -105,6 +105,8 @@ export function RecordingFiles({
   const [protection, setProtectionFilter] = useState('all')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [confirmDelete, setConfirmDelete] = useState(false)
+  // The row whose delete is being confirmed: null when the dialog is closed.
+  const [rowDelete, setRowDelete] = useState<Schema<'RecordingSegment'> | null>(null)
   const [exportsOpen, setExportsOpen] = useState(false)
   const [archiveTarget, setArchiveTarget] = useState('')
   const [outcomes, setOutcomes] = useState<Outcome[] | null>(null)
@@ -323,6 +325,30 @@ export function RecordingFiles({
         headers: { ...init.headers, 'Idempotency-Key': newRequestKey() },
       })
     }, `已提交 ${selected.size} 段的上传任务`)
+  }
+
+  // One row's delete goes through the same batch endpoint: it is the same
+  // operation with one id, and the per-row reasons (protected, archiving,
+  // lease-held) come back in the same shape.
+  async function deleteOne(id: string) {
+    setRowDelete(null)
+    await run(async () => {
+      const result = await apiRequest<{ items: Outcome[]; released_bytes: number }>(
+        '/api/v1/recordings/batch-delete-local',
+        {
+          ...jsonRequest('POST', { segment_ids: [id] }),
+          headers: { 'Idempotency-Key': newRequestKey() },
+        }
+      )
+      setOutcomes(result.items)
+      const removed = result.items.filter((entry) => entry.state === 'deleted')
+      return {
+        text:
+          removed.length > 0
+            ? `已删除，释放 ${bytes(result.released_bytes)}`
+            : `未删除：${result.items[0]?.reason ?? '原因未知'}`,
+      }
+    }, (value) => value.text)
   }
 
   async function deleteSelected() {
@@ -615,6 +641,7 @@ export function RecordingFiles({
                           onToggle={(next) => toggle(item.id, next)}
                           onProtect={() => void setProtection(item, !item.protected)}
                           onPlay={() => onPlaySegment?.(item.id)}
+                          onDelete={() => setRowDelete(item)}
                           rowRef={
                             item.id === activeSegmentId
                               ? (node: HTMLDivElement | null) => {
@@ -636,6 +663,27 @@ export function RecordingFiles({
           )}
         </>
       )}
+      <ConfirmDialog
+        open={!!rowDelete}
+        onOpenChange={(next) => !next && setRowDelete(null)}
+        title={`删除这段录像的本地副本？`}
+        desc={
+          rowDelete
+            ? `${rowDelete.start.slice(11, 19)} · ${bytes(rowDelete.bytes)}${
+                rowDelete.archived ? '。这段有云端副本，删除后仍可从云端回放。' : '。这段没有云端副本，删除后不可回放。'
+              }`
+            : ''
+        }
+        confirmText='删除'
+        cancelBtnText='取消'
+        destructive
+        isLoading={action.pending}
+        handleConfirm={() => {
+          const target = rowDelete
+          if (!target) return
+          void deleteOne(target.id)
+        }}
+      />
       <ConfirmDialog
         open={confirmDelete}
         onOpenChange={setConfirmDelete}
@@ -714,6 +762,7 @@ function RecordingRow({
   onToggle,
   onProtect,
   onPlay,
+  onDelete,
   rowRef,
 }: {
   item: Segment
@@ -724,6 +773,7 @@ function RecordingRow({
   onToggle: (next: boolean) => void
   onProtect: () => void
   onPlay: () => void
+  onDelete: () => void
   rowRef?: (node: HTMLDivElement | null) => void
 }) {
   const startClock = zone ? formatClock(Date.parse(item.start), zone) : '—'
@@ -795,25 +845,34 @@ function RecordingRow({
         </div>
       </div>
       <div className='flex shrink-0 items-center gap-1'>
-        <Button
-          type='button'
-          size='sm'
+        {/* Four icons, one shape, all revealed on hover. Play used to carry a
+            text label and stay visible while the other three were icons behind
+            hover, which read as "one action and some extras" — they are four
+            peer actions on one segment.
+            The one exception is the row that is playing: its play icon stays
+            visible and filled, because that is a state, not an affordance. */}
+        <div
           className={cn(
-            'h-6 gap-1 px-2 text-[10px]',
-            isCurrent
-              ? 'bg-emerald-500/90 text-white hover:bg-emerald-500'
-              : ''
+            'flex items-center gap-1 transition-opacity group-focus-within/row:opacity-100',
+            isCurrent ? 'opacity-100' : 'opacity-0 group-hover/row:opacity-100'
           )}
-          variant={isCurrent ? 'default' : 'outline'}
-          disabled={!fillable}
-          onClick={onPlay}
-          title={isCurrent ? '播放中' : '播放此段'}
-          aria-label={`播放 ${item.id}`}
         >
-          {isCurrent ? <Play className='size-3 fill-current' /> : <Play className='size-3' />}
-          {isCurrent ? '当前' : '播放'}
-        </Button>
-        <div className='flex items-center gap-1 opacity-0 transition-opacity group-hover/row:opacity-100'>
+          <button
+            type='button'
+            aria-label={`播放 ${item.id}`}
+            aria-pressed={isCurrent}
+            disabled={!fillable}
+            onClick={onPlay}
+            title={isCurrent ? '播放中' : '播放此段'}
+            className={cn(
+              'grid size-6 place-items-center rounded border disabled:opacity-30',
+              isCurrent
+                ? 'border-emerald-500/40 bg-emerald-500/20 text-emerald-300'
+                : 'border-video-border bg-video-surface-raised text-video-chrome-foreground/70 hover:text-video-chrome-foreground'
+            )}
+          >
+            <Play className={cn('size-3.5', isCurrent && 'fill-current')} />
+          </button>
           {item.state === 'ready' && (
             <a
               href={`/api/v1/recordings/${item.id}/content`}
@@ -837,7 +896,8 @@ function RecordingRow({
           <button
             type='button'
             aria-label={`删除本地副本 ${startClock}`}
-            disabled={actionPending || !fillable}
+            disabled={actionPending || !fillable || item.state !== 'ready'}
+            onClick={onDelete}
             className='grid size-6 place-items-center rounded border border-video-border bg-video-surface-raised text-video-chrome-foreground/70 hover:text-red-400 disabled:opacity-30'
             title='删除本地副本'
           >

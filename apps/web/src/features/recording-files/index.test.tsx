@@ -237,3 +237,49 @@ test('file management is administrator only', async () => {
     .element(view.getByText(/录像文件管理只对管理员开放/))
     .toBeVisible()
 })
+
+// The trash icon had no onClick at all: it rendered, looked enabled, and did
+// nothing. This pins the whole path — click, confirm, one-segment delete.
+test('the row delete icon asks for confirmation and deletes that segment', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  await expect.element(view.getByTestId('recording-row')).toHaveLength(3)
+
+  // The row's delete control, by its accessible name (it is an icon button).
+  // The row renders its clock in the site zone, so match the prefix.
+  const trash = view.getByRole('button', { name: /^删除本地副本 / }).first()
+  await userEvent.click(trash)
+
+  // A confirmation appears, and it says whether the footage survives elsewhere.
+  await expect.element(view.getByText(/删除这段录像的本地副本/)).toBeVisible()
+
+  await userEvent.click(view.getByRole('button', { name: '删除' }))
+  const deletions = setup.mutations.filter((m) => m.path.endsWith('/batch-delete-local'))
+  expect(deletions).toHaveLength(1)
+  expect(deletions[0].body).toEqual({ segment_ids: [OLD] })
+})
+
+// A segment with no media has nothing to delete; the icon must not offer it.
+test('the delete icon is disabled for a segment with no local copy', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  await expect.element(view.getByTestId('recording-row')).toHaveLength(3)
+  // The third row is 'missing'.
+  const row = view.getByTestId('recording-row').nth(2)
+  const trash = row.getByRole('button', { name: /删除本地副本/ })
+  await expect.element(trash).toBeDisabled()
+})
+
+// Four peer actions on one segment, all icons. The text label made the other
+// three read as extras.
+test('the row actions are four icon buttons with no text labels', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  const row = view.getByTestId('recording-row').first()
+  // Play is an icon now: no "播放" word in the row.
+  await expect.element(row).not.toHaveTextContent('播放')
+  for (const label of [/^播放 /, /^下载 /, /^保护 /, /^删除本地副本 /]) {
+    const target = row.getByRole('button', { name: label }).or(row.getByRole('link', { name: label }))
+    await expect.element(target).toBeVisible()
+  }
+})
