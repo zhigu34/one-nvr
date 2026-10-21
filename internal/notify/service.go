@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -67,6 +68,10 @@ type ChannelView struct {
 	LastCheck json.RawMessage `json:"last_check,omitempty"`
 	Version   int64           `json:"version"`
 	CreatedAt time.Time       `json:"created_at"`
+	// Email settings, present for kind 'email'. The password is never here: it
+	// lives in the sealed secret and HasSecret says whether one exists.
+	Email      *SMTPConfig `json:"email,omitempty"`
+	Recipients []Recipient `json:"recipients,omitempty"`
 }
 
 // ChannelInput is a create or update request. Secret is write-only: empty on an
@@ -77,17 +82,45 @@ type ChannelInput struct {
 	URL     string
 	Secret  string
 	Enabled bool
+	// Email carries the SMTP parameters for kind 'email'.
+	Email *SMTPConfig
+	// Recipients replace the stored list when non-nil. A nil slice means "leave
+	// the recipients alone", which is what an update that only renames a channel
+	// needs.
+	Recipients *[]RecipientInput
 }
 
-const channelColumns = `c.id,c.kind,c.name,COALESCE(c.url,''),c.enabled,(octet_length(c.secret_ciphertext)>0),c.last_check,c.version,c.created_at`
+// RecipientInput is one mailbox on an email channel, from the editor.
+type RecipientInput struct {
+	Name    string `json:"name"`
+	Address string `json:"address"`
+}
+
+const channelColumns = `c.id,c.kind,c.name,COALESCE(c.url,''),c.enabled,(octet_length(c.secret_ciphertext)>0),c.last_check,c.version,c.created_at,
+	COALESCE(c.sender_name,''),COALESCE(c.sender_address,''),COALESCE(c.smtp_host,''),COALESCE(c.smtp_port,0),c.smtp_tls,c.smtp_auth,COALESCE(c.smtp_username,'')`
 
 func scanChannel(row pgx.Row) (ChannelView, error) {
 	var out ChannelView
-	err := row.Scan(&out.ID, &out.Kind, &out.Name, &out.URL, &out.Enabled, &out.HasSecret, &out.LastCheck, &out.Version, &out.CreatedAt)
-	return out, err
+	var senderName, senderAddress, host, username string
+	var port int
+	var useTLS, useAuth bool
+	err := row.Scan(&out.ID, &out.Kind, &out.Name, &out.URL, &out.Enabled, &out.HasSecret, &out.LastCheck, &out.Version, &out.CreatedAt,
+		&senderName, &senderAddress, &host, &port, &useTLS, &useAuth, &username)
+	if err != nil {
+		return out, err
+	}
+	// The SMTP block is reported only where it means something: an inbox with an
+	// empty sender name would otherwise look half-configured.
+	if out.Kind == "email" {
+		out.Email = &SMTPConfig{
+			SenderName: senderName, SenderAddress: senderAddress, Host: host, Port: port,
+			TLS: useTLS, UseAuth: useAuth, Username: username,
+		}
+	}
+	return out, nil
 }
 
-func validateChannelInput(in ChannelInput) error {
+func validateChannelInput(in ChannelInput, creating bool) error {
 	if len(in.Name) < 1 || len(in.Name) > 64 {
 		return ErrChannelInvalid
 	}
@@ -97,6 +130,34 @@ func validateChannelInput(in ChannelInput) error {
 		return nil
 	case "webhook":
 		if in.URL == "" {
+			return ErrChannelInvalid
+		}
+		return nil
+	case "email":
+		// Every field the adapter needs to open a session, checked here so a
+		// channel that could never deliver is refused at save time instead of at
+		// the first real alarm.
+		if in.Email == nil {
+			return ErrChannelInvalid
+		}
+		if strings.TrimSpace(in.Email.SenderAddress) == "" || strings.TrimSpace(in.Email.Host) == "" {
+			return ErrChannelInvalid
+		}
+		if in.Email.Port < 1 || in.Email.Port > 65535 {
+			return ErrChannelInvalid
+		}
+		// A new channel must have at least one mailbox. An update may omit the
+		// list entirely (nil keeps the stored one — the rename path relies on
+		// that), but an explicit empty list is refused: it would leave the
+		// channel undeliverable while looking configured.
+		if in.Recipients == nil {
+			if creating {
+				return ErrChannelInvalid
+			}
+		} else if len(trimRecipients(*in.Recipients)) == 0 {
+			return ErrChannelInvalid
+		}
+		if in.Email.UseAuth && strings.TrimSpace(in.Email.Username) == "" {
 			return ErrChannelInvalid
 		}
 		return nil
@@ -124,7 +185,10 @@ func (s *Service) ListChannels(ctx context.Context, p auth.Principal) ([]Channel
 		}
 		out = append(out, channel)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return s.attachRecipients(ctx, out)
 }
 
 // RegisterChannel creates a destination. A webhook must carry a signing secret
@@ -134,7 +198,7 @@ func (s *Service) RegisterChannel(ctx context.Context, p auth.Principal, in Chan
 	if err := s.Auth.RequireAdmin(ctx, p); err != nil {
 		return ChannelView{}, err
 	}
-	if err := validateChannelInput(in); err != nil {
+	if err := validateChannelInput(in, true); err != nil {
 		return ChannelView{}, err
 	}
 	if in.Kind == "webhook" && in.Secret == "" {
@@ -154,9 +218,15 @@ func (s *Service) RegisterChannel(ctx context.Context, p auth.Principal, in Chan
 		if in.URL != "" {
 			url = &in.URL
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO notification_channels(id,site_id,kind,name,url,credential_key_id,secret_nonce,secret_ciphertext,enabled)
-			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-			channelID, s.siteID, in.Kind, in.Name, url, sealed.KeyID, sealed.Nonce, sealed.Ciphertext, in.Enabled); err != nil {
+		insertArgs := []any{channelID, s.siteID, in.Kind, in.Name, url, sealed.KeyID, sealed.Nonce, sealed.Ciphertext, in.Enabled}
+		insertArgs = append(insertArgs, smtpColumns(in.Email)...)
+		if _, err := tx.Exec(ctx, `INSERT INTO notification_channels(id,site_id,kind,name,url,credential_key_id,secret_nonce,secret_ciphertext,enabled,
+			sender_name,sender_address,smtp_host,smtp_port,smtp_tls,smtp_auth,smtp_username)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+			insertArgs...); err != nil {
+			return err
+		}
+		if err := replaceRecipientsTx(ctx, tx, channelID, in.Recipients); err != nil {
 			return err
 		}
 		// The audit names the channel and its kind; the endpoint is a URL and
@@ -166,8 +236,16 @@ func (s *Service) RegisterChannel(ctx context.Context, p auth.Principal, in Chan
 			return err
 		}
 		scanned, scanErr := scanChannel(tx.QueryRow(ctx, `SELECT `+channelColumns+` FROM notification_channels c WHERE c.id=$1`, channelID))
+		if scanErr != nil {
+			return scanErr
+		}
+		recipients, recipientErr := recipientsTx(ctx, tx, channelID)
+		if recipientErr != nil {
+			return recipientErr
+		}
+		scanned.Recipients = recipients
 		out = scanned
-		return scanErr
+		return nil
 	})
 	return out, err
 }
@@ -178,7 +256,7 @@ func (s *Service) UpdateChannel(ctx context.Context, p auth.Principal, channelID
 	if err := s.Auth.RequireAdmin(ctx, p); err != nil {
 		return ChannelView{}, err
 	}
-	if err := validateChannelInput(in); err != nil {
+	if err := validateChannelInput(in, false); err != nil {
 		return ChannelView{}, err
 	}
 	var out ChannelView
@@ -205,12 +283,23 @@ func (s *Service) UpdateChannel(ctx context.Context, p auth.Principal, channelID
 			if err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, `UPDATE notification_channels SET kind=$2,name=$3,url=$4,enabled=$5,credential_key_id=$6,secret_nonce=$7,secret_ciphertext=$8,version=version+1,updated_at=now() WHERE id=$1 AND version=$9`,
-				channelID, in.Kind, in.Name, url, in.Enabled, sealed.KeyID, sealed.Nonce, sealed.Ciphertext, expected); err != nil {
+			args := []any{channelID, in.Kind, in.Name, url, in.Enabled, sealed.KeyID, sealed.Nonce, sealed.Ciphertext, expected}
+			args = append(args, smtpColumns(in.Email)...)
+			if _, err := tx.Exec(ctx, `UPDATE notification_channels SET kind=$2,name=$3,url=$4,enabled=$5,credential_key_id=$6,secret_nonce=$7,secret_ciphertext=$8,
+				sender_name=$10,sender_address=$11,smtp_host=$12,smtp_port=$13,smtp_tls=$14,smtp_auth=$15,smtp_username=$16,version=version+1,updated_at=now()
+				WHERE id=$1 AND version=$9`, args...); err != nil {
 				return err
 			}
-		} else if _, err := tx.Exec(ctx, `UPDATE notification_channels SET kind=$2,name=$3,url=$4,enabled=$5,version=version+1,updated_at=now() WHERE id=$1 AND version=$6`,
-			channelID, in.Kind, in.Name, url, in.Enabled, expected); err != nil {
+		} else {
+			args := []any{channelID, in.Kind, in.Name, url, in.Enabled, expected}
+			args = append(args, smtpColumns(in.Email)...)
+			if _, err := tx.Exec(ctx, `UPDATE notification_channels SET kind=$2,name=$3,url=$4,enabled=$5,
+				sender_name=$7,sender_address=$8,smtp_host=$9,smtp_port=$10,smtp_tls=$11,smtp_auth=$12,smtp_username=$13,version=version+1,updated_at=now()
+				WHERE id=$1 AND version=$6`, args...); err != nil {
+				return err
+			}
+		}
+		if err := replaceRecipientsTx(ctx, tx, channelID, in.Recipients); err != nil {
 			return err
 		}
 		var version int64
@@ -220,13 +309,24 @@ func (s *Service) UpdateChannel(ctx context.Context, p auth.Principal, channelID
 		if version == expected {
 			return fault.New(409, "notification_channel_version_conflict", "渠道已被他人修改，请刷新后重试")
 		}
-		details, _ := json.Marshal(map[string]any{"kind": in.Kind, "name": in.Name, "secret_rotated": in.Secret != ""})
+		// The key cannot be named "secret_rotated": safejson refuses any field whose
+		// name contains "secret", because the audit trail must not become a place a
+		// credential leaks into. `rotated` says the same thing without tripping it.
+		details, _ := json.Marshal(map[string]any{"kind": in.Kind, "name": in.Name, "rotated": in.Secret != ""})
 		if err := audit.Append(ctx, tx, audit.Entry{ActorID: p.UserID, Action: "notification.channel_updated", ObjectID: channelID, Details: details}); err != nil {
 			return err
 		}
 		scanned, scanErr := scanChannel(tx.QueryRow(ctx, `SELECT `+channelColumns+` FROM notification_channels c WHERE c.id=$1`, channelID))
+		if scanErr != nil {
+			return scanErr
+		}
+		recipients, recipientErr := recipientsTx(ctx, tx, channelID)
+		if recipientErr != nil {
+			return recipientErr
+		}
+		scanned.Recipients = recipients
 		out = scanned
-		return scanErr
+		return nil
 	})
 	return out, err
 }
@@ -280,19 +380,7 @@ func (s *Service) TestChannel(ctx context.Context, p auth.Principal, channelID i
 	if err != nil {
 		return nil, ErrChannelInvalid
 	}
-	probe := Message{
-		DeliveryID:    mustID(),
-		SiteName:      "测试",
-		ChannelNo:     1,
-		Category:      "person",
-		CategoryLabel: CategoryLabel("person"),
-		Severity:      "low",
-		StartedAt:     time.Now().UTC(),
-		StartedLocal:  time.Now().Format("2006-01-02 15:04:05"),
-		Title:         "one-nvr 测试通知",
-		Body:          "这是一条测试通知；收到即表示该渠道可用。",
-	}
-	sendErr := adapter.Send(ctx, probe)
+	sendErr := adapter.Send(ctx, testMessage())
 	result := map[string]any{"kind": config.Kind, "state": "healthy", "checked_at": time.Now().UTC()}
 	if sendErr != nil {
 		result["state"] = "unavailable"
@@ -325,8 +413,14 @@ func (s *Service) channelConfig(ctx context.Context, channelID id.ID) (ChannelCo
 	var keyID string
 	var nonce, ciphertext []byte
 	var url *string
-	if err := s.DB.Pool.QueryRow(ctx, `SELECT id,kind,name,url,credential_key_id,secret_nonce,secret_ciphertext FROM notification_channels WHERE id=$1 AND site_id=$2`,
-		channelID, s.siteID).Scan(&out.ID, &out.Kind, &out.Name, &url, &keyID, &nonce, &ciphertext); err != nil {
+	var senderName, senderAddress, host, username string
+	var port int
+	var useTLS, useAuth bool
+	if err := s.DB.Pool.QueryRow(ctx, `SELECT id,kind,name,url,credential_key_id,secret_nonce,secret_ciphertext,
+		COALESCE(sender_name,''),COALESCE(sender_address,''),COALESCE(smtp_host,''),COALESCE(smtp_port,0),smtp_tls,smtp_auth,COALESCE(smtp_username,'')
+		FROM notification_channels WHERE id=$1 AND site_id=$2`,
+		channelID, s.siteID).Scan(&out.ID, &out.Kind, &out.Name, &url, &keyID, &nonce, &ciphertext,
+		&senderName, &senderAddress, &host, &port, &useTLS, &useAuth, &username); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return out, auth.ErrNotFound
 		}
@@ -334,6 +428,19 @@ func (s *Service) channelConfig(ctx context.Context, channelID id.ID) (ChannelCo
 	}
 	if url != nil {
 		out.URL = *url
+	}
+	if out.Kind == "email" {
+		out.Email = &SMTPConfig{
+			SenderName: senderName, SenderAddress: senderAddress, Host: host, Port: port,
+			TLS: useTLS, UseAuth: useAuth, Username: username,
+		}
+		recipients, err := s.loadRecipients(ctx, channelID)
+		if err != nil {
+			return out, err
+		}
+		for _, recipient := range recipients {
+			out.Recipients = append(out.Recipients, recipient.Address)
+		}
 	}
 	secret, err := s.Secrets.OpenCredential(s.siteID, channelID, channelID, "secret", secrets.EncryptedCredential{KeyID: keyID, Nonce: nonce, Ciphertext: ciphertext})
 	if err != nil {
@@ -349,4 +456,229 @@ func mustID() id.ID {
 		panic(err)
 	}
 	return i
+}
+
+// smtpColumns renders the SMTP settings as the argument list the INSERT and
+// UPDATE statements expect, in one place so the two cannot drift.
+//
+// A nil config writes NULLs: a webhook has no sender and must not be given one,
+// and the table's CHECK relies on that to tell the kinds apart.
+func smtpColumns(cfg *SMTPConfig) []any {
+	if cfg == nil {
+		return []any{nil, nil, nil, nil, false, true, nil}
+	}
+	nullable := func(v string) any {
+		if strings.TrimSpace(v) == "" {
+			return nil
+		}
+		return strings.TrimSpace(v)
+	}
+	var port any
+	if cfg.Port > 0 {
+		port = cfg.Port
+	}
+	return []any{
+		nullable(cfg.SenderName), nullable(cfg.SenderAddress), nullable(cfg.Host), port,
+		cfg.TLS, cfg.UseAuth, nullable(cfg.Username),
+	}
+}
+
+// replaceRecipientsTx rewrites an email channel's mailbox list.
+//
+// A nil pointer leaves the stored list alone (an update that only renames the
+// channel); a non-nil one replaces it wholesale, which matches how the editor
+// behaves — the operator edits the list as a set, not as individual rows.
+func replaceRecipientsTx(ctx context.Context, tx pgx.Tx, channelID id.ID, in *[]RecipientInput) error {
+	if in == nil {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM notification_recipients WHERE channel_id=$1`, channelID); err != nil {
+		return err
+	}
+	for _, recipient := range trimRecipients(*in) {
+		recipientID, err := id.New()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO notification_recipients(id,channel_id,name,address) VALUES($1,$2,$3,$4)`,
+			recipientID, channelID, recipient.Name, recipient.Address); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// loadRecipients reads a channel's mailboxes. Kept separate from scanChannel
+// because it is a second query, and folding it in would make the channel list
+// N+1.
+func (s *Service) loadRecipients(ctx context.Context, channelID id.ID) ([]Recipient, error) {
+	rows, err := s.DB.Pool.Query(ctx, `SELECT id,COALESCE(name,''),address,last_check FROM notification_recipients
+		WHERE channel_id=$1 ORDER BY created_at,address`, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Recipient{}
+	for rows.Next() {
+		var item Recipient
+		if err := rows.Scan(&item.ID, &item.Name, &item.Address, &item.LastCheck); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// attachRecipients fills the mailbox list on every email channel in one query.
+func (s *Service) attachRecipients(ctx context.Context, channels []ChannelView) ([]ChannelView, error) {
+	emailChannels := 0
+	for _, channel := range channels {
+		if channel.Kind == "email" {
+			emailChannels++
+		}
+	}
+	if emailChannels == 0 {
+		return channels, nil
+	}
+	rows, err := s.DB.Pool.Query(ctx, `SELECT channel_id,id,COALESCE(name,''),address,last_check
+		FROM notification_recipients WHERE channel_id IN (SELECT id FROM notification_channels WHERE site_id=$1 AND kind='email')
+		ORDER BY created_at,address`, s.siteID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	byChannel := map[id.ID][]Recipient{}
+	for rows.Next() {
+		var channelID id.ID
+		var item Recipient
+		if err := rows.Scan(&channelID, &item.ID, &item.Name, &item.Address, &item.LastCheck); err != nil {
+			return nil, err
+		}
+		byChannel[channelID] = append(byChannel[channelID], item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for index := range channels {
+		if channels[index].Kind == "email" {
+			channels[index].Recipients = byChannel[channels[index].ID]
+		}
+	}
+	return channels, nil
+}
+
+// trimRecipients drops blank rows and duplicates, so "one mailbox" cannot be
+// stored twice and "an empty row" cannot make a list look non-empty.
+func trimRecipients(in []RecipientInput) []RecipientInput {
+	out := make([]RecipientInput, 0, len(in))
+	seen := map[string]bool{}
+	for _, recipient := range in {
+		address := strings.TrimSpace(recipient.Address)
+		if address == "" {
+			continue
+		}
+		key := strings.ToLower(address)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, RecipientInput{Name: strings.TrimSpace(recipient.Name), Address: address})
+	}
+	return out
+}
+
+// TestRecipient sends one message to a single mailbox and records the outcome on
+// that row.
+//
+// The operator's Email tab tests each recipient separately, and that is the right
+// unit: a refused address is a fact about that address, and a channel-level
+// verdict would leave them guessing which mailbox failed. The session is opened
+// and authenticated once — the parameters are the channel's — and only the
+// recipient changes.
+func (s *Service) TestRecipient(ctx context.Context, p auth.Principal, channelID, recipientID id.ID) (json.RawMessage, error) {
+	if err := s.Auth.RequireAdmin(ctx, p); err != nil {
+		return nil, err
+	}
+	var address, name string
+	if err := s.DB.Pool.QueryRow(ctx, `SELECT address,COALESCE(name,'') FROM notification_recipients WHERE id=$1 AND channel_id=$2`,
+		recipientID, channelID).Scan(&address, &name); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, auth.ErrNotFound
+		}
+		return nil, err
+	}
+	config, err := s.channelConfig(ctx, channelID)
+	if err != nil {
+		return nil, err
+	}
+	if config.Kind != "email" {
+		return nil, ErrChannelInvalid
+	}
+	// One mailbox, not the stored list: the test has to prove THIS address
+	// reaches someone.
+	config.Recipients = []string{address}
+	adapter, err := s.registry.Build(config)
+	if err != nil {
+		return nil, ErrChannelInvalid
+	}
+	probe := testMessage()
+	sendErr := adapter.Send(ctx, probe)
+	result := map[string]any{"state": "healthy", "checked_at": time.Now().UTC(), "address": address}
+	if sendErr != nil {
+		result["state"] = "unavailable"
+		result["error"] = sendErr.Error()
+		if status := StatusOf(sendErr); status != 0 {
+			result["status"] = status
+		}
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.DB.Pool.Exec(ctx, `UPDATE notification_recipients SET last_check=$2 WHERE id=$1`, recipientID, raw); err != nil {
+		return nil, err
+	}
+	if sendErr != nil && !IsPermanent(sendErr) {
+		return raw, sendErr
+	}
+	return raw, nil
+}
+
+// testMessage is the probe both test paths send. One definition keeps the two
+// from drifting into different ideas of "a test".
+func testMessage() Message {
+	now := time.Now().UTC()
+	return Message{
+		DeliveryID:    mustID(),
+		SiteName:      "测试",
+		ChannelNo:     1,
+		Category:      "person",
+		CategoryLabel: CategoryLabel("person"),
+		Severity:      "low",
+		StartedAt:     now,
+		StartedLocal:  now.Format("2006-01-02 15:04:05"),
+		Title:         "one-nvr 测试通知",
+		Body:          "这是一条测试通知；收到即表示该渠道可用。",
+	}
+}
+
+// recipientsTx reads a channel's mailboxes inside a caller's transaction, so a
+// register or update can return the complete view it just wrote instead of making
+// the editor refetch.
+func recipientsTx(ctx context.Context, tx pgx.Tx, channelID id.ID) ([]Recipient, error) {
+	rows, err := tx.Query(ctx, `SELECT id,COALESCE(name,''),address,last_check FROM notification_recipients
+		WHERE channel_id=$1 ORDER BY created_at,address`, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Recipient{}
+	for rows.Next() {
+		var item Recipient
+		if err := rows.Scan(&item.ID, &item.Name, &item.Address, &item.LastCheck); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }

@@ -58,6 +58,12 @@ type ChannelConfig struct {
 	Name   string
 	URL    string
 	Secret []byte
+	// Email carries the SMTP parameters for kind 'email'. Nil for other kinds,
+	// so an adapter cannot read settings that do not exist for it.
+	Email *SMTPConfig
+	// Recipients are the mailboxes of an email channel, already resolved by the
+	// service. Empty for other kinds.
+	Recipients []string
 }
 
 // NewRegistry starts a registry with no kinds. Callers register what they build.
@@ -100,6 +106,10 @@ func DefaultRegistry() *Registry {
 	registry := NewRegistry()
 	registry.Register("inapp", func(in ChannelConfig) (Channel, error) { return InApp{}, nil })
 	registry.Register("webhook", func(in ChannelConfig) (Channel, error) { return newWebhook(in) })
+	// SMTP mail (EVT-05). Registered here like any other kind: the message layer,
+	// the rule bindings and the delivery queue are untouched by it, which is the
+	// property the channel interface exists to keep.
+	registry.Register("email", func(in ChannelConfig) (Channel, error) { return newEmail(in) })
 	return registry
 }
 

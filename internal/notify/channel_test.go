@@ -183,8 +183,18 @@ func TestANewChannelKindNeedsOnlyAnAdapter(t *testing.T) {
 
 func TestDefaultRegistryShipsTheDocumentedKinds(t *testing.T) {
 	registry := DefaultRegistry()
-	if kinds := registry.Kinds(); len(kinds) != 2 || kinds[0] != "inapp" || kinds[1] != "webhook" {
-		t.Fatalf("EVT-05 ships the inbox and webhooks, got %v", kinds)
+	// The inbox, webhooks, and SMTP mail. Pinned as an exact list so adding a kind
+	// is a deliberate change to this test rather than a silent widening of what a
+	// deployment offers.
+	want := []string{"email", "inapp", "webhook"}
+	kinds := registry.Kinds()
+	if len(kinds) != len(want) {
+		t.Fatalf("EVT-05 ships %v, got %v", want, kinds)
+	}
+	for index := range want {
+		if kinds[index] != want[index] {
+			t.Fatalf("EVT-05 ships %v, got %v", want, kinds)
+		}
 	}
 	// The inbox needs no endpoint and no secret; it must always build.
 	inbox, err := registry.Build(ChannelConfig{Kind: "inapp", Name: "站内"})

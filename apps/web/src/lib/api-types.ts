@@ -1625,6 +1625,23 @@ export interface paths {
         patch: operations["notificationChannelUpdate"];
         trace?: never;
     };
+    "/api/v1/notification-channels/{id}/recipients/{recipientID}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Send one test message to a single mailbox. The unit is the address, not the channel: a refused mailbox is a fact about that address, and a channel-level verdict would leave the operator guessing which one failed. */
+        post: operations["notificationRecipientTest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/notification-channels/{id}/test": {
         parameters: {
             query?: never;
@@ -2871,10 +2888,41 @@ export interface components {
         NotificationChannel: {
             id?: components["schemas"]["UUID"];
             /** @enum {string} */
-            kind?: "inapp" | "webhook";
+            kind?: "inapp" | "webhook" | "email";
             name?: string;
-            /** @description Absent for the built-in inbox. */
+            /** @description Absent for the built-in inbox and for email, which carries its endpoint in the smtp_* fields. */
             url?: string;
+            /** @description SMTP settings, present for kind 'email'. The password is never here: has_secret says one is stored. */
+            email?: {
+                /** @description Display name on the From line. */
+                sender_name: string;
+                /** @description The From address. */
+                sender_address: string;
+                smtp_host: string;
+                smtp_port: number;
+                /** @description Implicit TLS (SMTPS, usually 465). STARTTLS is attempted whenever the server advertises it and this is false, which is what a port-587 relay expects. */
+                smtp_tls: boolean;
+                /** @description Whether to send AUTH. A local relay may need none. */
+                smtp_auth: boolean;
+                /** @description AUTH username. Not a secret; the password lives in the sealed secret. */
+                username: string;
+            };
+            /** @description Mailboxes on an email channel, in the order they were added. Absent for other kinds. */
+            recipients?: {
+                id: components["schemas"]["UUID"];
+                name: string;
+                address: string;
+                /** @description Outcome of the last per-address test. */
+                last_check?: {
+                    /** @enum {string} */
+                    state: "healthy" | "unavailable";
+                    address: string;
+                    status?: number;
+                    error?: string;
+                    /** Format: date-time */
+                    checked_at: string;
+                } | null;
+            }[];
             enabled?: boolean;
             /** @description Whether a signing secret is stored. The secret itself is write-only and never returned. */
             has_secret?: boolean;
@@ -8902,12 +8950,29 @@ export interface operations {
             content: {
                 "application/json": {
                     /** @enum {string} */
-                    kind: "inapp" | "webhook";
+                    kind: "inapp" | "webhook" | "email";
                     name: string;
                     /** @description Required for webhook; absent for the built-in inbox. */
                     url?: string;
-                    /** @description Write-only signing secret. Required when creating a webhook. */
+                    /** @description Write-only secret: the webhook signing key, or the SMTP password. Empty on an update keeps the stored one. */
                     secret?: string;
+                    /** @description SMTP settings. Required when kind is email; ignored otherwise. */
+                    email?: {
+                        sender_name: string;
+                        /** @description The From address. */
+                        sender_address: string;
+                        smtp_host: string;
+                        smtp_port: number;
+                        /** @description Implicit TLS (usually port 465). Otherwise STARTTLS is attempted when offered. */
+                        smtp_tls: boolean;
+                        smtp_auth: boolean;
+                        username: string;
+                    };
+                    /** @description Mailboxes for an email channel. Omitted on an update keeps the stored list; an explicit empty array is refused. */
+                    recipients?: {
+                        name: string;
+                        address: string;
+                    }[];
                     /** @default true */
                     enabled?: boolean;
                 };
@@ -8956,11 +9021,26 @@ export interface operations {
             content: {
                 "application/json": {
                     /** @enum {string} */
-                    kind: "inapp" | "webhook";
+                    kind: "inapp" | "webhook" | "email";
                     name: string;
                     url?: string;
                     /** @description Empty keeps the stored secret, so renaming does not require re-entering it. */
                     secret?: string;
+                    /** @description SMTP settings. Required when kind is email; ignored otherwise. */
+                    email?: {
+                        sender_name: string;
+                        sender_address: string;
+                        smtp_host: string;
+                        smtp_port: number;
+                        smtp_tls: boolean;
+                        smtp_auth: boolean;
+                        username: string;
+                    };
+                    /** @description Omitted keeps the stored mailbox list; an explicit empty array is refused. */
+                    recipients?: {
+                        name: string;
+                        address: string;
+                    }[];
                     enabled?: boolean;
                 };
             };
@@ -8974,6 +9054,27 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["NotificationChannel"];
                 };
+            };
+        };
+    };
+    notificationRecipientTest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+                recipientID: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The test ran. The body carries {state, address, checked_at, status?, error?} and is also stored on the recipient row. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

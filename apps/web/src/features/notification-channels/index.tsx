@@ -23,11 +23,38 @@ const errorText = (error: unknown) => apiErrorText(error, ERROR_CODES)
 const KIND_LABELS: Record<string, string> = {
   inapp: '站内提醒',
   webhook: 'Webhook',
+  email: '邮件（SMTP）',
 }
 
 const KIND_HELP: Record<string, string> = {
   inapp: '事件页内的站内提醒，无需配置，不受冷却限制——每一次命中都会记下来。',
   webhook: '把通知内容 POST 到该地址，带签名与稳定投递 ID，接收端可据此去重。',
+  email: '通过你自己的 SMTP 服务器发送邮件。参数顺序与常见 NVR 的「Email」页面一致：先填发件人，再填服务器与认证，最后登记收件人。',
+}
+
+type RecipientDraft = { name: string; address: string }
+
+type EmailDraft = {
+  sender_name: string
+  sender_address: string
+  smtp_host: string
+  smtp_port: string
+  smtp_tls: boolean
+  smtp_auth: boolean
+  username: string
+}
+
+const EMPTY_EMAIL: EmailDraft = {
+  sender_name: '',
+  sender_address: '',
+  smtp_host: '',
+  // 25 is the plain-relay default a Hikvision page ships with; 587 is the
+  // submission port most providers want. 25 is the safer prefill: the operator
+  // who needs 587 knows it, and one who does not is on a local relay.
+  smtp_port: '25',
+  smtp_tls: false,
+  smtp_auth: false,
+  username: '',
 }
 
 const LAST_CHECK_TONES: Record<string, string> = {
@@ -35,7 +62,15 @@ const LAST_CHECK_TONES: Record<string, string> = {
   unavailable: 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400',
 }
 
-const EMPTY_FORM = { kind: 'webhook', name: '', url: '', secret: '', enabled: true }
+const EMPTY_FORM = {
+  kind: 'webhook',
+  name: '',
+  url: '',
+  secret: '',
+  enabled: true,
+  email: EMPTY_EMAIL,
+  recipients: [] as RecipientDraft[],
+}
 
 /**
  * EVT-05: where an alert goes. The admin-only surface, because a channel names
@@ -85,7 +120,7 @@ export function NotificationChannels() {
   }
 
   function submit() {
-    const body = {
+    const body: Record<string, unknown> = {
       kind: form.kind,
       name: form.name,
       // The inbox has no endpoint; sending one would be refused by the server's
@@ -93,6 +128,22 @@ export function NotificationChannels() {
       url: form.kind === 'webhook' ? form.url : '',
       secret: form.secret,
       enabled: form.enabled,
+    }
+    if (form.kind === 'email') {
+      body.email = {
+        sender_name: form.email.sender_name,
+        sender_address: form.email.sender_address,
+        smtp_host: form.email.smtp_host,
+        smtp_port: Number(form.email.smtp_port || 0),
+        smtp_tls: form.email.smtp_tls,
+        smtp_auth: form.email.smtp_auth,
+        username: form.email.username,
+      }
+      // Rows the operator left blank are not sent: an empty row is not a
+      // mailbox, and sending it would be refused as an invalid address.
+      body.recipients = form.recipients
+        .filter((row) => row.address.trim() !== '')
+        .map((row) => ({ name: row.name.trim(), address: row.address.trim() }))
     }
     void run(
       async () => {
@@ -116,12 +167,28 @@ export function NotificationChannels() {
   function edit(channel: Channel) {
     setEditing(channel.id ?? '')
     setEditingVersion(channel.version ?? 0)
+    const email = channel.email
     setForm({
       kind: channel.kind ?? 'webhook',
       name: channel.name ?? '',
       url: channel.url ?? '',
       secret: '',
       enabled: channel.enabled ?? true,
+      email: email
+        ? {
+            sender_name: email.sender_name ?? '',
+            sender_address: email.sender_address ?? '',
+            smtp_host: email.smtp_host ?? '',
+            smtp_port: String(email.smtp_port ?? 25),
+            smtp_tls: !!email.smtp_tls,
+            smtp_auth: !!email.smtp_auth,
+            username: email.username ?? '',
+          }
+        : EMPTY_EMAIL,
+      recipients: (channel.recipients ?? []).map((row) => ({
+        name: row.name ?? '',
+        address: row.address ?? '',
+      })),
     })
     setTestResult('')
   }
@@ -138,6 +205,22 @@ export function NotificationChannels() {
       if (result.status) parts.push(`HTTP ${result.status}`)
       if (result.error) parts.push(result.error)
       setTestResult(`${channel.name}：${parts.join(' · ')}`)
+    }, '')
+  }
+
+  // Testing one mailbox, because a refused address is a fact about that address.
+  // A channel-level verdict would leave the operator guessing which one failed.
+  function testRecipient(channel: Channel, recipientID: string) {
+    void run(async () => {
+      const result = await apiRequest<{ state?: string; address?: string; status?: number; error?: string }>(
+        `/api/v1/notification-channels/${channel.id}/recipients/${recipientID}/test`,
+        jsonRequest('POST')
+      )
+      const parts = [result.state === 'healthy' ? '已送达' : '未送达']
+      if (result.address) parts.unshift(result.address)
+      if (result.status) parts.push(`HTTP ${result.status}`)
+      if (result.error) parts.push(result.error)
+      setTestResult(parts.join(' · '))
     }, '')
   }
 
@@ -214,6 +297,108 @@ export function NotificationChannels() {
             />
           </label>
         )}
+        {form.kind === 'email' && (
+          <>
+            {/* Order follows the operator's existing mental model: a Hikvision
+                Email tab reads sender, server, then authentication. Reordering
+                for "cleaner layout" would make them hunt. */}
+            <label className='grid gap-2 text-sm'>
+              <span>发件人名称</span>
+              <Input
+                aria-label='发件人名称'
+                value={form.email.sender_name}
+                onChange={(event) =>
+                  setForm({ ...form, email: { ...form.email, sender_name: event.target.value } })
+                }
+                maxLength={128}
+                placeholder='门岗值班'
+              />
+            </label>
+            <label className='grid gap-2 text-sm'>
+              <span>发件人地址</span>
+              <Input
+                aria-label='发件人地址'
+                type='email'
+                value={form.email.sender_address}
+                onChange={(event) =>
+                  setForm({ ...form, email: { ...form.email, sender_address: event.target.value } })
+                }
+                required
+                placeholder='nvr@example.com'
+              />
+            </label>
+            <label className='grid gap-2 text-sm'>
+              <span>SMTP 服务器</span>
+              <Input
+                aria-label='SMTP 服务器'
+                value={form.email.smtp_host}
+                onChange={(event) =>
+                  setForm({ ...form, email: { ...form.email, smtp_host: event.target.value } })
+                }
+                required
+                placeholder='smtp.example.com'
+              />
+            </label>
+            <label className='grid gap-2 text-sm'>
+              <span>SMTP 端口</span>
+              <Input
+                aria-label='SMTP 端口'
+                type='number'
+                min={1}
+                max={65535}
+                value={form.email.smtp_port}
+                onChange={(event) =>
+                  setForm({ ...form, email: { ...form.email, smtp_port: event.target.value } })
+                }
+                required
+              />
+              <span className='text-[11px] text-muted-foreground'>
+                465 一般是 SSL；587 是 STARTTLS（服务器支持时会自动升级）
+              </span>
+            </label>
+            <CheckboxField
+              label='启用 SSL'
+              checked={form.email.smtp_tls}
+              onCheckedChange={(checked) =>
+                setForm({ ...form, email: { ...form.email, smtp_tls: checked === true } })
+              }
+            />
+            <CheckboxField
+              label='服务器认证'
+              checked={form.email.smtp_auth}
+              onCheckedChange={(checked) =>
+                setForm({ ...form, email: { ...form.email, smtp_auth: checked === true } })
+              }
+            />
+            {form.email.smtp_auth && (
+              <>
+                <label className='grid gap-2 text-sm'>
+                  <span>用户名</span>
+                  <Input
+                    aria-label='SMTP 用户名'
+                    value={form.email.username}
+                    onChange={(event) =>
+                      setForm({ ...form, email: { ...form.email, username: event.target.value } })
+                    }
+                    required
+                    autoComplete='username'
+                  />
+                </label>
+                <label className='grid gap-2 text-sm'>
+                  <span>密码{editing ? '（留空保持不变）' : ''}</span>
+                  <Input
+                    aria-label='SMTP 密码'
+                    type='password'
+                    value={form.secret}
+                    onChange={(event) => setForm({ ...form, secret: event.target.value })}
+                    required={!editing}
+                    autoComplete='new-password'
+                  />
+                </label>
+              </>
+            )}
+          </>
+        )}
         <CheckboxField
           label='启用'
           checked={form.enabled}
@@ -240,6 +425,81 @@ export function NotificationChannels() {
         </div>
         <p className='text-xs text-muted-foreground md:col-span-3'>{KIND_HELP[form.kind]}</p>
       </form>
+      {form.kind === 'email' && (
+        <div className='rounded-xl border bg-card p-4'>
+          <div className='mb-2 flex items-center justify-between'>
+            <h3 className='text-sm font-medium'>收件人</h3>
+            <Button
+              type='button'
+              size='sm'
+              variant='outline'
+              onClick={() =>
+                setForm({ ...form, recipients: [...form.recipients, { name: '', address: '' }] })
+              }
+            >
+              添加一行
+            </Button>
+          </div>
+          {/* The three rows the operator's page shows are the minimum: an empty
+              list is legal in the editor (they may still be typing) but the
+              server refuses to save a channel with no mailbox. */}
+          {form.recipients.length === 0 && (
+            <p className='mb-2 text-xs text-muted-foreground'>
+              至少需要一个收件人；保存前请填写地址。
+            </p>
+          )}
+          <div className='divide-y rounded-lg border'>
+            {form.recipients.map((row, index) => (
+              <div key={index} className='flex flex-wrap items-center gap-2 p-2'>
+                <span className='w-6 text-center text-xs tabular-nums text-muted-foreground'>
+                  {index + 1}
+                </span>
+                <Input
+                  aria-label={`收件人名称 ${index + 1}`}
+                  className='w-40'
+                  placeholder='名称（可留空）'
+                  maxLength={64}
+                  value={row.name}
+                  onChange={(event) => {
+                    const next = [...form.recipients]
+                    next[index] = { ...row, name: event.target.value }
+                    setForm({ ...form, recipients: next })
+                  }}
+                />
+                <Input
+                  aria-label={`收件人地址 ${index + 1}`}
+                  className='flex-1'
+                  type='email'
+                  placeholder='name@example.com'
+                  value={row.address}
+                  onChange={(event) => {
+                    const next = [...form.recipients]
+                    next[index] = { ...row, address: event.target.value }
+                    setForm({ ...form, recipients: next })
+                  }}
+                />
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='outline'
+                  className='border-red-500/30 text-red-600 dark:text-red-400'
+                  onClick={() =>
+                    setForm({
+                      ...form,
+                      recipients: form.recipients.filter((_, at) => at !== index),
+                    })
+                  }
+                >
+                  移除
+                </Button>
+              </div>
+            ))}
+          </div>
+          <p className='mt-2 text-[11px] text-muted-foreground'>
+            保存后可在下方渠道卡片里对每个收件人单独测试。
+          </p>
+        </div>
+      )}
       {channels.data && channels.data.items.length === 0 && (
         <Empty>尚未添加通知渠道。添加站内提醒或 Webhook 后，规则即可绑定它们。</Empty>
       )}
@@ -290,6 +550,57 @@ export function NotificationChannels() {
                   </Button>
                 </div>
               </div>
+              {channel.email && (
+                <p className='mt-2 text-xs text-muted-foreground'>
+                  {channel.email.sender_address} · {channel.email.smtp_host}:
+                  {channel.email.smtp_port}
+                  {channel.email.smtp_tls ? ' · SSL' : ''}
+                  {channel.email.smtp_auth ? ' · 认证' : ' · 不认证'}
+                </p>
+              )}
+              {!!channel.recipients?.length && (
+                <div className='mt-2 space-y-1'>
+                  {channel.recipients.map((recipient, index) => {
+                    const state = (recipient.last_check as { state?: string } | null | undefined)
+                      ?.state
+                    return (
+                      <div
+                        key={recipient.id}
+                        data-testid='notification-recipient'
+                        className='flex flex-wrap items-center gap-2 text-xs'
+                      >
+                        <span className='w-5 text-center tabular-nums text-muted-foreground'>
+                          {index + 1}
+                        </span>
+                        <span className='w-32 truncate'>{recipient.name || '—'}</span>
+                        <span className='flex-1 truncate font-mono text-muted-foreground'>
+                          {recipient.address}
+                        </span>
+                        {state && (
+                          <span
+                            className={`rounded-full border px-2 py-0.5 ${
+                              state === 'healthy'
+                                ? 'border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
+                                : 'border-amber-500/30 text-amber-600 dark:text-amber-400'
+                            }`}
+                          >
+                            {state === 'healthy' ? '上次测试成功' : '上次测试失败'}
+                          </span>
+                        )}
+                        <Button
+                          type='button'
+                          size='sm'
+                          variant='outline'
+                          disabled={pending}
+                          onClick={() => testRecipient(channel, recipient.id ?? '')}
+                        >
+                          测试
+                        </Button>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
               {channel.has_secret && (
                 <p className='mt-2 text-xs text-muted-foreground'>已保存签名密钥（不回显）</p>
               )}

@@ -6552,7 +6552,8 @@
                     "type": "string",
                     "enum": [
                       "inapp",
-                      "webhook"
+                      "webhook",
+                      "email"
                     ]
                   },
                   "name": {
@@ -6565,7 +6566,35 @@
                   },
                   "secret": {
                     "type": "string",
-                    "description": "Write-only signing secret. Required when creating a webhook."
+                    "description": "Write-only secret: the webhook signing key, or the SMTP password. Empty on an update keeps the stored one."
+                  },
+                  "email": {
+                    "type": "object",
+                    "description": "SMTP settings. Required when kind is email; ignored otherwise.",
+                    "properties": {
+                      "sender_name": { "type": "string", "maxLength": 128 },
+                      "sender_address": { "type": "string", "description": "The From address." },
+                      "smtp_host": { "type": "string" },
+                      "smtp_port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                      "smtp_tls": { "type": "boolean", "description": "Implicit TLS (usually port 465). Otherwise STARTTLS is attempted when offered." },
+                      "smtp_auth": { "type": "boolean" },
+                      "username": { "type": "string" }
+                    },
+                    "required": ["sender_name", "sender_address", "smtp_host", "smtp_port", "smtp_tls", "smtp_auth", "username"],
+                    "additionalProperties": false
+                  },
+                  "recipients": {
+                    "type": "array",
+                    "description": "Mailboxes for an email channel. Omitted on an update keeps the stored list; an explicit empty array is refused.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": { "type": "string", "maxLength": 64 },
+                        "address": { "type": "string" }
+                      },
+                      "required": ["name", "address"],
+                      "additionalProperties": false
+                    }
                   },
                   "enabled": {
                     "type": "boolean",
@@ -6618,7 +6647,8 @@
                     "type": "string",
                     "enum": [
                       "inapp",
-                      "webhook"
+                      "webhook",
+                      "email"
                     ]
                   },
                   "name": {
@@ -6631,6 +6661,34 @@
                   "secret": {
                     "type": "string",
                     "description": "Empty keeps the stored secret, so renaming does not require re-entering it."
+                  },
+                  "email": {
+                    "type": "object",
+                    "description": "SMTP settings. Required when kind is email; ignored otherwise.",
+                    "properties": {
+                      "sender_name": { "type": "string", "maxLength": 128 },
+                      "sender_address": { "type": "string" },
+                      "smtp_host": { "type": "string" },
+                      "smtp_port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                      "smtp_tls": { "type": "boolean" },
+                      "smtp_auth": { "type": "boolean" },
+                      "username": { "type": "string" }
+                    },
+                    "required": ["sender_name", "sender_address", "smtp_host", "smtp_port", "smtp_tls", "smtp_auth", "username"],
+                    "additionalProperties": false
+                  },
+                  "recipients": {
+                    "type": "array",
+                    "description": "Omitted keeps the stored mailbox list; an explicit empty array is refused.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": { "type": "string", "maxLength": 64 },
+                        "address": { "type": "string" }
+                      },
+                      "required": ["name", "address"],
+                      "additionalProperties": false
+                    }
                   },
                   "enabled": {
                     "type": "boolean"
@@ -6675,6 +6733,42 @@
         "responses": {
           "200": {
             "description": "Destination removed. Refused with 409 while a rule still binds it."
+          }
+        }
+      }
+    },
+    "/api/v1/notification-channels/{id}/recipients/{recipientID}/test": {
+      "post": {
+        "operationId": "notificationRecipientTest",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "description": "Send one test message to a single mailbox. The unit is the address, not the channel: a refused mailbox is a fact about that address, and a channel-level verdict would leave the operator guessing which one failed.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "recipientID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The test ran. The body carries {state, address, checked_at, status?, error?} and is also stored on the recipient row."
           }
         }
       }
@@ -9956,7 +10050,8 @@
             "type": "string",
             "enum": [
               "inapp",
-              "webhook"
+              "webhook",
+              "email"
             ]
           },
           "name": {
@@ -9964,7 +10059,88 @@
           },
           "url": {
             "type": "string",
-            "description": "Absent for the built-in inbox."
+            "description": "Absent for the built-in inbox and for email, which carries its endpoint in the smtp_* fields."
+          },
+          "email": {
+            "description": "SMTP settings, present for kind 'email'. The password is never here: has_secret says one is stored.",
+            "type": "object",
+            "properties": {
+              "sender_name": {
+                "type": "string",
+                "description": "Display name on the From line."
+              },
+              "sender_address": {
+                "type": "string",
+                "description": "The From address."
+              },
+              "smtp_host": {
+                "type": "string"
+              },
+              "smtp_port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "smtp_tls": {
+                "type": "boolean",
+                "description": "Implicit TLS (SMTPS, usually 465). STARTTLS is attempted whenever the server advertises it and this is false, which is what a port-587 relay expects."
+              },
+              "smtp_auth": {
+                "type": "boolean",
+                "description": "Whether to send AUTH. A local relay may need none."
+              },
+              "username": {
+                "type": "string",
+                "description": "AUTH username. Not a secret; the password lives in the sealed secret."
+              }
+            },
+            "required": [
+              "sender_name",
+              "sender_address",
+              "smtp_host",
+              "smtp_port",
+              "smtp_tls",
+              "smtp_auth",
+              "username"
+            ],
+            "additionalProperties": false
+          },
+          "recipients": {
+            "type": "array",
+            "description": "Mailboxes on an email channel, in the order they were added. Absent for other kinds.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "address": {
+                  "type": "string"
+                },
+                "last_check": {
+                  "type": "object",
+                  "nullable": true,
+                  "description": "Outcome of the last per-address test.",
+                  "properties": {
+                    "state": { "type": "string", "enum": ["healthy", "unavailable"] },
+                    "address": { "type": "string" },
+                    "status": { "type": "integer", "minimum": 100, "maximum": 599 },
+                    "error": { "type": "string" },
+                    "checked_at": { "type": "string", "format": "date-time" }
+                  },
+                  "required": ["state", "address", "checked_at"]
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "address"
+              ],
+              "additionalProperties": false
+            }
           },
           "enabled": {
             "type": "boolean"

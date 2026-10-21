@@ -38,6 +38,22 @@ func decodeChannelBody(w http.ResponseWriter, q *http.Request) (notify.ChannelIn
 		URL     string `json:"url"`
 		Secret  string `json:"secret"`
 		Enabled *bool  `json:"enabled"`
+		// SMTP parameters, present for kind 'email'.
+		Email *struct {
+			SenderName    string `json:"sender_name"`
+			SenderAddress string `json:"sender_address"`
+			Host          string `json:"smtp_host"`
+			Port          int    `json:"smtp_port"`
+			TLS           bool   `json:"smtp_tls"`
+			UseAuth       bool   `json:"smtp_auth"`
+			Username      string `json:"username"`
+		} `json:"email"`
+		// Nil means "leave the stored recipients alone"; an empty array clears
+		// them. A rename must not silently unbind every mailbox.
+		Recipients *[]struct {
+			Name    string `json:"name"`
+			Address string `json:"address"`
+		} `json:"recipients"`
 	}
 	if err := decode(w, q, &in); err != nil {
 		fail(w, q, err)
@@ -47,13 +63,32 @@ func decodeChannelBody(w http.ResponseWriter, q *http.Request) (notify.ChannelIn
 	if in.Enabled != nil {
 		enabled = *in.Enabled
 	}
-	return notify.ChannelInput{
+	input := notify.ChannelInput{
 		Kind:    in.Kind,
 		Name:    in.Name,
 		URL:     in.URL,
 		Secret:  in.Secret,
 		Enabled: enabled,
-	}, true
+	}
+	if in.Email != nil {
+		input.Email = &notify.SMTPConfig{
+			SenderName:    in.Email.SenderName,
+			SenderAddress: in.Email.SenderAddress,
+			Host:          in.Email.Host,
+			Port:          in.Email.Port,
+			TLS:           in.Email.TLS,
+			UseAuth:       in.Email.UseAuth,
+			Username:      in.Email.Username,
+		}
+	}
+	if in.Recipients != nil {
+		recipients := make([]notify.RecipientInput, 0, len(*in.Recipients))
+		for _, recipient := range *in.Recipients {
+			recipients = append(recipients, notify.RecipientInput{Name: recipient.Name, Address: recipient.Address})
+		}
+		input.Recipients = &recipients
+	}
+	return input, true
 }
 
 // registerNotificationChannel handles POST /api/v1/notification-channels.
@@ -232,4 +267,30 @@ func (r *router) setRuleChannels(w http.ResponseWriter, q *http.Request, p auth.
 	respond(w, q, 200, struct {
 		ChannelIDs []id.ID `json:"channel_ids"`
 	}{channels})
+}
+
+// testNotificationRecipient handles POST
+// /api/v1/notification-channels/{id}/recipients/{recipientID}/test: prove one
+// mailbox, the way the operator's Email tab tests each row.
+func (r *router) testNotificationRecipient(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Notify == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
+	channelID, err := pathID(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	recipientID, err := id.Parse(q.PathValue("recipientID"))
+	if err != nil {
+		fail(w, q, auth.ErrInvalid)
+		return
+	}
+	result, err := r.d.Notify.TestRecipient(q.Context(), p, channelID, recipientID)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, result)
 }
