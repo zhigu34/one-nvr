@@ -120,13 +120,11 @@ test('the recordings workspace renders channels, playback and the file panel sid
   await expect.element(view.getByTestId('files-panel')).toBeVisible()
   // No tab role is rendered any more; the previous entry split is gone.
   expect(view.getByRole('tab').query()).toBeNull()
-  // The rail carries two badges of different kinds: a COUNT of segments in the
-  // current window and a GROUP name. Both used the same green chip, so "CH01
-  // 224" read as a group called 224 — the one question a badge must not raise.
-  const count = view.getByTitle(/当前时段 \d+ 段录像/).first()
-  await expect.element(count).toBeVisible()
-  expect((count.element() as HTMLElement).className).toContain('tabular-nums')
-  expect((count.element() as HTMLElement).className).not.toContain('emerald')
+  // The rail carries one badge per channel: the group name. The per-channel
+  // segment count was removed — it answered a different question than the group
+  // chip beside it while looking the same, and each rail row fetched its own
+  // stats request for a number the timeline band already reports once.
+  expect(view.getByTitle(/当前时段 \d+ 段录像/).query()).toBeNull()
 })
 
 // Legacy deep links like /recordings?tab=files still resolve, even though the

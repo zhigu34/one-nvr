@@ -218,7 +218,6 @@ export function RecordingsWorkspace({
                       activeID={channelID}
                       onSelect={onChannelChange}
                       summaries={summaries}
-                      range={activeRange}
                     />
                   ),
                   files:
@@ -290,13 +289,11 @@ function ChannelsRail({
   activeID,
   onSelect,
   summaries,
-  range,
 }: {
   channels: Schema<'Channel'>[]
   activeID: string
   onSelect: (id: string) => void
   summaries: Map<string, Schema<'ChannelSummary'>>
-  range: { start: number; end: number } | null
 }) {
   const [search, setSearch] = useState('')
   const filtered = useMemo(() => {
@@ -359,8 +356,6 @@ function ChannelsRail({
               active={active}
               dot={dot}
               onSelect={() => onSelect(channel.id)}
-              channelId={channel.id}
-              range={range}
             />
           )
         })}
@@ -380,8 +375,6 @@ function ChannelRow({
   active,
   dot,
   onSelect,
-  channelId,
-  range,
 }: {
   label: string
   name: string
@@ -389,20 +382,7 @@ function ChannelRow({
   active: boolean
   dot: { cls: string; title: string }
   onSelect: () => void
-  channelId: string
-  range: { start: number; end: number } | null
 }) {
-  const path = useMemo(() => {
-    if (!range) return ''
-    return `/api/v1/recordings/stats?${new URLSearchParams({
-      channel_id: channelId,
-      start: new Date(range.start).toISOString(),
-      end: new Date(range.end).toISOString(),
-      limit: '1',
-    })}`
-  }, [channelId, range])
-  const stats = useAPI<Schema<'RecordingStats'>>(path, !!path)
-  const segments = stats.data?.segments
   return (
     <button
       type='button'
@@ -411,8 +391,7 @@ function ChannelRow({
       aria-label={label}
       className={cn(
         'flex h-8 items-center gap-2 truncate rounded px-2 text-left text-sm text-video-chrome-foreground hover:bg-video-wash',
-        active && 'bg-video-wash font-medium text-video-chrome-foreground',
-        segments === 0 && 'text-video-chrome-foreground/50'
+        active && 'bg-video-wash font-medium text-video-chrome-foreground'
       )}
     >
       <span
@@ -423,20 +402,11 @@ function ChannelRow({
       <span className='inline-grid min-w-6 place-items-center rounded bg-video-wash px-1 py-0.5 text-[10px] font-semibold tabular-nums'>
         {label.slice(2, 4)}
       </span>
+      {/* No per-channel segment count here. It was a count in the current search
+          window sitting next to a group-name chip, so the two read alike while
+          answering different questions — and every rail row fetched its own
+          stats request for a number that is already shown once, on the band. */}
       <span className='flex-1 truncate'>{name}</span>
-      {typeof segments === 'number' && segments > 0 && (
-        // Neutral by design. This is a COUNT of segments in the current window,
-        // while the chip beside it is a GROUP NAME — two different kinds of fact.
-        // Styling both green made an operator ask "is CH01 224 files or a group
-        // called 224", which is the one question a badge must never raise.
-        // tabular-nums keeps the column from shifting as the counts change.
-        <span
-          title={`当前时段 ${segments} 段录像`}
-          className='rounded px-1 py-0.5 text-[10px] font-normal tabular-nums text-zinc-500'
-        >
-          {segments > 999 ? '999+' : segments}
-        </span>
-      )}
       {group && (
         <span
           title={`分组 · ${group}`}
