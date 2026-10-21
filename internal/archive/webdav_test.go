@@ -365,3 +365,39 @@ func TestLockedCollectionThatIsMissingStillFails(t *testing.T) {
 		t.Fatal("a locked collection that is missing must fail")
 	}
 }
+
+// A streamed GET body must stay readable after the helper returns.
+//
+// requestSized cancelled its request context with `defer cancel()`, so the body
+// it handed back was dead the moment the caller got it: cloud playback read a
+// few kilobytes and then failed with "context canceled", while a one-byte probe
+// (drained inside the same call) passed. Every ranged read of a real recording
+// went through this path.
+func TestStreamedBodyOutlivesTheRequestHelper(t *testing.T) {
+	payload := bytes.Repeat([]byte("x"), 256*1024)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "video/mp4")
+			_, _ = w.Write(payload)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer server.Close()
+
+	client, _ := NewClient(server.URL, "/nvr", "user", "pass")
+	body, _, _, err := client.GetRange(context.Background(), "k/file.mp4", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer body.Close()
+	// Read the whole thing, well past the point where a cancelled context would
+	// cut it off.
+	got, readErr := io.ReadAll(body)
+	if readErr != nil {
+		t.Fatalf("the streamed body must stay readable after GetRange returns: %v", readErr)
+	}
+	if len(got) != len(payload) {
+		t.Fatalf("expected %d bytes, got %d (truncated by a cancelled context)", len(payload), len(got))
+	}
+}

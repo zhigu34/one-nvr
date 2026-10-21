@@ -117,9 +117,17 @@ func (c *Client) request(ctx context.Context, method, url string, body io.Reader
 // chunked upload reaches the driver with size -1).
 func (c *Client) requestSized(ctx context.Context, method, url string, body io.Reader, rangeHeader string, size int64) (*http.Response, error) {
 	bounded, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
+	// The cancel must travel with the response, NOT run when this function
+	// returns: a streamed body is read by the caller afterwards, and cancelling
+	// the context here closes it. That is what made cloud playback die after a
+	// few kilobytes with "context canceled" while a one-byte probe (read inside
+	// this call) succeeded.
+	//
+	// The body is wrapped so closing it releases the timer; every caller closes
+	// the body it receives, which is what keeps this bounded.
 	req, err := http.NewRequestWithContext(bounded, method, url, body)
 	if err != nil {
+		cancel()
 		return nil, ErrTargetUnavailable
 	}
 	if size >= 0 && body != nil {
@@ -134,12 +142,27 @@ func (c *Client) requestSized(ctx context.Context, method, url string, body io.R
 	req.SetBasicAuth(c.username, c.password)
 	response, err := c.http.Do(req)
 	if err != nil {
+		cancel()
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		return nil, &probeError{Code: ErrTargetUnavailable, Stage: "connect", Detail: transportReason(err)}
 	}
+	response.Body = &cancelOnClose{ReadCloser: response.Body, cancel: cancel}
 	return response, nil
+}
+
+// cancelOnClose releases the request's context once the body is closed, which is
+// the only moment the stream is genuinely finished with.
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnClose) Close() error {
+	err := c.ReadCloser.Close()
+	c.cancel()
+	return err
 }
 
 // withTrace attaches the request/response trace to a probe error.
