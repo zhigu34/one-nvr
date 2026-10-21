@@ -103,6 +103,24 @@ describe('recording timeline', () => {
     expect(blockedReason(segment('x', 0, 60))).toBe('')
   })
 
+  // ARC-04: the content endpoint serves the archived copy when the local file is
+  // gone, so a deleted or missing segment with a verified cloud copy plays.
+  // Blocking it here made the file list's play button do nothing: the play
+  // signal looked for a playable entry and found none.
+  it('an archived segment without local media is playable', () => {
+    for (const state of ['deleted', 'missing'] as const) {
+      expect(blockedReason(segment('x', 0, 60, { state, archived: true }))).toBe('')
+    }
+    // Without a cloud copy there is nothing to serve.
+    expect(blockedReason(segment('x', 0, 60, { state: 'deleted', archived: false }))).not.toBe('')
+    expect(blockedReason(segment('x', 0, 60, { state: 'missing', archived: false }))).not.toBe('')
+    // Every other non-ready state stays blocked regardless: a still-writing or
+    // conflicting segment has no settled bytes anywhere.
+    for (const state of ['finalizing', 'provisional', 'damaged', 'conflict'] as const) {
+      expect(blockedReason(segment('x', 0, 60, { state, archived: true }))).not.toBe('')
+    }
+  })
+
   it('prefers the playable segment when two cover the same instant', () => {
     const timeline = buildTimeline(
       [

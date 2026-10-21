@@ -65,14 +65,26 @@ const CHECK_REASON: Record<string, string> = {
  * Why a segment cannot be handed to the player, or an empty string.
  *
  * "Cannot play" and "went wrong" are different questions, and only the first
- * one decides whether a play button may appear. A deleted segment cannot play —
- * the bytes are gone — but nothing failed, so the canvas colours it slate
- * instead of red. Returning '' here would have said it IS playable, which put a
- * play button on footage that answers 404.
+ * one decides whether a play button may appear. A deleted segment cannot play
+ * from the local disk — the bytes are gone — but nothing failed, so the canvas
+ * colours it slate instead of red.
+ *
+ * A verified cloud copy changes the answer: the content endpoint falls back to
+ * the archive when the local file is gone (ARC-04), so a deleted or missing
+ * segment that is archived IS playable. Blocking it here meant the file list's
+ * play button did nothing at all — the timeline entry was marked blocked, so the
+ * play signal found no playable entry to start.
+ *
+ * Every other non-ready state stays blocked regardless of the archive: a
+ * still-writing or conflicting segment has no settled bytes anywhere.
  */
 export function blockedReason(segment: Segment): string {
-  if (segment.state !== 'ready') return STATE_REASON[segment.state]
-  return CHECK_REASON[segment.check_state] || ''
+  if (segment.state === 'ready') return CHECK_REASON[segment.check_state] || ''
+  if ((segment.state === 'deleted' || segment.state === 'missing') && segment.archived) {
+    // Served from the cloud copy through the same content endpoint.
+    return ''
+  }
+  return STATE_REASON[segment.state]
 }
 
 /**
