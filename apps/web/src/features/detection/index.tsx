@@ -1,38 +1,30 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { apiRequest, jsonRequest } from '@/lib/api-client'
+import { apiRequest } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
-import { Switch } from '@/components/ui/switch'
 import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { useAPI } from '@/features/foundation/hooks'
 import { apiErrorText } from '@/features/foundation/api-errors'
 import { LoadingButton } from '@/features/foundation/loading-button'
 import { StatusBadge } from '@/features/foundation/status-badge'
-import { Empty, Notices, QueryState, SelectField } from '@/features/foundation/ui'
+import { Empty, Notices, PageTitle, QueryState } from '@/features/foundation/ui'
 import { cn } from '@/lib/utils'
+import { DetectionConfigBar } from './config-bar'
+import { SENSITIVITY_TEXT, STREAM_TEXT, configSummary } from './draft'
 import { ZoneWorkbench } from './zones'
 
 type Config = Schema<'DetectionConfig'>
 type Runtime = Schema<'DetectionRuntime'>
 type Channel = Schema<'Channel'>
 type Summary = Schema<'ChannelSummary'>
-
-const LABEL_TEXT: Record<string, string> = {
-  person: '人', bicycle: '自行车', car: '轿车', motorcycle: '摩托车', bus: '巴士',
-  truck: '卡车', cat: '猫', dog: '狗', bird: '鸟', horse: '马', sheep: '羊', cow: '牛', bear: '熊',
-}
-
-// The detector's vocabulary is broad; a row shows the common six and keeps the
-// rest one click away instead of spraying the whole model across every row.
-const COMMON_LABELS = ['person', 'car', 'bicycle', 'motorcycle', 'truck', 'bus']
-const MORE_LABELS = ['cat', 'dog', 'bird', 'horse', 'sheep', 'cow', 'bear']
 
 const ERROR_CODES: Record<string, string> = {
   detection_label_unsupported: '模型不支持所选目标类别',
@@ -48,7 +40,7 @@ const HELP_TEXT =
   '发布失败时自动保留上一份配置。区域坐标按比例存储，与摄像头分辨率无关。'
 
 // Row health, derived from the same summary data the channels page uses. A
-// channel with no camera cannot run detection, so its whole row is inert.
+// channel with no camera cannot run detection, so its row is inert.
 function rowHealth(channel: Summary) {
   if (!channel.source_ip && !channel.current_revision_id) return 'unconfigured'
   if (!channel.enabled) return 'disabled'
@@ -56,7 +48,10 @@ function rowHealth(channel: Summary) {
   return 'offline'
 }
 
-const HEALTH_BADGES: Record<RowHealth, { tone: 'success' | 'warning' | 'neutral' | 'destructive'; text: string }> = {
+const HEALTH_BADGES: Record<
+  RowHealth,
+  { tone: 'success' | 'warning' | 'neutral' | 'destructive'; text: string }
+> = {
   online: { tone: 'success', text: '在线' },
   offline: { tone: 'warning', text: '离线' },
   disabled: { tone: 'neutral', text: '通道已停用' },
@@ -64,14 +59,16 @@ const HEALTH_BADGES: Record<RowHealth, { tone: 'success' | 'warning' | 'neutral'
   unknown: { tone: 'neutral', text: '未知' },
 }
 
-type RowFilter = 'all' | 'enabled' | 'dirty'
+type RowFilter = 'all' | 'enabled' | 'unconfigured'
 type RowHealth = 'online' | 'offline' | 'disabled' | 'unconfigured' | 'unknown'
 
 /**
- * M3 batch 2 (AI-01/AI-07): per-channel detection settings and the capability
- * card. Publication is an explicit action: editing a row only saves it, and
- * the sticky bar renders and reloads Frigate's config. Recording is never
- * touched by any of this.
+ * M3 batch 2 (AI-01/AI-07): detection settings as one bar plus a read-only table.
+ *
+ * All five settings live in the bar and apply to whatever is selected. The table
+ * answers "what did each channel end up with" — it has no controls of its own, so
+ * there is exactly one place a setting can be changed. Publishing stays a
+ * separate, explicit action: edits only save, and the sticky bar reloads Frigate.
  */
 export function Detection() {
   const client = useQueryClient()
@@ -82,40 +79,40 @@ export function Detection() {
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
-  // Rows the operator edited but has not saved yet; the sticky publish bar
-  // counts them so "保存再发布" never happens out of order.
-  const [dirty, setDirty] = useState<Set<string>>(new Set())
   const [filter, setFilter] = useState<RowFilter>('all')
-  const summaryOf = new Map(
-    (summaries.data?.items || []).map((item) => [item.channel_id, item])
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [openWorkbench, setOpenWorkbench] = useState<string>('')
+
+  const summaryOf = useMemo(
+    () => new Map((summaries.data?.items || []).map((item) => [item.channel_id, item])),
+    [summaries.data]
+  )
+  const configOf = useMemo(
+    () => new Map((configs.data?.items || []).map((config) => [config.channel_id ?? '', config])),
+    [configs.data]
   )
   const permitted = (channels.data?.items || []).filter((channel) =>
     channel.permissions.includes('configure')
   )
-  const configOf = new Map((configs.data?.items || []).map((config) => [config.channel_id ?? '', config]))
-  const rows = permitted.map((channel) => {
+  // Only a channel the server will accept can be selected: applying to an
+  // unconfigured channel wastes a round trip and reports a failure the operator
+  // cannot act on from here.
+  const actionable = permitted.filter((channel) => {
     const summary = summaryOf.get(channel.id ?? '')
-    const config = configOf.get(channel.id ?? '')
-    const health: RowHealth = summary ? rowHealth(summary) : 'unknown'
-    return {
-      channel,
-      config,
-      health,
-      enabled: config?.enabled ?? false,
-    }
+    return summary ? rowHealth(summary) !== 'unconfigured' : false
   })
+  const chosen = permitted.filter((channel) => selected.has(channel.id ?? ''))
   const counts = {
-    all: rows.length,
-    enabled: rows.filter((row) => row.enabled).length,
-    dirty: dirty.size,
+    all: permitted.length,
+    enabled: permitted.filter((channel) => configOf.get(channel.id ?? '')?.enabled).length,
+    unconfigured: permitted.length - actionable.length,
   }
-  const visibleRows = rows.filter((row) => {
-    if (filter === 'enabled') return row.enabled
-    if (filter === 'dirty') return dirty.has(row.channel.id ?? '')
+  const visibleRows = permitted.filter((channel) => {
+    if (filter === 'enabled') return !!configOf.get(channel.id ?? '')?.enabled
+    if (filter === 'unconfigured') return !actionable.includes(channel)
     return true
   })
   const pendingPublish = runtime.data?.revision?.pending ?? false
-  const hasUnsaved = counts.dirty > 0
 
   async function run(action: () => Promise<void>, message: string) {
     setPending(true)
@@ -135,27 +132,32 @@ export function Detection() {
   const publish = () =>
     void run(async () => {
       await apiRequest('/api/v1/detection/publish', { method: 'POST' })
-      setDirty(new Set())
     }, '检测配置已发布')
 
+  function toggle(id: string, checked: boolean) {
+    setSelected((previous) => {
+      const next = new Set(previous)
+      if (checked) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }
+
   return (
-    <div className='space-y-4'>
-      <div>
-        <div className='flex items-center gap-2'>
-          <h1 className='text-2xl font-semibold tracking-tight'>检测配置</h1>
-          <span
-            role='note'
-            aria-label='检测配置使用说明'
-            title={HELP_TEXT}
-            className='grid size-5 cursor-help place-items-center rounded-full border border-border text-[10px] text-muted-foreground'
-          >
-            ?
-          </span>
-        </div>
-        <p className='mt-1 text-sm text-muted-foreground'>
-          按通道启停智能检测并选择码流、帧率与目标类别；发布后检测服务重载一次，失败时保留上一份配置。
-        </p>
-      </div>
+    <div className='space-y-4 pb-20'>
+      <PageTitle
+        title='检测配置'
+        description='在上方选择码流、帧率、灵敏度与目标，勾选通道后一次应用；下方表格只展示每路当前生效的配置。'
+      >
+        <span
+          role='note'
+          aria-label='检测配置使用说明'
+          title={HELP_TEXT}
+          className='grid size-5 cursor-help place-items-center rounded-full border border-border text-[10px] text-muted-foreground'
+        >
+          ?
+        </span>
+      </PageTitle>
       <QueryState
         pending={channels.isPending || configs.isPending}
         error={channels.error || configs.error}
@@ -163,25 +165,27 @@ export function Detection() {
       />
       <Notices notice={notice} error={error} />
       {runtime.data && (
-          <div className='grid gap-2 rounded-xl border bg-card p-4 text-sm sm:grid-cols-2 lg:grid-cols-4'>
-            <div>
-              <p className='text-xs text-muted-foreground'>检测服务</p>
-              <p>
-                <StatusBadge
-                  tone={runtime.data.runtime?.reachable ? 'success' : 'destructive'}
-                >
-                  {runtime.data.runtime?.reachable ? '运行中' : '不可达'}
-                </StatusBadge>
-              </p>
-            </div>
+        <div className='grid gap-2 rounded-xl border bg-card p-4 text-sm sm:grid-cols-2 lg:grid-cols-4'>
+          <div>
+            <p className='text-xs text-muted-foreground'>检测服务</p>
+            <p>
+              <StatusBadge tone={runtime.data.runtime?.reachable ? 'success' : 'destructive'}>
+                {runtime.data.runtime?.reachable ? '运行中' : '不可达'}
+              </StatusBadge>
+            </p>
+          </div>
           <div>
             <p className='text-xs text-muted-foreground'>版本 / 检测器</p>
-            <p>{runtime.data.runtime?.version || '—'} · {runtime.data.runtime?.detector || '—'}</p>
+            <p>
+              {runtime.data.runtime?.version || '—'} · {runtime.data.runtime?.detector || '—'}
+            </p>
           </div>
           <div>
             <p className='text-xs text-muted-foreground'>推理耗时</p>
             <p>
-              {runtime.data.runtime?.inference_ms ? `${runtime.data.runtime.inference_ms.toFixed(1)} ms` : '—'}
+              {runtime.data.runtime?.inference_ms
+                ? `${runtime.data.runtime.inference_ms.toFixed(1)} ms`
+                : '—'}
               {runtime.data.runtime?.overloaded ? ' · 过载' : ''}
             </p>
           </div>
@@ -200,18 +204,26 @@ export function Detection() {
                     : 'mt-1 text-xs text-muted-foreground'
                 }
               >
-                {runtime.data.revision.pending
-                  ? '有设置尚未发布'
-                  : '与检测服务一致'}
+                {runtime.data.revision.pending ? '有设置尚未发布' : '与检测服务一致'}
               </p>
             )}
           </div>
         </div>
       )}
-      {(!permitted.length && channels.data) ? (
+      {!permitted.length && channels.data ? (
         <Empty>没有可配置检测的通道，请联系管理员分配通道配置权限。</Empty>
       ) : (
         <>
+          <DetectionConfigBar
+            chosen={chosen}
+            chosenCount={chosen.length}
+            total={permitted.length}
+            onSelectAll={() =>
+              setSelected(new Set(actionable.map((channel) => channel.id ?? '')))
+            }
+            onClear={() => setSelected(new Set())}
+            configOf={configOf}
+          />
           <div
             role='group'
             aria-label='通道筛选'
@@ -221,7 +233,7 @@ export function Detection() {
               [
                 { value: 'all', label: '全部' },
                 { value: 'enabled', label: '已启用检测' },
-                { value: 'dirty', label: '未保存修改' },
+                { value: 'unconfigured', label: '未配置源' },
               ] as const
             ).map(({ value, label }) => {
               const active = filter === value
@@ -246,339 +258,178 @@ export function Detection() {
               )
             })}
           </div>
-          {/* pb-20 keeps the last row clear of the sticky publish bar when
-              scrolled to the bottom. */}
-          <div className='space-y-2 pb-20'>
-            {visibleRows.map((row) => (
-              <DetectionRow
-                key={row.channel.id}
-                channel={row.channel}
-                config={row.config}
-                health={row.health}
-                dirty={dirty.has(row.channel.id ?? '')}
-                onDirty={(value) =>
-                  setDirty((current) => {
-                    const next = new Set(current)
-                    if (value) next.add(row.channel.id ?? '')
-                    else next.delete(row.channel.id ?? '')
-                    return next
-                  })
-                }
-                pending={pending}
-                onSave={(next) =>
-                  void run(async () => {
-                    await apiRequest(
-                      `/api/v1/detection/configs/${row.channel.id}`,
-                      jsonRequest('PUT', { ...next, version: row.config?.version ?? 0 })
-                    )
-                    onDirty(row.channel.id ?? '', false)
-                  }, '检测配置已保存，发布后生效')
-                }
-              />
-            ))}
+          <div className='overflow-hidden rounded-xl border bg-card'>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className='w-20'>通道</TableHead>
+                  <TableHead className='w-24'>状态</TableHead>
+                  <TableHead className='w-24'>检测</TableHead>
+                  <TableHead className='w-24'>码流</TableHead>
+                  <TableHead className='w-20'>帧率</TableHead>
+                  <TableHead className='w-24'>灵敏度</TableHead>
+                  <TableHead>目标</TableHead>
+                  <TableHead className='w-40'>区域与规则</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {visibleRows.map((channel) => {
+                  const id = channel.id ?? ''
+                  const config = configOf.get(id)
+                  const summary = summaryOf.get(id)
+                  const health: RowHealth = summary ? rowHealth(summary) : 'unknown'
+                  const badge = HEALTH_BADGES[health]
+                  const inert = health === 'unconfigured' || health === 'unknown'
+                  const enabled = config?.enabled ?? false
+                  const labels = config?.labels ?? []
+                  return (
+                    <ChannelRow
+                      key={id}
+                      channel={channel}
+                      badge={badge}
+                      inert={inert}
+                      enabled={enabled}
+                      stream={config?.stream ?? 'sub'}
+                      fps={config?.fps ?? 5}
+                      sensitivity={config?.sensitivity ?? 'balanced'}
+                      labels={labels}
+                      selected={selected.has(id)}
+                      workbenchOpen={openWorkbench === id}
+                      onSelect={(checked) => toggle(id, checked)}
+                      onToggleWorkbench={() =>
+                        setOpenWorkbench(openWorkbench === id ? '' : id)
+                      }
+                      label={`CH${String(channel.channel_no ?? 0).padStart(2, '0')} ${channel.channel_name}`}
+                    />
+                  )
+                })}
+              </TableBody>
+            </Table>
+            {visibleRows.length === 0 && (
+              <div className='p-8 text-center text-sm text-muted-foreground'>
+                没有匹配的通道
+              </div>
+            )}
           </div>
         </>
       )}
-      {(pendingPublish || hasUnsaved) && permitted.length > 0 && (
+      {pendingPublish && permitted.length > 0 && (
         <div
           data-testid='publish-bar'
           className='sticky bottom-0 z-20 -mx-4 flex flex-wrap items-center justify-between gap-3 border-t border-amber-600/40 bg-card/95 px-4 py-2.5 backdrop-blur'
         >
           <span className='text-sm text-amber-600'>
-            {hasUnsaved
-              ? `${counts.dirty} 路有未保存的修改，发布前请先保存`
-              : '有设置尚未发布，检测服务仍在使用上一份配置'}
+            有设置尚未发布，检测服务仍在使用上一份配置
           </span>
-          <LoadingButton
-            pending={pending}
-            disabled={hasUnsaved}
-            pendingText='发布中…'
-            onClick={publish}
-          >
+          <LoadingButton pending={pending} pendingText='发布中…' onClick={publish}>
             发布检测配置
           </LoadingButton>
         </div>
       )}
     </div>
   )
-
-  function onDirty(id: string, value: boolean) {
-    setDirty((current) => {
-      const next = new Set(current)
-      if (value) next.add(id)
-      else next.delete(id)
-      return next
-    })
-  }
 }
 
-function DetectionRow({
+/**
+ * One channel as the table shows it: state and current settings, no controls.
+ *
+ * The zones/rules toggle stays because it opens that channel's workbench — it is
+ * a second editor for geometry, not a sixth copy of the settings above, and the
+ * bar cannot draw on a frame it does not have.
+ */
+function ChannelRow({
   channel,
-  config,
-  health,
-  dirty,
-  onDirty,
-  pending,
-  onSave,
+  badge,
+  inert,
+  enabled,
+  stream,
+  fps,
+  sensitivity,
+  labels,
+  selected,
+  workbenchOpen,
+  onSelect,
+  onToggleWorkbench,
+  label,
 }: {
   channel: Channel
-  config?: Config
-  health: RowHealth
-  dirty: boolean
-  onDirty: (value: boolean) => void
-  pending: boolean
-  onSave: (next: {
-    enabled: boolean
-    stream: string
-    fps: number
-    labels: string[]
-    sensitivity: 'sensitive' | 'balanced' | 'strict'
-  }) => void
+  badge: { tone: 'success' | 'warning' | 'neutral' | 'destructive'; text: string }
+  inert: boolean
+  enabled: boolean
+  stream: string
+  fps: number
+  sensitivity: string
+  labels: string[]
+  selected: boolean
+  workbenchOpen: boolean
+  onSelect: (checked: boolean) => void
+  onToggleWorkbench: () => void
+  label: string
 }) {
-  // The row must follow the stored configuration, not a snapshot taken at
-  // mount: the page renders before the config query resolves, and React reuses
-  // these component instances once it does, so state seeded from an initially
-  // undefined config would silently show defaults for every channel.
-  const [draft, setDraft] = useState<{
-    enabled: boolean
-    stream: string
-    fps: number
-    labels: string[]
-    sensitivity: 'sensitive' | 'balanced' | 'strict'
-  } | null>(null)
-  const [workbenchOpen, setWorkbenchOpen] = useState(false)
-  const enabled = draft?.enabled ?? config?.enabled ?? false
-  const stream = draft?.stream ?? config?.stream ?? 'sub'
-  const fps = draft?.fps ?? config?.fps ?? 5
-  // Sensitivity decides how readily a detection is called; it is the one
-  // setting an operator changes when the detector is too eager or too shy.
-  const sensitivity = draft?.sensitivity ?? config?.sensitivity ?? 'balanced'
-  const selected = draft?.labels ?? config?.labels ?? ['person']
-  const label = `CH${String(channel.channel_no ?? 0).padStart(2, '0')} ${channel.channel_name}`
-  const extra = selected.filter((value) => !COMMON_LABELS.includes(value))
-  const summaryText =
-    selected.length === 0
-      ? '未选择'
-      : selected.length <= 3
-        ? selected.map((value) => LABEL_TEXT[value] || value).join('、')
-        : `${selected.length} 类`
-  // A channel without a camera cannot stream into the detector: nothing on
-  // this row is actionable and the workbench has no frame to draw on.
-  const inert = health === 'unconfigured' || health === 'unknown'
-  const badge = health === 'unknown' ? null : HEALTH_BADGES[health]
-  const savedEnabled = config?.enabled ?? false
-  const savedStream = config?.stream ?? 'sub'
-  const savedFps = config?.fps ?? 5
-  const savedLabels = config?.labels ?? ['person']
-  const savedSensitivity = config?.sensitivity ?? 'balanced'
-  const unchanged =
-    !draft ||
-    (enabled === savedEnabled &&
-      stream === savedStream &&
-      fps === savedFps &&
-      sensitivity === savedSensitivity &&
-      selected.length === savedLabels.length &&
-      selected.every((value) => savedLabels.includes(value)))
-
-  function mutate(
-    patch: Partial<{
-      enabled: boolean
-      stream: string
-      fps: number
-      labels: string[]
-      sensitivity: 'sensitive' | 'balanced' | 'strict'
-    }>
-  ) {
-    setDraft({ enabled, stream, fps, labels: selected, sensitivity, ...patch })
-    onDirty(true)
-  }
-
-  function toggle(value: string, next: boolean) {
-    mutate({
-      labels: next
-        ? [...new Set([...selected, value])]
-        : selected.filter((item) => item !== value),
-    })
-  }
-
+  const interactive = !inert
   return (
-    <div
-      className={cn(
-        'space-y-2 rounded-xl border bg-card p-3 text-sm',
-        // Enabled rows get a faint emerald edge so the fence glance reads at a
-        // distance; inert rows dim out entirely.
-        enabled && !inert && 'border-l-2 border-l-emerald-500/60',
-        inert && 'opacity-60'
-      )}
-    >
-      <div className='flex flex-wrap items-center gap-x-4 gap-y-2' data-testid='detection-row'>
-        <span
-          className={cn(
-            'w-40 shrink-0 truncate font-medium',
-            inert && 'text-zinc-500'
-          )}
-        >
-          {label}
-        </span>
-        {/* Fixed-width slot: the health labels differ by three characters, and
-            without a reserved box every control to the right shifts per row. */}
-        <span className='inline-flex w-24 shrink-0 justify-start'>
-          {badge ? (
-            <StatusBadge tone={badge.tone}>{badge.text}</StatusBadge>
-          ) : null}
-        </span>
-        <label className='flex items-center gap-2'>
-          <Switch
-            checked={enabled}
-            disabled={pending || inert}
-            onCheckedChange={(next) => mutate({ enabled: next })}
-            aria-label={`${label} 启用检测`}
-          />
-          启用检测
-        </label>
-        {/* Labels live in the row header via ariaLabel only: repeating the
-            channel name on every control is what pushed these to two lines. */}
-        <div className='flex items-center gap-2'>
-          <span className='text-xs text-muted-foreground'>码流</span>
-          <SelectField
-            ariaLabel={`${label} 检测码流`}
-            value={stream}
-            disabled={inert}
-            onValueChange={(next) => setStream(next)}
-            options={[
-              { value: 'sub', label: '子码流' },
-              { value: 'main', label: '主码流' },
-            ]}
-            className='w-24'
-          />
-        </div>
-        <div className='flex items-center gap-2'>
-          <span className='text-xs text-muted-foreground'>帧率</span>
-          <SelectField
-            ariaLabel={`${label} 检测帧率`}
-            value={String(fps)}
-            disabled={inert}
-            onValueChange={(next) => setFps(next)}
-            options={[2, 5, 10, 15].map((value) => ({ value: String(value), label: `${value} fps` }))}
-            className='w-20'
-          />
-        </div>
-        <div className='flex items-center gap-2'>
-          <span className='text-xs text-muted-foreground'>灵敏度</span>
-          <SelectField
-            ariaLabel={`${label} 检测灵敏度`}
-            value={sensitivity}
-            disabled={inert}
-            onValueChange={(next) =>
-              mutate({ sensitivity: (next ?? 'balanced') as typeof sensitivity })
-            }
-            options={[
-              { value: 'sensitive', label: '灵敏' },
-              { value: 'balanced', label: '标准' },
-              { value: 'strict', label: '严格' },
-            ]}
-            className='w-20'
-          />
-        </div>
-        <div className='flex items-center gap-2'>
-          <span className='text-xs text-muted-foreground'>目标</span>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant='outline'
-                size='sm'
-                disabled={inert}
-                aria-label={`${label} 目标类别`}
-              >
-                {summaryText}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align='start' className='w-44'>
-              <DropdownMenuLabel>常用目标</DropdownMenuLabel>
-              {COMMON_LABELS.map((value) => (
-                <DropdownMenuCheckboxItem
-                  key={value}
-                  checked={selected.includes(value)}
-                  onSelect={(event) => event.preventDefault()}
-                  onCheckedChange={(next) => toggle(value, next === true)}
-                >
-                  {LABEL_TEXT[value] || value}
-                </DropdownMenuCheckboxItem>
-              ))}
-              <DropdownMenuLabel>其他</DropdownMenuLabel>
-              {MORE_LABELS.map((value) => (
-                <DropdownMenuCheckboxItem
-                  key={value}
-                  checked={selected.includes(value)}
-                  onSelect={(event) => event.preventDefault()}
-                  onCheckedChange={(next) => toggle(value, next === true)}
-                >
-                  {LABEL_TEXT[value] || value}
-                </DropdownMenuCheckboxItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-          {extra.length > 0 && (
-            <span className='text-xs text-muted-foreground'>+{extra.length} 类</span>
-          )}
-        </div>
-        {inert && (
-          <span
-            className='text-xs text-muted-foreground'
-            title='请先在通道管理中接入摄像头'
-          >
-            请先在通道管理中接入摄像头
-          </span>
+    <>
+      <TableRow
+        data-testid='detection-row'
+        className={cn(
+          interactionClass(interactive, selected),
+          inert && 'opacity-60'
         )}
-        <div className='ml-auto flex items-center gap-2'>
-          {/* Unchanged rows have nothing to save: the dimmed button states
-              that instead of sixteen identical invites to click. Only an
-              actual edit lights it up. */}
-          {unchanged ? (
-            <Button
-              size='sm'
-              variant='outline'
-              className='opacity-40'
-              disabled
-              title='修改设置后可保存'
-            >
-              保存
-            </Button>
-          ) : (
-            <Button
-              size='sm'
-              disabled={pending || inert || !selected.length}
-              onClick={() => onSave({ enabled, stream, fps, labels: selected, sensitivity })}
-            >
-              保存*
-            </Button>
+        onClick={() => interactive && onSelect(!selected)}
+      >
+        <TableCell className='font-medium'>{label}</TableCell>
+        <TableCell>
+          <StatusBadge tone={badge.tone}>{badge.text}</StatusBadge>
+        </TableCell>
+        <TableCell>
+          <StatusBadge tone={enabled ? 'success' : 'neutral'}>
+            {enabled ? '已启用' : '未启用'}
+          </StatusBadge>
+        </TableCell>
+        <TableCell className='text-sm'>{STREAM_TEXT[stream] ?? stream}</TableCell>
+        <TableCell className='tabular-nums text-sm'>{fps} fps</TableCell>
+        <TableCell className='text-sm'>
+          {SENSITIVITY_TEXT[sensitivity as keyof typeof SENSITIVITY_TEXT] ?? sensitivity}
+        </TableCell>
+        <TableCell className='text-sm'>
+          {configSummary(labels)}
+          {inert && (
+            <span className='ml-2 text-xs text-muted-foreground'>请先在通道管理中接入摄像头</span>
           )}
-          <WorkbenchToggle
+        </TableCell>
+        <TableCell onClick={(event) => event.stopPropagation()}>
+          <ZoneRuleToggle
             open={workbenchOpen}
-            disabled={inert}
+            disabled={!interactive}
             label={label}
             channelID={channel.id ?? ''}
-            onToggle={() => setWorkbenchOpen(!workbenchOpen)}
+            onToggle={onToggleWorkbench}
           />
-        </div>
-      </div>
-      {dirty && <StatusBadge tone='warning'>未保存</StatusBadge>}
+        </TableCell>
+      </TableRow>
       {workbenchOpen && (
-        <ZoneWorkbench channelID={channel.id ?? ''} detectionEnabled={enabled} />
+        <TableRow>
+          <TableCell colSpan={8} className='bg-card/40 p-0'>
+            <ZoneWorkbench channelID={channel.id ?? ''} detectionEnabled={enabled} />
+          </TableCell>
+        </TableRow>
       )}
-    </div>
+    </>
   )
-
-  function setStream(next: string | undefined) {
-    mutate({ stream: (next ?? 'sub') as 'main' | 'sub' })
-  }
-  function setFps(next: string | undefined) {
-    mutate({ fps: Number(next ?? 5) })
-  }
 }
 
-/** The zones/rules count lives on the toggle so fences are visible unexpanded. */
-function WorkbenchToggle({
+function interactionClass(interactive: boolean, selected: boolean) {
+  if (!interactive) return 'cursor-not-allowed'
+  return cn('cursor-pointer transition-colors', selected ? 'bg-primary/10 hover:bg-primary/15' : 'hover:bg-accent/50')
+}
+
+/**
+ * The zones/rules count lives on the toggle so fences are visible unexpanded.
+ *
+ * It stays in the table because it opens that channel's workbench: geometry is a
+ * second editor, not a sixth copy of the settings the bar owns.
+ */
+function ZoneRuleToggle({
   open,
   disabled,
   label,
@@ -593,17 +444,14 @@ function WorkbenchToggle({
 }) {
   const zones = useAPI<Schema<'DetectionZonePage'>>(
     `/api/v1/detection/zones?channel_id=${channelID}`,
-    open || (!!channelID && !disabled)
+    !disabled
   )
   const rules = useAPI<Schema<'DetectionRulePage'>>(
     `/api/v1/detection/rules?channel_id=${channelID}`,
-    open || (!!channelID && !disabled)
+    !disabled
   )
   const zoneCount = zones.data?.items?.length
   const ruleCount = rules.data?.items?.length
-  // The counts ride on the accessible name too: an explicit aria-label would
-  // otherwise override the visible text and hide the numbers from screen
-  // readers and queries alike.
   const text = open
     ? '收起区域与规则'
     : `区域与规则${zoneCount != null && ruleCount != null ? ` (${zoneCount} 区域 · ${ruleCount} 规则)` : ''}`

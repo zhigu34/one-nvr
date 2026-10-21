@@ -137,16 +137,22 @@ test('zones and rules stay behind a disclosure until asked for', async () => {
   await expect.element(screen.getByRole('button', { name: '新建规则' })).toBeVisible()
 })
 
-test('a healthy enabled row shows its health badge and keeps one line', async () => {
+test('a healthy enabled row reports its state and settings, with no controls of its own', async () => {
   const screen = await render(view(fixture(true)))
   const row = screen.getByTestId('detection-row')
   await expect.element(row).toBeVisible()
   // Row health comes from the channel summary, not the detection config.
   await expect.element(screen.getByText('在线')).toBeVisible()
-  // The enabled toggle is a Switch, not a checkbox.
-  await expect
-    .element(screen.getByRole('switch', { name: 'CH05 大门 启用检测' }))
-    .toBeChecked()
+  await expect.element(row.getByText('已启用')).toBeVisible()
+  // The current settings are shown as text: the operator reads them here and
+  // changes them in the bar, so there is exactly one place a setting can be set.
+  await expect.element(row).toHaveTextContent('子码流')
+  await expect.element(row).toHaveTextContent('5 fps')
+  await expect.element(row).toHaveTextContent('标准')
+  await expect.element(row).toHaveTextContent('人')
+  // No per-row editing controls survive the move to the bar.
+  expect(row.getByRole('switch').query()).toBeNull()
+  expect(row.getByRole('button', { name: /检测码流|检测帧率|检测灵敏度|目标类别/ }).query()).toBeNull()
 })
 
 test('an unconfigured channel is dimmed out with inert controls', async () => {
@@ -163,7 +169,7 @@ test('an unconfigured channel is dimmed out with inert controls', async () => {
     )
   )
   await expect.element(screen.getByText('未配置源')).toBeVisible()
-  const toggle = screen.getByRole('switch', { name: 'CH05 大门 启用检测' })
+  const toggle = screen.getByRole('button', { name: 'CH05 大门 区域与规则' })
   await expect.element(toggle).toBeDisabled()
   await expect
     .element(screen.getByRole('button', { name: 'CH05 大门 区域与规则' }))
@@ -176,58 +182,93 @@ test('the filter pills narrow the rows by state', async () => {
   const group = screen.getByRole('group', { name: '通道筛选' })
   await expect.element(group).toHaveTextContent('全部1')
   await expect.element(group).toHaveTextContent('已启用检测1')
-  await userEvent.click(group.getByRole('button', { name: /未保存修改/ }))
-  // No dirty rows yet: the empty result is fine, the pill counts come from edits.
+  await expect.element(group).toHaveTextContent('未配置源0')
+  await userEvent.click(group.getByRole('button', { name: /未配置源/ }))
+  // This channel has a source, so the unconfigured filter empties the table.
   await expect
-    .element(screen.getByRole('button', { name: /未保存修改/ }))
+    .element(screen.getByRole('button', { name: /未配置源/ }))
     .toHaveAttribute('aria-pressed', 'true')
+  await expect.element(screen.getByText('没有匹配的通道')).toBeVisible()
 })
 
-test('editing a row marks it dirty and the sticky publish bar appears', async () => {
+test('the bar applies to the selected channel and writes what the row then shows', async () => {
   const screen = await render(view(fixture(false, { revisionPending: true })))
-  // Before any edit: the runtime says pending, so the bar exists but the
-  // dirty hint does not.
   await expect.element(screen.getByTestId('publish-bar')).toBeVisible()
-  expect(screen.getByTestId('publish-bar').element().textContent).not.toContain('未保存的修改')
-  // An untouched row has nothing to save: the button sits dimmed and inert.
-  // Scoped to the row: the "未保存修改" pill also matches 保存.
-  const row = screen.getByTestId('detection-row')
-  await expect.element(row.getByRole('button', { name: '保存' })).toBeDisabled()
-  const switchControl = screen.getByRole('switch', { name: 'CH05 大门 启用检测' })
-  await switchControl.click()
-  // The edit lights the save button up as 保存*.
+  // Nothing selected: apply is not available.
   await expect
-    .element(row.getByRole('button', { name: '保存*' }))
-    .toBeEnabled()
-  // The bar now warns about the unsaved edit and blocks publishing.
-  await vi.waitFor(() =>
-    expect(screen.getByTestId('publish-bar').element().textContent).toContain('未保存的修改')
-  )
-  await expect
-    .element(screen.getByTestId('publish-bar').getByRole('button', { name: '发布检测配置' }))
+    .element(screen.getByRole('button', { name: /应用到所选通道/ }))
     .toBeDisabled()
-  // The row carries the exact badge; the bar's longer hint matches separately.
-  await expect.element(screen.getByText('未保存', { exact: true })).toBeVisible()
-  // Saving the row clears the dirty flag and releases the publish button.
-  await screen.getByRole('button', { name: '保存*' }).click()
+
+  // Selecting the row echoes its stored settings into the bar. Clicking the row
+  // anywhere outside a control selects it.
+  await screen.getByTestId('detection-row').click()
+  await expect.element(screen.getByText(/已选 1 \/ 1 路/)).toBeVisible()
+  // With no edit yet there is still nothing to apply: applying would rewrite the
+  // same values on every selected channel.
+  await expect
+    .element(screen.getByRole('button', { name: /应用到所选通道/ }))
+    .toBeDisabled()
+
+  await screen.getByRole('switch', { name: '批量启用检测' }).click()
+  const apply = screen.getByRole('button', { name: /应用到所选通道/ })
+  await expect.element(apply).toBeEnabled()
+  await userEvent.click(apply)
   await vi.waitFor(() =>
     expect(
       calls.request.mock.calls.filter(
         ([path, init]) =>
-          String(path) === `/api/v1/detection/configs/${channelID}` && init?.method === 'PUT'
+          String(path) === `/api/v1/detection/configs/${channelID}` &&
+          init?.method === 'PUT'
       ).length
     ).toBe(1)
   )
-  await expect
-    .element(screen.getByTestId('publish-bar').getByRole('button', { name: '发布检测配置' }))
-    .toBeEnabled()
-  // Saving returns the row button to its dimmed, disabled rest state.
-  await expect.element(row.getByRole('button', { name: '保存' })).toBeDisabled()
+  const put = calls.request.mock.calls.find(
+    ([path, init]) =>
+      String(path) === `/api/v1/detection/configs/${channelID}` &&
+      (init as RequestInit | undefined)?.method === 'PUT'
+  )
+  const body = JSON.parse(String((put?.[1] as RequestInit | undefined)?.body ?? '{}'))
+  // Only the changed field moves; the rest keep the channel's own values.
+  expect(body.enabled).toBe(true)
+  expect(body.stream).toBe('sub')
+  expect(body.fps).toBe(5)
+  expect(body.labels).toEqual(['person'])
+  await expect.element(screen.getByText(/已应用 1 路检测配置/)).toBeVisible()
+})
+
+test('applying leaves untouched fields at each channel\'s own value', async () => {
+  const screen = await render(view(fixture(true)))
+  // The stored config has stream 'sub'; change only the frame rate.
+  await screen.getByTestId('detection-row').click()
+  await userEvent.click(screen.getByLabelText('批量检测帧率'))
+  await userEvent.click(await screen.getByRole('option', { name: '15 fps' }).first())
+  await userEvent.click(screen.getByRole('button', { name: /应用到所选通道/ }))
+  await vi.waitFor(() =>
+    expect(
+      calls.request.mock.calls.filter(
+        ([path, init]) =>
+          String(path) === `/api/v1/detection/configs/${channelID}` &&
+          init?.method === 'PUT'
+      ).length
+    ).toBe(1)
+  )
+  const put = calls.request.mock.calls.find(
+    ([path, init]) =>
+      String(path) === `/api/v1/detection/configs/${channelID}` &&
+      (init as RequestInit | undefined)?.method === 'PUT'
+  )
+  const body = JSON.parse(String((put?.[1] as RequestInit | undefined)?.body ?? '{}'))
+  expect(body.fps).toBe(15)
+  // The stream was not edited, so it must not be rewritten from the bar's echo.
+  expect(body.stream).toBe('sub')
+  expect(body.enabled).toBe(true)
 })
 
 // The health labels differ by three characters ("在线" vs "通道已停用"); the
 // fixed-width slot keeps the switch and selects on one vertical line.
-test('the health badge sits in a fixed-width slot regardless of label length', async () => {
+// The health badge is its own table column now, so column alignment replaces the
+// old fixed-width span; what still matters is that a long label renders whole.
+test('a disabled channel shows its state without truncation', async () => {
   const screen = await render(
     view(
       fixture(true, {
@@ -241,9 +282,6 @@ test('the health badge sits in a fixed-width slot regardless of label length', a
   )
   const row = screen.getByTestId('detection-row')
   await expect.element(row.getByText('通道已停用')).toBeVisible()
-  const badgeSlot = row.element().querySelector('span.w-24')
-  expect(badgeSlot).toBeTruthy()
-  expect(badgeSlot!.textContent).toContain('通道已停用')
 })
 
 test('a channel without detection says why zones cannot be calibrated', async () => {
@@ -260,19 +298,27 @@ test('a channel without detection says why zones cannot be calibrated', async ()
 // Sensitivity is the control an operator reaches for when the detector is too
 // eager or too shy. It must be visible per channel and must travel in the saved
 // payload — a control that renders but is not sent is worse than none.
-test('sensitivity is offered per channel and saved with the rest', async () => {
-  const page = await render(view(fixture(true)))
-  await expect.element(page.getByText('灵敏度').first()).toBeVisible()
-  const select = page.getByLabelText(/检测灵敏度/).first()
+test('sensitivity is edited in the bar and carried into the write', async () => {
+  const screen = await render(view(fixture(true)))
+  await screen.getByTestId('detection-row').click()
+  const select = screen.getByLabelText('批量检测灵敏度')
   await expect.element(select).toBeVisible()
-  // Changing it makes the row dirty, which is the only way the save button
-  // appears.
   await userEvent.click(select)
-  await userEvent.click(await page.getByRole('option', { name: '灵敏' }).first())
-  const save = page.getByRole('button', { name: '保存*' }).first()
-  await userEvent.click(save)
+  await userEvent.click(await screen.getByRole('option', { name: '灵敏' }).first())
+  await userEvent.click(screen.getByRole('button', { name: /应用到所选通道/ }))
+  await vi.waitFor(() =>
+    expect(
+      calls.request.mock.calls.filter(
+        ([path, init]) =>
+          String(path) === `/api/v1/detection/configs/${channelID}` &&
+          init?.method === 'PUT'
+      ).length
+    ).toBe(1)
+  )
   const put = calls.request.mock.calls.find(
-    ([path, init]) => String(path).includes('/detection/configs/') && (init as RequestInit | undefined)?.method === 'PUT'
+    ([path, init]) =>
+      String(path) === `/api/v1/detection/configs/${channelID}` &&
+      (init as RequestInit | undefined)?.method === 'PUT'
   )
   const body = JSON.parse(String((put?.[1] as RequestInit | undefined)?.body ?? '{}'))
   expect(body.sensitivity).toBe('sensitive')
