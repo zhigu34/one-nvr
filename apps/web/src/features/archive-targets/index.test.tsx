@@ -602,16 +602,24 @@ test('立即上传 queues the unarchived segments through the existing endpoint'
   }
   calls.request.mockClear()
   calls.request.mockImplementation(async (path: string, init?: RequestInit) => {
-    if (path.startsWith('/api/v1/recordings?') && (!init || init.method === undefined))
+    // The walk now slices 90 days into 31-day windows, so the mock must answer per
+    // window rather than repeating the same four rows three times.
+    if (path.startsWith('/api/v1/recordings?') && (!init || init.method === undefined)) {
+      const params = new URLSearchParams(path.split('?')[1])
+      const end = Date.parse(params.get('end')!)
+      const newest = end >= Date.now() - 31 * 24 * 3600 * 1000
       return {
-        items: [
-          { id: 's1', state: 'ready', archived: false },
-          { id: 's2', state: 'ready', archived: true },
-          { id: 's3', state: 'finalizing', archived: false },
-          { id: 's4', state: 'ready', archived: false },
-        ],
+        items: newest
+          ? [
+              { id: 's1', state: 'ready', archived: false },
+              { id: 's2', state: 'ready', archived: true },
+              { id: 's3', state: 'finalizing', archived: false },
+              { id: 's4', state: 'ready', archived: false },
+            ]
+          : [],
         next_cursor: null,
       }
+    }
     if (path === '/api/v1/recordings/archive') return { queued: ['s1', 's4'] }
     if (path.startsWith('/api/v1/archive-targets')) return { items: captured.targets ?? [], next_cursor: null }
     if (path.startsWith('/api/v1/archive-policies'))
@@ -629,4 +637,17 @@ test('立即上传 queues the unarchived segments through the existing endpoint'
   // Only ready AND unarchived segments, and the channel's bound target.
   expect(body.segment_ids.sort()).toEqual(['s1', 's4'])
   expect(body.target_id).toBe('t1')
+  // Every list request must stay inside the endpoint's 31-day ceiling. This walk
+  // asked for 90 days in one request and the API answered 422 every time, which
+  // the operator saw only as "立即上传 failed".
+  const lists = calls.request.mock.calls.filter(
+    ([path, init]) => path.startsWith('/api/v1/recordings?') && (!init || (init as RequestInit).method === undefined)
+  )
+  expect(lists.length).toBeGreaterThan(0)
+  for (const [path] of lists) {
+    const params = new URLSearchParams(String(path).split('?')[1])
+    const span = Date.parse(params.get('end')!) - Date.parse(params.get('start')!)
+    expect(span).toBeLessThanOrEqual(31 * 24 * 3600 * 1000)
+    expect(span).toBeGreaterThan(0)
+  }
 })

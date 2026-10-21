@@ -637,35 +637,42 @@ function ArchivePlan({
     setNotice('')
     try {
       // Page through the channel's recent segments to find what is not archived.
-      // The list is newest-first, so the backlog is what sits after them; a
-      // bounded window keeps this from walking years of footage.
+      // The window is walked in 31-day slices because that is the endpoint's
+      // ceiling: `List` rejects any span longer than 31 days with 422, and this
+      // used to ask for 90 in one request — so the button failed every time with
+      // an error that said nothing about the real cause.
       const unarchived: string[] = []
-      let cursor = ''
       // One instant for the whole walk: a moving "end" would let the cursor skip
       // segments published while the loop runs.
       const now = new Date()
-      const from = new Date(now.getTime() - 90 * 24 * 3600 * 1000)
-      // 500 per page, at most 20 pages: 10 000 segments, far beyond any backlog
-      // one channel accumulates between uploads.
-      for (let page = 0; page < 20; page++) {
-        const params = new URLSearchParams({
-          channel_id: channelID,
-          start: from.toISOString(),
-          end: now.toISOString(),
-          limit: '500',
-        })
-        if (cursor) params.set('cursor', cursor)
-        const result = await apiRequest<{ items: Schema<'RecordingSegment'>[]; next_cursor: string | null }>(
-          `/api/v1/recordings?${params.toString()}`
-        )
-        for (const segment of result.items) {
-          // ready only: a finalizing or damaged segment has no uploadable bytes.
-          if (segment.state === 'ready' && !segment.archived && segment.id) {
-            unarchived.push(segment.id)
+      const oldest = now.getTime() - 90 * 24 * 3600 * 1000
+      // 500 per page, at most 20 pages per slice: 10 000 segments, far beyond any
+      // backlog one channel accumulates between uploads.
+      for (let slice = 0; slice < 3; slice++) {
+        const sliceEnd = new Date(now.getTime() - slice * 31 * 24 * 3600 * 1000)
+        const sliceStart = new Date(Math.max(oldest, sliceEnd.getTime() - 31 * 24 * 3600 * 1000))
+        if (sliceStart.getTime() >= sliceEnd.getTime()) break
+        let cursor = ''
+        for (let page = 0; page < 20; page++) {
+          const params = new URLSearchParams({
+            channel_id: channelID,
+            start: sliceStart.toISOString(),
+            end: sliceEnd.toISOString(),
+            limit: '500',
+          })
+          if (cursor) params.set('cursor', cursor)
+          const result = await apiRequest<{ items: Schema<'RecordingSegment'>[]; next_cursor: string | null }>(
+            `/api/v1/recordings?${params.toString()}`
+          )
+          for (const segment of result.items) {
+            // ready only: a finalizing or damaged segment has no uploadable bytes.
+            if (segment.state === 'ready' && !segment.archived && segment.id) {
+              unarchived.push(segment.id)
+            }
           }
+          if (!result.next_cursor) break
+          cursor = result.next_cursor
         }
-        if (!result.next_cursor) break
-        cursor = result.next_cursor
       }
       if (!unarchived.length) {
         setNotice('该通道没有待上传的录像')

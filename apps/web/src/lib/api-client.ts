@@ -1,5 +1,7 @@
 // Sessions remain in the server's HttpOnly cookie. CSRF lives only in memory.
 let csrfToken = ''
+// The token belongs to one session; a login or logout must drop it.
+let sessionCSRF = ''
 let generation = 0
 // getRandomValues is available on ordinary HTTP as well as HTTPS. randomUUID
 // requires a secure context and is absent on a LAN HTTP deployment.
@@ -30,7 +32,33 @@ export class ApiError extends Error {
 }
 export function clearAuthentication() {
   csrfToken = ''
+  sessionCSRF = ''
   generation++
+}
+
+/**
+ * loadSessionCSRF obtains the CSRF token for the CURRENT session.
+ *
+ * It must not be setup/status. That endpoint issues a PRE-auth token, signed for
+ * a cookie that login deletes, and `protected` compares against the session's own
+ * token — so every write after a page load (where the in-memory token is empty)
+ * was rejected with 403 csrf_rejected. That is exactly what the playback lease
+ * heartbeat hit: 30 seconds after a reload, on a network where the request still
+ * reached the server.
+ *
+ * `/auth/me` is the right source: it is a protected GET, needs no CSRF, and its
+ * response carries the token derived from the session cookie. A 401 there is left
+ * to the caller — the write will fail the same way, and the interceptor turns it
+ * into the unauthenticated path.
+ */
+async function loadSessionCSRF(started: number) {
+  if (sessionCSRF) {
+    // Another request in this generation already fetched it.
+    csrfToken = sessionCSRF
+    return
+  }
+  await apiRequest<{ csrf_token: string }>('/api/v1/auth/me').catch(() => {})
+  if (generation === started) sessionCSRF = csrfToken
 }
 export async function apiRequest<T>(
   path: string,
@@ -42,8 +70,7 @@ export async function apiRequest<T>(
   const headers = new Headers(init.headers)
   const method = (init.method || 'GET').toUpperCase()
   if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
-    if (!csrfToken)
-      await apiRequest<{ csrf_token: string }>('/api/v1/setup/status')
+    if (!csrfToken) await loadSessionCSRF(started)
     headers.set('X-CSRF-Token', csrfToken)
     if (init.body instanceof FormData) headers.delete('Content-Type')
     else if (init.body) headers.set('Content-Type', 'application/json')

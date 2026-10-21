@@ -105,12 +105,35 @@ test.each([200, 401])(
     )
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ data: {} })))
     await apiRequest('/api/v1/site', { method: 'PATCH', body: '{}' })
-    expect(fetchMock.mock.calls[1][0]).toBe('/api/v1/setup/status')
+    // The bootstrap must ask the SESSION for its token. setup/status issues a
+    // pre-auth token, which `protected` rejects — every write after a page load
+    // used to fail with 403 csrf_rejected because of it.
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/v1/auth/me')
     expect(
       new Headers(fetchMock.mock.calls[2][1].headers).get('X-CSRF-Token')
     ).toBe('fresh-csrf')
   }
 )
+
+// Every write after a page load needs the SESSION's CSRF token. The bootstrap
+// used to call setup/status, which issues a pre-auth token signed for a cookie
+// login deletes — `protected` rejected it, so the first write after a reload
+// (the playback lease heartbeat, 30 seconds in) failed with 403 csrf_rejected.
+test('a write with no cached token bootstraps from the session, not pre-auth', async () => {
+  clearAuthentication()
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { user: {}, csrf_token: 'session-csrf' } }))
+    )
+    .mockResolvedValueOnce(new Response(JSON.stringify({ data: {} })))
+  vi.stubGlobal('fetch', fetchMock)
+  await apiRequest('/api/v1/recordings/seg-1/lease', { method: 'POST' })
+  expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/auth/me')
+  expect(
+    new Headers(fetchMock.mock.calls[1][1].headers).get('X-CSRF-Token')
+  ).toBe('session-csrf')
+})
 
 test('multipart keeps its browser boundary and CSRF instead of a JSON content type', async () => {
   const fetchMock = vi
