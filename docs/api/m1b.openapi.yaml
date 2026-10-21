@@ -4299,6 +4299,53 @@
         }
       }
     },
+    "/api/v1/recordings/{id}/cloud-copy": {
+      "delete": {
+        "operationId": "recordingCloudCopyDelete",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "archive",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The remote object is deleted and its copy row is marked expired. The local copy is untouched; the recording stops being playable from the cloud."
+          },
+          "404": {
+            "description": "This recording has no verified remote copy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The archive target could not be reached; the copy is still there and the request can be retried.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "m1a.openapi.yaml#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/recordings/archive": {
       "post": {
         "operationId": "recordingArchiveUpload",

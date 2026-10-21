@@ -267,6 +267,43 @@ test('the row delete icon asks for confirmation and deletes that segment', async
   expect(deletions[0].body).toEqual({ segment_ids: [OLD] })
 })
 
+// Deleting the cloud copy is not deleting the recording. The row offers it only
+// when a copy exists, and the confirmation must say whether the local file
+// survives — those two halves are what keep an operator from destroying the only
+// remaining copy while trying to free up disk.
+test('the cloud-copy icon asks for confirmation and deletes the remote object', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  await expect.element(view.getByTestId('recording-row')).toHaveLength(5)
+
+  // The fourth row is 'deleted' with a verified cloud copy: the only row the
+  // cloud action applies to.
+  const row = view.getByTestId('recording-row').nth(3)
+  await userEvent.click(row.getByRole('button', { name: /^删除云端副本 / }))
+
+  await expect.element(view.getByText(/删除这段录像的云端副本/)).toBeVisible()
+  // Local playback survives, and the dialog has to say so.
+  await expect.element(view.getByText(/本地已经没有文件了，删除后不可回放/)).toBeVisible()
+
+  await userEvent.click(view.getByRole('button', { name: '删除云端副本' }))
+  const deletes = setup.mutations.filter((m) => m.path.endsWith('/cloud-copy'))
+  expect(deletes).toHaveLength(1)
+  expect(deletes[0].path).toBe(`/api/v1/recordings/${DELETED_CLOUD}/cloud-copy`)
+})
+
+// No cloud copy, no cloud action: offering it would produce a 404 the operator
+// cannot act on.
+test('the cloud-copy icon is absent when the recording has no cloud copy', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  await expect.element(view.getByTestId('recording-row')).toHaveLength(5)
+  // Row 0 is local-only (archived false) and row 4 is deleted-local-only.
+  for (const index of [0, 4]) {
+    const row = view.getByTestId('recording-row').nth(index)
+    expect(row.getByRole('button', { name: /^删除云端副本 / }).elements()).toHaveLength(0)
+  }
+})
+
 // A segment with no media has nothing to delete; the icon must not offer it.
 test('the delete icon is disabled for a segment with no local copy', async () => {
   const setup = fixture()

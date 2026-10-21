@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, Download, Play, Shield, ShieldOff, Trash2, X } from 'lucide-react'
+import { ChevronDown, CloudOff, Download, Play, Shield, ShieldOff, Trash2, X } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth-store'
 import { apiRequest, jsonRequest, newRequestKey } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
@@ -105,6 +105,7 @@ export function RecordingFiles({
   const [protection, setProtectionFilter] = useState('all')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [rowCloudDelete, setRowCloudDelete] = useState<Segment | null>(null)
   // The row whose delete is being confirmed: null when the dialog is closed.
   const [rowDelete, setRowDelete] = useState<Schema<'RecordingSegment'> | null>(null)
   const [exportsOpen, setExportsOpen] = useState(false)
@@ -348,6 +349,19 @@ export function RecordingFiles({
             ? `已删除，释放 ${bytes(result.released_bytes)}`
             : `未删除：${result.items[0]?.reason ?? '原因未知'}`,
       }
+    }, (value) => value.text)
+  }
+
+  // Deleting the cloud copy is a separate call from deleting the local file:
+  // the server deletes the remote object and marks the copy expired, and the
+  // local file is untouched. Saying which one is going is the whole point —
+  // an operator who meant "free up space here" must not destroy the off-site
+  // copy by accident, and vice versa.
+  async function deleteCloudCopy(id: string) {
+    setRowCloudDelete(null)
+    await run(async () => {
+      await apiRequest(`/api/v1/recordings/${id}/cloud-copy`, { method: 'DELETE' })
+      return { text: '云端副本已删除' }
     }, (value) => value.text)
   }
 
@@ -642,6 +656,7 @@ export function RecordingFiles({
                           onProtect={() => void setProtection(item, !item.protected)}
                           onPlay={() => onPlaySegment?.(item.id)}
                           onDelete={() => setRowDelete(item)}
+                          onDeleteCloud={() => setRowCloudDelete(item)}
                           rowRef={
                             item.id === activeSegmentId
                               ? (node: HTMLDivElement | null) => {
@@ -682,6 +697,29 @@ export function RecordingFiles({
           const target = rowDelete
           if (!target) return
           void deleteOne(target.id)
+        }}
+      />
+      <ConfirmDialog
+        open={!!rowCloudDelete}
+        onOpenChange={(next) => !next && setRowCloudDelete(null)}
+        title='删除这段录像的云端副本？'
+        desc={
+          rowCloudDelete
+            ? `${rowCloudDelete.start.slice(11, 19)}${
+                rowCloudDelete.state === 'ready'
+                  ? '。本地副本保留，仍可在这里播放；删除后云端不再有备份。'
+                  : '。这段本地已经没有文件了，删除后不可回放。'
+              }`
+            : ''
+        }
+        confirmText='删除云端副本'
+        cancelBtnText='取消'
+        destructive
+        isLoading={action.pending}
+        handleConfirm={() => {
+          const target = rowCloudDelete
+          if (!target) return
+          void deleteCloudCopy(target.id)
         }}
       />
       <ConfirmDialog
@@ -763,6 +801,7 @@ function RecordingRow({
   onProtect,
   onPlay,
   onDelete,
+  onDeleteCloud,
   rowRef,
 }: {
   item: Segment
@@ -774,6 +813,7 @@ function RecordingRow({
   onProtect: () => void
   onPlay: () => void
   onDelete: () => void
+  onDeleteCloud: () => void
   rowRef?: (node: HTMLDivElement | null) => void
 }) {
   const startClock = zone ? formatClock(Date.parse(item.start), zone) : '—'
@@ -913,6 +953,22 @@ function RecordingRow({
           >
             <Trash2 className='size-3.5' />
           </button>
+          {/* Removing the cloud object is a different decision from removing the
+              local file: the trash button above keeps cloud playback working,
+              this one is the only way to make the bytes stop existing off-site
+              before their retention deadline. Shown only when a copy exists. */}
+          {item.archived && (
+            <button
+              type='button'
+              aria-label={`删除云端副本 ${startClock}`}
+              disabled={actionPending}
+              onClick={onDeleteCloud}
+              className='grid size-6 place-items-center rounded border border-video-border bg-video-surface-raised text-video-chrome-foreground/70 hover:text-red-400 disabled:opacity-30'
+              title='删除云端副本'
+            >
+              <CloudOff className='size-3.5' />
+            </button>
+          )}
         </div>
       </div>
     </div>

@@ -286,9 +286,14 @@ func validateTargetInput(in TargetInput) error {
 	if !validRoot(in.RemoteRoot) {
 		return auth.ErrInvalid
 	}
-	if len(in.Username) < 1 || len(in.Username) > 128 || in.CloudRetentionDays < 1 {
+	if len(in.Username) < 1 || len(in.Username) > 128 || in.CloudRetentionDays < 0 || in.CloudRetentionDays > 36500 {
 		return auth.ErrInvalid
 	}
+	// 0 is a valid choice, not a missing value: the field's own help text says
+	// "0 = keep forever", and rejecting it made that promise untrue — the only way
+	// to keep a copy forever was to leave the page, because the form could not be
+	// submitted with 0. Every reader of the column already treats NULL as "no
+	// deadline", which is what 0 produces.
 	return nil
 }
 
@@ -522,14 +527,33 @@ func (s *Service) enqueueUpload(ctx context.Context, tx pgx.Tx, targetID, segmen
 		return false, nil
 	}
 	objectKey := path.Join(string(s.siteID), src.Target)
+	// ARC-09: the cloud deadline is stamped HERE, when the copy is created, and
+	// derived from the segment's real end rather than the upload moment — a file
+	// uploaded a week late must not gain a week of retention.
+	//
+	// Leaving it NULL was the behaviour until now, and it silenced the whole
+	// feature: the expiry sweep selects `cloud_expires_at < now()`, which is NULL
+	// for every copy and therefore never true, so "cloud retention: 365 days" never
+	// deleted anything. A NULL deadline is read as "keep forever" everywhere else
+	// (the local cleanup gate, the pressure sweeps), which is exactly what it then
+	// meant. 0 days keeps that meaning deliberately.
+	var cloudExpires *time.Time
+	if err := tx.QueryRow(ctx, `SELECT CASE WHEN t.cloud_retention_days > 0
+			THEN s.end_at + make_interval(days => t.cloud_retention_days) END
+		FROM recording_segments s, archive_targets t WHERE s.id=$1 AND t.id=$2`,
+		segmentID, targetID).Scan(&cloudExpires); err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return false, err
+		}
+	}
 	copyID, err := id.New()
 	if err != nil {
 		return false, err
 	}
 	// The hash is computed during upload; zeros keep the NOT NULL/CHECK honest
 	// until then, and the row's presence is what guards deletion mid-flight.
-	if _, err := tx.Exec(ctx, `INSERT INTO recording_archive_copies(id,segment_id,target_id,object_key,state,size_bytes,sha256) VALUES($1,$2,$3,$4,'uploading',$5,$6) ON CONFLICT (segment_id,target_id) DO NOTHING`,
-		copyID, segmentID, targetID, objectKey, src.Size, strings.Repeat("0", 64)); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO recording_archive_copies(id,segment_id,target_id,object_key,state,size_bytes,sha256,cloud_expires_at) VALUES($1,$2,$3,$4,'uploading',$5,$6,$7) ON CONFLICT (segment_id,target_id) DO NOTHING`,
+		copyID, segmentID, targetID, objectKey, src.Size, strings.Repeat("0", 64), cloudExpires); err != nil {
 		return false, err
 	}
 	var actual id.ID

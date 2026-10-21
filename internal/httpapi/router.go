@@ -171,6 +171,7 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("POST /api/v1/recordings/protect-window", r.protected(r.protectRecordingWindow))
 	r.mux.HandleFunc("POST /api/v1/recordings/{id}/lease", r.protected(r.renewRecordingLease))
 	r.mux.HandleFunc("DELETE /api/v1/recordings/{id}/lease", r.protected(r.releaseRecordingLease))
+	r.mux.HandleFunc("DELETE /api/v1/recordings/{id}/cloud-copy", r.protected(r.deleteCloudCopy))
 	r.mux.HandleFunc("GET /api/v1/archive-targets", r.protected(r.listArchiveTargets))
 	r.mux.HandleFunc("GET /api/v1/archive-targets/status", r.protected(r.listArchiveTargetStatuses))
 	r.mux.HandleFunc("POST /api/v1/archive-targets", r.protected(r.registerArchiveTarget))

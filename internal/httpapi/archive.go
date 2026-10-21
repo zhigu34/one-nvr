@@ -255,3 +255,23 @@ func (r *router) upsertArchivePolicy(w http.ResponseWriter, q *http.Request, p a
 	}
 	respond(w, q, 200, policy)
 }
+
+// deleteCloudCopy handles DELETE /api/v1/recordings/{id}/cloud-copy: remove one
+// recording's remote object without touching its local copy.
+//
+// A separate route from the local delete because they are different decisions: the
+// trash button on the recordings page removes the LOCAL file (and keeps the cloud
+// copy playable), while this one removes the CLOUD object. Folding them together
+// would make "delete" mean two things depending on which copy happened to exist.
+func (r *router) deleteCloudCopy(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	recordingID, err := pathID(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	if err := r.d.Archive.DeleteCloudCopy(q.Context(), p, recordingID); err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, struct{}{})
+}
