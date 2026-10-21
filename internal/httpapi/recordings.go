@@ -276,8 +276,15 @@ func (r *router) serveCloudContent(w http.ResponseWriter, q *http.Request, p aut
 	_ = status
 	w.WriteHeader(responseStatus)
 	// Same operator-signal-only rule as the local path: the audit row and the
-	// response head are committed, an interrupted copy just ends the stream.
-	_, _ = io.CopyN(w, body, plan.Length())
+	// response head are committed, so an interrupted copy can only end the
+	// stream. It is logged, though — a silently truncated body reaches the
+	// browser as "TypeError: Failed to fetch", which says nothing about the
+	// upstream read that actually failed.
+	copied, copyErr := io.CopyN(w, body, plan.Length())
+	if copyErr != nil {
+		slog.Warn("cloud playback interrupted", "segment", string(recordingID),
+			"expected", plan.Length(), "copied", copied, "error", copyErr)
+	}
 }
 
 // releaseRecordingLease handles DELETE /api/v1/recordings/{id}/lease: the
