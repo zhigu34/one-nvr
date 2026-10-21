@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/zhigu34/one-nvr/internal/archive"
+	"github.com/zhigu34/one-nvr/internal/id"
 )
 
 // The deadline must be stamped when the copy is created, from the segment's real
@@ -173,5 +174,109 @@ func TestDeleteCloudCopyKeepsTheRowWhenTheTargetIsUnreachable(t *testing.T) {
 	}
 	if state != "verified" {
 		t.Fatalf("the copy row became %q although the object was never proven deleted", state)
+	}
+}
+
+// Deleting the cloud copy must not make the recording permanently un-uploadable.
+//
+// (segment_id,target_id) is unique, so the copy row survives an upload, an expiry
+// and a manual cloud delete. `ON CONFLICT DO NOTHING` kept that row 'expired',
+// the job was then enqueued against it, and the upload path refuses to read a row
+// that is not 'uploading' — so the page said "queued" and nothing was ever sent.
+// Reported by the operator as "删除云端副本后不能再次上传".
+func TestCloudCopyCanBeUploadedAgainAfterDeletion(t *testing.T) {
+	fixture, service, dav := lifecycleFixture(t)
+	ctx := context.Background()
+	targetID := registerDefaultTarget(t, fixture, service, dav)
+	if _, err := service.UpsertPolicy(ctx, fixture.Admin, archive.Policy{
+		ChannelID: fixture.Channel, TargetID: targetID, Mode: archive.ModeImmediate,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	segment, err := fixture.Service.Publish(ctx, fixture.Inbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runUploadJob(t, fixture, service, ctx)
+	var firstKey string
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT object_key FROM recording_archive_copies WHERE segment_id=$1`, segment.ID).Scan(&firstKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.DeleteCloudCopy(ctx, fixture.Admin, segment.ID); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state FROM recording_archive_copies WHERE segment_id=$1`, segment.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "expired" {
+		t.Fatalf("precondition: the copy should be expired, got %q", state)
+	}
+
+	// Ask for the same segment against the same target again.
+	created, err := service.CreateUploads(ctx, fixture.Admin, targetID, []id.ID{segment.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(created) != 1 {
+		t.Fatalf("re-upload after a cloud delete queued %d segments, want 1", len(created))
+	}
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state FROM recording_archive_copies WHERE segment_id=$1`, segment.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "uploading" {
+		t.Fatalf("the copy row stayed %q; the upload job would have nothing to send", state)
+	}
+	// And the job actually runs: the object is back on the target and the row is
+	// verified again. This is the half that a state check alone would miss.
+	runUploadJob(t, fixture, service, ctx)
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state FROM recording_archive_copies WHERE segment_id=$1`, segment.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "verified" {
+		t.Fatalf("re-upload finished as %q, want verified", state)
+	}
+	client, err := archive.NewClient(dav.URL, "/one-nvr", "archiver", "dav-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := client.GetRange(ctx, firstKey, "bytes=0-0"); err != nil {
+		t.Fatal("the remote object was not uploaded again")
+	}
+}
+
+// An already-verified copy must not be re-uploaded: that would replace a good
+// object and reset its retention for no reason.
+func TestVerifiedCloudCopyIsNotReuploaded(t *testing.T) {
+	fixture, service, dav := lifecycleFixture(t)
+	ctx := context.Background()
+	targetID := registerDefaultTarget(t, fixture, service, dav)
+	if _, err := service.UpsertPolicy(ctx, fixture.Admin, archive.Policy{
+		ChannelID: fixture.Channel, TargetID: targetID, Mode: archive.ModeImmediate,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	segment, err := fixture.Service.Publish(ctx, fixture.Inbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runUploadJob(t, fixture, service, ctx)
+	var verifiedAt time.Time
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT verified_at FROM recording_archive_copies WHERE segment_id=$1`, segment.ID).Scan(&verifiedAt); err != nil {
+		t.Fatal(err)
+	}
+	created, err := service.CreateUploads(ctx, fixture.Admin, targetID, []id.ID{segment.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(created) != 0 {
+		t.Fatalf("an already-archived segment was queued again (%d)", len(created))
+	}
+	var after time.Time
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT verified_at FROM recording_archive_copies WHERE segment_id=$1`, segment.ID).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if !after.Equal(verifiedAt) {
+		t.Fatal("the existing verified copy was rewritten by a duplicate request")
 	}
 }

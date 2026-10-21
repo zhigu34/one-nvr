@@ -550,24 +550,66 @@ func (s *Service) enqueueUpload(ctx context.Context, tx pgx.Tx, targetID, segmen
 	if err != nil {
 		return false, err
 	}
-	// The hash is computed during upload; zeros keep the NOT NULL/CHECK honest
-	// until then, and the row's presence is what guards deletion mid-flight.
-	if _, err := tx.Exec(ctx, `INSERT INTO recording_archive_copies(id,segment_id,target_id,object_key,state,size_bytes,sha256,cloud_expires_at) VALUES($1,$2,$3,$4,'uploading',$5,$6,$7) ON CONFLICT (segment_id,target_id) DO NOTHING`,
+	// A copy row is not a one-shot record: (segment_id,target_id) is unique, so the
+	// row survives being uploaded, expired and deleted. Re-uploading an object the
+	// operator deleted from the cloud therefore has to REVIVE that row rather than
+	// insert a new one — `DO NOTHING` here silently kept the 'expired' state, the
+	// job was enqueued against a row the upload path refuses to read, and the
+	// page reported success while nothing was ever sent. Reported by the operator:
+	// "删除云端副本后不能再次上传".
+	//
+	// Only a settled row is revived. 'uploading' and 'verified' keep their state:
+	// one is already in flight, the other is a copy we must not quietly re-upload
+	// (its deadline belongs to the existing object).
+	if _, err := tx.Exec(ctx, `INSERT INTO recording_archive_copies(id,segment_id,target_id,object_key,state,size_bytes,sha256,cloud_expires_at) VALUES($1,$2,$3,$4,'uploading',$5,$6,$7)
+		ON CONFLICT (segment_id,target_id) DO UPDATE SET
+			state='uploading', error_code=NULL, sha256=EXCLUDED.sha256,
+			size_bytes=EXCLUDED.size_bytes, object_key=EXCLUDED.object_key,
+			cloud_expires_at=EXCLUDED.cloud_expires_at,
+			uploaded_at=NULL, verified_at=NULL
+		WHERE recording_archive_copies.state IN ('expired','failed')`,
 		copyID, segmentID, targetID, objectKey, src.Size, strings.Repeat("0", 64), cloudExpires); err != nil {
 		return false, err
 	}
 	var actual id.ID
-	if err := tx.QueryRow(ctx, `SELECT id FROM recording_archive_copies WHERE segment_id=$1 AND target_id=$2`, segmentID, targetID).Scan(&actual); err != nil {
+	var copyState string
+	if err := tx.QueryRow(ctx, `SELECT id,state FROM recording_archive_copies WHERE segment_id=$1 AND target_id=$2`, segmentID, targetID).Scan(&actual, &copyState); err != nil {
 		return false, err
+	}
+	// Already there, already good, or still moving: nothing to queue. Reporting
+	// true here would claim work that will not happen.
+	if copyState != "uploading" {
+		return false, nil
 	}
 	payload, err := json.Marshal(map[string]any{"copy_id": actual})
 	if err != nil {
 		return false, err
 	}
+	key := string(segmentID) + ":" + string(targetID)
+	// `jobs` is idempotent on (kind, key), so a finished job for this pair blocks
+	// every future attempt: Enqueue returns the old row unchanged and the caller
+	// reports "nothing to do". Reviving the copy row above is only half the fix —
+	// the job has to be revived with it.
+	//
+	// The attempt counter restarts, which means the old attempt rows must go:
+	// job_attempts is keyed (job_id, attempt), so a second attempt 1 collides with
+	// the first one (SQLSTATE 23505 on the very next Claim). The rows are the audit
+	// trail of one attempt sequence, and the per-file audit entry already records
+	// that this segment was archived; keeping a stale sequence would also make the
+	// retry budget look exhausted.
+	if _, err := tx.Exec(ctx, `UPDATE jobs SET state='queued',attempt=0,available_at=clock_timestamp(),
+		error_code=NULL,lease_expires_at=NULL,fencing_token=NULL,updated_at=clock_timestamp()
+		WHERE kind='recording.archive_upload' AND idempotency_key=$1 AND state IN ('succeeded','failed')`, key); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM job_attempts a USING jobs j
+		WHERE a.job_id=j.id AND j.kind='recording.archive_upload' AND j.idempotency_key=$1 AND a.state<>'running'`, key); err != nil {
+		return false, err
+	}
 	if _, err := jobs.Enqueue(ctx, tx, jobs.Input{
 		Kind:           "recording.archive_upload",
 		ObjectID:       actual,
-		IdempotencyKey: string(segmentID) + ":" + string(targetID),
+		IdempotencyKey: key,
 		Payload:        payload,
 	}); err != nil {
 		if errors.Is(err, jobs.ErrIdempotencyConflict) {
@@ -634,10 +676,17 @@ func (s *Service) RetryFailures(ctx context.Context, p auth.Principal, targetID 
 				return err
 			}
 			// Attempts restart at zero: the retry budget belongs to one attempt
-			// sequence, and the operator asking again is a new sequence.
+			// sequence, and the operator asking again is a new sequence. The old
+			// attempt rows have to go with the counter — job_attempts is keyed
+			// (job_id, attempt), so leaving them makes the next Claim collide.
+			retryKey := string(item.SegmentID) + ":" + string(targetID)
 			if _, err := tx.Exec(ctx, `UPDATE jobs SET state='queued',attempt=0,available_at=clock_timestamp(),
 				error_code=NULL,lease_expires_at=NULL,fencing_token=NULL,updated_at=clock_timestamp()
-				WHERE kind='recording.archive_upload' AND idempotency_key=$1`, string(item.SegmentID)+":"+string(targetID)); err != nil {
+				WHERE kind='recording.archive_upload' AND idempotency_key=$1`, retryKey); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `DELETE FROM job_attempts a USING jobs j
+				WHERE a.job_id=j.id AND j.kind='recording.archive_upload' AND j.idempotency_key=$1 AND a.state<>'running'`, retryKey); err != nil {
 				return err
 			}
 			if _, err := jobs.Enqueue(ctx, tx, jobs.Input{
