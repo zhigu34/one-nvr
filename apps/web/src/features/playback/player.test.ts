@@ -37,6 +37,9 @@ function segment(
 class FakeMedia implements MediaElement {
   src = ''
   currentTime = 0
+  // Real elements report the resource duration; the controller reads it to
+  // decide when the next segment is close enough to prefetch.
+  duration = 18
   playbackRate = 1
   error: { code?: number } | null = null
   plays = 0
@@ -248,5 +251,44 @@ describe('recording playback controller', () => {
     f.controller.dispose()
     expect(f.media.listenerCount()).toBe(0)
     expect(f.media.src).toBe('')
+  })
+})
+
+// Advancing only on `ended` makes the element silent, then ask for the next
+// file and wait for its headers and first frames — a visible hitch at every
+// segment boundary on an 18-second cut. The next segment's opening bytes are
+// fetched while the current one is still playing.
+describe('prefetching the next segment', () => {
+  const base = Date.parse('2026-10-05T00:00:00Z')
+
+  it('starts fetching the next segment shortly before this one ends', async () => {
+    const fetchSpy = vi.fn(async () => new Response(new Uint8Array(16), { status: 206 }))
+    const original = globalThis.fetch
+    globalThis.fetch = fetchSpy as unknown as typeof fetch
+    try {
+      const f = fixture([segment('seg-a', 0, 18), segment('seg-b', 18, 36)])
+      f.controller.start(base)
+      f.media.emit('loadedmetadata')
+      // The prefetch only runs while playing (a paused element has no "about to
+      // finish" to act on).
+      f.media.emit('playing')
+      // Far from the end: nothing to prefetch yet.
+      f.media.currentTime = 4
+      f.media.emit('timeupdate')
+      expect(fetchSpy).not.toHaveBeenCalled()
+
+      // Inside the lead window: the next segment is fetched once.
+      f.media.currentTime = 15
+      f.media.emit('timeupdate')
+      f.media.emit('timeupdate')
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit]
+      expect(url).toContain('seg-b')
+      // A ranged request: buffering the whole next file would waste bandwidth
+      // when the operator stops here.
+      expect((init.headers as Record<string, string>).Range).toBe('bytes=0-65535')
+    } finally {
+      globalThis.fetch = original
+    }
   })
 })

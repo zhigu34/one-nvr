@@ -80,6 +80,10 @@ export class PlaybackController {
     rate: 1,
   }
   private listeners: [string, () => void][] = []
+  /** The segment whose opening bytes are already being fetched. */
+  private prefetched = ''
+  /** How close to the end of a segment prefetching starts. */
+  private static readonly PREFETCH_LEAD_SECONDS = 4
 
   constructor(
     private media: MediaElement,
@@ -308,7 +312,45 @@ export class PlaybackController {
 
   private tick() {
     if (!this.entry || this.stopped) return
+    this.prefetchNext()
     this.publish('playing', '播放中')
+  }
+
+  /**
+   * Fetch the next segment's opening bytes while the current one is still
+   * playing.
+   *
+   * Advance used to run only on `ended`: the element went silent, THEN asked for
+   * the next file, waited for headers and the first frames, and only then
+   * resumed. On a channel cut into ~18-second segments that is a visible hitch
+   * every time a segment ends — which is exactly what "回放会卡一下，时间却是
+   * 连续的" describes.
+   *
+   * Prefetching the first kilobyte warms the connection and the response headers
+   * (the same origin, same cookie, no-store) so the real load starts with the
+   * server already streaming. It deliberately asks for a small range: buffering
+   * the whole next file would waste bandwidth when the operator stops here, and
+   * the element will request what it needs anyway.
+   */
+  private prefetchNext() {
+    if (!this.entry || !this.playing) return
+    const duration = this.media.duration
+    if (!Number.isFinite(duration) || duration <= 0) return
+    const remaining = duration - this.media.currentTime
+    if (remaining > PlaybackController.PREFETCH_LEAD_SECONDS) return
+    const next = nextPlayableEntry(this.timeline, this.entry.end)
+    if (!next || next.id === this.prefetched) return
+    this.prefetched = next.id
+    void fetch(contentPath(next.id), {
+      headers: { Range: 'bytes=0-65535' },
+      credentials: 'same-origin',
+      cache: 'no-store',
+    })
+      .then((response) => response.body?.cancel())
+      .catch(() => {
+        // A failed prefetch must not surface: the real load will report the
+        // problem through the normal error path a few seconds later.
+      })
   }
 
   private publish(phase: Phase, message: string) {
