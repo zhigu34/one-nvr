@@ -30,6 +30,9 @@ import (
 //
 //   - hook_inbox has ON DELETE NO ACTION to recording_runs, so it must go before
 //     them or the run delete fails;
+//   - job_attempts has ON DELETE NO ACTION to jobs, so recording jobs' attempts
+//     must go before the jobs themselves — found by running the purge against a
+//     real schema, which is exactly why the statement list lives here;
 //   - event_clip_jobs references both events and clip_windows;
 //   - recording_export_sources references recording_segments with no cascade.
 //
@@ -46,6 +49,7 @@ var historyPurgeStatements = []string{
 	`DELETE FROM recording_archive_copies`,
 	`DELETE FROM recording_locations`,
 	`DELETE FROM hook_inbox`,
+	`DELETE FROM job_attempts WHERE job_id IN (SELECT id FROM jobs WHERE kind LIKE 'recording.%')`,
 	`DELETE FROM jobs WHERE kind LIKE 'recording.%'`,
 	`DELETE FROM recording_segments`,
 	`DELETE FROM recording_manual_windows`,

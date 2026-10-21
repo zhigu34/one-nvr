@@ -49,6 +49,20 @@ func TestPurgeHistoryEmptiesMediaAndEventsButKeepsConfiguration(t *testing.T) {
 		VALUES($1,$2,$3,'processed','{}',clock_timestamp())`, mustID(t), "purge-"+string(runID), runID); err != nil {
 		t.Fatal(err)
 	}
+	// job_attempts has ON DELETE NO ACTION to jobs. This is the second constraint a
+	// naive order trips over, and it was found by running the purge for real: the
+	// test failed with the same SQLSTATE production did, which is the point of
+	// asserting the order here rather than discovering it live.
+	recordingJobID := mustID(t)
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO jobs(id,kind,object_id,idempotency_key,parameter_digest,payload,state)
+		VALUES($1,'recording.archive_upload',$2,$3,decode(repeat('00',32),'hex'),'{}','queued')`,
+		recordingJobID, segmentID, "purge-"+string(segmentID)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO job_attempts(job_id,attempt,fencing_token,state)
+		VALUES($1,1,$2,'running')`, recordingJobID, mustID(t)); err != nil {
+		t.Fatal(err)
+	}
 
 	// Configuration that must survive: the point of the purge is data, not a
 	// re-install.
