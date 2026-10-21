@@ -22,6 +22,11 @@ type UpdateInput struct {
 	// RecordingRetentionDays is the local retention period. 0 disables automatic
 	// deletion, which is the default so an upgrade never starts deleting.
 	RecordingRetentionDays *int `json:"recording_retention_days"`
+	// EventClipLeadSeconds / EventClipTrailSeconds set how far an event recording
+	// reaches before the first detection and after the last one. Absent leaves the
+	// stored value alone.
+	EventClipLeadSeconds  *int `json:"event_clip_lead_seconds"`
+	EventClipTrailSeconds *int `json:"event_clip_trail_seconds"`
 }
 
 func (s *Service) Current(ctx context.Context, p auth.Principal) (Site, error) {
@@ -29,7 +34,7 @@ func (s *Service) Current(ctx context.Context, p auth.Principal) (Site, error) {
 	if _, err := s.Auth.CurrentUser(ctx, p); err != nil {
 		return out, err
 	}
-	err := s.DB.Pool.QueryRow(ctx, "SELECT id,name,timezone,channel_count,require_storage_write_proof,recording_retention_days,version FROM sites WHERE singleton").Scan(&out.ID, &out.Name, &out.Timezone, &out.ChannelCount, &out.RequireStorageWriteProof, &out.RecordingRetentionDays, &out.Version)
+	err := s.DB.Pool.QueryRow(ctx, "SELECT id,name,timezone,channel_count,require_storage_write_proof,recording_retention_days,event_clip_lead_seconds,event_clip_trail_seconds,version FROM sites WHERE singleton").Scan(&out.ID, &out.Name, &out.Timezone, &out.ChannelCount, &out.RequireStorageWriteProof, &out.RecordingRetentionDays, &out.EventClipLeadSeconds, &out.EventClipTrailSeconds, &out.Version)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return out, auth.ErrNotFound
 	}
@@ -39,10 +44,19 @@ func (s *Service) Current(ctx context.Context, p auth.Principal) (Site, error) {
 func (s *Service) Update(ctx context.Context, p auth.Principal, expected int64, in UpdateInput) (Site, error) {
 	var out Site
 	if expected < 1 ||
-		(in.Name == nil && in.Timezone == nil && in.RequireStorageWriteProof == nil && in.RecordingRetentionDays == nil) {
+		(in.Name == nil && in.Timezone == nil && in.RequireStorageWriteProof == nil && in.RecordingRetentionDays == nil &&
+			in.EventClipLeadSeconds == nil && in.EventClipTrailSeconds == nil) {
 		return out, auth.ErrInvalid
 	}
 	if in.RecordingRetentionDays != nil && (*in.RecordingRetentionDays < 0 || *in.RecordingRetentionDays > 3650) {
+		return out, auth.ErrInvalid
+	}
+	// The ranges match the table's CHECK constraints, so an out-of-range value is a
+	// 422 here rather than a 500 from PostgreSQL.
+	if in.EventClipLeadSeconds != nil && (*in.EventClipLeadSeconds < 0 || *in.EventClipLeadSeconds > 60) {
+		return out, auth.ErrInvalid
+	}
+	if in.EventClipTrailSeconds != nil && (*in.EventClipTrailSeconds < 0 || *in.EventClipTrailSeconds > 120) {
 		return out, auth.ErrInvalid
 	}
 	if in.Name != nil {
@@ -59,7 +73,7 @@ func (s *Service) Update(ctx context.Context, p auth.Principal, expected int64, 
 		if err := s.Auth.RequireAdminTx(ctx, p, tx); err != nil {
 			return err
 		}
-		err := tx.QueryRow(ctx, "UPDATE sites SET name=COALESCE($1,name),timezone=COALESCE($2,timezone),require_storage_write_proof=COALESCE($4,require_storage_write_proof),recording_retention_days=COALESCE($5,recording_retention_days),version=version+1 WHERE singleton AND version=$3 RETURNING id,name,timezone,channel_count,require_storage_write_proof,recording_retention_days,version", in.Name, in.Timezone, expected, in.RequireStorageWriteProof, in.RecordingRetentionDays).Scan(&out.ID, &out.Name, &out.Timezone, &out.ChannelCount, &out.RequireStorageWriteProof, &out.RecordingRetentionDays, &out.Version)
+		err := tx.QueryRow(ctx, "UPDATE sites SET name=COALESCE($1,name),timezone=COALESCE($2,timezone),require_storage_write_proof=COALESCE($4,require_storage_write_proof),recording_retention_days=COALESCE($5,recording_retention_days),event_clip_lead_seconds=COALESCE($6,event_clip_lead_seconds),event_clip_trail_seconds=COALESCE($7,event_clip_trail_seconds),version=version+1 WHERE singleton AND version=$3 RETURNING id,name,timezone,channel_count,require_storage_write_proof,recording_retention_days,event_clip_lead_seconds,event_clip_trail_seconds,version", in.Name, in.Timezone, expected, in.RequireStorageWriteProof, in.RecordingRetentionDays, in.EventClipLeadSeconds, in.EventClipTrailSeconds).Scan(&out.ID, &out.Name, &out.Timezone, &out.ChannelCount, &out.RequireStorageWriteProof, &out.RecordingRetentionDays, &out.EventClipLeadSeconds, &out.EventClipTrailSeconds, &out.Version)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return auth.ErrConflict
 		}

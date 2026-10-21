@@ -64,6 +64,21 @@ CI 只覆盖本机做不到的部分（Docker、真实 ZLM、真实分片、真�
 
 ## 当前交接快照（2026-10-09）
 
+- **2026-10-21 事件录像改成「录像为主体、事件为锚点」（迁移 0050）**。用户的原话是规则本身：**一个录像文件里可以包含多个触发事件；事件只是标记与跳转锚点；无录像时触发才生成录像，录像生成中触发则延长录像。**
+  - **旧模型是反的**：`event_clip_jobs.event_id` 是主键 → 一个事件最多一个片段 → 两个事件必然两个文件。现场实测 6 小时 162 段活动里 **67 段被切成多个事件，最多 6 个**，所以一次经过就是几个文件、中间是没录的空档。
+  - **新表 `clip_windows`**（`window_start` / `window_end` / `state` / `segment_id` / `clip_run_id`）。`event_clip_jobs` 保留（事件重复消息靠它幂等），但角色降为「这个事件属于哪个窗口」，`window_id NOT NULL`。
+  - **归属判定只有一条规则**：录像计划在 `事件结束 + 后置` 收尾；**在这之前**来新事件，就把收尾推到 `新事件结束 + 后置`；继续来继续推；没有续上就收尾发布。`window_start` **永不移动**（头部已经录进文件了）。
+  - **两套状态词表不能混用**：`clip_windows` 有 `finalizing`，`event_clip_jobs` 只有 `growing`。混写是 CHECK 违反（这个错误我犯过一次）。
+  - **装配仍按窗口做，发布条件换成窗口自己的关闭时刻**（不再是「某个事件有结束时间」——一个窗口上有多个事件时那个问题没有单一答案）。
+  - **前后置改成站点设置**（`sites.event_clip_lead_seconds` / `event_clip_trail_seconds`，默认 5/10）。原先有**两套重复常量**（`events.PreEventWindow/PostEventWindow` 与 `recording.PreEventLead/PostEventTrail`，值相同、无共享定义），现在渲染时读库。**改完从下一个事件起生效**，已打开的窗口沿用原来的关闭时刻——设置页写明了这一点。
+  - **`events.media_segments` 的口径冲突顺手修掉**：装配曾往这列写**分片数**，linking pass 写**覆盖片段数**。同一列两种含义取决于谁最后写。现在装配完全不碰这列，由 linking pass 唯一决定。
+  - **前后置只有一个读取点**（`events.eventMediaWindow`）。`queueClipJob`（决定录多长）与 `linkEventMedia`（决定「现有录像算不算覆盖了这个事件」）必须读同一组数字：原来后者仍用旧常量，于是**把后置调小之后，录出来的长度正好是操作者要的，判定却说「只覆盖了事件的一部分」**——一处按要求缩短，另一处报短缺。
+  - **`PublishSettledClips` 的条件也换了**：现在要求窗口已过关闭时刻且同通道没有别的开放窗口。`SweepEventClipJobs` 也改成回收 `clip_windows`（`finalizing` 超过租期 → `open`），因为装配状态已经搬家；只扫 job 表会让被放弃的窗口永远卡在 `finalizing`。
+  - **测试**：`TestOneActivityStretchProducesOneClip`（一段活动 → 1 个片段）、`TestEventsFarApartStaySeparateClips`（相隔较远 → 2 个窗口）。**这两条走的是 `recording.AttachEvent`，而 worker 实际不调用它** —— 生产路径是 `events.queueClipJob`（因为 events 不能 import recording，同一规则写了第二遍 SQL）。所以另加 `TestTwoDetectionsOnOneVisitShareARecording` / `TestDetectionsFarApartStaySeparateRecordings` 走真实的 `Ingest`；**已验证把延长分支关掉会让前者从 1 个窗口变成 4 个**。
+  - **时间基准必须在「现在附近」**：放在过去会让窗口一建立就过期，测的就是另一个分支（这个坑我踩过三次）。另外回放旧事件时，运行中事件的关闭时刻是 `now + 后置`，所以两个相隔一分钟的旧事件会在同一秒被延长到一起——这类测试要直接把 `end_time` 带在 `new` 消息里。
+  - **未做**：不合并两个已发布的片段（重写已发布文件在这个项目里已经出过五层损坏事故）。
+
+
 - **2026-10-19 录像「缺失/损坏」的完整因果（这是本轮最重要的记录）**。用户三次追问「怎么产生的」，前两轮我只修了表象。**真正的机制是一条自我制造故障的循环，由我自己的重构引入**：
   - **循环长这样**：事件录像在事件进行中**每隔几秒重拼一次**（`growing` → `queued` → 重拼）。重拼 = 重新 remux 出一个**新文件**再 `rename` 覆盖。而 segment 行里的 `file_identity`（device/inode/size/mtime）**只在第一次插入时采集**，重拼分支只更新 `start_at/end_at/size_bytes`。于是每一轮重拼都在制造一个「索引描述旧文件、磁盘是新文件」的行，**下一轮对账必然判它损坏**。
   - **为什么「后面录制的也不可用」**：这不是历史数据问题。只要事件还在持续，它就会被反复重拼，**每一次重拼制造的行都活不过自己的第一次校验**。所以滚动窗口里最新的片段全是 damaged，只有已经停止重拼的那几条能存活——截图里唯一的「可用」`14:10:34` 正是这种情况。

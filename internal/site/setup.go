@@ -30,8 +30,17 @@ type Site struct {
 	RequireStorageWriteProof bool `json:"require_storage_write_proof"`
 	// RecordingRetentionDays is 0 (disabled) by default: automatic deletion of
 	// existing footage is not a decision an upgrade may make for the operator.
-	RecordingRetentionDays int   `json:"recording_retention_days"`
-	Version                int64 `json:"version"`
+	RecordingRetentionDays int `json:"recording_retention_days"`
+	// EventClipLeadSeconds and EventClipTrailSeconds are how far an event
+	// recording reaches before the first detection and after the last one.
+	//
+	// They are site-wide rather than per channel: the question they answer ("how
+	// much of someone walking out of frame do I need") is about the operator's
+	// tolerance, not about one camera. Read when a recording window is created or
+	// extended, so a change applies from the next detection.
+	EventClipLeadSeconds  int   `json:"event_clip_lead_seconds"`
+	EventClipTrailSeconds int   `json:"event_clip_trail_seconds"`
+	Version               int64 `json:"version"`
 }
 type SetupInput struct {
 	Token         string `json:"token"`

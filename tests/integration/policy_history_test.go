@@ -19,7 +19,6 @@ import (
 // timeline — including for the disabled and unconfigured channels the sampler
 // never visits.
 
-
 // configureChannel activates the fixture's draft revision, which the publication
 // fixture deliberately leaves inactive.
 func configureChannel(t *testing.T, f publishFixture) {

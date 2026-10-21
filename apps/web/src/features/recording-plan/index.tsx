@@ -118,6 +118,10 @@ export function RecordingPlan() {
             summaries={summaryOf}
             peers={peers}
             timezone={site.data?.timezone || ''}
+            clipTiming={{
+              lead: site.data?.event_clip_lead_seconds ?? 5,
+              trail: site.data?.event_clip_trail_seconds ?? 10,
+            }}
             pools={pools.data?.items || []}
           />
           <div className='overflow-hidden rounded-xl border bg-card'>

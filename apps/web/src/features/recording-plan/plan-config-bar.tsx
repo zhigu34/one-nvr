@@ -4,6 +4,7 @@ import { CalendarClock, Check, Zap } from 'lucide-react'
 import { ApiError, apiRequest, jsonRequest } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { useAPI, useAction } from '@/features/foundation/hooks'
 import { sourceCommand } from '@/features/channels/api'
 import { boundOrDefaultPool, verifyPoolWrite } from '@/features/storage-pools/pool-check'
@@ -40,6 +41,7 @@ export function PlanConfigBar({
   peers,
   timezone,
   pools,
+  clipTiming,
 }: {
   chosen: Schema<'Channel'>[]
   chosenCount: number
@@ -50,6 +52,12 @@ export function PlanConfigBar({
   peers: { id: string; label: string }[]
   timezone: string
   pools: Schema<'Pool'>[]
+  /**
+   * How far an event recording reaches before the first detection and after the
+   * last one, as the site sets it. Shown on the switch because that is where the
+   * operator forms an expectation of what a clip will contain.
+   */
+  clipTiming: { lead: number; trail: number }
 }) {
   const client = useQueryClient()
   const action = useAction()
@@ -57,6 +65,9 @@ export function PlanConfigBar({
   const [eventOn, setEventOn] = useState(false)
   const [windows, setWindows] = useState<ScheduleWindow[] | null>(null)
   const [scheduleOpen, setScheduleOpen] = useState(false)
+  // The lead/trail editor expands inside the bar, next to the switch that states
+  // what those numbers mean.
+  const [clipTimingOpen, setClipTimingOpen] = useState(false)
   const [manualMinutes, setManualMinutes] = useState(30)
   const [manualPending, setManualPending] = useState(false)
   const [outcome, setOutcome] = useState('')
@@ -361,7 +372,7 @@ export function PlanConfigBar({
           aria-pressed={effectiveEvent}
           aria-label='事件录像开关'
           onClick={() => toggleEvent(!effectiveEvent)}
-          title='事件到达时保留前 5 秒到后 5 秒；仅在通道没有常规录像时启用缓冲'
+          title={`事件到达时保留前 ${clipTiming.lead} 秒到后 ${clipTiming.trail} 秒；仅在通道没有常规录像时启用缓冲`}
           className={cn(
             'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors',
             effectiveEvent
@@ -371,7 +382,17 @@ export function PlanConfigBar({
         >
           <Zap aria-hidden className='size-3' />
           事件录像 · {effectiveEvent ? '开' : '关'}
-          <span className='text-[10px] opacity-70'>前5s/后5s</span>
+          <span className='text-[10px] opacity-70'>
+            前{clipTiming.lead}s/后{clipTiming.trail}s
+          </span>
+        </button>
+        <button
+          type='button'
+          aria-expanded={clipTimingOpen}
+          onClick={() => setClipTimingOpen((value) => !value)}
+          className='rounded-full border border-dashed px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground'
+        >
+          {clipTimingOpen ? '收起时长' : '调整时长'}
         </button>
 
         <Button
@@ -473,6 +494,19 @@ export function PlanConfigBar({
         </div>
       )}
 
+      {/* The lead and trail are a SITE setting, so they are edited here but apply
+          to every channel. The note says so: an operator who changes them expecting
+          one channel to change would otherwise be surprised later. */}
+      {clipTimingOpen && (
+        <div className='border-t px-4 py-3'>
+          <ClipTimingEditor
+            lead={clipTiming.lead}
+            trail={clipTiming.trail}
+            onClose={() => setClipTimingOpen(false)}
+          />
+        </div>
+      )}
+
       {outcome && (
         <p role='status' className='border-t px-4 py-2 text-xs text-muted-foreground'>
           {outcome}
@@ -498,4 +532,112 @@ function describe(cause: unknown): string {
     if (cause.status === 409) return '配置已被其他人修改，请刷新后重试'
   }
   return cause instanceof Error && cause.message ? cause.message : '操作失败'
+}
+
+/**
+ * ClipTimingEditor edits the site's event-recording lead and trail.
+ *
+ * Site-wide, not per channel: the numbers answer "how much of someone walking out
+ * of frame do I need", which is the operator's tolerance rather than a property of
+ * one camera. The note says so plainly, because a control that looks like it
+ * belongs to the selected channels and does not is worse than no control.
+ *
+ * A change applies from the NEXT detection: a recording window that is already open
+ * keeps the close it was given. Saying that here saves an operator from concluding
+ * the setting did nothing when the clip in front of them is unchanged.
+ */
+function ClipTimingEditor({
+  lead,
+  trail,
+  onClose,
+}: {
+  lead: number
+  trail: number
+  onClose: () => void
+}) {
+  const client = useQueryClient()
+  const action = useAction()
+  const site = useAPI<Schema<'Site'>>('/api/v1/site')
+  const [leadDraft, setLeadDraft] = useState(String(lead))
+  const [trailDraft, setTrailDraft] = useState(String(trail))
+
+  async function save() {
+    const nextLead = Number(leadDraft)
+    const nextTrail = Number(trailDraft)
+    if (!Number.isInteger(nextLead) || nextLead < 0 || nextLead > 60) {
+      return
+    }
+    if (!Number.isInteger(nextTrail) || nextTrail < 0 || nextTrail > 120) {
+      return
+    }
+    const ok = await action.run(
+      () =>
+        apiRequest(
+          '/api/v1/site',
+          jsonRequest(
+            'PATCH',
+            { event_clip_lead_seconds: nextLead, event_clip_trail_seconds: nextTrail },
+            site.data?.version
+          )
+        ),
+      '已保存，下一个事件起生效'
+    )
+    if (ok) {
+      await client.invalidateQueries()
+      onClose()
+    }
+  }
+
+  return (
+    <div className='space-y-2'>
+      <div className='flex flex-wrap items-end gap-3'>
+        <label className='grid gap-1 text-xs'>
+          <span className='text-muted-foreground'>事件前</span>
+          <div className='relative'>
+            <Input
+              aria-label='事件录像前置秒数'
+              type='number'
+              min={0}
+              max={60}
+              value={leadDraft}
+              onChange={(event) => setLeadDraft(event.target.value)}
+              className='w-20 pr-6'
+            />
+            <span className='pointer-events-none absolute inset-y-0 right-2 flex items-center text-[11px] text-muted-foreground'>
+              秒
+            </span>
+          </div>
+        </label>
+        <label className='grid gap-1 text-xs'>
+          <span className='text-muted-foreground'>事件后</span>
+          <div className='relative'>
+            <Input
+              aria-label='事件录像后置秒数'
+              type='number'
+              min={0}
+              max={120}
+              value={trailDraft}
+              onChange={(event) => setTrailDraft(event.target.value)}
+              className='w-20 pr-6'
+            />
+            <span className='pointer-events-none absolute inset-y-0 right-2 flex items-center text-[11px] text-muted-foreground'>
+              秒
+            </span>
+          </div>
+        </label>
+        <Button size='sm' disabled={action.pending} onClick={() => void save()}>
+          保存
+        </Button>
+      </div>
+      <p className='text-[11px] text-muted-foreground'>
+        全站设置，所有通道共用。后置时间内再次触发会把同一段录像延长，不再另起文件。
+        改完从下一个事件起生效，正在录的那段沿用原来的时长。
+      </p>
+      {action.error && (
+        <p role='alert' className='text-xs text-red-500'>
+          {action.error}
+        </p>
+      )}
+    </div>
+  )
 }

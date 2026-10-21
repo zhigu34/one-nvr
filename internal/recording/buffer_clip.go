@@ -35,25 +35,6 @@ import (
 	"github.com/zhigu34/one-nvr/internal/storage"
 )
 
-// QueueClip records that an event needs a clip assembled from the buffer.
-//
-// It is idempotent on the event: two detections for the same event (the stream
-// and the reconciliation read) must not enqueue two jobs, and a second job would
-// assemble the same footage twice.
-func (s *Service) QueueClip(ctx context.Context, eventID, channelID id.ID, startedAt time.Time, endedAt *time.Time) error {
-	window := ClipJobWindow{
-		Start: startedAt.Add(-PreEventLead),
-		End:   startedAt.Add(PostEventTrail),
-	}
-	if endedAt != nil {
-		window.End = endedAt.Add(PostEventTrail)
-	}
-	_, err := s.DB.Pool.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end)
-		VALUES($1,$2,$3,$4) ON CONFLICT(event_id) DO NOTHING`,
-		eventID, channelID, window.Start.UTC(), window.End.UTC())
-	return err
-}
-
 // clipSettleDelay is how long after an event's end the clip keeps growing.
 //
 // The detector ends an event when it stops recognising the subject, which
@@ -63,7 +44,10 @@ func (s *Service) QueueClip(ctx context.Context, eventID, channelID id.ID, start
 // already playable while it waits.
 const clipSettleDelay = 6 * time.Second
 
-// PreEventLead and PostEventTrail are the operator-chosen buffer window.
+// PreEventLead and PostEventTrail are the defaults for the buffer window.
+//
+// The operator's values live on the site row and are read by LoadClipTiming when
+// a window is created; these are the fallback for a service with no site.
 const (
 	PreEventLead = 5 * time.Second
 	// PostEventTrail is longer than the lead: the detector ends an event when it
@@ -71,13 +55,6 @@ const (
 	// frame, so the tail has to cover a departure rather than a detection.
 	PostEventTrail = 10 * time.Second
 )
-
-// ClipJobWindow is the span a buffered clip must cover around an event, as the
-// caller decided it.
-type ClipJobWindow struct {
-	Start time.Time
-	End   time.Time
-}
 
 // AssembleClips drains queued clip jobs.
 //
@@ -98,12 +75,18 @@ func (s *Service) AssembleClips(ctx context.Context) {
 	// The delay is a settle delay, not a re-open: ended_at is never rewritten, and
 	// the link window the page shows still ends at the event's own end plus the
 	// trail.
-	rows, err := s.DB.Pool.Query(ctx, `SELECT j.event_id,j.channel_id,j.window_start,j.window_end,
-			j.segment_id,j.clip_run_id,
-			e.ended_at IS NULL OR e.ended_at > clock_timestamp() - $1::interval AS still_open
-		FROM event_clip_jobs j LEFT JOIN events e ON e.id=j.event_id
-		WHERE j.state IN ('queued','growing')
-		ORDER BY (e.ended_at IS NULL OR e.ended_at > clock_timestamp() - $1::interval) DESC, j.updated_at LIMIT 20`,
+	// The unit of work is a WINDOW, not an event. A window closes at
+	// `event end + trail` and is pushed out by every event that arrives before
+	// that close, so one stretch of activity is one recording with several events
+	// anchored on it. "Still open" therefore means the window's own close has not
+	// passed the settle delay yet — there is no per-event answer to that question
+	// any more.
+	rows, err := s.DB.Pool.Query(ctx, `SELECT w.id,w.channel_id,w.window_start,w.window_end,
+			w.segment_id,w.clip_run_id,
+			w.window_end > clock_timestamp() - $1::interval AS still_open
+		FROM clip_windows w
+		WHERE w.state IN ('open','finalizing')
+		ORDER BY (w.window_end > clock_timestamp() - $1::interval) DESC, w.updated_at LIMIT 20`,
 		clipSettleDelay.String())
 	if err != nil {
 		if ctx.Err() == nil {
@@ -114,7 +97,7 @@ func (s *Service) AssembleClips(ctx context.Context) {
 	var jobs []clipJob
 	for rows.Next() {
 		var item clipJob
-		if err := rows.Scan(&item.Event, &item.Channel, &item.Start, &item.End, &item.Segment, &item.Run, &item.StillOpen); err != nil {
+		if err := rows.Scan(&item.Window, &item.Channel, &item.Start, &item.End, &item.Segment, &item.Run, &item.StillOpen); err != nil {
 			rows.Close()
 			return
 		}
@@ -130,7 +113,7 @@ func (s *Service) AssembleClips(ctx context.Context) {
 		}
 		if err := s.assembleClip(ctx, item); err != nil {
 			if ctx.Err() == nil {
-				slog.Warn("clip assembly failed", "event", item.Event, "error", err)
+				slog.Warn("clip assembly failed", "window", item.Window, "error", err)
 			}
 			// An empty window is a TIMING answer, not a verdict. It means the ring
 			// held nothing for this span yet — typically an event detected in the
@@ -143,13 +126,20 @@ func (s *Service) AssembleClips(ctx context.Context) {
 			// bounds this: a job whose event ended long ago and whose window stayed
 			// empty is retried, not abandoned forever, because failed rows are not
 			// reopened at all.
-			if errors.Is(err, errClipWindowEmpty) && s.eventIsRecent(ctx, item.Event) {
-				_, _ = s.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET state='queued',error_code=$2,updated_at=clock_timestamp() WHERE event_id=$1`,
-					item.Event, clipErrorCode(err))
+			// The reason goes on both rows: the window is what the assembler reads,
+			// and the job rows are the audit trail an operator looks at. Writing only
+			// one leaves the other claiming there was no problem.
+			if errors.Is(err, errClipWindowEmpty) && s.windowIsRecent(ctx, item.Window) {
+				_, _ = s.DB.Pool.Exec(ctx, `UPDATE clip_windows SET state='open',error_code=$2,updated_at=clock_timestamp() WHERE id=$1`,
+					item.Window, clipErrorCode(err))
+				_, _ = s.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET state='queued',error_code=$2,updated_at=clock_timestamp() WHERE window_id=$1`,
+					item.Window, clipErrorCode(err))
 				continue
 			}
-			_, _ = s.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET state='failed',error_code=$2,updated_at=clock_timestamp() WHERE event_id=$1`,
-				item.Event, clipErrorCode(err))
+			_, _ = s.DB.Pool.Exec(ctx, `UPDATE clip_windows SET state='failed',error_code=$2,updated_at=clock_timestamp() WHERE id=$1`,
+				item.Window, clipErrorCode(err))
+			_, _ = s.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET state='failed',error_code=$2,updated_at=clock_timestamp() WHERE window_id=$1`,
+				item.Window, clipErrorCode(err))
 		}
 	}
 }
@@ -160,24 +150,24 @@ func (s *Service) AssembleClips(ctx context.Context) {
 // ring's keep window, which is by definition the longest a fragment can wait.
 const windowRetryAge = BufferKeepSeconds * time.Second
 
-// eventIsRecent reports whether an event is young enough that its fragments might
+// windowIsRecent reports whether a window is young enough that its fragments might
 // still land.
-func (s *Service) eventIsRecent(ctx context.Context, eventID id.ID) bool {
+func (s *Service) windowIsRecent(ctx context.Context, windowID id.ID) bool {
 	var recent bool
-	if err := s.DB.Pool.QueryRow(ctx, `SELECT started_at > clock_timestamp()-make_interval(secs => $2) FROM events WHERE id=$1`, eventID, windowRetryAge.Seconds()).Scan(&recent); err != nil {
+	if err := s.DB.Pool.QueryRow(ctx, `SELECT window_start > clock_timestamp()-make_interval(secs => $2) FROM clip_windows WHERE id=$1`, windowID, windowRetryAge.Seconds()).Scan(&recent); err != nil {
 		return false
 	}
 	return recent
 }
 
-// clipJob is one unit of assembly work.
+// clipJob is one unit of assembly work: one recording window.
 //
-// Segment and Run are set once the clip exists: while an event runs the clip is
-// re-cut from the accumulated fragments into the same file, so the event always
-// points at one clip that simply gets longer. A row per assembly would leave the
-// page choosing between forty versions of the same minute.
+// Segment and Run are set once the clip exists: while the window is still open the
+// clip is re-cut from the accumulated fragments into the same file, so a window
+// always points at one clip that simply gets longer. A row per assembly would
+// leave the page choosing between forty versions of the same minute.
 type clipJob struct {
-	Event     id.ID
+	Window    id.ID
 	Channel   id.ID
 	Start     time.Time
 	End       time.Time
@@ -186,14 +176,14 @@ type clipJob struct {
 	StillOpen bool
 }
 
-// assembleClip cuts (or re-cuts) the clip for one job.
+// assembleClip cuts (or re-cuts) the clip for one window.
 func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
-	eventID, channelID, from, to := job.Event, job.Channel, job.Start, job.End
-	// Claiming the job first means a crash mid-assembly leaves it 'running'
-	// rather than 'queued', so a retry does not duplicate a partially written
-	// file. The sweeper below requeues stale claims.
-	tag, err := s.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET state='running',updated_at=clock_timestamp()
-		WHERE event_id=$1 AND state IN ('queued','growing')`, eventID)
+	windowID, channelID, from, to := job.Window, job.Channel, job.Start, job.End
+	// Claiming first means a crash mid-assembly leaves the window 'running' rather
+	// than 'open', so a retry does not duplicate a partially written file. The
+	// sweeper below requeues stale claims.
+	tag, err := s.DB.Pool.Exec(ctx, `UPDATE clip_windows SET state='finalizing',updated_at=clock_timestamp()
+		WHERE id=$1 AND state IN ('open','finalizing')`, windowID)
 	if err != nil {
 		return err
 	}
@@ -212,9 +202,9 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 	// entry from describing footage whose origin is unknown.
 	var poolID, revisionID id.ID
 	if err := s.DB.Pool.QueryRow(ctx, `SELECT revision.source_revision_id,ch.storage_pool_id
-		FROM events ev JOIN channels ch ON ch.id=ev.channel_id
+		FROM clip_windows w JOIN channels ch ON ch.id=w.channel_id
 		JOIN LATERAL (SELECT ch.current_revision_id AS source_revision_id) revision ON true
-		WHERE ev.id=$1 AND ch.storage_pool_id IS NOT NULL`, eventID).Scan(&revisionID, &poolID); err != nil {
+		WHERE w.id=$1 AND ch.storage_pool_id IS NOT NULL`, windowID).Scan(&revisionID, &poolID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errClipNoPool
 		}
@@ -288,7 +278,7 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 		if job.Segment != nil {
 			// Nothing new and nothing held: the clip is as complete as this pass can
 			// make it. Settling avoids rewriting identical bytes every five seconds.
-			return s.settleClip(ctx, eventID, job.StillOpen)
+			return s.settleClip(ctx, windowID, job.StillOpen)
 		}
 		return errClipWindowEmpty
 	}
@@ -481,26 +471,38 @@ func (s *Service) assembleClip(ctx context.Context, job clipJob) error {
 			segmentID, poolID, published, info.Size(), locationState); err != nil {
 			return err
 		}
-		// The event now has footage of its own, so its verdict becomes linked. The
-		// span starts where the file starts, not where the newest fragment does.
-		// While the event runs the page shows 录像生成中 rather than a play button:
-		// media_state says footage EXISTS, while the segment's own state says whether
-		// that footage is finished. Conflating the two is what let a half-minute clip
-		// be indexed as a finished recording.
-		_, err := tx.Exec(ctx, `UPDATE events SET media_state='linked',media_start_at=$2,media_end_at=$3,media_segments=$4,updated_at=clock_timestamp() WHERE id=$1`,
-			eventID, nameStart.UTC(), end.UTC(), partCount)
+		// The events on this window get their media verdict from the linking pass,
+		// which computes it from time coverage — the one definition. This function
+		// used to write media_state='linked' and put the FRAGMENT COUNT into
+		// media_segments, while the linking pass put the SEGMENT count in the same
+		// column: one column, two meanings, depending on which writer ran last.
+		//
+		// Nothing is written to events here now. A window that exists is a segment
+		// that covers the events' spans, so linkEventMedia reports them linked on
+		// its next pass, and it reports coverage honestly rather than from whichever
+		// assembly ran most recently.
+		//
+		// A window that has not closed keeps growing for the next pass; a closed one
+		// is published and settled.
+		next := "done"
+		if job.StillOpen {
+			next = "finalizing"
+		}
+		_, err = tx.Exec(ctx, `UPDATE clip_windows SET state=$2,segment_id=$3,clip_run_id=$4,updated_at=clock_timestamp() WHERE id=$1`,
+			windowID, next, segmentID, runID)
 		if err != nil {
 			return err
 		}
-		// An event that is still running keeps its clip open for the next pass: the
-		// window extends as fragments accumulate, and the segment stays
-		// 'finalizing'. A finished event closes the job for good and publishes.
-		next := "done"
+		// The job rows point at the window. Their state uses the JOB vocabulary
+		// ('growing', not 'finalizing' — two tables, two CHECK lists, and mixing them
+		// was a constraint violation, not a style question). It exists for the audit
+		// trail; the assembler reads clip_windows.
+		jobState := "done"
 		if job.StillOpen {
-			next = "growing"
+			jobState = "growing"
 		}
-		_, err = tx.Exec(ctx, `UPDATE event_clip_jobs SET state=$2,segment_id=$3,clip_run_id=$4,updated_at=clock_timestamp() WHERE event_id=$1`,
-			eventID, next, segmentID, runID)
+		_, err = tx.Exec(ctx, `UPDATE event_clip_jobs SET state=$2,segment_id=$3,clip_run_id=$4,updated_at=clock_timestamp() WHERE window_id=$1`,
+			windowID, jobState, segmentID, runID)
 		return err
 	})
 	if err != nil {
@@ -622,28 +624,37 @@ func copyFile(source, target string) error {
 	return nil
 }
 
-// settleClip closes a job whose clip is already as complete as the ring allows.
+// settleClip closes a window whose clip is already as complete as the ring allows.
 //
-// This is what keeps a running-but-idle event from rewriting the same bytes every
-// five seconds. A running event still goes back to 'growing' so the next message
-// can extend it; a finished one is 'done'.
-func (s *Service) settleClip(ctx context.Context, eventID id.ID, stillOpen bool) error {
+// This is what keeps a running-but-idle window from rewriting the same bytes every
+// five seconds. A window that has not closed yet goes back to 'finalizing' so the
+// next event or fragment can extend it; a closed one is 'done' and published.
+//
+// Two state vocabularies meet here: clip_windows knows 'finalizing', event_clip_jobs
+// only knows 'growing'. Writing the window's word into the job table is a CHECK
+// violation, so each table gets its own.
+func (s *Service) settleClip(ctx context.Context, windowID id.ID, stillOpen bool) error {
 	next := "done"
+	jobState := "done"
 	if stillOpen {
-		next = "growing"
+		next = "finalizing"
+		jobState = "growing"
 	}
 	err := s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `UPDATE event_clip_jobs SET state=$2,updated_at=clock_timestamp() WHERE event_id=$1`, eventID, next); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE clip_windows SET state=$2,updated_at=clock_timestamp() WHERE id=$1`, windowID, next); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE event_clip_jobs SET state=$2,updated_at=clock_timestamp() WHERE window_id=$1`, windowID, jobState); err != nil {
 			return err
 		}
 		if stillOpen {
 			return nil
 		}
-		// The event ended without producing new fragments, so this is the pass that
+		// The window closed without producing new fragments, so this is the pass that
 		// publishes its clip. Without this the segment would stay 'finalizing'
 		// forever — unplayable, unarchived, unexportable — precisely because nothing
 		// else happened to trigger a re-cut.
-		return s.publishClipTx(ctx, tx, eventID)
+		return s.publishClipTx(ctx, tx, windowID)
 	})
 	return err
 }
@@ -652,13 +663,13 @@ func (s *Service) settleClip(ctx context.Context, eventID id.ID, stillOpen bool)
 //
 // It is the single place the transition happens, so "finished" cannot come to
 // mean two different things in two paths.
-func (s *Service) publishClipTx(ctx context.Context, tx pgx.Tx, eventID id.ID) error {
+func (s *Service) publishClipTx(ctx context.Context, tx pgx.Tx, windowID id.ID) error {
 	if _, err := tx.Exec(ctx, `UPDATE recording_segments s SET state='ready',error_code=NULL,ready_at=clock_timestamp()
-		FROM event_clip_jobs j WHERE j.event_id=$1 AND s.id=j.segment_id AND s.state='finalizing'`, eventID); err != nil {
+		FROM clip_windows w WHERE w.id=$1 AND s.id=w.segment_id AND s.state='finalizing'`, windowID); err != nil {
 		return err
 	}
 	_, err := tx.Exec(ctx, `UPDATE recording_locations l SET state='ready',verified_at=clock_timestamp()
-		FROM event_clip_jobs j WHERE j.event_id=$1 AND l.segment_id=j.segment_id AND l.state='finalizing'`, eventID)
+		FROM clip_windows w WHERE w.id=$1 AND l.segment_id=w.segment_id AND l.state='finalizing'`, windowID)
 	return err
 }
 
@@ -827,9 +838,16 @@ func (s *Service) PublishSettledClips(ctx context.Context) {
 	if s.DB == nil {
 		return
 	}
+	// The condition is the window's own close, not "some event on it has ended":
+	// with several events anchored on one recording, the recording is finished
+	// when its window has passed its close, and a window that is still being
+	// extended must not be published early.
 	tag, err := s.DB.Pool.Exec(ctx, `UPDATE recording_segments s SET state='ready',error_code=NULL,ready_at=clock_timestamp()
-		FROM event_clip_jobs j JOIN events e ON e.id=j.event_id
-		WHERE j.segment_id=s.id AND s.state='finalizing' AND e.ended_at IS NOT NULL`)
+		FROM clip_windows w
+		WHERE w.segment_id=s.id AND s.state='finalizing'
+		  AND w.window_end < clock_timestamp() - interval '1 second'
+		  AND NOT EXISTS(SELECT 1 FROM clip_windows newer
+		                 WHERE newer.channel_id=w.channel_id AND newer.id<>w.id AND newer.state='open')`)
 	if err != nil {
 		if ctx.Err() == nil {
 			slog.Warn("settled clip publication unavailable", "error", err)
@@ -840,8 +858,7 @@ func (s *Service) PublishSettledClips(ctx context.Context) {
 		return
 	}
 	if _, err := s.DB.Pool.Exec(ctx, `UPDATE recording_locations l SET state='ready',verified_at=clock_timestamp()
-		FROM event_clip_jobs j JOIN events e ON e.id=j.event_id
-		WHERE j.segment_id=l.segment_id AND l.state='finalizing' AND e.ended_at IS NOT NULL`); err != nil && ctx.Err() == nil {
+		FROM recording_segments s WHERE s.id=l.segment_id AND l.state='finalizing' AND s.state='ready'`); err != nil && ctx.Err() == nil {
 		slog.Warn("settled clip location publication unavailable", "error", err)
 		return
 	}
@@ -971,19 +988,30 @@ func (s *Service) SweepEventClipJobs(ctx context.Context) {
 	// retention below only removes 'done'/'failed'. The event then never gets a
 	// clip and the row is not even eligible for cleanup.
 	//
-	// The claim is fenced on updated_at so a job that is genuinely still being
+	// The claim is fenced on updated_at so a row that is genuinely still being
 	// assembled is not stolen: one assembly pass is seconds, and the lease is far
 	// longer than that.
-	requeued, err := s.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs
-		SET state='queued',updated_at=clock_timestamp()
-		WHERE state='running' AND updated_at < clock_timestamp()-make_interval(secs => $1)`,
+	//
+	// The window is where assembly state lives now, so that is what has to be
+	// requeued. The job rows follow it, in their own vocabulary (the window knows
+	// 'finalizing', the job only knows 'running'). Sweeping the job table alone left
+	// an abandoned window in 'finalizing' forever and the event never got its clip.
+	requeued, err := s.DB.Pool.Exec(ctx, `UPDATE clip_windows
+		SET state='open',error_code=NULL,updated_at=clock_timestamp()
+		WHERE state='finalizing' AND updated_at < clock_timestamp()-make_interval(secs => $1)`,
 		clipJobLease.Seconds())
 	if err != nil {
 		if ctx.Err() == nil {
-			slog.Warn("event clip job requeue unavailable", "error", err)
+			slog.Warn("event clip window requeue unavailable", "error", err)
 		}
-	} else if n := requeued.RowsAffected(); n > 0 {
-		slog.Info("event clip jobs requeued", "count", n)
+	} else {
+		if _, jobErr := s.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET state='queued',updated_at=clock_timestamp()
+			WHERE state='running' AND updated_at < clock_timestamp()-make_interval(secs => $1)`, clipJobLease.Seconds()); jobErr != nil && ctx.Err() == nil {
+			slog.Warn("event clip job requeue unavailable", "error", jobErr)
+		}
+		if n := requeued.RowsAffected(); n > 0 {
+			slog.Info("event clip windows requeued", "count", n)
+		}
 	}
 	rows, err := s.DB.Pool.Exec(ctx, `DELETE FROM event_clip_jobs
 		WHERE state IN ('done','failed') AND updated_at < clock_timestamp()-make_interval(secs => $1)`,

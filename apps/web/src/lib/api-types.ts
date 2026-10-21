@@ -1967,6 +1967,10 @@ export interface components {
             require_storage_write_proof: boolean;
             /** @description Local retention period in days. 0 (default) disables automatic deletion entirely, so an upgraded site keeps every recording until an administrator sets a period. Retention never removes protected recordings. */
             recording_retention_days: number;
+            /** @description How many seconds of footage before the first detection an event recording starts. Site-wide because the question is the operator's tolerance, not one camera's. */
+            event_clip_lead_seconds: number;
+            /** @description How many seconds after the last detection an event recording keeps running. A new event arriving inside this window extends the same recording instead of starting another. */
+            event_clip_trail_seconds: number;
             version: components["schemas"]["Version"];
         };
         Channel: {
@@ -3555,6 +3559,8 @@ export interface operations {
                     timezone?: string;
                     require_storage_write_proof?: boolean;
                     recording_retention_days?: number;
+                    event_clip_lead_seconds?: number;
+                    event_clip_trail_seconds?: number;
                 };
             };
         };

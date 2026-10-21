@@ -158,6 +158,8 @@ function site(retentionDays: number): Schema<'Site'> {
     timezone: 'Asia/Shanghai',
     channel_count: 16,
     require_storage_write_proof: true,
+    event_clip_lead_seconds: 5,
+    event_clip_trail_seconds: 10,
     recording_retention_days: retentionDays,
     version: 4,
   }

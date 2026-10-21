@@ -172,11 +172,24 @@ func TestRecordingContentHidesUnauthorizedSegments(t *testing.T) {
 func TestRecordingContentRefusesUnpublishedOrUnverifiableMedia(t *testing.T) {
 	f := newContentFixture(t)
 	media := filepath.Join(f.Pool.Path, f.Target)
-	for _, state := range []string{"finalizing", "provisional", "missing", "damaged", "conflict"} {
+	// The verdict must name what is wrong, because the HTTP layer falls back to the
+	// verified cloud copy for exactly four of them. Collapsing missing and damaged
+	// into "not published yet" told the caller to wait, so a recording with a
+	// healthy remote replica became unplayable the moment its local file vanished.
+	//
+	// finalizing / provisional / conflict are genuinely "no settled bytes here".
+	want := map[string]string{
+		"finalizing":  "recording_not_ready",
+		"provisional": "recording_not_ready",
+		"conflict":    "recording_not_ready",
+		"missing":     "recording_missing",
+		"damaged":     "recording_damaged",
+	}
+	for state, code := range want {
 		f.setSegmentState(t, state)
 		response := f.get(t, f.Session, nil)
-		if response.Code != 409 || !strings.Contains(response.Body.String(), "recording_not_ready") {
-			t.Fatalf("state %s answered %d %s", state, response.Code, response.Body.String())
+		if response.Code != 409 || !strings.Contains(response.Body.String(), code) {
+			t.Fatalf("state %s must answer 409 %s, got %d %s", state, code, response.Code, response.Body.String())
 		}
 		if bytes.Contains(response.Body.Bytes(), f.Published[:64]) || response.Header().Get("Content-Range") != "" {
 			t.Fatalf("state %s produced media bytes", state)

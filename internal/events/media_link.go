@@ -16,6 +16,7 @@ package events
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -23,17 +24,42 @@ import (
 	"github.com/zhigu34/one-nvr/internal/id"
 )
 
-// EventMediaWindow is how far before the event starts and after it ends the
-// footage should reach.
+// DefaultEventMediaWindow is how far before an event starts and after it ends
+// the footage should reach, when the site has no override.
 //
-// Five seconds of lead-in answers "what walked into frame". The trail is longer
-// because the detector ends an event when it loses the subject, which is often
-// while the person is still walking out — a five-second tail cut them off
-// mid-stride. Ten seconds covers the departure at normal walking pace.
+// These used to be the ONLY definition, duplicated as recording.PreEventLead /
+// PostEventTrail with identical values and no shared source. The real values now
+// live on the site row (event_clip_lead_seconds / event_clip_trail_seconds,
+// migration 0050) and are read by eventMediaWindow; this pair is the fallback for
+// a service without a site (rendering-only construction).
 const (
 	PreEventWindow  = 5 * time.Second
 	PostEventWindow = 10 * time.Second
 )
+
+// eventMediaWindow reads the site's lead and trail for this channel.
+//
+// Both places that ask "how far around an event does footage reach" must read the
+// same numbers: queueClipJob decides what to record, and linkEventMedia decides
+// whether what exists counts as covering the event. Leaving the second on the old
+// constants meant shortening the trail made every clip read as "only covers part
+// of the event" — the recording shrank exactly as asked and the verdict called it
+// a shortfall.
+func eventMediaWindow(ctx context.Context, tx pgx.Tx, channelID id.ID) (lead, trail time.Duration) {
+	var leadSeconds, trailSeconds int
+	err := tx.QueryRow(ctx, `SELECT s.event_clip_lead_seconds, s.event_clip_trail_seconds
+		FROM channels c JOIN sites s ON s.id=c.site_id WHERE c.id=$1`, channelID).Scan(&leadSeconds, &trailSeconds)
+	if err != nil {
+		// A channel without a site row cannot exist, but a caller in a test fixture
+		// might not have created one; fall back to the defaults rather than losing
+		// the recording or the coverage verdict.
+		if ctx.Err() == nil && !errors.Is(err, pgx.ErrNoRows) {
+			slog.Warn("event clip timing unavailable, using defaults", "error", err)
+		}
+		return PreEventWindow, PostEventWindow
+	}
+	return time.Duration(leadSeconds) * time.Second, time.Duration(trailSeconds) * time.Second
+}
 
 // mediaLink is the outcome of looking for footage around an event.
 type mediaLink struct {
@@ -58,13 +84,14 @@ type mediaLink struct {
 //     hide footage that does exist. REC-09 forbids both.
 //   - unavailable — nothing covers the window.
 func (s *Service) linkEventMedia(ctx context.Context, tx pgx.Tx, channelID id.ID, startedAt time.Time, endedAt *time.Time) (mediaLink, error) {
-	from := startedAt.Add(-PreEventWindow)
+	lead, trail := eventMediaWindow(ctx, tx, channelID)
+	from := startedAt.Add(-lead)
 	// An event still running has no end yet. Ask for the window it would have
 	// if it stopped now, and let a later update re-evaluate: a link computed
 	// against a moving end would go stale the moment the event grew.
-	to := startedAt.Add(PostEventWindow)
+	to := startedAt.Add(trail)
 	if endedAt != nil {
-		to = endedAt.Add(PostEventWindow)
+		to = endedAt.Add(trail)
 	}
 	// A growing event clip is 'finalizing' until the event ends, and it is still
 	// footage that exists: the page plays it while it grows. Counting only 'ready'
@@ -243,46 +270,81 @@ func (s *Service) channelBuffering(ctx context.Context, tx pgx.Tx, channelID id.
 	return active
 }
 
-// queueClipJob records that a buffered clip should be assembled for this event.
+// queueClipJob attaches this event to a recording window. REC-09.
 //
-// Written here rather than by calling the recording package: events must not
-// import recording (the dependency runs recording → events for nothing, but
-// events → recording would create a cycle the moment the buffer needs to read an
-// event). One INSERT is cheaper than the cycle.
+// The rule, and the whole of it: a recording is planned to close at
+// `event end + trail`; an event arriving BEFORE that close moves the close out to
+// its own `end + trail`, repeatedly. The recording is the subject and each event
+// is an anchor on it, because the detector ends an event while the subject is
+// still walking out and starts another when it sees them again — one visit is one
+// recording, not several files with unwatched time between them.
 //
-// The window is the same lead and trail used for linking, so the clip covers the
-// span the page promises. ON CONFLICT keeps the stream and the reconciliation
-// read from queueing the same window twice.
+// The buffer records continuously, so extending a window adds real footage; this
+// never claims a gap was covered.
+//
+// Written in SQL here rather than by calling recording.AttachEvent: events must
+// not import recording (the dependency runs recording → events, and the reverse
+// would create a cycle the moment the buffer needs to read an event). The two
+// implementations answer the same question; the integration test
+// TestOneActivityStretchProducesOneClip exercises the recording side, and
+// TestTwoDetectionsOnOneVisitShareARecording exercises this one.
 func (s *Service) queueClipJob(ctx context.Context, tx pgx.Tx, eventID, channelID id.ID, startedAt time.Time, endedAt *time.Time) error {
-	from := startedAt.Add(-PreEventWindow)
-	to := startedAt.Add(PostEventWindow)
+	lead, trail := eventMediaWindow(ctx, tx, channelID)
+
+	openAt := startedAt.Add(-lead)
+	closeAt := startedAt.Add(trail)
 	if endedAt != nil {
-		to = endedAt.Add(PostEventWindow)
+		closeAt = endedAt.Add(trail)
 	} else {
-		// The event is still running: its window has to reach the present,
-		// otherwise every update produces the same three seconds and the clip
-		// never grows. The assembler cuts whatever fragments exist, so asking for
-		// a span that extends past the newest one is harmless.
+		// A running event's close is measured from now: waiting for the detector to
+		// close it would leave the window stalled at the first fragments.
 		now := time.Now().UTC()
-		if now.After(to) {
-			to = now
+		if now.Add(trail).After(closeAt) {
+			closeAt = now.Add(trail)
 		}
 	}
-	// A running event advances its window as messages arrive, so the page can show
-	// the clip growing instead of nothing until the detection ends.
-	//
-	// Only a job that has not finished is advanced: 'done' and 'failed' are
-	// settled answers, and a late duplicate message must not reopen them. A job
-	// already in 'growing' goes back to 'queued' so the next pass re-cuts it — the
-	// clip exists, but its window moved.
-	_, err := tx.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end,state)
-		VALUES($1,$2,$3,$4,'queued')
-		ON CONFLICT(event_id) DO UPDATE SET
-			window_start=EXCLUDED.window_start,
-			window_end=EXCLUDED.window_end,
-			state='queued',
-			updated_at=clock_timestamp()
-		WHERE event_clip_jobs.state IN ('queued','growing')`,
-		eventID, channelID, from.UTC(), to.UTC())
+
+	// The newest window on this channel that has not closed yet, locked so two
+	// detections a moment apart extend one window instead of each creating one.
+	var windowID id.ID
+	var currentEnd time.Time
+	err := tx.QueryRow(ctx, `SELECT id, window_end FROM clip_windows
+		WHERE channel_id=$1 AND state IN ('open','finalizing')
+		ORDER BY window_end DESC, id LIMIT 1 FOR UPDATE`, channelID).Scan(&windowID, &currentEnd)
+	switch {
+	case err == nil && currentEnd.After(time.Now().UTC()):
+		// Still inside its countdown: extend. window_start never moves — the head
+		// of this recording is what was already recorded.
+		if _, err := tx.Exec(ctx, `UPDATE clip_windows
+			SET window_end=GREATEST(window_end,$2), state='open', updated_at=clock_timestamp()
+			WHERE id=$1`, windowID, closeAt.UTC()); err != nil {
+			return err
+		}
+	case err == nil || errors.Is(err, pgx.ErrNoRows):
+		// No open window, or the newest one has already passed its close: a new
+		// recording starts here, and the old one is left for the assembler.
+		newID, idErr := id.New()
+		if idErr != nil {
+			return idErr
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO clip_windows(id,channel_id,window_start,window_end,state)
+			VALUES($1,$2,$3,$4,'open')`, newID, channelID, openAt.UTC(), closeAt.UTC()); err != nil {
+			return err
+		}
+		windowID = newID
+	default:
+		return err
+	}
+
+	// One row per event keeps the detector's repeated messages idempotent. The job
+	// row is the anchor: which recording does this detection belong to. The
+	// assembly columns are kept in step for the audit trail; the assembler reads
+	// clip_windows.
+	_, err = tx.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end,state,window_id)
+		VALUES($1,$2,$3,$4,'queued',$5)
+		ON CONFLICT(event_id) DO UPDATE SET window_id=EXCLUDED.window_id,
+			window_start=EXCLUDED.window_start, window_end=EXCLUDED.window_end,
+			updated_at=clock_timestamp()`,
+		eventID, channelID, openAt.UTC(), closeAt.UTC(), windowID)
 	return err
 }

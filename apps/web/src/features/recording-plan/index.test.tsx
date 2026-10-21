@@ -343,3 +343,19 @@ test('select all and clear move the whole selection', async () => {
   await expect.element(view.getByText(/已选 0 \/ 2 路/)).toBeVisible()
   setup.client.clear()
 })
+
+// Lead and trail are a site setting, shown on the event switch because that is
+// where the operator forms an expectation of what a clip contains. The control
+// must open, state the ranges, and save through the site endpoint.
+test('event clip lead and trail are editable and say they are site-wide', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  await userEvent.click(view.getByRole('button', { name: '调整时长' }))
+  await expect.element(view.getByLabelText('事件录像前置秒数')).toBeVisible()
+  await expect.element(view.getByLabelText('事件录像后置秒数')).toBeVisible()
+  // A control scoped to "all channels" while sitting in a per-channel bar has to
+  // say so, or it reads as belonging to the selection.
+  await expect.element(view.getByText(/全站设置，所有通道共用/)).toBeVisible()
+  // And it must say when the change lands: an open recording keeps its old close.
+  await expect.element(view.getByText(/从下一个事件起生效/)).toBeVisible()
+})

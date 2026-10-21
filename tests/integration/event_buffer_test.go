@@ -23,9 +23,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zhigu34/one-nvr/internal/database"
 	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/media/probe"
-	"github.com/zhigu34/one-nvr/internal/recording"
 )
 
 // markBuffering makes the channel look like it has a live ring buffer, which is
@@ -206,10 +206,7 @@ func TestClipAssemblyReportsAnEmptyWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end)
-		VALUES($1,$2,$3,$4)`, eventID, fixture.Channel, now.Add(-10*time.Second), now); err != nil {
-		t.Fatal(err)
-	}
+	seedClipJob(ctx, t, fixture.DB, eventID, fixture.Channel, now.Add(-10*time.Second), now, "queued")
 	fixture.Service.AssembleClips(ctx)
 	var state, code string
 	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state,coalesce(error_code,'') FROM event_clip_jobs WHERE event_id=$1`, eventID).Scan(&state, &code); err != nil {
@@ -293,7 +290,14 @@ func TestRunningEventAdvancesItsClipWindow(t *testing.T) {
 	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT window_end FROM event_clip_jobs WHERE event_id=(SELECT id FROM events WHERE source_id='evt-growing')`).Scan(&finalEnd); err != nil {
 		t.Fatal(err)
 	}
-	want := ended.Add(recording.PostEventTrail)
+	// The trail is a site setting now, so ask the site rather than a Go constant:
+	// asserting against the constant would keep passing if the migration's default
+	// drifted away from it.
+	var trailSeconds int
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT event_clip_trail_seconds FROM sites WHERE singleton`).Scan(&trailSeconds); err != nil {
+		t.Fatal(err)
+	}
+	want := ended.Add(time.Duration(trailSeconds) * time.Second)
 	if finalEnd.Sub(want).Abs() > time.Second {
 		t.Fatalf("a finished event's window must end at its end plus the trail: %v vs %v", finalEnd, want)
 	}
@@ -409,6 +413,124 @@ func TestStaleBufferDoesNotQueueClipWork(t *testing.T) {
 	}
 }
 
+// Two detections on one visit share one recording, driven through Ingest — the
+// path the detector actually uses.
+//
+// TestOneActivityStretchProducesOneClip exercises recording.AttachEvent, but the
+// worker never calls that: events.queueClipJob is a second implementation of the
+// same rule (written in SQL because events must not import recording). A test of
+// only the first would leave the operator's rule covered by the copy nobody runs.
+func TestTwoDetectionsOnOneVisitShareARecording(t *testing.T) {
+	fixture, service := newEventsFixture(t)
+	ctx := context.Background()
+	if err := service.SetMappings(ctx, fixture.Admin, map[id.ID]string{fixture.Channel: "front-door"}); err != nil {
+		t.Fatal(err)
+	}
+	markBuffering(t, fixture)
+	// Realtime, so the first event's close is still ahead when the second arrives —
+	// that is the condition the rule is about. A base in the past would make every
+	// window already closed and assert the other branch.
+	firstStart := time.Now().UTC().Add(-6 * time.Second).Truncate(time.Second)
+	secondStart := firstStart.Add(5 * time.Second)
+	firstEnd := firstStart.Add(2 * time.Second)
+	secondEnd := secondStart.Add(3 * time.Second)
+
+	firstEndUnix := float64(firstEnd.Unix())
+	if err := service.Ingest(ctx, frigatePayload("new", "evt-visit-a", "front-door", "person",
+		float64(firstStart.Unix()), nil, nil, false)); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Ingest(ctx, frigatePayload("update", "evt-visit-a", "front-door", "person",
+		float64(firstStart.Unix()), &firstEndUnix, nil, false)); err != nil {
+		t.Fatal(err)
+	}
+	// The second event begins inside the first recording's trail window, so it must
+	// extend that recording rather than start another.
+	secondEndUnix := float64(secondEnd.Unix())
+	if err := service.Ingest(ctx, frigatePayload("new", "evt-visit-b", "front-door", "person",
+		float64(secondStart.Unix()), nil, nil, false)); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Ingest(ctx, frigatePayload("update", "evt-visit-b", "front-door", "person",
+		float64(secondStart.Unix()), &secondEndUnix, nil, false)); err != nil {
+		t.Fatal(err)
+	}
+
+	var windows int
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM clip_windows WHERE channel_id=$1`, fixture.Channel).Scan(&windows); err != nil {
+		t.Fatal(err)
+	}
+	if windows != 1 {
+		var detail string
+		_ = fixture.DB.Pool.QueryRow(ctx, `SELECT string_agg(window_start::text||' .. '||window_end::text||' '||state, ' | ' ORDER BY window_start)
+			FROM clip_windows WHERE channel_id=$1`, fixture.Channel).Scan(&detail)
+		t.Fatalf("two detections on one visit produced %d recordings, want 1: the second arrived inside the first one's trail window; windows: %s", windows, detail)
+	}
+	// Both anchors point at that one recording.
+	var shared, jobs int
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT count(DISTINCT window_id), count(*) FROM event_clip_jobs WHERE channel_id=$1`, fixture.Channel).Scan(&shared, &jobs); err != nil {
+		t.Fatal(err)
+	}
+	if jobs != 2 || shared != 1 {
+		t.Fatalf("%d events produced %d distinct windows, want 2 events on 1 window", jobs, shared)
+	}
+	// The recording must reach the last event's end plus the trail: extending means
+	// the window grows, not that it keeps the first event's close.
+	var covers bool
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT window_end >= $2::timestamptz + interval '10 seconds'
+		FROM clip_windows WHERE channel_id=$1`, fixture.Channel, secondEnd).Scan(&covers); err != nil {
+		t.Fatal(err)
+	}
+	if !covers {
+		t.Fatal("the recording did not extend to the second event's end plus the trail")
+	}
+}
+
+// Two detections far apart stay two recordings, through the same Ingest path.
+func TestDetectionsFarApartStaySeparateRecordings(t *testing.T) {
+	fixture, service := newEventsFixture(t)
+	ctx := context.Background()
+	if err := service.SetMappings(ctx, fixture.Admin, map[id.ID]string{fixture.Channel: "front-door"}); err != nil {
+		t.Fatal(err)
+	}
+	markBuffering(t, fixture)
+	// Both events are replayed from the past, so each "new" message arrives with no
+	// end_time. A running event's close is measured from NOW, deliberately — waiting
+	// for the detector to close it would stall the window — so replaying two old
+	// events a second apart would give both a close of now+trail and merge them.
+	// Each event has to be driven to its stored end before the next one arrives, so
+	// its close lands at its own end + trail; the second one is a minute later and
+	// therefore starts a second recording.
+	firstStart := time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Second)
+	firstEnd := firstStart.Add(10 * time.Second)
+	secondStart := firstEnd.Add(60 * time.Second)
+	secondEnd := secondStart.Add(10 * time.Second)
+	for _, item := range []struct {
+		sourceID string
+		start    time.Time
+		end      time.Time
+	}{
+		{"evt-sep-a", firstStart, firstEnd},
+		{"evt-sep-b", secondStart, secondEnd},
+	} {
+		endUnix := float64(item.end.Unix())
+		if err := service.Ingest(ctx, frigatePayload("new", item.sourceID, "front-door", "person",
+			float64(item.start.Unix()), &endUnix, nil, false)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var windows int
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM clip_windows WHERE channel_id=$1`, fixture.Channel).Scan(&windows); err != nil {
+		t.Fatal(err)
+	}
+	if windows != 2 {
+		var detail string
+		_ = fixture.DB.Pool.QueryRow(ctx, `SELECT string_agg(window_start::text||' .. '||window_end::text, ' | ' ORDER BY window_start)
+			FROM clip_windows WHERE channel_id=$1`, fixture.Channel).Scan(&detail)
+		t.Fatalf("two distant detections produced %d recordings, want 2; windows: %s", windows, detail)
+	}
+}
+
 // Settled jobs are swept; live ones are not, however old they look.
 func TestClipJobRetentionKeepsLiveWork(t *testing.T) {
 	fixture := scheduledFixture(t)
@@ -431,10 +553,11 @@ func TestClipJobRetentionKeepsLiveWork(t *testing.T) {
 			VALUES($1,$2,'frigate',$3,'person',0.5,'[]',clock_timestamp(),'gone','unavailable','{}')`, ev, fixture.Channel, "src-"+state); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end,state,updated_at)
-			VALUES($1,$2,$3,$4,$5,$6)`, ev, fixture.Channel, now.Add(-time.Minute), now, state, now.Add(-age)); err != nil {
+		windowID := seedClipJob(ctx, t, fixture.DB, ev, fixture.Channel, now.Add(-time.Minute), now, state)
+		if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET updated_at=$2 WHERE event_id=$1`, ev, now.Add(-age)); err != nil {
 			t.Fatal(err)
 		}
+		_, _ = fixture.DB.Pool.Exec(ctx, `UPDATE clip_windows SET updated_at=$2 WHERE id=$1`, windowID, now.Add(-age))
 	}
 	fixture.Service.SweepEventClipJobs(ctx)
 	var remaining int
@@ -539,7 +662,7 @@ func TestClipRecutExtendsTheSameFile(t *testing.T) {
 	if err := os.MkdirAll(ring, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	base := time.Now().UTC().Add(-40 * time.Second).Truncate(time.Second)
+	base := time.Now().UTC().Add(-10 * time.Second).Truncate(time.Second)
 	writeFragment := func(offset int) {
 		start := base.Add(time.Duration(offset) * time.Second)
 		// ZLM names a fragment in the CONTAINER's local zone. Formatting in UTC
@@ -569,10 +692,7 @@ func TestClipRecutExtendsTheSameFile(t *testing.T) {
 		VALUES($1,$2,'frigate','evt-recut','person',0.5,'[]',$3,'gone','unavailable','{}')`, eventID, fixture.Channel, base); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end,state)
-		VALUES($1,$2,$3,$4,'queued')`, eventID, fixture.Channel, base, base.Add(6*time.Second)); err != nil {
-		t.Fatal(err)
-	}
+	seedClipJob(ctx, t, fixture.DB, eventID, fixture.Channel, base, base.Add(6*time.Second), "queued")
 	fixture.Service.AssembleClips(ctx)
 
 	var (
@@ -591,7 +711,16 @@ func TestClipRecutExtendsTheSameFile(t *testing.T) {
 	// The event keeps running: two more fragments land and the job re-queues.
 	writeFragment(6)
 	writeFragment(9)
-	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET state='queued',window_end=$2 WHERE event_id=$1`, eventID, base.Add(12*time.Second)); err != nil {
+	// A running event: the close is still ahead, so the assembler re-cuts rather
+	// than settling. A close in the past is a finished recording and only gets
+	// published — correct behaviour, and not what this test is about. The start
+	// stays where the fragments are: moving it would put them outside the window.
+	openEnd := base.Add(20 * time.Second)
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE clip_windows SET state='open',window_end=$2
+		WHERE id=(SELECT window_id FROM event_clip_jobs WHERE event_id=$1)`, eventID, openEnd); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET state='queued',window_end=$2 WHERE event_id=$1`, eventID, openEnd); err != nil {
 		t.Fatal(err)
 	}
 	// The ring evicts the oldest fragments, exactly as the sweeper would: this is
@@ -1061,7 +1190,11 @@ func TestRunningEventClipStaysUnpublishedUntilItEnds(t *testing.T) {
 	if err := os.MkdirAll(ring, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	base := time.Now().UTC().Add(-40 * time.Second).Truncate(time.Second)
+	// Near now, with the window's close ahead of us: "still running" is now a
+	// property of the window, not of the event. A close in the past is a finished
+	// recording and only gets published — correct behaviour, and the second half of
+	// this test drives exactly that.
+	base := time.Now().UTC().Add(-20 * time.Second).Truncate(time.Second)
 	writeFragment := func(offset int) {
 		start := base.Add(time.Duration(offset) * time.Second)
 		path := filepath.Join(ring, start.In(time.Local).Format("2006-01-02-15-04-05")+"-0.mp4")
@@ -1083,10 +1216,7 @@ func TestRunningEventClipStaysUnpublishedUntilItEnds(t *testing.T) {
 		VALUES($1,$2,'frigate','evt-running','person',0.5,'[]',$3,'gone','pending','{}')`, eventID, fixture.Channel, base); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end,state)
-		VALUES($1,$2,$3,$4,'queued')`, eventID, fixture.Channel, base, base.Add(6*time.Second)); err != nil {
-		t.Fatal(err)
-	}
+	seedClipJob(ctx, t, fixture.DB, eventID, fixture.Channel, base, base.Add(40*time.Second), "queued")
 	fixture.Service.AssembleClips(ctx)
 
 	segmentStateOf := func() (string, string) {
@@ -1122,6 +1252,10 @@ func TestRunningEventClipStaysUnpublishedUntilItEnds(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The window must move so this pass has work; the fragments are unchanged.
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE clip_windows SET state='open',window_end=$2
+		WHERE id=(SELECT window_id FROM event_clip_jobs WHERE event_id=$1)`, eventID, endedAt.Add(5*time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET state='queued',window_end=$2 WHERE event_id=$1`, eventID, endedAt.Add(5*time.Second)); err != nil {
 		t.Fatal(err)
 	}
@@ -1174,8 +1308,11 @@ func TestSettledEventStillPublishesItsClip(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The job is settled: the assembly loop will never pick it up again.
-	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end,state,segment_id,clip_run_id)
-		VALUES($1,$2,$3,$4,'done',$5,$6)`, eventID, fixture.Channel, started, ended, segment, runID); err != nil {
+	doneWindow := seedClipJob(ctx, t, fixture.DB, eventID, fixture.Channel, started, ended, "done")
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE clip_windows SET segment_id=$2,clip_run_id=$3 WHERE id=$1`, doneWindow, segment, runID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET segment_id=$2,clip_run_id=$3 WHERE event_id=$1`, eventID, segment, runID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1230,8 +1367,14 @@ func TestSettledPublicationSkipsRunningEvents(t *testing.T) {
 		VALUES($1,$2,$3,1024,'finalizing')`, segment, fixture.Pool.ID, path); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end,state,segment_id,clip_run_id)
-		VALUES($1,$2,$3,clock_timestamp(),'growing',$4,$5)`, eventID, fixture.Channel, started, segment, runID); err != nil {
+	growingWindow := seedClipJob(ctx, t, fixture.DB, eventID, fixture.Channel, started, time.Now().UTC(), "growing")
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE clip_windows SET segment_id=$2,clip_run_id=$3 WHERE id=$1`, growingWindow, segment, runID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE clip_windows SET window_end=clock_timestamp() WHERE id=$1`, growingWindow); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET segment_id=$2,clip_run_id=$3 WHERE event_id=$1`, eventID, segment, runID); err != nil {
 		t.Fatal(err)
 	}
 	fixture.Service.PublishSettledClips(ctx)
@@ -1358,7 +1501,10 @@ func TestClipNeverConcatenatesAPreviousClip(t *testing.T) {
 	if err := os.MkdirAll(ring, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	base := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Second)
+	// Near now, and the window's close is pushed ahead of the fragments each pass
+	// (see below): an open window re-cuts, a closed one only settles, and this test
+	// is about re-cutting.
+	base := time.Now().UTC().Add(-10 * time.Second).Truncate(time.Second)
 	writeFragment := func(offset int) {
 		start := base.Add(time.Duration(offset) * time.Second)
 		path := filepath.Join(ring, start.In(time.Local).Format("2006-01-02-15-04-05")+"-0.mp4")
@@ -1378,10 +1524,7 @@ func TestClipNeverConcatenatesAPreviousClip(t *testing.T) {
 		VALUES($1,$2,'frigate','evt-generations','person',0.5,'[]',$3,'gone','pending','{}')`, eventID, fixture.Channel, base); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end,state)
-		VALUES($1,$2,$3,$4,'queued')`, eventID, fixture.Channel, base, base.Add(6*time.Second)); err != nil {
-		t.Fatal(err)
-	}
+	seedClipJob(ctx, t, fixture.DB, eventID, fixture.Channel, base, base.Add(6*time.Second), "queued")
 
 	// Four passes, each adding two fragments and evicting the oldest — exactly what
 	// a two-minute event does to a thirty-second ring.
@@ -1389,7 +1532,12 @@ func TestClipNeverConcatenatesAPreviousClip(t *testing.T) {
 		writeFragment(pass * 6)
 		writeFragment(pass*6 + 3)
 		if pass > 0 {
-			if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET state='queued',window_end=$2 WHERE event_id=$1`, eventID, base.Add(time.Duration(pass*6+6)*time.Second)); err != nil {
+			windowEnd := base.Add(time.Duration(pass*6+6) * time.Second)
+			if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE clip_windows SET state='open',window_end=$2
+				WHERE id=(SELECT window_id FROM event_clip_jobs WHERE event_id=$1)`, eventID, windowEnd); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET state='queued',window_end=$2 WHERE event_id=$1`, eventID, windowEnd); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -1506,9 +1654,14 @@ func TestAbandonedClipJobIsRequeued(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A claim from a worker that is gone: 'running', last touched long ago.
-	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end,state,updated_at)
-		VALUES($1,$2,clock_timestamp()-interval '5 minutes',clock_timestamp()-interval '4 minutes','running',clock_timestamp()-interval '10 minutes')`,
-		eventID, fixture.Channel); err != nil {
+	staleWindow := seedClipJob(ctx, t, fixture.DB, eventID, fixture.Channel,
+		time.Now().UTC().Add(-5*time.Minute), time.Now().UTC().Add(-4*time.Minute), "running")
+	// Both rows must look abandoned: the sweep fences on updated_at, and the job
+	// row is the one this test reads back.
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE clip_windows SET state='finalizing',updated_at=clock_timestamp()-interval '10 minutes' WHERE id=$1`, staleWindow); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE event_clip_jobs SET updated_at=clock_timestamp()-interval '10 minutes' WHERE event_id=$1`, eventID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1612,10 +1765,7 @@ func TestEmptyWindowStaysRetryableForARecentEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end,state)
-		VALUES($1,$2,$3,$4,'queued')`, recent, fixture.Channel, now.Add(-15*time.Second), now); err != nil {
-		t.Fatal(err)
-	}
+	seedClipJob(ctx, t, fixture.DB, recent, fixture.Channel, now.Add(-15*time.Second), now, "queued")
 
 	fixture.Service.AssembleClips(ctx)
 
@@ -1634,10 +1784,7 @@ func TestEmptyWindowStaysRetryableForARecentEvent(t *testing.T) {
 		VALUES($1,$2,'frigate','evt-old','person',0.5,'[]',clock_timestamp()-interval '30 minutes','gone','unavailable','{}')`, old, fixture.Channel); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end,state)
-		VALUES($1,$2,$3,$4,'queued')`, old, fixture.Channel, now.Add(-31*time.Minute), now.Add(-30*time.Minute)); err != nil {
-		t.Fatal(err)
-	}
+	seedClipJob(ctx, t, fixture.DB, old, fixture.Channel, now.Add(-31*time.Minute), now.Add(-30*time.Minute), "queued")
 	fixture.Service.AssembleClips(ctx)
 	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state FROM event_clip_jobs WHERE event_id=$1`, old).Scan(&state); err != nil {
 		t.Fatal(err)
@@ -1693,4 +1840,214 @@ func TestQuarantinedSegmentCanBeReclaimed(t *testing.T) {
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		t.Fatal("the quarantined file is still on disk after a successful deletion")
 	}
+}
+
+// One stretch of activity is ONE recording, even when the detector reports it as
+// several events.
+//
+// The detector ends an event when it stops recognising the subject — routinely
+// while the person is still walking out — and starts a new one when it sees them
+// again. Measured on this site, 67 of 162 six-hour activity stretches arrived as
+// two or more events, up to six. Each produced its own clip, so one visit to the
+// driveway is several files with unwatched time between them.
+//
+// The rule the operator stated: a recording is planned to close at `event end +
+// trail`; an event arriving BEFORE that closes it moves the close out to its own
+// `end + trail`, repeatedly. The recording is the subject; events are anchors on
+// it.
+func TestOneActivityStretchProducesOneClip(t *testing.T) {
+	ffmpeg := mediaTestTool(t, "ffmpeg")
+	ffprobe := mediaTestTool(t, "ffprobe")
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	cache := t.TempDir()
+	fixture.Service.EventCacheDir = cache
+	fixture.Service.EventCacheBytes = 512 << 20
+	fixture.Service.Probe = probe.Runner{FFmpeg: ffmpeg, FFprobe: ffprobe}
+
+	ring := filepath.Join(cache, "events", string(fixture.Channel))
+	if err := os.MkdirAll(ring, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Realtime: the events arrive now, so their windows' closes are in the future
+	// and an arriving event extends the open one. Placing them a minute in the past
+	// would make every window already closed, and the test would be asserting the
+	// wrong branch — that case is TestEventsFarApartStaySeparateClips.
+	base := time.Now().UTC().Add(-8 * time.Second).Truncate(time.Second)
+	// Nine seconds of continuous footage: one visit, two events.
+	for offset := 0; offset < 9; offset += 3 {
+		start := base.Add(time.Duration(offset) * time.Second)
+		name := start.In(time.Local).Format("2006-01-02-15-04-05") + "-0.mp4"
+		path := filepath.Join(ring, name)
+		if err := exec.Command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+			"-f", "lavfi", "-i", "testsrc2=size=160x90:rate=5", "-t", "3",
+			"-c:v", "libx264", "-threads", "1", "-y", path).Run(); err != nil {
+			t.Fatal("synthetic fragment creation failed", err)
+		}
+		end := start.Add(3 * time.Second)
+		if err := os.Chtimes(path, end, end); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Event A: 0-5s. Event B: 8-12s — inside A's trail window (5s + 10s trail
+	// reaches 15s), so the recording must be extended rather than restarted.
+	first := mustID(t)
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO events(id,channel_id,source,source_id,category,score,zones,started_at,ended_at,snapshot_state,media_state,raw)
+		VALUES($1,$2,'frigate','evt-a','person',0.5,'[]',$3,$4,'gone','unavailable','{}')`,
+		first, fixture.Channel, base, base.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	second := mustID(t)
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO events(id,channel_id,source,source_id,category,score,zones,started_at,ended_at,snapshot_state,media_state,raw)
+		VALUES($1,$2,'frigate','evt-b','person',0.5,'[]',$3,$4,'gone','unavailable','{}')`,
+		second, fixture.Channel, base.Add(5*time.Second), base.Add(8*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	// Attach both through the same path the detector uses.
+	for _, item := range []struct {
+		id    id.ID
+		start time.Time
+		end   time.Time
+	}{
+		{first, base, base.Add(2 * time.Second)},
+		{second, base.Add(5 * time.Second), base.Add(8 * time.Second)},
+	} {
+		end := item.end
+		if err := fixture.Service.QueueClipWindow(ctx, item.id, fixture.Channel, item.start, &end); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The window's close is in the future (trail after the last event), so move it
+	// into the past to let the assembler treat the recording as finished. Scoped to
+	// this channel: an unqualified UPDATE would also rewrite the very windows this
+	// test is counting.
+	// Make the recording look finished so the assembler will publish it, without
+	// shrinking it below the footage: the close moves to one second after the last
+	// fragment's end, which is in the past. The table's CHECK forbids
+	// window_end <= window_start, and a real close is always after it.
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE clip_windows
+		SET window_end = window_start + interval '11 seconds'
+		WHERE channel_id=$1`, fixture.Channel); err != nil {
+		t.Fatal(err)
+	}
+	fixture.Service.AssembleClips(ctx)
+
+	var runs int
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT count(DISTINCT run_id) FROM recording_segments
+		WHERE channel_id=$1 AND run_id IN (SELECT clip_run_id FROM clip_windows WHERE channel_id=$1)`, fixture.Channel).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if runs != 1 {
+		var detail string
+		_ = fixture.DB.Pool.QueryRow(ctx, `SELECT string_agg(id::text||' '||window_start::text||' .. '||window_end::text||' '||state, ' | ' ORDER BY window_start)
+			FROM clip_windows WHERE channel_id=$1`, fixture.Channel).Scan(&detail)
+		t.Fatalf("one visit produced %d clips, want 1: the second event arrived inside the first recording's trail window; windows: %s", runs, detail)
+	}
+}
+
+// Two visits far apart stay two recordings. The rule above must not merge
+// everything a channel ever recorded into one file.
+func TestEventsFarApartStaySeparateClips(t *testing.T) {
+	ffmpeg := mediaTestTool(t, "ffmpeg")
+	ffprobe := mediaTestTool(t, "ffprobe")
+	fixture := scheduledFixture(t)
+	ctx := context.Background()
+	cache := t.TempDir()
+	fixture.Service.EventCacheDir = cache
+	fixture.Service.EventCacheBytes = 512 << 20
+	fixture.Service.Probe = probe.Runner{FFmpeg: ffmpeg, FFprobe: ffprobe}
+
+	ring := filepath.Join(cache, "events", string(fixture.Channel))
+	if err := os.MkdirAll(ring, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().UTC().Add(-180 * time.Second).Truncate(time.Second)
+	writeAt := func(offset int) {
+		start := base.Add(time.Duration(offset) * time.Second)
+		name := start.In(time.Local).Format("2006-01-02-15-04-05") + "-0.mp4"
+		path := filepath.Join(ring, name)
+		if err := exec.Command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+			"-f", "lavfi", "-i", "testsrc2=size=160x90:rate=5", "-t", "3",
+			"-c:v", "libx264", "-threads", "1", "-y", path).Run(); err != nil {
+			t.Fatal(err)
+		}
+		end := start.Add(3 * time.Second)
+		if err := os.Chtimes(path, end, end); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Footage for each visit, plus a 120-second gap between them.
+	writeAt(0)
+	writeAt(120)
+
+	first := mustID(t)
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO events(id,channel_id,source,source_id,category,score,zones,started_at,ended_at,snapshot_state,media_state,raw)
+		VALUES($1,$2,'frigate','evt-far-a','person',0.5,'[]',$3,$4,'gone','unavailable','{}')`,
+		first, fixture.Channel, base, base.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	second := mustID(t)
+	if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO events(id,channel_id,source,source_id,category,score,zones,started_at,ended_at,snapshot_state,media_state,raw)
+		VALUES($1,$2,'frigate','evt-far-b','person',0.5,'[]',$3,$4,'gone','unavailable','{}')`,
+		second, fixture.Channel, base.Add(120*time.Second), base.Add(123*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []struct {
+		id    id.ID
+		start time.Time
+		end   time.Time
+	}{
+		{first, base, base.Add(3 * time.Second)},
+		{second, base.Add(120 * time.Second), base.Add(123 * time.Second)},
+	} {
+		end := item.end
+		if err := fixture.Service.QueueClipWindow(ctx, item.id, fixture.Channel, item.start, &end); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE clip_windows
+		SET window_end = window_start + interval '1 second'
+		WHERE channel_id=$1`, fixture.Channel); err != nil {
+		t.Fatal(err)
+	}
+	fixture.Service.AssembleClips(ctx)
+
+	var windows int
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM clip_windows WHERE channel_id=$1`, fixture.Channel).Scan(&windows); err != nil {
+		t.Fatal(err)
+	}
+	if windows != 2 {
+		t.Fatalf("two visits two minutes apart produced %d windows, want 2", windows)
+	}
+}
+
+// seedClipJob inserts an event_clip_jobs row together with the clip_windows row it
+// now belongs to.
+//
+// Since migration 0050 a job is an anchor on a recording window: window_id is NOT
+// NULL, and the assembler reads clip_windows. Tests that used to insert a job
+// directly have to create its window first — the job alone is no longer a unit of
+// work.
+func seedClipJob(ctx context.Context, t *testing.T, db *database.DB, eventID, channelID id.ID, from, to time.Time, state string) id.ID {
+	t.Helper()
+	windowID := mustID(t)
+	windowState := "open"
+	switch state {
+	case "done":
+		windowState = "done"
+	case "failed":
+		windowState = "failed"
+	case "growing":
+		windowState = "finalizing"
+	}
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO clip_windows(id,channel_id,window_start,window_end,state)
+		VALUES($1,$2,$3,$4,$5)`, windowID, channelID, from, to, windowState); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO event_clip_jobs(event_id,channel_id,window_start,window_end,state,window_id)
+		VALUES($1,$2,$3,$4,$5,$6)`, eventID, channelID, from, to, state, windowID); err != nil {
+		t.Fatal(err)
+	}
+	return windowID
 }

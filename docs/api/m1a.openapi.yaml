@@ -547,6 +547,16 @@
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 3650
+                  },
+                  "event_clip_lead_seconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 60
+                  },
+                  "event_clip_trail_seconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 120
                   }
                 },
                 "required": [],
@@ -3133,6 +3143,18 @@
             "maximum": 3650,
             "description": "Local retention period in days. 0 (default) disables automatic deletion entirely, so an upgraded site keeps every recording until an administrator sets a period. Retention never removes protected recordings."
           },
+          "event_clip_lead_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 60,
+            "description": "How many seconds of footage before the first detection an event recording starts. Site-wide because the question is the operator's tolerance, not one camera's."
+          },
+          "event_clip_trail_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 120,
+            "description": "How many seconds after the last detection an event recording keeps running. A new event arriving inside this window extends the same recording instead of starting another."
+          },
           "version": {
             "$ref": "#/components/schemas/Version"
           }
@@ -3144,6 +3166,8 @@
           "channel_count",
           "require_storage_write_proof",
           "recording_retention_days",
+          "event_clip_lead_seconds",
+          "event_clip_trail_seconds",
           "version"
         ],
         "additionalProperties": false

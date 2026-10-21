@@ -50,6 +50,8 @@ function fixture(
         timezone: 'Asia/Shanghai',
         channel_count: 16,
         require_storage_write_proof: !requireProof,
+        event_clip_lead_seconds: 5,
+        event_clip_trail_seconds: 10,
         recording_retention_days: 0,
         version: 2,
       } satisfies Schema<'Site'>
@@ -61,6 +63,8 @@ function fixture(
         timezone: 'Asia/Shanghai',
         channel_count: 16,
         require_storage_write_proof: requireProof,
+        event_clip_lead_seconds: 5,
+        event_clip_trail_seconds: 10,
         recording_retention_days: 0,
         version: 1,
       } satisfies Schema<'Site'>
