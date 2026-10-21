@@ -18,6 +18,8 @@ export type MediaElement = {
   src: string
   currentTime: number
   playbackRate: number
+  /** NaN until metadata arrives; the prefetch reads it to find the end. */
+  duration: number
   error?: { code?: number } | null
   play(): Promise<void>
   pause(): void
