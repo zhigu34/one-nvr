@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { configuredChannels } from '@/features/foundation/channels'
 import { Link } from '@tanstack/react-router'
 import {
   Loader2,
@@ -341,7 +342,7 @@ function LiveWorkspace({
   userID: string
   initialChannel?: string
 }) {
-  const channels = items.filter((c) => c.permissions.includes('live'))
+  const channels = configuredChannels(items.filter((c) => c.permissions.includes('live')))
   const storageKey = `one-nvr:live-view:${userID}`
   const [view, setView] = useState<View>(() => {
     let raw: string | null = null

@@ -20,6 +20,7 @@ const channel: Schema<'Channel'> = {
   enabled: true,
   version: 3,
   permissions: ['configure'],
+  configured: true,
 }
 const revision: Schema<'SourceRevision'> = {
   id: '00000000-0000-4000-8000-000000000010',

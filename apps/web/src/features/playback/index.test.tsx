@@ -40,6 +40,7 @@ const channels: Schema<'Channel'>[] = [
     // Export is its own grant (EXP): the player bar's control only exists for a
     // channel the operator may actually export from.
     permissions: ['playback', 'export'],
+    configured: true,
   },
   {
     id: 'channel-2',
@@ -49,6 +50,7 @@ const channels: Schema<'Channel'>[] = [
     enabled: true,
     version: 1,
     permissions: ['live'],
+    configured: true,
   },
 ]
 

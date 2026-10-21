@@ -351,7 +351,7 @@ test('a channel row reports its binding, coverage and failures', async () => {
         local_retention_hours: 48,
       },
     ],
-    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门' }],
+    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门', configured: true }],
     policies: [{ channel_id: 'c1', target_id: 't1', mode: 'immediate', schedule: '' }],
   })
   await expect.element(page.getByText('CH01 前门')).toBeVisible()
@@ -381,7 +381,7 @@ test('a channel with nothing archived says so instead of showing zeroes', async 
         local_retention_hours: 0,
       },
     ],
-    channels: [{ id: 'c2', channel_no: 2, channel_name: '后门' }],
+    channels: [{ id: 'c2', channel_no: 2, channel_name: '后门', configured: true }],
   })
   await expect.element(page.getByText('未归档').first()).toBeVisible()
   expect(page.getByText('0/0').query()).toBeNull()
@@ -408,7 +408,7 @@ test('an unbound channel shows its local footage without faking a ratio', async 
         local_retention_hours: 48,
       },
     ],
-    channels: [{ id: 'c3', channel_no: 3, channel_name: '后门-左' }],
+    channels: [{ id: 'c3', channel_no: 3, channel_name: '后门-左', configured: true }],
   })
   await expect.element(page.getByText('未归档').first()).toBeVisible()
   // The footage is stated, so the row is not a blank.
@@ -424,8 +424,8 @@ test('the policy table is read only and one line per channel', async () => {
   const page = await setup({
     targets: [TARGET],
     channels: [
-      { id: 'c1', channel_no: 1, channel_name: '前门-左上' },
-      { id: 'c2', channel_no: 2, channel_name: '前门-右上' },
+      { id: 'c1', channel_no: 1, channel_name: '前门-左上', configured: true },
+      { id: 'c2', channel_no: 2, channel_name: '前门-右上', configured: true },
     ],
   })
   await expect.element(page.getByTestId('archive-target-row')).toBeVisible()
@@ -449,7 +449,7 @@ test('the policy table is read only and one line per channel', async () => {
 test('the always-on mode is named for what it does', async () => {
   const page = await setup({
     targets: [{ id: 't1', name: 'Openlist', enabled: true, username: 'admin' }],
-    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左' }],
+    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左', configured: true }],
   })
   await expect.element(page.getByTestId('archive-target-row')).toBeVisible()
   await userEvent.click(page.getByLabelText('上传模式'))
@@ -464,7 +464,7 @@ test('the target list comes before the per-channel policy table', async () => {
   const page = await setup({
     targets: [{ id: 't1', name: 'Openlist', enabled: true, username: 'admin' }],
     statuses: [{ target_id: 't1', verified: 1, uploading: 0, failed: 0 }],
-    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左' }],
+    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左', configured: true }],
   })
   await expect.element(page.getByTestId('archive-target-row')).toBeVisible()
   const row = page.getByTestId('archive-target-row').element()
@@ -477,7 +477,7 @@ test('the target list comes before the per-channel policy table', async () => {
 test('applying a scheduled policy without a time names the missing field', async () => {
   const page = await setup({
     targets: [{ id: 't1', name: 'Openlist', enabled: true, username: 'admin' }],
-    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左' }],
+    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左', configured: true }],
   })
   await expect.element(page.getByTestId('archive-target-row')).toBeVisible()
   await expect.element(page.getByText('CH01 前门-左')).toBeVisible()
@@ -543,7 +543,7 @@ test('a bound channel with footage outstanding offers 立即上传', async () =>
       },
     ],
     policies: [{ channel_id: 'c1', target_id: 't1', mode: 'scheduled', schedule: '02:00-06:00' }],
-    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左' }],
+    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左', configured: true }],
   })
   await expect.element(page.getByRole('button', { name: '立即上传' })).toBeVisible()
 })
@@ -560,7 +560,7 @@ test('a fully archived channel gets no 立即上传 button', async () => {
       },
     ],
     policies: [{ channel_id: 'c1', target_id: 't1', mode: 'immediate', schedule: '' }],
-    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左' }],
+    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左', configured: true }],
   })
   await expect.element(page.getByText('10/10')).toBeVisible()
   expect(page.getByRole('button', { name: '立即上传' }).query()).toBeNull()
@@ -578,7 +578,7 @@ test('立即上传 queues the unarchived segments through the existing endpoint'
       },
     ],
     policies: [{ channel_id: 'c1', target_id: 't1', mode: 'scheduled', schedule: '02:00-06:00' }],
-    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左' }],
+    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左', configured: true }],
     recordings: [
       { id: 's1', state: 'ready', archived: false },
       { id: 's2', state: 'ready', archived: true },
@@ -598,7 +598,7 @@ test('立即上传 queues the unarchived segments through the existing endpoint'
       },
     ],
     policies: [{ channel_id: 'c1', target_id: 't1', mode: 'scheduled', schedule: '02:00-06:00' }],
-    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左' }],
+    channels: [{ id: 'c1', channel_no: 1, channel_name: '前门-左', configured: true }],
   }
   calls.request.mockClear()
   calls.request.mockImplementation(async (path: string, init?: RequestInit) => {

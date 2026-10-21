@@ -84,6 +84,7 @@ function fixture(
             enabled: true,
             version: 1,
             permissions: ['playback', 'configure'],
+            configured: true,
           },
         ],
         next_cursor: null,

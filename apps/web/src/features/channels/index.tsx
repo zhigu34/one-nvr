@@ -331,6 +331,7 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
               enabled: channel.enabled,
               version: channel.version,
               permissions: channel.permissions,
+              configured: channel.current_revision_id != null,
             }))}
             initialBatch={initialBatch}
           />

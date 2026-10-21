@@ -60,6 +60,7 @@ function fixture(rules: Schema<'DetectionRule'>[] = [], zones: Schema<'Detection
             enabled: true,
             version: 1,
             permissions: ['configure'],
+            configured: true,
           },
         ],
         next_cursor: null,
@@ -264,7 +265,7 @@ test('a rule can be bound to notification channels, and none means record only',
       return { items: [{ id: 'rule-1', channel_id: channelID, name: '门口进入', kind: 'appear', categories: ['person'] }] }
     if (path.startsWith('/api/v1/detection/zones?')) return { items: [] }
     if (path.startsWith('/api/v1/channels?'))
-      return { items: [{ id: channelID, channel_no: 1, channel_name: '大门', channel_group: '', enabled: true, version: 1, permissions: ['configure'] }], next_cursor: null }
+      return { items: [{ id: channelID, channel_no: 1, channel_name: '大门', channel_group: '', enabled: true, version: 1, permissions: ['configure'], configured: true }], next_cursor: null }
     if (path === '/api/v1/notification-channels')
       return {
         items: [

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { configuredChannels } from '@/features/foundation/channels'
 import { useQueryClient } from '@tanstack/react-query'
 import { apiRequest } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
@@ -91,8 +92,8 @@ export function Detection() {
     () => new Map((configs.data?.items || []).map((config) => [config.channel_id ?? '', config])),
     [configs.data]
   )
-  const permitted = (channels.data?.items || []).filter((channel) =>
-    channel.permissions.includes('configure')
+  const permitted = configuredChannels(
+    (channels.data?.items || []).filter((channel) => channel.permissions.includes('configure'))
   )
   // Only a channel the server will accept can be selected: applying to an
   // unconfigured channel wastes a round trip and reports a failure the operator

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { configuredChannels } from '@/features/foundation/channels'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
@@ -183,8 +184,10 @@ export function Playback({
     active && !providedChannels
   )
   const site = useAPI<Schema<'Site'>>('/api/v1/site', active)
-  const filtered = (providedChannels ?? channelsQuery.data?.items ?? []).filter(
-    (channel) => channel.permissions.includes('playback')
+  const filtered = configuredChannels(
+    (providedChannels ?? channelsQuery.data?.items ?? []).filter((channel) =>
+      channel.permissions.includes('playback')
+    )
   )
   const channels = filtered
   // The site zone is never assumed: every clock in this page is derived from it,

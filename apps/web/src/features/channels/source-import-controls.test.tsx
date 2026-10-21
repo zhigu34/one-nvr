@@ -19,6 +19,7 @@ const channel: Schema<'Channel'> = {
   enabled: true,
   version: 4,
   permissions: ['configure'],
+  configured: true,
 }
 test('file preview sends multipart and does not submit or test until explicitly selected', async () => {
   const row: Schema<'ImportItem'> = {

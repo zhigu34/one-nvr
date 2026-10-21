@@ -37,6 +37,7 @@ function mockCommon() {
             enabled: true,
             version: 1,
             permissions: ['playback'],
+            configured: true,
           },
           {
             id: CH2,
@@ -46,6 +47,7 @@ function mockCommon() {
             enabled: true,
             version: 1,
             permissions: ['playback'],
+            configured: true,
           },
         ],
         next_cursor: null,

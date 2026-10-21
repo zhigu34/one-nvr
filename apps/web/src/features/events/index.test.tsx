@@ -7,6 +7,7 @@ import {
 } from '@tanstack/react-router'
 import { afterEach, expect, test, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
+import { userEvent } from 'vitest/browser'
 import { useAuthStore } from '@/stores/auth-store'
 import type { PageData, Schema } from '@/lib/types'
 import { Events } from './index'
@@ -93,6 +94,7 @@ function fixture(
             enabled: true,
             version: 1,
             permissions: ['playback', 'configure'],
+            configured: true,
           },
         ],
         next_cursor: null,
@@ -126,6 +128,49 @@ const view = async (client: QueryClient) => {
   })
   return render(<RouterProvider router={router} />)
 }
+
+// A reserved slot with no camera behind it is setup context, not an option. Every
+// page except channel management hides them, and the server refuses to stream from
+// one, so offering it in a filter would only produce an empty result.
+test('the channel filter lists configured channels only', async () => {
+  calls.request.mockImplementation(async (path: string) => {
+    if (path === '/api/v1/site') return { timezone: 'Asia/Shanghai', site_name: '测试站点' }
+    if (path.startsWith('/api/v1/channels?'))
+      return {
+        items: [
+          {
+            id: channelID,
+            channel_no: 5,
+            channel_name: '大门',
+            channel_group: '',
+            enabled: true,
+            version: 1,
+            permissions: ['playback', 'configure'],
+            configured: true,
+          },
+          {
+            id: '00000000-0000-4000-8000-0000000000f1',
+            channel_no: 6,
+            channel_name: '空槽位',
+            channel_group: '',
+            enabled: true,
+            version: 1,
+            permissions: ['playback', 'configure'],
+            configured: false,
+          },
+        ],
+        next_cursor: null,
+      } satisfies PageData<Schema<'Channel'>>
+    if (path.startsWith('/api/v1/events?')) return { items: [], next_cursor: null }
+    return {}
+  })
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const page = await view(client)
+  await userEvent.click(page.getByLabelText('通道筛选').element())
+  // The configured channel is offered; the empty slot is not.
+  await expect.element(page.getByRole('option', { name: /CH05 大门/ })).toBeVisible()
+  expect(page.getByRole('option', { name: /空槽位/ }).elements()).toHaveLength(0)
+})
 
 test('an event shows which rules it tripped and why', async () => {
   const { client } = fixture([

@@ -56,6 +56,7 @@ async function fixture(initialChannel = '') {
       channel_name: `通道 ${index + 1}`,
       version: 1,
       permissions: index === 31 ? ['playback'] : ['live'],
+      configured: true,
     })),
     next_cursor: null,
   })

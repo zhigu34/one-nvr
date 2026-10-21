@@ -23,6 +23,7 @@ const channel: Schema<'Channel'> = {
   enabled: true,
   version: 1,
   permissions: ['export', 'playback'],
+  configured: true,
 }
 
 const analysis: Schema<'RecordingExportAnalysis'> = {

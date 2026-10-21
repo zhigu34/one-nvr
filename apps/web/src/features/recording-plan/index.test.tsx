@@ -30,7 +30,8 @@ const channel: Schema<'Channel'> = {
   enabled: true,
   version: 4,
   permissions: ['configure'],
-}
+  configured: true,
+  }
 const peer: Schema<'Channel'> = {
   ...channel,
   id: '00000000-0000-4000-8000-000000000002',

@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Checkbox } from '@/components/ui/checkbox'
+import { configuredChannels } from '@/features/foundation/channels'
 import { useAPI } from '@/features/foundation/hooks'
 import { apiErrorText } from '@/features/foundation/api-errors'
 import { Empty, Notices, QueryState, SelectField } from '@/features/foundation/ui'
@@ -474,7 +475,7 @@ export function ArchiveTargets() {
           the table asks "where does this channel go". */}
       {admin && !!targets.data?.items.length && (
         <ArchivePlan
-          channels={channels.data?.items || []}
+          channels={configuredChannels(channels.data?.items || [])}
           targets={targets.data?.items || []}
           policies={policies.data?.items || []}
           statuses={channelStatus.data?.items || []}

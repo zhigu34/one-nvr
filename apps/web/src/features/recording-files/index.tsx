@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { configuredChannels } from '@/features/foundation/channels'
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, CloudOff, Download, Play, Shield, ShieldOff, Trash2, X } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth-store'
@@ -127,8 +128,8 @@ export function RecordingFiles({
   const [outcomes, setOutcomes] = useState<Outcome[] | null>(null)
   const action = useAction()
 
-  const permitted = (channels.data?.items || []).filter((entry) =>
-    entry.permissions.includes('playback')
+  const permitted = configuredChannels(
+    (channels.data?.items || []).filter((entry) => entry.permissions.includes('playback'))
   )
   const activeChannel = controlledChannelId || initialChannel || permitted[0]?.id || ''
   const exportable = permitted.find(

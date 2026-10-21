@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
+import { configuredChannels } from '@/features/foundation/channels'
 import { useAPI } from '@/features/foundation/hooks'
 import { apiErrorText } from '@/features/foundation/api-errors'
 import { LoadingButton } from '@/features/foundation/loading-button'
@@ -67,7 +68,7 @@ export function RulePanel({ channelID, onChanged }: { channelID: string; onChang
     !!channelID
   )
   const channels = useAPI<PageData<Channel>>('/api/v1/channels?limit=100')
-  const permitted = (channels.data?.items || []).some(
+  const permitted = configuredChannels(channels.data?.items || []).some(
     (channel) => channel.id === channelID && channel.permissions.includes('configure')
   )
   // Enabled destinations only: the server skips a disabled channel at raise

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { configuredChannels } from '@/features/foundation/channels'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { AlertTriangle, CheckCheck, Clock, ImageOff, Loader2, Play, User, VideoOff } from 'lucide-react'
@@ -156,8 +157,8 @@ export function Events() {
   const zone = site.data?.timezone || ''
   const active = !!zone
   const channels = useAPI<PageData<Channel>>('/api/v1/channels?limit=100', active)
-  const permitted = (channels.data?.items || []).filter((channel) =>
-    channel.permissions.includes('playback')
+  const permitted = configuredChannels(
+    (channels.data?.items || []).filter((channel) => channel.permissions.includes('playback'))
   )
   const channelOf = new Map(
     permitted.map((channel) => [channel.id ?? '', channel])

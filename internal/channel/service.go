@@ -24,6 +24,12 @@ type Channel struct {
 	Permissions  []auth.Action `json:"permissions"`
 	// RecordingQuotaBytes 0 means no per-channel quota.
 	RecordingQuotaBytes int64 `json:"recording_quota_bytes"`
+	// Configured reports whether an applied camera source exists. It is computed
+	// here, in the same query that lists the channels, so every page filters on the
+	// same fact instead of re-deriving it from summary fields — the pages that
+	// hide unconfigured channels must agree with each other and with the server's
+	// own refusal to stream from a channel that has no source.
+	Configured bool `json:"configured"`
 }
 type Page struct {
 	Items      []Channel `json:"items"`
@@ -109,7 +115,7 @@ func (s *Service) List(ctx context.Context, p auth.Principal, cursor id.ID, limi
 			return out, err
 		}
 	}
-	rows, err := s.DB.Pool.Query(ctx, `SELECT c.id,c.channel_no,c.channel_name,c.channel_group,c.enabled,c.version,c.recording_quota_bytes,g.live,g.playback,g.export,g.configure,g.archive FROM channels c JOIN channel_grants g ON g.channel_id=c.id WHERE g.user_id=$1 AND c.channel_no>$2 AND (g.live OR g.playback OR g.export OR g.archive OR (g.configure AND $3<>'viewer')) ORDER BY c.channel_no LIMIT $4`, p.UserID, from, u.Role, limit+1)
+	rows, err := s.DB.Pool.Query(ctx, `SELECT c.id,c.channel_no,c.channel_name,c.channel_group,c.enabled,c.version,c.recording_quota_bytes,g.live,g.playback,g.export,g.configure,g.archive,c.current_revision_id IS NOT NULL FROM channels c JOIN channel_grants g ON g.channel_id=c.id WHERE g.user_id=$1 AND c.channel_no>$2 AND (g.live OR g.playback OR g.export OR g.archive OR (g.configure AND $3<>'viewer')) ORDER BY c.channel_no LIMIT $4`, p.UserID, from, u.Role, limit+1)
 	if err != nil {
 		return out, err
 	}
@@ -117,7 +123,7 @@ func (s *Service) List(ctx context.Context, p auth.Principal, cursor id.ID, limi
 	for rows.Next() {
 		var c Channel
 		var live, playback, export, configure, archive bool
-		if err := rows.Scan(&c.ID, &c.ChannelNo, &c.ChannelName, &c.ChannelGroup, &c.Enabled, &c.Version, &c.RecordingQuotaBytes, &live, &playback, &export, &configure, &archive); err != nil {
+		if err := rows.Scan(&c.ID, &c.ChannelNo, &c.ChannelName, &c.ChannelGroup, &c.Enabled, &c.Version, &c.RecordingQuotaBytes, &live, &playback, &export, &configure, &archive, &c.Configured); err != nil {
 			return out, err
 		}
 		c.Permissions = permissions(u.Role, live, playback, export, configure, archive)

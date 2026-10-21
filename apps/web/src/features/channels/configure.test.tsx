@@ -39,7 +39,7 @@ function summary(
     enabled: true,
     version: 1,
     permissions: ['configure', 'playback'],
-    current_revision_id: null,
+        current_revision_id: null,
     main: observation,
     sub: observation,
     recording: { ...observation, state: 'disabled' },

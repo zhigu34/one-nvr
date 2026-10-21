@@ -1999,6 +1999,8 @@ export interface components {
             permissions: ("live" | "playback" | "export" | "configure" | "archive")[];
             /** @description Per-channel recording quota in bytes; 0 means no quota. Housekeeping limit, not a filesystem quota. */
             recording_quota_bytes?: number;
+            /** @description Whether an applied camera source exists. Only channel management lists unconfigured slots; every other page hides them, and the server refuses to stream from a channel with no source, so this is the same fact the API acts on. */
+            configured: boolean;
         };
         SetupInput: {
             token: string;

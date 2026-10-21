@@ -3213,6 +3213,10 @@
             "type": "integer",
             "minimum": 0,
             "description": "Per-channel recording quota in bytes; 0 means no quota. Housekeeping limit, not a filesystem quota."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Whether an applied camera source exists. Only channel management lists unconfigured slots; every other page hides them, and the server refuses to stream from a channel with no source, so this is the same fact the API acts on."
           }
         },
         "required": [
@@ -3222,7 +3226,8 @@
           "channel_group",
           "enabled",
           "version",
-          "permissions"
+          "permissions",
+          "configured"
         ],
         "additionalProperties": false
       },
