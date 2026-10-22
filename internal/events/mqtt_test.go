@@ -176,3 +176,69 @@ func TestMQTTKeepalivePing(t *testing.T) {
 		t.Fatal("an idle stream must just keep waiting", err)
 	}
 }
+
+// Frigate's payloads span more than one TCP segment, and the idle read deadline
+// fires between them. The bytes already consumed must survive that deadline:
+// dropping them resumes the stream in the middle of a frame, and a frame header
+// carries no marker to resynchronise on.
+//
+// Measured on the live site before this test existed: every subscription died
+// within 36–200 seconds, mosquitto logged "Client one-nvr-events has exceeded
+// timeout" because the stuck read loop could not send a PINGREQ, and the events
+// published during each reconnect gap were lost — 30 events in six hours that
+// Frigate held with snapshots and this index never received.
+func TestMQTTContinuesAFrameSplitAcrossTheReadDeadline(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	const payload = `{"type":"new","split":"across-read-deadline"}`
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		reader := bufio.NewReader(conn)
+		for {
+			packetType, body, err := readRawPacket(reader)
+			if err != nil {
+				return
+			}
+			switch packetType >> 4 {
+			case 1: // CONNECT
+				_, _ = conn.Write([]byte{0x20, 0x02, 0x00, 0x00})
+			case 8: // SUBSCRIBE
+				_, _ = conn.Write([]byte{0x90, 0x03, body[0], body[1], 0x00})
+				// Half the frame, a stall longer than the client's read
+				// deadline, then the rest.
+				frame := publishFrame(TopicPrefix, []byte(payload))
+				cut := len(frame) / 2
+				_, _ = conn.Write(frame[:cut])
+				time.Sleep(20 * time.Second)
+				_, _ = conn.Write(frame[cut:])
+			case 12: // PINGREQ
+				_, _ = conn.Write([]byte{0xd0, 0x00})
+			}
+		}
+	}()
+	ctx := context.Background()
+	client, err := Dial(ctx, listener.Addr().String(), "user", "pass", "split-frame")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.Subscribe(ctx, TopicPrefix); err != nil {
+		t.Fatal(err)
+	}
+	wait, cancel := context.WithTimeout(ctx, 40*time.Second)
+	defer cancel()
+	got, err := client.Receive(wait)
+	if err != nil {
+		t.Fatal("a frame split across the read deadline must still be delivered", err)
+	}
+	if string(got) != payload {
+		t.Fatalf("payload = %q, want %q", string(got), payload)
+	}
+}

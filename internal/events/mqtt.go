@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"io"
 	"net"
 	"time"
 )
@@ -39,6 +38,8 @@ type Client struct {
 	// pending holds PUBLISH frames that arrived before the SUBACK; Receive
 	// drains them first so a retained message is never dropped.
 	pending []pendingPublish
+	// partial keeps the bytes of a frame whose read deadline expired midway.
+	partial partialFrame
 }
 
 // Dial performs CONNECT/CONNACK against the broker.
@@ -126,6 +127,30 @@ func (c *Client) Subscribe(ctx context.Context, topic string) error {
 
 type pendingPublish struct{ payload []byte }
 
+// partialFrame is the bytes of one frame that have arrived so far.
+//
+// A read deadline is a liveness signal, not the end of a packet. Frigate's
+// event payloads can span more than one TCP segment, and the read timeout fires
+// between them; if the bytes already consumed were dropped, the stream would
+// resume in the middle of a frame and never resynchronise. Measured on the live
+// site: every session died within 36–200 seconds, the broker logged
+// "Client one-nvr-events has exceeded timeout" because no PINGREQ could get out
+// (the read loop was stuck mid-frame), and every event published in the
+// reconnect gap was lost — 30 events in six hours that Frigate held with
+// snapshots and this index did not have at all.
+type partialFrame struct {
+	active bool
+	header byte
+	length int
+	mult   int
+	digits int
+	cont   bool
+	body   []byte
+	filled int
+}
+
+func (p *partialFrame) reset() { *p = partialFrame{} }
+
 // Receive blocks for the next PUBLISH body, keeping the connection alive with
 // PINGREQ while idle. A clean context cancellation returns ctx.Err().
 func (c *Client) Receive(ctx context.Context) ([]byte, error) {
@@ -141,6 +166,9 @@ func (c *Client) Receive(ctx context.Context) ([]byte, error) {
 		if err != nil {
 			if isTimeout(err) {
 				// Idle: a PINGREQ keeps the broker from dropping the session.
+				// Any bytes of a frame already read stay in c.partial, so the
+				// next read continues that frame instead of skipping into the
+				// middle of it.
 				if time.Since(c.lastPkt) >= keepAlive/2 {
 					if pingErr := c.writePacket(0xc0, nil); pingErr != nil {
 						return nil, ErrMQTTUnavailable
@@ -234,31 +262,60 @@ func (c *Client) writePacket(first byte, body []byte) error {
 	return err
 }
 
+// readPacket returns one whole frame. It is resumable: when a read deadline
+// expires partway through, the bytes consumed so far are kept in c.partial and
+// the next call continues from exactly there. Losing them would desynchronise
+// the stream, because a frame header has no resynchronisation marker.
+//
+// Header errors are only reported once a byte is genuinely unavailable for a
+// reason other than a timeout; the caller treats a timeout as "idle" and calls
+// again.
 func (c *Client) readPacket() (byte, []byte, error) {
-	header, err := c.reader.ReadByte()
-	if err != nil {
-		return 0, nil, err
+	p := &c.partial
+	if !p.active {
+		header, err := c.reader.ReadByte()
+		if err != nil {
+			return 0, nil, err
+		}
+		p.active = true
+		p.header = header
+		p.length = 0
+		p.mult = 1
+		p.digits = 0
+		p.body = nil
+		p.filled = 0
 	}
-	length := 0
-	multiplier := 1
-	for range 4 {
+	// Remaining-length field: at most four bytes, each carrying seven bits and
+	// a continuation flag.
+	for p.digits < 4 && (p.digits == 0 || p.cont) {
 		b, err := c.reader.ReadByte()
 		if err != nil {
 			return 0, nil, err
 		}
-		length += int(b&0x7f) * multiplier
-		if b&0x80 == 0 {
+		p.digits++
+		p.length += int(b&0x7f) * p.mult
+		p.cont = b&0x80 != 0
+		if !p.cont {
 			break
 		}
-		multiplier *= 128
+		p.mult *= 128
 	}
-	if length < 0 || length > maxPacket {
+	if p.digits == 0 || p.cont || p.length < 0 || p.length > maxPacket {
+		p.reset()
 		return 0, nil, errMQTTProtocol
 	}
-	body := make([]byte, length)
-	if _, err := io.ReadFull(c.reader, body); err != nil {
-		return 0, nil, err
+	if p.body == nil {
+		p.body = make([]byte, p.length)
 	}
+	for p.filled < p.length {
+		n, err := c.reader.Read(p.body[p.filled:])
+		p.filled += n
+		if err != nil {
+			return 0, nil, err
+		}
+	}
+	header, body := p.header, p.body
+	p.reset()
 	if c.Trace != nil {
 		c.Trace("in", append([]byte{header}, body...))
 	}

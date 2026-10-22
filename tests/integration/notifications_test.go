@@ -563,17 +563,38 @@ func TestReconciliationNeverMovesAnEventBackwards(t *testing.T) {
 
 // When the detector no longer knows the event at all, the honest outcome is a
 // closed event with no picture — not an open one forever.
+//
+// The event is older than SnapshotRetryWindow so the picture verdict is final.
+// Inside that window the detector not knowing the event is not proof there is no
+// image: it drops its own records on a short retention while the bytes may still
+// be on disk, and 'gone' is invisible to the archive sweep.
 func TestReconciliationClosesAnEventTheDetectorNoLongerHas(t *testing.T) {
-	f := newLostEndFixture(t, nil) // every request answers 404
+	f := newNotifyFixture(t)
+	f.mapCamera(t, "front-door")
+	started := float64(time.Now().UTC().Add(-3 * time.Hour).Unix())
+	if err := f.service.Ingest(context.Background(),
+		frigatePayload("new", "evt-dropped", "front-door", "person", started, nil, nil, false)); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+	f.service.Frigate = server.URL
 
 	f.service.ReconcileOpenEvents(context.Background())
 
-	ended, snapshot := f.eventRow(t)
+	var ended *time.Time
+	var snapshot string
+	if err := f.fixture.DB.Pool.QueryRow(context.Background(),
+		`SELECT ended_at,snapshot_state FROM events WHERE source_id='evt-dropped'`).Scan(&ended, &snapshot); err != nil {
+		t.Fatal(err)
+	}
 	if ended == nil {
 		t.Fatal("an event the detector dropped must be closed, not left open")
 	}
 	// "gone" rather than "pending": the UI must stop promising a picture that
-	// nobody can produce.
+	// nobody can produce, and the retry window has passed.
 	if snapshot != "gone" {
 		t.Fatalf("a picture that cannot exist must be marked gone, got %q", snapshot)
 	}
@@ -685,13 +706,18 @@ func TestReconciliationRecoversASnapshotAnnouncedAfterTheEnd(t *testing.T) {
 	}
 }
 
-// The other half of the same case: the detector confirms there is no picture.
-// Leaving the row pending would promise one forever, so it becomes an honest
-// "none" the operator can stop waiting on.
-func TestReconciliationSettlesAClosedEventWithNoPicture(t *testing.T) {
+// The other half of the same case: the detector confirms there is no picture
+// and the retry window has passed, so the row becomes an honest "none" the
+// operator can stop waiting on.
+//
+// The event is placed BEYOND SnapshotRetryWindow on purpose. Inside the window a
+// 404 is not an answer — Frigate writes pictures asynchronously, and a 'gone'
+// verdict is invisible to the archive sweep, so an early one forecloses the only
+// path that could still recover the image. The next test covers that half.
+func TestReconciliationSettlesAClosedEventWithNoPictureAfterTheRetryWindow(t *testing.T) {
 	f := newNotifyFixture(t)
 	f.mapCamera(t, "front-door")
-	started := float64(time.Now().UTC().Add(-20 * time.Minute).Unix())
+	started := float64(time.Now().UTC().Add(-3 * time.Hour).Unix())
 	if err := f.service.Ingest(context.Background(),
 		frigatePayload("new", "evt-no-shot", "front-door", "person", started, nil, nil, false)); err != nil {
 		t.Fatal(err)
@@ -725,6 +751,55 @@ func TestReconciliationSettlesAClosedEventWithNoPicture(t *testing.T) {
 	}
 	if state != "gone" {
 		t.Fatalf("a picture the detector does not have must stop being promised, got %q", state)
+	}
+}
+
+// A 404 seconds after the event is not evidence that no picture exists.
+//
+// Frigate writes snapshots asynchronously, so the image routinely appears after
+// the event's own record stops being updated. Marking 'gone' on the first 404
+// made the verdict permanent: the archive sweep only picks up 'ready', and the
+// reconciliation scan only looked at 'pending', so a picture that arrived a
+// minute later had no route back into the index. The event stays pending until
+// the same window the sweep uses has passed.
+func TestReconciliationKeepsAPicturePendingInsideTheRetryWindow(t *testing.T) {
+	f := newNotifyFixture(t)
+	f.mapCamera(t, "front-door")
+	// Ten minutes old: far past the proportional reconcile gate, well inside the
+	// two-hour window in which Frigate can still produce the image.
+	started := float64(time.Now().UTC().Add(-10 * time.Minute).Unix())
+	if err := f.service.Ingest(context.Background(),
+		frigatePayload("new", "evt-early-404", "front-door", "person", started, nil, nil, false)); err != nil {
+		t.Fatal(err)
+	}
+	ended := started + 60
+	if err := f.service.Ingest(context.Background(),
+		frigatePayload("end", "evt-early-404", "front-door", "person", started, &ended, nil, false)); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/snapshot.jpg") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "evt-early-404", "camera": "front-door", "label": "person",
+			"start_time": started, "end_time": ended, "has_snapshot": false,
+			"data": map[string]any{"score": 0.7},
+		})
+	}))
+	defer server.Close()
+	f.service.Frigate = server.URL
+
+	f.service.ReconcileOpenEvents(context.Background())
+
+	var state string
+	if err := f.fixture.DB.Pool.QueryRow(context.Background(),
+		`SELECT snapshot_state FROM events WHERE source_id='evt-early-404'`).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "pending" {
+		t.Fatalf("a 404 inside the retry window must not settle the picture, got %q", state)
 	}
 }
 

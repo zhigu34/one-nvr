@@ -251,13 +251,10 @@ func TestTerminalSnapshotFailureStopsRetrying(t *testing.T) {
 func TestShortEventsAreReconciledSooner(t *testing.T) {
 	fixture, service := newEventsFixture(t)
 	ctx := context.Background()
-	// A detector that has no picture for anything, so every examined event is
-	// settled as gone. That is what makes "was it examined" observable.
+	// A detector that knows nothing about these events, so a 'gone' verdict is
+	// the only outcome once the wait has passed — which is what makes "was this
+	// examined yet" observable from the row.
 	detector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/snapshot.jpg") {
-			w.WriteHeader(404)
-			return
-		}
 		w.WriteHeader(404)
 	}))
 	defer detector.Close()
@@ -267,8 +264,11 @@ func TestShortEventsAreReconciledSooner(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
-	// A short event that ended 45 seconds ago: past the 30s floor, well inside the
-	// old two-minute gate.
+	// A short event that ended 45 seconds ago: past the proportional gate (30s
+	// for a one-second detection) and well inside the old two-minute one. It is
+	// examined this pass, and the picture keeps its own wait (SnapshotRetryWindow)
+	// — Frigate writes snapshots asynchronously, so a 404 this early is not proof
+	// there is no image.
 	short := mustID(t)
 	if _, err := fixture.DB.Pool.Exec(ctx,
 		`INSERT INTO events(id,channel_id,source,source_id,category,score,zones,started_at,ended_at,snapshot_state,media_state,raw)
@@ -276,8 +276,17 @@ func TestShortEventsAreReconciledSooner(t *testing.T) {
 		short, fixture.Channel, now.Add(-46*time.Second), now.Add(-45*time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	// A long event (five minutes) that also ended 45 seconds ago: its own wait is
-	// the two-minute cap, so it must be left alone.
+	// The same short event, older than the retry window: now the verdict is final
+	// and it becomes gone. This is the observable proof that the sweep reached it.
+	old := mustID(t)
+	if _, err := fixture.DB.Pool.Exec(ctx,
+		`INSERT INTO events(id,channel_id,source,source_id,category,score,zones,started_at,ended_at,snapshot_state,media_state,raw)
+		 VALUES($1,$2,'frigate','short-1-old','person',0.5,'[]',$3,$4,'pending','pending','{}')`,
+		old, fixture.Channel, now.Add(-3*time.Hour-1*time.Second), now.Add(-3*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	// A long event (five minutes) that ended 45 seconds ago: its own wait is the
+	// two-minute cap, so it must be left alone entirely.
 	longFresh := mustID(t)
 	if _, err := fixture.DB.Pool.Exec(ctx,
 		`INSERT INTO events(id,channel_id,source,source_id,category,score,zones,started_at,ended_at,snapshot_state,media_state,raw)
@@ -304,11 +313,16 @@ func TestShortEventsAreReconciledSooner(t *testing.T) {
 		}
 		return state
 	}
-	// The short event was examined and settled: the detector has no picture.
-	if got := stateOf(short); got != "gone" {
-		t.Fatalf("a 1-second event that ended 45s ago is still %q; it is past its 30s wait", got)
+	// A recent short event is examined but keeps waiting for its picture.
+	if got := stateOf(short); got != "pending" {
+		t.Fatalf("a 1-second event that ended 45s ago became %q; the picture keeps its retry window", got)
 	}
-	// The long event was NOT: its own duration puts its wait at the two-minute cap.
+	// Past the window the same event is settled: proof the sweep reached it.
+	if got := stateOf(old); got != "gone" {
+		t.Fatalf("a short event past the retry window is still %q; it must be settled", got)
+	}
+	// The long event was NOT examined: its own duration puts its wait at the
+	// two-minute cap.
 	if got := stateOf(longFresh); got != "pending" {
 		t.Fatalf("a 5-minute event that ended 45s ago became %q; its wait should still be running", got)
 	}

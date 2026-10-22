@@ -161,11 +161,22 @@ func (s *Service) openEvents(ctx context.Context) ([]openEvent, error) {
 			-- It closed but the picture never arrived. The wait is proportional to
 			-- the event's own length: a one-second detection is asked about after
 			-- $1, a five-minute one after $3.
-			OR (ended_at IS NOT NULL AND snapshot_state='pending'
+			--
+			-- 'gone' is included inside the retry window. A 'gone' verdict was once
+			-- reached from a single 404 and then became permanent — invisible to the
+			-- archive sweep, which only looks at 'ready', and to this scan, which
+			-- only looked at 'pending'. Frigate writes pictures asynchronously, so a
+			-- 404 seconds after an event can precede the file by a minute; a row
+			-- marked gone in that gap could never recover the picture even though
+			-- the detector had it. Outside the window the verdict stands.
+			OR (ended_at IS NOT NULL AND (
+					snapshot_state='pending'
+					OR (snapshot_state='gone' AND started_at >= clock_timestamp() - $5::interval)
+				)
 			    AND ended_at < clock_timestamp() - LEAST(GREATEST(ended_at - started_at, $1::interval), $3::interval))
 		)
 		ORDER BY started_at DESC LIMIT $2`,
-		reconcileMinAge.String(), reconcileBatch, reconcileMaxAge.String(), openEventMinAge.String())
+		reconcileMinAge.String(), reconcileBatch, reconcileMaxAge.String(), openEventMinAge.String(), SnapshotRetryWindow.String())
 	if err != nil {
 		return nil, err
 	}
@@ -339,14 +350,21 @@ func (s *Service) publishReconciledClip(ctx context.Context, eventID id.ID) {
 // would claim something is still happening, and leaving it pending would
 // promise a picture nobody can produce. An unclosed event is closed at its
 // start time, the last moment the detector is known to have seen it.
+//
+// The end time is settled immediately — the detector not knowing the event means
+// nobody is going to report one. The snapshot verdict keeps the usual wait: a
+// 404 for the event can race a picture that is still being written, and 'gone'
+// is invisible to the archive sweep, so declaring it early forecloses the only
+// path that could still recover the image.
 func (s *Service) settleAbandoned(ctx context.Context, candidate openEvent) {
 	_, err := s.DB.Pool.Exec(ctx, `UPDATE events SET
 			ended_at=COALESCE(ended_at,started_at),
 			expires_at=COALESCE(expires_at,COALESCE(ended_at,started_at) + $2::interval),
-			snapshot_state=CASE WHEN snapshot_state='pending' THEN 'gone' ELSE snapshot_state END,
+			snapshot_state=CASE WHEN snapshot_state='pending'
+				AND started_at < clock_timestamp() - $3::interval THEN 'gone' ELSE snapshot_state END,
 			updated_at=clock_timestamp()
 		WHERE id=$1 AND (ended_at IS NULL OR snapshot_state='pending')`,
-		candidate.ID, EventIndexRetention.String())
+		candidate.ID, EventIndexRetention.String(), SnapshotRetryWindow.String())
 	if err != nil {
 		if ctx.Err() == nil {
 			slog.Warn("abandoned event not settled", "event", candidate.ID, "error", err)
@@ -395,21 +413,36 @@ func (s *Service) probeSnapshot(ctx context.Context, client *http.Client, source
 // markSnapshotReady records a picture the detector does have. The event is
 // already closed, so only the snapshot dimension changes; the archive sweep
 // picks it up from here on its own tick.
+//
+// 'gone' is included because a gone verdict inside the retry window is a
+// provisional one: this pass asks the detector for the bytes, and if it answers
+// with an image the earlier 404 is simply out of date.
 func (s *Service) markSnapshotReady(ctx context.Context, candidate openEvent) {
-	_, err := s.DB.Pool.Exec(ctx, `UPDATE events SET snapshot_state='ready',updated_at=clock_timestamp()
-		WHERE id=$1 AND snapshot_state='pending'`, candidate.ID)
+	_, err := s.DB.Pool.Exec(ctx, `UPDATE events SET snapshot_state='ready',snapshot_archive_error=NULL,updated_at=clock_timestamp()
+		WHERE id=$1 AND snapshot_state IN ('pending','gone')`, candidate.ID)
 	if err != nil && ctx.Err() == nil {
 		slog.Warn("recovered snapshot not recorded", "event", candidate.ID, "error", err)
 	}
 }
 
 // settleWithoutSnapshot records that a closed event has no picture and is not
-// going to get one. The event closed, the detector has been asked for the image
-// itself well after the fact, and it answered that there is none: waiting longer
-// would only keep the operator watching a placeholder.
+// going to get one.
+//
+// One 404 is not that answer. Frigate writes snapshots asynchronously and this
+// service has already been wrong about it once: a single "snapshot.jpg 404" was
+// treated as final, so the row became 'gone', and 'gone' is invisible to the
+// archive sweep — which only picks up 'ready'. A picture that appeared a minute
+// later then had no path back into the index at all.
+//
+// The wait is the same window the archive sweep uses (SnapshotRetryWindow): it
+// is the length of time this product already decided Frigate can still produce a
+// picture for an event. Before that window ends, a 404 leaves the event pending
+// and the next pass asks again; the sweep, which asks for the image itself, is
+// what can still rescue it.
 func (s *Service) settleWithoutSnapshot(ctx context.Context, candidate openEvent) {
 	_, err := s.DB.Pool.Exec(ctx, `UPDATE events SET snapshot_state='gone',updated_at=clock_timestamp()
-		WHERE id=$1 AND snapshot_state='pending'`, candidate.ID)
+		WHERE id=$1 AND snapshot_state='pending'
+		  AND started_at < clock_timestamp() - $2::interval`, candidate.ID, SnapshotRetryWindow.String())
 	if err != nil && ctx.Err() == nil {
 		slog.Warn("closed event without a snapshot not settled", "event", candidate.ID, "error", err)
 	}
