@@ -46,6 +46,12 @@ const (
 	StateHealthy       = "healthy"
 	StateUnavailable   = "unavailable"
 	StateNotAvailable  = "not_available"
+	// StateUnverified is "configured but never tested". It is deliberately not
+	// StateUnavailable: reporting an untested target as 运行异常 says it is broken,
+	// and the operator goes looking for a fault that has not happened. Measured on
+	// this site: 5 verified copies were being uploaded through a target whose card
+	// read 运行异常, because nobody had ever pressed 测试.
+	StateUnverified = "unverified"
 )
 
 // Snapshot reports both optional modules as this build and this deployment
@@ -120,7 +126,19 @@ func (s *Service) archive(ctx context.Context) (Capability, error) {
 	case healthy > 0:
 		out.State, out.Reason = StateHealthy, "target_probe_succeeded"
 	default:
-		out.State, out.Reason = StateUnavailable, "archive_target_unreachable"
+		// Nobody has a healthy verdict. Before calling that an outage, ask whether
+		// anyone ever measured it: a target saved and never tested has an empty
+		// last_check, and "we have not looked" is not "it is broken". Uploads may
+		// well be succeeding — they were on this site.
+		var tested int
+		if err := s.Operations.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM archive_targets WHERE enabled AND last_check IS NOT NULL`).Scan(&tested); err != nil {
+			return out, err
+		}
+		if tested == 0 {
+			out.State, out.Reason = StateUnverified, "archive_target_untested"
+		} else {
+			out.State, out.Reason = StateUnavailable, "archive_target_unreachable"
+		}
 	}
 	return out, nil
 }

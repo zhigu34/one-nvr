@@ -2081,10 +2081,10 @@ export interface components {
             /** @description Whether this build carries the module's business logic. A release property, never a health signal. */
             implemented: boolean;
             /**
-             * @description disabled: switch off. not_configured: switched on with nothing set up yet. healthy: configured and its dependencies answered. unavailable: configured but a dependency did not answer. not_available: this build does not carry it.
+             * @description disabled: switch off. not_configured: switched on with nothing set up yet. healthy: configured and its dependencies answered. unavailable: configured but a dependency did not answer. not_available: this build does not carry it. unverified: configured but never tested — not the same as unavailable, because nothing has measured it.
              * @enum {string}
              */
-            state: "disabled" | "not_configured" | "healthy" | "unavailable" | "not_available";
+            state: "disabled" | "not_configured" | "healthy" | "unavailable" | "not_available" | "unverified";
             reason: string;
         };
         BundledOpenList: {

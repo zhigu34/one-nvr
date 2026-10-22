@@ -277,6 +277,14 @@ const MODULE_STATES: Record<
     tone: 'destructive',
     hint: '已配置，但依赖组件没有响应，请到运维与审计页查看组件状态。',
   },
+  // Configured, never tested. Saying 运行异常 here would send the operator after
+  // a fault that has not happened — measured on this site, uploads were succeeding
+  // through a target whose card claimed it was broken.
+  unverified: {
+    label: '未验证',
+    tone: 'warning',
+    hint: '已配置，但还没有测试过。到归档目标页点一次「测试」即可确认。',
+  },
   not_available: {
     label: '版本尚未提供',
     tone: 'info',

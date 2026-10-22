@@ -3349,9 +3349,10 @@
               "not_configured",
               "healthy",
               "unavailable",
-              "not_available"
+              "not_available",
+              "unverified"
             ],
-            "description": "disabled: switch off. not_configured: switched on with nothing set up yet. healthy: configured and its dependencies answered. unavailable: configured but a dependency did not answer. not_available: this build does not carry it."
+            "description": "disabled: switch off. not_configured: switched on with nothing set up yet. healthy: configured and its dependencies answered. unavailable: configured but a dependency did not answer. not_available: this build does not carry it. unverified: configured but never tested — not the same as unavailable, because nothing has measured it."
           },
           "reason": {
             "type": "string"

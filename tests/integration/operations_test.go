@@ -307,3 +307,43 @@ func TestOperationsResourcesRequiresAdmin(t *testing.T) {
 		t.Fatalf("viewer read host resources: %v", err)
 	}
 }
+
+// A target that was saved and never tested is unverified, not broken.
+//
+// Measured on the live site: five copies were being uploaded successfully through
+// a target whose capability card read 运行异常, because last_check was empty and
+// "no healthy target" was read as "no working target". Saying 运行异常 sends the
+// operator after a fault that has not happened.
+func TestUntestedArchiveTargetIsUnverifiedNotUnavailable(t *testing.T) {
+	fixture := newPublicationFixture(t)
+	ctx := context.Background()
+	targets := archive.New(fixture.DB, fixture.Auth, fixture.Site.Secrets, fixture.Service.Pools)
+	// openlist must be enabled for Observe to accept that component name.
+	ops := operations.New(fixture.DB, nil, true, true)
+	caps := capability.Service{Operations: ops, FrigateEnabled: true}
+
+	// Register a target but never test it: last_check stays null.
+	if _, err := targets.RegisterTarget(ctx, fixture.Admin, archive.TargetInput{
+		Name: "untested", BaseURL: "https://dav.example.com", RemoteRoot: "/archive",
+		Username: "u", Password: "isolated-test-only", CloudRetentionDays: 365, Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The archive module needs a healthy OpenList/detector to be considered at
+	// all; this test is about the target verdict, so make those healthy.
+	for _, name := range []string{"frigate", "openlist", "mqtt"} {
+		if err := ops.Observe(ctx, operations.Observation{Name: name, State: "healthy", Reason: "probe_succeeded", ObservedAt: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if c := mustSnapshot(t, caps).Archive; c.State != capability.StateUnverified {
+		t.Fatalf("an untested target reads %q (%s), want unverified", c.State, c.Reason)
+	}
+	// Once it has been measured and refused, the same target IS a fault.
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE archive_targets SET last_check=jsonb_build_object('state','unavailable','observed_at',now())`); err != nil {
+		t.Fatal(err)
+	}
+	if c := mustSnapshot(t, caps).Archive; c.State != capability.StateUnavailable {
+		t.Fatalf("a tested-and-refused target reads %q, want unavailable", c.State)
+	}
+}
