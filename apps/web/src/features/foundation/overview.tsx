@@ -21,6 +21,7 @@ import { useState } from 'react'
 import { useAPI } from './hooks'
 import { QueryState, PageTitle } from './ui'
 import { formatClock } from '@/features/playback/zone'
+import { durationLabel } from '@/features/channels/reliability-format'
 
 type Summary = Schema<'ChannelSummary'>
 type Component = Schema<'Component'>
@@ -153,11 +154,36 @@ export function Overview() {
     `/api/v1/reliability/summary?from=${reliabilityWindow.from}&to=${reliabilityWindow.to}`,
     admin
   )
+  // The faults themselves, not just a count: "1 路有中断" tells an operator
+  // something is wrong and nothing about which channel, which is the one thing
+  // they need next. These rows carry the channel and the exact span.
+  const faults = useAPI<{ items: Schema<'ReliabilityFault'>[] }>(
+    `/api/v1/faults?from=${reliabilityWindow.from}&to=${reliabilityWindow.to}`,
+    admin
+  )
+  // One entry per channel that had an interruption, newest fault first: the
+  // strip names the worst channel and the cards each carry their own history.
+  const faultsByChannel = new Map<string, Schema<'ReliabilityFault'>>()
+  for (const fault of faults.data?.items || []) {
+    if (fault.maintenance) continue
+    const id = fault.channel_id ?? ''
+    if (!id) continue
+    const seen = faultsByChannel.get(id)
+    const started = Date.parse(fault.started_at ?? '')
+    if (!seen || started > Date.parse(seen.started_at ?? '')) {
+      faultsByChannel.set(id, fault)
+    }
+  }
   const zone = site.data?.timezone || ''
   const channels = summaries.data?.items || []
   // Event rows name their channel via this map.
   const channelOf = new Map(
     channels.map((item) => [item.channel_id, item])
+  )
+  // The fault rows carry a channel number but not its name (the contract omits
+  // it), so the alarm strip resolves the name from the summary it already has.
+  const channelNameOf = new Map(
+    channels.map((item) => [item.channel_id, item.channel_name])
   )
   // Same derivation as the channels page's status pills, so the overview and
   // the management table can never disagree about a row.
@@ -176,6 +202,8 @@ export function Overview() {
   const configured = channels.filter(
     (channel) => !isUnconfigured(channel)
   )
+  const faultOf = (id: string | undefined) =>
+    id ? faultsByChannel.get(id) ?? null : null
   const active = configured
     .filter((channel) => channel.main.state === 'healthy')
     .slice(0, 8)
@@ -564,10 +592,13 @@ export function Overview() {
             )}
           </div>
           <ChannelAlarms
+            faults={faultsByChannel}
             abnormal={abnormalChannels}
             unjudged={unjudgedChannels}
-            pending={reliability.isPending}
-            error={!!reliability.error}
+            pending={reliability.isPending || faults.isPending}
+            error={!!reliability.error || !!faults.error}
+            zone={zone}
+            channelNameOf={channelNameOf}
           />
         </div>
       )}
@@ -605,13 +636,31 @@ export function Overview() {
                       <li
                         key={channel.channel_id}
                         data-testid='active-channel-card'
-                        className='group flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3.5 transition-colors hover:border-muted-foreground/40 hover:bg-muted/50'
+                        data-alert={faultOf(channel.channel_id) ? 'yes' : undefined}
+                        className={cn(
+                          'group flex items-center justify-between gap-3 rounded-lg border px-4 py-3.5 transition-colors',
+                          faultOf(channel.channel_id)
+                            ? // A channel that dropped out in the last day must
+                              // not look identical to eight healthy ones: the
+                              // whole point of the patrol is finding it by eye.
+                              'border-amber-500/40 bg-amber-950/10 hover:border-amber-500/60'
+                            : 'border-border bg-muted/30 hover:border-muted-foreground/40 hover:bg-muted/50'
+                        )}
                       >
                         <div className='min-w-0'>
                           <p className='flex min-w-0 items-center gap-1.5'>
+                            {/* Online now, but with a warning mark: the dot
+                                answers "is it up this second", the mark answers
+                                "has it been reliable today". Both are true and
+                                neither replaces the other. */}
                             <span
                               aria-hidden
-                              className='size-1.5 shrink-0 rounded-full bg-emerald-500'
+                              className={cn(
+                                'size-1.5 shrink-0 rounded-full',
+                                faultOf(channel.channel_id)
+                                  ? 'bg-amber-500'
+                                  : 'bg-emerald-500'
+                              )}
                             />
                             <span className='shrink-0 font-mono text-[11px] text-muted-foreground'>
                               {label}
@@ -619,6 +668,17 @@ export function Overview() {
                             <span className='truncate text-sm font-medium'>
                               {channel.channel_name}
                             </span>
+                            {faultOf(channel.channel_id) && (
+                              <span
+                                data-testid='channel-alert-badge'
+                                title={faultTimeSpan(faultOf(channel.channel_id)!, zone)}
+                                className='shrink-0 rounded border border-amber-500/40 px-1 text-[10px] text-amber-600 dark:text-amber-400'
+                              >
+                                {faultOf(channel.channel_id)!.state === 'open'
+                                  ? '中断中'
+                                  : `曾中断 ${durationLabel(faultOf(channel.channel_id)!.duration_ms ?? 0, 1)}`}
+                              </span>
+                            )}
                           </p>
                           {/* The metadata line carries all three facts an
                               operator scans for, in the order they read them:
@@ -627,7 +687,14 @@ export function Overview() {
                               in different corners of the card. */}
                           <p className='mt-1 truncate pl-3 text-[11px] text-muted-foreground/70'>
                             主流 {streaming || '正常'}
-                            {channel.sub.state === 'healthy' ? ' · 子流正常' : ''}
+                            {/* "子流正常" is a claim about right now, and the badge
+                                beside the name already carries the history. When
+                                the sub stream is not healthy the reason belongs
+                                here; when it is, saying so adds nothing the dot
+                                has not already said. */}
+                            {channel.sub.state !== 'healthy'
+                              ? ` · 子流${channel.sub.state === 'unavailable' ? '不可用' : '未观测'}`
+                              : ''}
                             {channel.bitrate_kbps
                               ? ` · ${channel.bitrate_kbps >= 1000 ? `${(channel.bitrate_kbps / 1000).toFixed(1)} Mbps` : `${Math.round(channel.bitrate_kbps)} kbps`}`
                               : ''}
@@ -792,21 +859,39 @@ export function Overview() {
  * claiming calm.
  */
 function ChannelAlarms({
+  faults,
   abnormal,
   unjudged,
   pending,
   error,
+  zone,
+  channelNameOf,
 }: {
+  /** The newest unplanned fault per channel, keyed by channel id. */
+  faults: Map<string, Schema<'ReliabilityFault'>>
   abnormal: number
   unjudged: number
   pending: boolean
   error: boolean
+  zone: string
+  channelNameOf: Map<string, string>
 }) {
+  const entries = [...faults.values()]
+  const nameOf = (id: string) => channelNameOf.get(id) ?? ''
+  // Worst first: a channel still down outranks one that recovered, then by
+  // length. The strip names one channel because naming five in a strip is a
+  // table, and the cards below carry each channel's own history anyway.
+  entries.sort((a, b) => {
+    const open = Number(b.state === 'open') - Number(a.state === 'open')
+    if (open !== 0) return open
+    return (b.duration_ms ?? 0) - (a.duration_ms ?? 0)
+  })
+  const primary = entries[0]
   return (
     <section
       data-testid='channel-alarms'
       aria-label='通道告警'
-      className='flex min-w-0 flex-col gap-1.5 lg:items-end'
+      className='flex min-w-0 flex-col items-start gap-1.5 lg:items-end'
     >
       <p className='flex items-center gap-1.5 text-xs text-muted-foreground'>
         <AlertTriangle aria-hidden className='size-3.5' />
@@ -816,13 +901,45 @@ function ChannelAlarms({
         <p className='text-xs text-muted-foreground'>告警数据读取失败</p>
       ) : pending ? (
         <p className='text-xs text-muted-foreground'>统计中…</p>
+      ) : primary ? (
+        <>
+          {/* The channel's name, not a count. An operator who reads "1 路有中断"
+              has to go hunting for which one; naming it makes the strip
+              actionable, and the link lands on that channel's reliability tab. */}
+          <Link
+            to='/channels/configure'
+            search={{ channel: primary.channel_id ?? '', tab: 'reliability' }}
+            data-testid='alarm-channel'
+            title={faultTimeSpan(primary, zone)}
+            className='inline-flex max-w-full items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-700 transition-colors hover:bg-amber-500/20 dark:text-amber-400'
+          >
+            <span className='relative flex size-1.5 shrink-0'>
+              <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-500 opacity-60 motion-reduce:hidden' />
+              <span className='relative inline-flex size-1.5 rounded-full bg-amber-500' />
+            </span>
+            <span className='truncate font-medium'>
+              CH{String(primary.channel_no ?? 0).padStart(2, '0')}
+              {nameOf(primary.channel_id ?? '') ? ` ${nameOf(primary.channel_id ?? '')}` : ''}
+            </span>
+            <span className='shrink-0 tabular-nums'>
+              {primary.state === 'open' ? '中断中' : '曾有中断'}{' '}
+              {durationLabel(primary.duration_ms ?? 0, 1)}
+            </span>
+            <ArrowRight aria-hidden className='size-3 shrink-0 opacity-60' />
+          </Link>
+          {entries.length > 1 && (
+            <p className='text-[11px] text-muted-foreground'>
+              另有 {entries.length - 1} 路曾有中断
+            </p>
+          )}
+        </>
       ) : abnormal > 0 ? (
-        <span className='inline-flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-600 dark:text-amber-400'>
-          <span className='relative flex size-1.5'>
-            <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-500 opacity-60 motion-reduce:hidden' />
-            <span className='relative inline-flex size-1.5 rounded-full bg-amber-500' />
-          </span>
-          <span className='tabular-nums'>{abnormal} 路有中断</span>
+        // Fault rows and the summary disagree (a fault older than the summary
+        // window, say). The count is still true, so it is reported as a count
+        // rather than dropped.
+        <span className='inline-flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs tabular-nums text-amber-600 dark:text-amber-400'>
+          <span aria-hidden className='size-1.5 rounded-full bg-amber-500' />
+          {abnormal} 路有中断
         </span>
       ) : (
         <span className='inline-flex items-center gap-1.5 text-xs text-muted-foreground'>
@@ -837,6 +954,16 @@ function ChannelAlarms({
       )}
     </section>
   )
+}
+
+/** The span of one fault, for a tooltip: when it ran and how long. */
+function faultTimeSpan(fault: Schema<'ReliabilityFault'>, zone: string): string {
+  const start = formatClock(Date.parse(fault.started_at ?? ''), zone)
+  const end = fault.ended_at
+    ? formatClock(Date.parse(fault.ended_at), zone)
+    : '持续中'
+  const length = durationLabel(fault.duration_ms ?? 0, 1)
+  return `${start} → ${end} · ${length}`
 }
 
 /**

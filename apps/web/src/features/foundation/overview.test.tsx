@@ -33,6 +33,7 @@ function component(
 function fixture(
   options: {
     reliability?: unknown[]
+    faults?: Schema<'ReliabilityFault'>[]
     resources?: Record<string, unknown>
     role?: 'admin' | 'viewer'
     components?: Schema<'Component'>[]
@@ -160,6 +161,8 @@ function fixture(
       )
     if (path.startsWith('/api/v1/reliability/summary'))
       return { items: options.reliability ?? [] }
+    if (path.startsWith('/api/v1/faults'))
+      return { items: options.faults ?? [], categories: [] }
     if (path === '/api/v1/operations/components')
       return (
         options.components ?? [
@@ -277,7 +280,7 @@ test('the availability card reports a rate with its own evidence', async () => {
   const setup = fixture({
     reliability: [
       {
-        channel_id: 'ch-1',
+        channel_id: '00000000-0000-4000-8000-000000000001',
         channel_no: 1,
         channel_name: '前门',
         kind: 'main',
@@ -293,7 +296,7 @@ test('the availability card reports a rate with its own evidence', async () => {
         sample_sufficient: true,
       },
       {
-        channel_id: 'ch-1',
+        channel_id: '00000000-0000-4000-8000-000000000001',
         channel_no: 1,
         channel_name: '前门',
         kind: 'recording',
@@ -309,15 +312,39 @@ test('the availability card reports a rate with its own evidence', async () => {
         sample_sufficient: true,
       },
     ],
+    faults: [
+      {
+        id: 'f-1',
+        channel_id: '00000000-0000-4000-8000-000000000001',
+        channel_no: 1,
+        kind: 'main',
+        state: 'resolved',
+        started_at: '2026-10-22T02:00:00Z',
+        ended_at: '2026-10-22T02:03:42Z',
+        duration_ms: 222_000,
+        initial_reason: 'stream_absent',
+        effective_category: 'upstream_unavailable',
+        category: 'upstream_unavailable',
+        note: '',
+        maintenance: false,
+      },
+    ],
   })
   const view = await render(setup.view)
   // 23 of 24 hours healthy is 95.8%, and one channel had an interruption.
   await expect.element(view.getByText('95.8%')).toBeVisible()
   await expect.element(view.getByText(/录像覆盖 50.0%/)).toBeVisible()
-  // The interruption count belongs to the status strip's alarm pill now.
-  await expect
-    .element(view.getByTestId('channel-alarms').getByText(/1 路有中断/))
-    .toBeVisible()
+  // The strip names the channel rather than counting: "1 路有中断" leaves the
+  // operator hunting for which one.
+  const alarms = view.getByTestId('channel-alarms')
+  await expect.element(alarms).toBeVisible()
+  // The channel's name, not a count: the strip must be actionable on its own.
+  await expect.element(alarms).toHaveTextContent('CH01 客厅')
+  await expect.element(alarms).toHaveTextContent('曾有中断 3 分 42 秒')
+  // And it links to that channel's reliability tab rather than to a generic page.
+  const link = alarms.element().querySelector('a')
+  expect(link?.getAttribute('href')).toContain('/channels/configure')
+  expect(link?.getAttribute('href')).toContain('tab=reliability')
 })
 
 // A window with no sufficient sample must say so rather than print 0%, which
@@ -453,4 +480,57 @@ test('a deployment without the event cache says 未启用', async () => {
   const view = await render(setup.view)
   await expect.element(view.getByTestId('host-cache')).toHaveTextContent('未启用')
   await expect.element(view.getByTestId('host-cache')).not.toHaveTextContent('接近上限')
+})
+
+// A channel that dropped out in the last day must not look like the seven others
+// in the patrol: the card carries a warning border, a mark beside the name, and
+// a tooltip with the exact span.
+test('a channel with an interruption is flagged in the patrol', async () => {
+  const setup = fixture({
+    reliability: [
+      {
+        channel_id: '00000000-0000-4000-8000-000000000001',
+        channel_no: 1,
+        channel_name: '客厅',
+        kind: 'main',
+        healthy_ms: 23 * 3600_000,
+        unavailable_ms: 3600_000,
+        unknown_ms: 0,
+        excluded_ms: 0,
+        expected_ms: 0,
+        owed_ms: 0,
+        covered_ms: 0,
+        fault_count: 1,
+        observed_ms: 24 * 3600_000,
+        sample_sufficient: true,
+      },
+    ],
+    faults: [
+      {
+        id: 'f-1',
+        channel_id: '00000000-0000-4000-8000-000000000001',
+        channel_no: 1,
+        kind: 'main',
+        state: 'resolved',
+        started_at: '2026-10-22T02:00:00Z',
+        ended_at: '2026-10-22T02:03:42Z',
+        duration_ms: 222_000,
+        initial_reason: 'stream_absent',
+        effective_category: 'upstream_unavailable',
+        category: 'upstream_unavailable',
+        note: '',
+        maintenance: false,
+      },
+    ],
+  })
+  const view = await render(setup.view)
+  const card = view.getByTestId('active-channel-card').first()
+  await expect.element(card).toBeVisible()
+  // The mark names the interruption and carries its span on hover.
+  const badge = card.getByTestId('channel-alert-badge')
+  await expect.element(badge).toHaveTextContent(/曾中断/)
+  expect(badge.element().getAttribute('title')).toMatch(/→/)
+  // And the card is visually distinct, not just textually.
+  expect(card.element().getAttribute('data-alert')).toBe('yes')
+  expect(card.element().className).toContain('amber')
 })
