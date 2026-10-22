@@ -353,3 +353,50 @@ test('the wecom robot key is masked in the list', async () => {
   await expect.element(screen.getByText(/cgi-bin\/webhook\/send\?key=••••/)).toBeVisible()
   expect(screen.getByText(/robot-secret-key/).query()).toBeNull()
 })
+
+// An enterprise application is not a robot: it needs the corp id, the agent id and
+// a secret, and it addresses members rather than carrying a URL.
+test('the wecom application form asks for its identifiers, not a URL', async () => {
+  signIn()
+  const screen = await render(view(fixture([], ['inapp', 'webhook', 'email', 'wecom', 'wecom_app'])))
+  await userEvent.click(screen.getByLabelText('渠道类型'))
+  await userEvent.click(await screen.getByRole('option', { name: '企业微信 · 应用' }).first())
+
+  await expect.element(screen.getByLabelText('企业ID')).toBeVisible()
+  await expect.element(screen.getByLabelText('应用ID')).toBeVisible()
+  await expect.element(screen.getByLabelText('应用 Secret')).toBeVisible()
+  await expect.element(screen.getByLabelText('应用接收人')).toBeVisible()
+  // No robot URL field: an application's endpoint is derived from the corp id.
+  expect(screen.getByLabelText('企业微信机器人地址').query()).toBeNull()
+  // The addressing syntax is explained where it is typed.
+  await expect.element(screen.getByText(/@all 发给应用可见范围内所有人/)).toBeVisible()
+})
+
+test('saving a wecom application sends its identifiers and addressing', async () => {
+  signIn()
+  const screen = await render(view(fixture([], ['inapp', 'webhook', 'email', 'wecom', 'wecom_app'])))
+  await userEvent.click(screen.getByLabelText('渠道类型'))
+  await userEvent.click(await screen.getByRole('option', { name: '企业微信 · 应用' }).first())
+
+  await userEvent.fill(screen.getByLabelText('渠道名称').element() as HTMLInputElement, '值班应用')
+  await userEvent.fill(screen.getByLabelText('企业ID').element() as HTMLInputElement, 'ww-corp')
+  await userEvent.fill(screen.getByLabelText('应用ID').element() as HTMLInputElement, '1000002')
+  await userEvent.fill(screen.getByLabelText('应用 Secret').element() as HTMLInputElement, 'app-secret')
+  await userEvent.fill(screen.getByLabelText('应用接收人').element() as HTMLInputElement, 'user:a|b')
+  await userEvent.click(screen.getByRole('button', { name: '添加', exact: true }))
+
+  const post = calls.request.mock.calls.find(
+    ([path, init]) => path === '/api/v1/notification-channels' && (init as RequestInit)?.method === 'POST'
+  )
+  const body = JSON.parse(String((post?.[1] as RequestInit | undefined)?.body ?? '{}'))
+  expect(body.kind).toBe('wecom_app')
+  expect(body.wecom_app).toEqual({
+    wecom_corp_id: 'ww-corp',
+    wecom_agent_id: 1000002,
+    wecom_to: 'user:a|b',
+    wecom_msg_type: 'text',
+  })
+  // The secret travels in the shared field, and there is no URL.
+  expect(body.secret).toBe('app-secret')
+  expect(body.url).toBe('')
+})

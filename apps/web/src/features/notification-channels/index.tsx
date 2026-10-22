@@ -24,7 +24,8 @@ const KIND_LABELS: Record<string, string> = {
   inapp: '站内提醒',
   webhook: 'Webhook',
   email: '邮件（SMTP）',
-  wecom: '企业微信',
+  wecom: '企业微信 · 群机器人',
+  wecom_app: '企业微信 · 应用',
 }
 
 const KIND_HELP: Record<string, string> = {
@@ -32,6 +33,7 @@ const KIND_HELP: Record<string, string> = {
   webhook: '把通知内容 POST 到该地址，带签名与稳定投递 ID，接收端可据此去重。',
   email: '通过你自己的 SMTP 服务器发送邮件。参数顺序与常见 NVR 的「Email」页面一致：先填发件人，再填服务器与认证，最后登记收件人。',
   wecom: '在值班群里添加一个群机器人，把它的 Webhook 地址粘贴到这里。机器人地址里带着密钥，请当作密码保管。',
+  wecom_app: '用企业微信管理后台创建的应用发送。应用能发给指定成员或部门，不要求对方在同一个群里；需要企业ID、应用ID 与 Secret。',
 }
 
 type RecipientDraft = { name: string; address: string }
@@ -73,6 +75,7 @@ const EMPTY_FORM = {
   email: EMPTY_EMAIL,
   recipients: [] as RecipientDraft[],
   wecom: { msgType: 'markdown', mentions: '' },
+  wecomApp: { corpID: '', agentID: '', to: '', msgType: 'text' },
 }
 
 /**
@@ -132,6 +135,14 @@ export function NotificationChannels() {
       url: form.kind === 'webhook' || form.kind === 'wecom' ? form.url : '',
       secret: form.secret,
       enabled: form.enabled,
+    }
+    if (form.kind === 'wecom_app') {
+      body.wecom_app = {
+        wecom_corp_id: form.wecomApp.corpID,
+        wecom_agent_id: Number(form.wecomApp.agentID || 0),
+        wecom_to: form.wecomApp.to,
+        wecom_msg_type: form.wecomApp.msgType,
+      }
     }
     if (form.kind === 'wecom') {
       body.wecom = {
@@ -202,6 +213,12 @@ export function NotificationChannels() {
       wecom: {
         msgType: channel.wecom?.wecom_msg_type ?? 'markdown',
         mentions: channel.wecom?.wecom_mentions ?? '',
+      },
+      wecomApp: {
+        corpID: channel.wecom_app?.wecom_corp_id ?? '',
+        agentID: String(channel.wecom_app?.wecom_agent_id ?? ''),
+        to: channel.wecom_app?.wecom_to ?? '',
+        msgType: channel.wecom_app?.wecom_msg_type ?? 'text',
       },
     })
     setTestResult('')
@@ -310,6 +327,80 @@ export function NotificationChannels() {
               autoComplete='new-password'
             />
           </label>
+        )}
+        {form.kind === 'wecom_app' && (
+          <>
+            <label className='grid gap-2 text-sm'>
+              <span>企业ID（corpID）</span>
+              <Input
+                aria-label='企业ID'
+                value={form.wecomApp.corpID}
+                onChange={(event) =>
+                  setForm({ ...form, wecomApp: { ...form.wecomApp, corpID: event.target.value } })
+                }
+                required
+                placeholder='ww1234567890abcdef'
+              />
+              <span className='text-[11px] text-muted-foreground'>
+                管理后台 →「我的企业」→ 企业信息最下方
+              </span>
+            </label>
+            <label className='grid gap-2 text-sm'>
+              <span>应用ID（agentID）</span>
+              <Input
+                aria-label='应用ID'
+                type='number'
+                min={1}
+                value={form.wecomApp.agentID}
+                onChange={(event) =>
+                  setForm({ ...form, wecomApp: { ...form.wecomApp, agentID: event.target.value } })
+                }
+                required
+                placeholder='1000002'
+              />
+            </label>
+            <label className='grid gap-2 text-sm'>
+              <span>应用 Secret{editing ? '（留空保持不变）' : ''}</span>
+              <Input
+                aria-label='应用 Secret'
+                type='password'
+                value={form.secret}
+                onChange={(event) => setForm({ ...form, secret: event.target.value })}
+                required={!editing}
+                autoComplete='new-password'
+              />
+            </label>
+            <label className='grid gap-2 text-sm'>
+              <span>消息格式</span>
+              <SelectField
+                ariaLabel='应用消息格式'
+                value={form.wecomApp.msgType}
+                onValueChange={(next) =>
+                  setForm({ ...form, wecomApp: { ...form.wecomApp, msgType: next || 'text' } })
+                }
+                options={[
+                  { value: 'text', label: '文本' },
+                  { value: 'markdown', label: 'Markdown' },
+                  { value: 'textcard', label: '图文卡片' },
+                ]}
+              />
+            </label>
+            <label className='grid gap-2 text-sm md:col-span-2'>
+              <span>接收人</span>
+              <Input
+                aria-label='应用接收人'
+                value={form.wecomApp.to}
+                onChange={(event) =>
+                  setForm({ ...form, wecomApp: { ...form.wecomApp, to: event.target.value } })
+                }
+                required
+                placeholder='@all 或 user:zhangsan|lisi 或 party:1|2 或 tag:值班'
+              />
+              <span className='text-[11px] text-muted-foreground'>
+                @all 发给应用可见范围内所有人；user: 成员账号，party: 部门ID，tag: 标签。只填值时按成员处理。
+              </span>
+            </label>
+          </>
         )}
         {form.kind === 'wecom' && (
           <>
@@ -621,6 +712,12 @@ export function NotificationChannels() {
                   </Button>
                 </div>
               </div>
+              {channel.wecom_app && (
+                <p className='mt-2 text-xs text-muted-foreground'>
+                  企业 {channel.wecom_app.wecom_corp_id} · 应用 {channel.wecom_app.wecom_agent_id} ·{' '}
+                  {channel.wecom_app.wecom_to}
+                </p>
+              )}
               {channel.wecom && (
                 <p className='mt-2 text-xs text-muted-foreground'>
                   {channel.wecom.wecom_msg_type === 'news' ? '图文卡片' : 'Markdown 文本'}

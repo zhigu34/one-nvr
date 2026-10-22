@@ -2888,10 +2888,21 @@ export interface components {
         NotificationChannel: {
             id?: components["schemas"]["UUID"];
             /** @enum {string} */
-            kind?: "inapp" | "webhook" | "email" | "wecom";
+            kind?: "inapp" | "webhook" | "email" | "wecom" | "wecom_app";
             name?: string;
-            /** @description Absent for the built-in inbox and for email, which carries its endpoint in the smtp_* fields. For wecom this is the group-robot URL, which carries the robot key — treat it as a credential. */
+            /** @description Absent for the built-in inbox, for email, and for wecom_app. For wecom this is the group-robot URL, which carries the robot key — treat it as a credential. */
             url?: string;
+            /** @description Enterprise-application settings, present for kind 'wecom_app'. The application secret is never here: has_secret says one is stored. */
+            wecom_app?: {
+                /** @description The enterprise ID (企业ID). */
+                wecom_corp_id: string;
+                /** @description The application's agent id (应用ID). */
+                wecom_agent_id: number;
+                /** @description Recipients. @all for the whole visible range; user:a|b, party:1|2, tag:x|y to address by kind; a bare value is read as user ids. */
+                wecom_to: string;
+                /** @enum {string} */
+                wecom_msg_type: "text" | "markdown" | "textcard";
+            };
             /** @description Group-robot settings, present for kind 'wecom'. */
             wecom?: {
                 /**
@@ -8960,7 +8971,7 @@ export interface operations {
             content: {
                 "application/json": {
                     /** @enum {string} */
-                    kind: "inapp" | "webhook" | "email" | "wecom";
+                    kind: "inapp" | "webhook" | "email" | "wecom" | "wecom_app";
                     name: string;
                     /** @description Required for webhook; absent for the built-in inbox. */
                     url?: string;
@@ -8977,6 +8988,15 @@ export interface operations {
                         smtp_tls: boolean;
                         smtp_auth: boolean;
                         username: string;
+                    };
+                    /** @description Enterprise-application settings. Required when kind is wecom_app; ignored otherwise. The secret is the application secret, sent in the `secret` field. */
+                    wecom_app?: {
+                        wecom_corp_id: string;
+                        wecom_agent_id: number;
+                        /** @description @all, or user:a|b / party:1|2 / tag:x|y, or a bare list of user ids. */
+                        wecom_to: string;
+                        /** @enum {string} */
+                        wecom_msg_type: "text" | "markdown" | "textcard";
                     };
                     /** @description Group-robot settings. Required when kind is wecom; ignored otherwise. */
                     wecom?: {
@@ -9038,7 +9058,7 @@ export interface operations {
             content: {
                 "application/json": {
                     /** @enum {string} */
-                    kind: "inapp" | "webhook" | "email" | "wecom";
+                    kind: "inapp" | "webhook" | "email" | "wecom" | "wecom_app";
                     name: string;
                     url?: string;
                     /** @description Empty keeps the stored secret, so renaming does not require re-entering it. */
@@ -9052,6 +9072,15 @@ export interface operations {
                         smtp_tls: boolean;
                         smtp_auth: boolean;
                         username: string;
+                    };
+                    /** @description Enterprise-application settings. Required when kind is wecom_app; ignored otherwise. The secret is the application secret, sent in the `secret` field. */
+                    wecom_app?: {
+                        wecom_corp_id: string;
+                        wecom_agent_id: number;
+                        /** @description @all, or user:a|b / party:1|2 / tag:x|y, or a bare list of user ids. */
+                        wecom_to: string;
+                        /** @enum {string} */
+                        wecom_msg_type: "text" | "markdown" | "textcard";
                     };
                     /** @description Group-robot settings. Required when kind is wecom; ignored otherwise. */
                     wecom?: {

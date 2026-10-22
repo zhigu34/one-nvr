@@ -349,3 +349,104 @@ func TestWeComRobotKeyNeverEntersTheAuditTrail(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A WeCom application stores its identifiers; the secret stays sealed.
+func TestWeComAppChannelRoundTripsItsSettings(t *testing.T) {
+	fixture := newNotifyFixture(t)
+	ctx := context.Background()
+	channel, err := fixture.notify.RegisterChannel(ctx, fixture.fixture.Admin, notify.ChannelInput{
+		Kind:    "wecom_app",
+		Name:    "值班应用",
+		Secret:  "app-secret",
+		Enabled: true,
+		WeComApp: &notify.WeComAppConfig{
+			CorpID:  "ww-corp-id",
+			AgentID: 1000002,
+			To:      "user:zhangsan|lisi",
+			MsgType: "markdown",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if channel.WeComApp == nil {
+		t.Fatal("a wecom_app channel was stored without its settings")
+	}
+	if channel.WeComApp.CorpID != "ww-corp-id" || channel.WeComApp.AgentID != 1000002 ||
+		channel.WeComApp.To != "user:zhangsan|lisi" || channel.WeComApp.MsgType != "markdown" {
+		t.Fatalf("the application settings did not round-trip: %+v", *channel.WeComApp)
+	}
+	if !channel.HasSecret {
+		t.Fatal("the application secret was not stored")
+	}
+	// It has no webhook URL: the endpoint is derived from the corp id.
+	if channel.URL != "" {
+		t.Fatalf("a wecom_app channel carries a URL (%q); its endpoint is fixed", channel.URL)
+	}
+	list, err := fixture.notify.ListChannels(ctx, fixture.fixture.Admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range list {
+		if item.ID == channel.ID {
+			if item.WeComApp == nil || item.WeComApp.AgentID != 1000002 {
+				t.Fatalf("the list lost the application settings: %+v", item.WeComApp)
+			}
+		}
+	}
+}
+
+func TestWeComAppChannelRefusesIncompleteSettings(t *testing.T) {
+	fixture := newNotifyFixture(t)
+	ctx := context.Background()
+	base := func() notify.ChannelInput {
+		return notify.ChannelInput{
+			Kind: "wecom_app", Name: "值班应用", Secret: "app-secret", Enabled: true,
+			WeComApp: &notify.WeComAppConfig{CorpID: "corp", AgentID: 1, To: "@all", MsgType: "text"},
+		}
+	}
+	cases := map[string]func(*notify.ChannelInput){
+		"no settings": func(in *notify.ChannelInput) { in.WeComApp = nil },
+		"no corp":     func(in *notify.ChannelInput) { in.WeComApp.CorpID = "" },
+		"no agent":    func(in *notify.ChannelInput) { in.WeComApp.AgentID = 0 },
+		"no to":       func(in *notify.ChannelInput) { in.WeComApp.To = "" },
+		"no secret":   func(in *notify.ChannelInput) { in.Secret = "" },
+	}
+	for name, breakIt := range cases {
+		in := base()
+		copyApp := *in.WeComApp
+		in.WeComApp = &copyApp
+		breakIt(&in)
+		if _, err := fixture.notify.RegisterChannel(ctx, fixture.fixture.Admin, in); err == nil {
+			t.Fatalf("%s: an undeliverable application was accepted", name)
+		}
+	}
+}
+
+// An update that leaves the secret empty keeps the stored one: renaming an
+// application must not require re-typing its secret.
+func TestWeComAppKeepsItsSecretOnRename(t *testing.T) {
+	fixture := newNotifyFixture(t)
+	ctx := context.Background()
+	channel, err := fixture.notify.RegisterChannel(ctx, fixture.fixture.Admin, notify.ChannelInput{
+		Kind: "wecom_app", Name: "值班应用", Secret: "app-secret", Enabled: true,
+		WeComApp: &notify.WeComAppConfig{CorpID: "corp", AgentID: 1, To: "@all", MsgType: "text"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	update := notify.ChannelInput{
+		Kind: "wecom_app", Name: "值班应用（新）", Secret: "", Enabled: true,
+		WeComApp: &notify.WeComAppConfig{CorpID: "corp", AgentID: 1, To: "user:a", MsgType: "markdown"},
+	}
+	updated, err := fixture.notify.UpdateChannel(ctx, fixture.fixture.Admin, channel.ID, channel.Version, update)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.HasSecret {
+		t.Fatal("an update without a secret dropped the stored one")
+	}
+	if updated.WeComApp.To != "user:a" || updated.WeComApp.MsgType != "markdown" {
+		t.Fatalf("the update did not take: %+v", *updated.WeComApp)
+	}
+}

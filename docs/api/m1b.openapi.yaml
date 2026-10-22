@@ -6554,7 +6554,8 @@
                       "inapp",
                       "webhook",
                       "email",
-                      "wecom"
+                      "wecom",
+                      "wecom_app"
                     ]
                   },
                   "name": {
@@ -6582,6 +6583,18 @@
                       "username": { "type": "string" }
                     },
                     "required": ["sender_name", "sender_address", "smtp_host", "smtp_port", "smtp_tls", "smtp_auth", "username"],
+                    "additionalProperties": false
+                  },
+                  "wecom_app": {
+                    "type": "object",
+                    "description": "Enterprise-application settings. Required when kind is wecom_app; ignored otherwise. The secret is the application secret, sent in the `secret` field.",
+                    "properties": {
+                      "wecom_corp_id": { "type": "string" },
+                      "wecom_agent_id": { "type": "integer", "minimum": 1 },
+                      "wecom_to": { "type": "string", "description": "@all, or user:a|b / party:1|2 / tag:x|y, or a bare list of user ids." },
+                      "wecom_msg_type": { "type": "string", "enum": ["text", "markdown", "textcard"] }
+                    },
+                    "required": ["wecom_corp_id", "wecom_agent_id", "wecom_to", "wecom_msg_type"],
                     "additionalProperties": false
                   },
                   "wecom": {
@@ -6660,7 +6673,8 @@
                       "inapp",
                       "webhook",
                       "email",
-                      "wecom"
+                      "wecom",
+                      "wecom_app"
                     ]
                   },
                   "name": {
@@ -6687,6 +6701,18 @@
                       "username": { "type": "string" }
                     },
                     "required": ["sender_name", "sender_address", "smtp_host", "smtp_port", "smtp_tls", "smtp_auth", "username"],
+                    "additionalProperties": false
+                  },
+                  "wecom_app": {
+                    "type": "object",
+                    "description": "Enterprise-application settings. Required when kind is wecom_app; ignored otherwise. The secret is the application secret, sent in the `secret` field.",
+                    "properties": {
+                      "wecom_corp_id": { "type": "string" },
+                      "wecom_agent_id": { "type": "integer", "minimum": 1 },
+                      "wecom_to": { "type": "string", "description": "@all, or user:a|b / party:1|2 / tag:x|y, or a bare list of user ids." },
+                      "wecom_msg_type": { "type": "string", "enum": ["text", "markdown", "textcard"] }
+                    },
+                    "required": ["wecom_corp_id", "wecom_agent_id", "wecom_to", "wecom_msg_type"],
                     "additionalProperties": false
                   },
                   "wecom": {
@@ -10074,7 +10100,8 @@
               "inapp",
               "webhook",
               "email",
-              "wecom"
+              "wecom",
+              "wecom_app"
             ]
           },
           "name": {
@@ -10082,7 +10109,22 @@
           },
           "url": {
             "type": "string",
-            "description": "Absent for the built-in inbox and for email, which carries its endpoint in the smtp_* fields. For wecom this is the group-robot URL, which carries the robot key — treat it as a credential."
+            "description": "Absent for the built-in inbox, for email, and for wecom_app. For wecom this is the group-robot URL, which carries the robot key — treat it as a credential."
+          },
+          "wecom_app": {
+            "description": "Enterprise-application settings, present for kind 'wecom_app'. The application secret is never here: has_secret says one is stored.",
+            "type": "object",
+            "properties": {
+              "wecom_corp_id": { "type": "string", "description": "The enterprise ID (企业ID)." },
+              "wecom_agent_id": { "type": "integer", "minimum": 1, "description": "The application's agent id (应用ID)." },
+              "wecom_to": {
+                "type": "string",
+                "description": "Recipients. @all for the whole visible range; user:a|b, party:1|2, tag:x|y to address by kind; a bare value is read as user ids."
+              },
+              "wecom_msg_type": { "type": "string", "enum": ["text", "markdown", "textcard"] }
+            },
+            "required": ["wecom_corp_id", "wecom_agent_id", "wecom_to", "wecom_msg_type"],
+            "additionalProperties": false
           },
           "wecom": {
             "description": "Group-robot settings, present for kind 'wecom'.",

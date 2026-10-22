@@ -163,64 +163,17 @@ func (w *wecom) classify(status int, raw []byte) error {
 // while a rate limit or a busy backend is worth another attempt. The numbers are
 // WeCom's; the words are ours.
 func (w *wecom) classifyErrCode(code int, message string) error {
-	reason := fmt.Sprintf("wecom errcode %d: %s", code, truncate(message, 160))
-	switch code {
-	case 45009:
-		// API rate limit exceeded.
-		return &DeliveryError{Reason: reason}
-	case 45033, 45034, 45035:
-		// Concurrency / quota limits on the robot.
-		return &DeliveryError{Reason: reason}
-	case 93000:
-		// The robot's key is invalid or has been reset.
-		return &PermanentError{Reason: reason}
-	case 40001, 40014, 42001, 42007:
-		// Invalid credential / expired token: the URL is wrong or revoked.
-		return &PermanentError{Reason: reason}
-	case 40008, 40058, 44002, 44003, 44004:
-		// Malformed message: our payload, and repeating it changes nothing.
-		return &PermanentError{Reason: reason}
-	}
-	// Unknown codes are retried: WeCom adds new ones, and treating an unknown
-	// failure as permanent would silently drop alerts on a server update.
-	if code >= 40000 && code < 50000 {
-		return &DeliveryError{Reason: reason}
-	}
-	return fmt.Errorf("%s", reason)
+	// One vocabulary for both WeCom paths: the robot and the application answer
+	// with the same codes, and two copies of this table would drift apart the
+	// first time one of them gained a case.
+	return classifyWeComErrCode("wecom", code, message)
 }
 
-// markdown renders the group message. It leads with the same title the inbox
-// shows, then the facts, then the links — a chat reader sees the channel and the
-// kind of alarm before any detail.
+// markdown renders the group message. The facts and links are the same as the
+// application's markdown, so the rendering lives in one place; the robot only adds
+// the mention line.
 func (w *wecom) markdown(m Message) string {
-	var lines []string
-	lines = append(lines, "**"+m.Title+"**")
-	body := m.Body
-	// The body repeats the title; a chat block does not need it twice. The title
-	// carries the site name as a prefix ("一号站 · CH03 人 高") while the body
-	// starts at the channel, so the match is on the title's tail, not its head.
-	head, tail, found := strings.Cut(m.Title, " · ")
-	if !found {
-		tail = head
-	}
-	if strings.HasPrefix(body, tail) {
-		body = strings.TrimPrefix(body, tail)
-		body = strings.TrimPrefix(body, " · ")
-	}
-	if body != "" {
-		lines = append(lines, body)
-	}
-	lines = append(lines, "")
-	if m.SnapshotURL != "" {
-		lines = append(lines, "[抓拍]("+m.SnapshotURL+")")
-	}
-	if m.ReplayURL != "" {
-		lines = append(lines, "[回放]("+m.ReplayURL+")")
-	}
-	// The delivery id is what a receiver quotes when asking "which alert?".
-	lines = append(lines, "")
-	lines = append(lines, `<font color="comment">投递 `+string(m.DeliveryID)+`</font>`)
-	text := strings.Join(lines, "\n")
+	text := wecomMarkdownBody(m)
 	if len(w.mentions) > 0 {
 		// The mention line sits at the end so the facts read first. `<@手机号>`
 		// is how a robot pings a member; the API expands it into a real mention.

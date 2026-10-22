@@ -66,6 +66,9 @@ type ChannelConfig struct {
 	Recipients []string
 	// WeCom carries the group-robot settings for kind 'wecom'. Nil otherwise.
 	WeCom *WeComConfig
+	// WeComApp carries the enterprise-application settings for kind 'wecom_app',
+	// whose secret is in Secret. Nil otherwise.
+	WeComApp *WeComAppConfig
 }
 
 // NewRegistry starts a registry with no kinds. Callers register what they build.
@@ -114,6 +117,10 @@ func DefaultRegistry() *Registry {
 	registry.Register("email", func(in ChannelConfig) (Channel, error) { return newEmail(in) })
 	// WeCom group robots: one webhook URL, a message layout, optional mentions.
 	registry.Register("wecom", func(in ChannelConfig) (Channel, error) { return newWeCom(in) })
+	// WeCom enterprise applications: corpID + secret traded for an access token,
+	// addressing named members or departments. Registered as its own kind because
+	// it authenticates and addresses differently from a group robot.
+	registry.Register("wecom_app", func(in ChannelConfig) (Channel, error) { return newWeComApp(in) })
 	return registry
 }
 

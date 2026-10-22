@@ -53,6 +53,13 @@ func decodeChannelBody(w http.ResponseWriter, q *http.Request) (notify.ChannelIn
 			MsgType  string `json:"wecom_msg_type"`
 			Mentions string `json:"wecom_mentions"`
 		} `json:"wecom"`
+		// Enterprise-application settings, present for kind 'wecom_app'.
+		WeComApp *struct {
+			CorpID  string `json:"wecom_corp_id"`
+			AgentID int    `json:"wecom_agent_id"`
+			To      string `json:"wecom_to"`
+			MsgType string `json:"wecom_msg_type"`
+		} `json:"wecom_app"`
 		// Nil means "leave the stored recipients alone"; an empty array clears
 		// them. A rename must not silently unbind every mailbox.
 		Recipients *[]struct {
@@ -88,6 +95,14 @@ func decodeChannelBody(w http.ResponseWriter, q *http.Request) (notify.ChannelIn
 	}
 	if in.WeCom != nil {
 		input.WeCom = &notify.WeComConfig{MsgType: in.WeCom.MsgType, Mentions: in.WeCom.Mentions}
+	}
+	if in.WeComApp != nil {
+		input.WeComApp = &notify.WeComAppConfig{
+			CorpID:  in.WeComApp.CorpID,
+			AgentID: in.WeComApp.AgentID,
+			To:      in.WeComApp.To,
+			MsgType: in.WeComApp.MsgType,
+		}
 	}
 	if in.Recipients != nil {
 		recipients := make([]notify.RecipientInput, 0, len(*in.Recipients))

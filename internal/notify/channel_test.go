@@ -186,7 +186,7 @@ func TestDefaultRegistryShipsTheDocumentedKinds(t *testing.T) {
 	// The inbox, webhooks, and SMTP mail. Pinned as an exact list so adding a kind
 	// is a deliberate change to this test rather than a silent widening of what a
 	// deployment offers.
-	want := []string{"email", "inapp", "webhook", "wecom"}
+	want := []string{"email", "inapp", "webhook", "wecom", "wecom_app"}
 	kinds := registry.Kinds()
 	if len(kinds) != len(want) {
 		t.Fatalf("EVT-05 ships %v, got %v", want, kinds)
