@@ -400,3 +400,35 @@ test('saving a wecom application sends its identifiers and addressing', async ()
   expect(body.secret).toBe('app-secret')
   expect(body.url).toBe('')
 })
+
+// One field is one grid cell, and nothing wraps it twice.
+//
+// This asserts structure rather than pixels on purpose: the vitest browser does
+// not load the application stylesheet, so every Tailwind class is inert and a
+// getBoundingClientRect comparison measures the browser's default form controls,
+// not the page. That check would "fail" for the wrong reason and "pass" for the
+// wrong reason. What is true in both worlds is the shape: each field is a single
+// grid cell, and SelectField — which renders its own grid — is not wrapped in a
+// second one, because two nested `gap-2` containers is exactly what pushed the
+// select out of line with its neighbours.
+test('each field is one grid cell, with SelectField unwrapped', async () => {
+  signIn()
+  const screen = await render(view(fixture([], ['inapp', 'webhook', 'email', 'wecom', 'wecom_app'])))
+  await userEvent.click(screen.getByLabelText('渠道类型'))
+  await userEvent.click(await screen.getByRole('option', { name: '企业微信 · 应用' }).first())
+
+  const form = document.querySelector('form') as HTMLElement
+  // The kind select is the first cell. Its own grid must be a DIRECT child of the
+  // form; a wrapper would make it a grandchild and reintroduce the double gap.
+  const kindCell = screen.getByLabelText('渠道类型').element().closest('.grid') as HTMLElement
+  expect(kindCell.parentElement).toBe(form)
+
+  // Every field cell carries exactly one gap container: itself.
+  for (const label of ['渠道名称', '企业ID', '应用ID', '应用 Secret']) {
+    const cell = screen.getByLabelText(label).element().closest('.grid') as HTMLElement
+    expect(cell.parentElement).toBe(form)
+    // No nested grid between the cell and the control.
+    const nested = cell.querySelectorAll(':scope > .grid')
+    expect(nested.length).toBe(0)
+  }
+})

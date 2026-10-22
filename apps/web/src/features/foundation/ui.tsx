@@ -111,7 +111,11 @@ export function SelectField({
         <SelectTrigger
           id={fieldId}
           size={size}
-          aria-label={label ? undefined : ariaLabel}
+          // Both may be present: `label` is what the page shows, `ariaLabel` is
+          // what it is called. Suppressing the accessible name whenever a visual
+          // label existed made "渠道类型" unqueryable the moment a form added a
+          // short visible caption, and the two are not the same string.
+          aria-label={ariaLabel || undefined}
           className={cn('w-full', triggerClassName)}
         >
           <SelectValue placeholder={placeholder} />

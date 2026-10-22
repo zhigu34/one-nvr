@@ -273,24 +273,22 @@ export function NotificationChannels() {
         </p>
       )}
       <form
-        className='grid items-end gap-3 rounded-xl border bg-card p-4 md:grid-cols-3'
+        className='grid content-start items-start gap-x-4 gap-y-3 rounded-xl border bg-card p-4 md:grid-cols-3'
         onSubmit={(event) => {
           event.preventDefault()
           submit()
         }}
       >
-        <label className='grid gap-2 text-sm'>
-          <span>类型</span>
-          <SelectField
-            ariaLabel='渠道类型'
+        <SelectField
+          label='类型'
+          ariaLabel='渠道类型'
             value={form.kind}
             onValueChange={(next) => {
               setForm({ ...form, kind: next || 'webhook' })
               setTestResult('')
             }}
             options={kinds.map((kind) => ({ value: kind, label: KIND_LABELS[kind] || kind }))}
-          />
-        </label>
+        />
         <label className='grid gap-2 text-sm'>
           <span>名称</span>
           <Input
@@ -370,10 +368,9 @@ export function NotificationChannels() {
                 autoComplete='new-password'
               />
             </label>
-            <label className='grid gap-2 text-sm'>
-              <span>消息格式</span>
-              <SelectField
-                ariaLabel='应用消息格式'
+            <SelectField
+              label='消息格式'
+              ariaLabel='应用消息格式'
                 value={form.wecomApp.msgType}
                 onValueChange={(next) =>
                   setForm({ ...form, wecomApp: { ...form.wecomApp, msgType: next || 'text' } })
@@ -382,9 +379,8 @@ export function NotificationChannels() {
                   { value: 'text', label: '文本' },
                   { value: 'markdown', label: 'Markdown' },
                   { value: 'textcard', label: '图文卡片' },
-                ]}
-              />
-            </label>
+              ]}
+            />
             <label className='grid gap-2 text-sm md:col-span-2'>
               <span>接收人</span>
               <Input
@@ -418,10 +414,9 @@ export function NotificationChannels() {
                 群设置 → 群机器人 → 添加机器人，复制它给的地址。地址里的 key 就是凭据。
               </span>
             </label>
-            <label className='grid gap-2 text-sm'>
-              <span>消息格式</span>
-              <SelectField
-                ariaLabel='企业微信消息格式'
+            <SelectField
+              label='消息格式'
+              ariaLabel='企业微信消息格式'
                 value={form.wecom.msgType}
                 onValueChange={(next) =>
                   setForm({ ...form, wecom: { ...form.wecom, msgType: next || 'markdown' } })
@@ -429,9 +424,8 @@ export function NotificationChannels() {
                 options={[
                   { value: 'markdown', label: 'Markdown 文本' },
                   { value: 'news', label: '图文卡片' },
-                ]}
-              />
-            </label>
+              ]}
+            />
             <label className='grid gap-2 text-sm'>
               <span>@ 手机号（可留空）</span>
               <Input
@@ -507,20 +501,30 @@ export function NotificationChannels() {
                 465 一般是 SSL；587 是 STARTTLS（服务器支持时会自动升级）
               </span>
             </label>
-            <CheckboxField
-              label='启用 SSL'
-              checked={form.email.smtp_tls}
-              onCheckedChange={(checked) =>
-                setForm({ ...form, email: { ...form.email, smtp_tls: checked === true } })
-              }
-            />
-            <CheckboxField
-              label='服务器认证'
-              checked={form.email.smtp_auth}
-              onCheckedChange={(checked) =>
-                setForm({ ...form, email: { ...form.email, smtp_auth: checked === true } })
-              }
-            />
+            {/* Two switches, one cell, and the cell is as tall as an input plus
+                its label so they line up with the fields beside them. Giving each
+                its own column left two nearly-empty cells and broke the row. */}
+            <div className='grid gap-2 text-sm'>
+              <span aria-hidden className='invisible'>
+                选项
+              </span>
+              <div className='flex h-9 items-center gap-4'>
+                <CheckboxField
+                  label='启用 SSL'
+                  checked={form.email.smtp_tls}
+                  onCheckedChange={(checked) =>
+                    setForm({ ...form, email: { ...form.email, smtp_tls: checked === true } })
+                  }
+                />
+                <CheckboxField
+                  label='服务器认证'
+                  checked={form.email.smtp_auth}
+                  onCheckedChange={(checked) =>
+                    setForm({ ...form, email: { ...form.email, smtp_auth: checked === true } })
+                  }
+                />
+              </div>
+            </div>
             {form.email.smtp_auth && (
               <>
                 <label className='grid gap-2 text-sm'>
@@ -550,29 +554,36 @@ export function NotificationChannels() {
             )}
           </>
         )}
-        <CheckboxField
-          label='启用'
-          checked={form.enabled}
-          onCheckedChange={(checked) => setForm({ ...form, enabled: checked === true })}
-        />
-        <div className='flex gap-2'>
-          <Button type='submit' disabled={pending}>
-            {editing ? '保存' : '添加'}
-          </Button>
-          {editing && (
-            <Button
-              type='button'
-              variant='outline'
-              onClick={() => {
-                setEditing('')
-                setEditingVersion(0)
-                setForm(EMPTY_FORM)
-                setTestResult('')
-              }}
-            >
-              取消
+        {/* The switch and the buttons sit below the field grid, not inside it.
+            They are not fields: placing them in a three-column field grid put two
+            small controls in cells sized for inputs and pushed the row above them
+            out of alignment. The help line spans the full width for the same
+            reason — it describes the whole form, not one column. */}
+        <div className='flex flex-wrap items-center justify-between gap-3 border-t pt-3 md:col-span-3'>
+          <CheckboxField
+            label='启用'
+            checked={form.enabled}
+            onCheckedChange={(checked) => setForm({ ...form, enabled: checked === true })}
+          />
+          <div className='flex gap-2'>
+            <Button type='submit' disabled={pending}>
+              {editing ? '保存' : '添加'}
             </Button>
-          )}
+            {editing && (
+              <Button
+                type='button'
+                variant='outline'
+                onClick={() => {
+                  setEditing('')
+                  setEditingVersion(0)
+                  setForm(EMPTY_FORM)
+                  setTestResult('')
+                }}
+              >
+                取消
+              </Button>
+            )}
+          </div>
         </div>
         <p className='text-xs text-muted-foreground md:col-span-3'>{KIND_HELP[form.kind]}</p>
       </form>
