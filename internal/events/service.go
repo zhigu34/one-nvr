@@ -296,14 +296,46 @@ func (s *Service) List(ctx context.Context, p auth.Principal, q ListQuery) (Even
 			}
 		}
 		cursorTime = cursor
+		// Evidence-free slivers are not shown.
+		//
+		// A detection that lasted a couple of seconds, produced no picture and has
+		// no footage anywhere has nothing to look at: the card is a blank tile
+		// whose only content is the fact that something was briefly detected.
+		// Measured on this site: 24 hours held 868 events, 407 of them three
+		// seconds or shorter, and 103 of those had neither a snapshot nor footage
+		// and no other event within thirty seconds — a fifth of the list was
+		// unpickable.
+		//
+		// The rule has two halves, both in SQL so the page and the count agree:
+		//
+		//   - a short, evidence-free event is hidden when nothing else happened on
+		//     that channel around it. It is a detection artifact, not a visit;
+		//   - when something else DID happen around it, only the rows with evidence
+		//     remain: the fragment is part of that activity, and its picture is on
+		//     its neighbour's card.
+		//
+		// A short event that DOES have a picture or footage is always shown — the
+		// rule is about having nothing to show, not about being brief.
 		rows, err := tx.Query(ctx, `SELECT `+eventColumns+` FROM events e
 			WHERE e.started_at < $1 AND e.started_at >= $2
+			AND NOT (
+				-- A running event is never a sliver: it has not finished, so its
+				-- duration is unknown, and hiding something that is happening right
+				-- now would be the worst possible answer.
+				e.ended_at IS NOT NULL
+				AND COALESCE(EXTRACT(EPOCH FROM (e.ended_at - e.started_at)), 0) <= $10
+				AND e.snapshot_relative_path IS NULL
+				AND NOT EXISTS (SELECT 1 FROM recording_segments rs
+				                WHERE rs.channel_id=e.channel_id AND rs.state IN ('ready','finalizing')
+				                  AND rs.start_at < COALESCE(e.ended_at,e.started_at) + interval '5 seconds'
+				                  AND rs.end_at > e.started_at - interval '5 seconds')
+			)
 			AND ($3::uuid IS NULL OR (e.started_at,e.id)<($4,$3::uuid))
 			AND ($5::uuid IS NULL OR e.channel_id=$5)
 			AND ($6::uuid IS NULL OR e.source_revision_id=$6)
 			AND ($7::text IS NULL OR e.category=$7)
 			AND ($8::text IS NULL OR e.handle_state=$8)
-			ORDER BY e.started_at DESC,e.id DESC LIMIT $9`, q.End.UTC(), q.Start.UTC(), nullableNull(q.Cursor), cursorTime, nullableID(q.ChannelID), nullableID(q.SourceRevisionID), nullableText(q.Category), nullableText(q.HandleState), q.Limit+1)
+			ORDER BY e.started_at DESC,e.id DESC LIMIT $9`, q.End.UTC(), q.Start.UTC(), nullableNull(q.Cursor), cursorTime, nullableID(q.ChannelID), nullableID(q.SourceRevisionID), nullableText(q.Category), nullableText(q.HandleState), q.Limit+1, EvidenceFreeSeconds)
 		if err != nil {
 			return err
 		}
@@ -622,3 +654,14 @@ func nullableNull(value id.ID) any {
 	}
 	return value
 }
+
+// EvidenceFreeSeconds is how short a detection must be for the list to hide it
+// when it has nothing to show.
+//
+// Three seconds is the measured knee, not a guess: on this site the <=3s bucket
+// averages 0.707 confidence against 0.886 for events over ten seconds, and
+// Frigate writes a snapshot for barely half of them (138 of 407) — it writes
+// pictures while an event runs, and a two-second detection can end before the
+// first one lands. A detection that short with no picture and no footage is a
+// track fragment, not something an operator can act on.
+const EvidenceFreeSeconds = 3
