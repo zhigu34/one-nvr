@@ -332,9 +332,14 @@ func (s *Service) List(ctx context.Context, p auth.Principal, q ListQuery) (Even
 			visible = append(visible, item)
 		}
 	}
-	out.Items = foldDuplicateDetections(visible)
-	// Truncation happens AFTER folding: splitting a cluster across two pages
-	// would show the same walk-past twice, once on each page.
+	// Every detection is its own row. The list answers "what did the detector
+	// see", and folding neighbouring detections into one row hid that: an operator
+	// counting what happened read a smaller number than the index held, and the
+	// "合并" badge made an event look like something the product had decided to
+	// suppress. Merging belongs to the RECORDING (one clip, several anchors,
+	// clip_windows) — not to the event list, where each anchor is the thing an
+	// operator navigates by.
+	out.Items = visible
 	if len(out.Items) > q.Limit {
 		out.Items = out.Items[:q.Limit]
 		cursor := out.Items[len(out.Items)-1].ID
@@ -342,88 +347,6 @@ func (s *Service) List(ctx context.Context, p auth.Principal, q ListQuery) (Even
 	}
 	return out, nil
 }
-
-// foldDuplicateDetections merges a channel's detections that belong to one
-// stretch of activity into a single row.
-//
-// The detector cannot tell one person from another: it re-identifies a subject
-// after a brief occlusion and emits a second event, and three people walking
-// past is three events. Neither distinction is useful here — the question the
-// list answers is "when was someone there", not "which person was which". So the
-// rule is time-based: same channel, same category, and no gap longer than
-// ActivityGap collapses into one row covering the whole stretch.
-//
-// Position was tried first and rejected. It cannot separate the cases it was
-// meant to: two people standing near each other have nearly the same box, and
-// one person crossing the frame moves far. Measured on this site, position
-// split the same overlapping pairs across both sides of any threshold.
-//
-// The upstream ids are kept in MergedIDs, so the list states how many were
-// folded and the original rows remain in the index.
-func foldDuplicateDetections(items []Event) []Event {
-	if len(items) < 2 {
-		return items
-	}
-	out := make([]Event, 0, len(items))
-	for _, item := range items {
-		if item.ChannelID == nil {
-			out = append(out, item)
-			continue
-		}
-		merged := false
-		for at := range out {
-			group := &out[at]
-			if group.ChannelID == nil || *group.ChannelID != *item.ChannelID {
-				continue
-			}
-			if group.Category != item.Category {
-				continue
-			}
-			// Within ActivityGap of the group's extent in either direction: input
-			// is newest-first, so the item usually starts before the group does.
-			if item.StartedAt.After(group.end().Add(ActivityGap)) ||
-				group.StartedAt.After(endOf(item).Add(ActivityGap)) {
-				continue
-			}
-			if item.StartedAt.Before(group.StartedAt) {
-				group.StartedAt = item.StartedAt
-			}
-			if candidate := endOf(item); candidate.After(group.end()) || group.EndedAt == nil {
-				group.EndedAt = &candidate
-			}
-			group.MergedIDs = append(group.MergedIDs, item.ID)
-			if item.Score > group.Score {
-				group.Score = item.Score
-			}
-			merged = true
-			break
-		}
-		if !merged {
-			out = append(out, item)
-		}
-	}
-	return out
-}
-
-// ActivityGap is how long a channel may be quiet before the next detection is
-// treated as a separate occurrence. Thirty seconds covers "someone walked out of
-// frame and came back" and "a second person followed the first" without merging
-// unrelated visits: measured on this site, 169 of 825 daily events sit within ten
-// seconds of the previous one and another 166 overlap outright, while the next
-// cluster starts at 11-30s and is followed by genuine gaps of minutes.
-const ActivityGap = 30 * time.Second
-
-// endOf is the moment an event stopped, or its start when it is still running
-// (a zero-length event still occupies an instant).
-func endOf(item Event) time.Time {
-	if item.EndedAt != nil && item.EndedAt.After(item.StartedAt) {
-		return *item.EndedAt
-	}
-	return item.StartedAt
-}
-
-// end is endOf for a pointer receiver inside the fold loop.
-func (e *Event) end() time.Time { return endOf(*e) }
 
 // Get returns one event with its handling trail, grant-checked.
 func (s *Service) Get(ctx context.Context, p auth.Principal, eventID id.ID) (Event, error) {
@@ -591,7 +514,15 @@ func (s *Service) Snapshot(ctx context.Context, p auth.Principal, eventID id.ID)
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusNotFound {
-		if _, updateErr := s.DB.Pool.Exec(ctx, `UPDATE events SET snapshot_state='gone' WHERE id=$1 AND snapshot_state<>'gone'`, eventID); updateErr != nil && ctx.Err() == nil {
+		// 'gone' is a verdict about the DETECTOR's current answer, not a permanent
+		// one. Frigate writes snapshots asynchronously, so a 404 minutes after the
+		// event can still be followed by the file — and the archive sweep keeps
+		// asking for two hours. Recording 'gone' only where it is still gone at the
+		// end of that window keeps the two paths from disagreeing: the sweep may
+		// archive a picture this endpoint already called missing.
+		if _, updateErr := s.DB.Pool.Exec(ctx, `UPDATE events SET snapshot_state='gone'
+			WHERE id=$1 AND snapshot_state<>'gone'
+			  AND started_at < clock_timestamp() - $2::interval`, eventID, SnapshotRetryWindow.String()); updateErr != nil && ctx.Err() == nil {
 			slog.Warn("event snapshot reconcile unavailable", "error", updateErr)
 		}
 		return nil, "", ErrEventNotFound

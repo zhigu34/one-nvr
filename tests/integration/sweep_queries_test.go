@@ -2,6 +2,10 @@ package integration
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -113,19 +117,127 @@ func TestArchiveSnapshotsReadsPoolPath(t *testing.T) {
 		t.Fatal("snapshot sweep did not finish; it is looping on a failing scan")
 	}
 
-	// The sweep must have looked at the row. A schema error leaves the row
-	// untouched with no error recorded, which is the bug's signature.
+	// The sweep must have looked at the row, and an unreachable detector must
+	// leave it ELIGIBLE for the next pass.
+	//
+	// This used to assert that snapshot_archive_error was set — which made the
+	// first failure final, because the scan excludes rows with a non-null error.
+	// A detector that was briefly down cost the picture permanently. The row now
+	// stays clean and the sweep retries within SnapshotRetryWindow; the evidence
+	// that the scan reached it is that the row is still pending and not excluded.
 	var recorded *string
+	var path *string
 	if err := fixture.DB.Pool.QueryRow(ctx,
-		`SELECT snapshot_archive_error FROM events WHERE source_id='snap-fixture-1'`).Scan(&recorded); err != nil {
+		`SELECT snapshot_archive_error,snapshot_relative_path FROM events WHERE source_id='snap-fixture-1'`).Scan(&recorded, &path); err != nil {
 		t.Fatal(err)
 	}
-	if recorded == nil {
-		t.Fatal("the snapshot sweep did not record an outcome for a ready event; " +
-			"an unreachable detector must be reported on the row, so a null " +
-			"result means the scan never reached it")
+	if path != nil {
+		t.Fatal("an unreachable detector produced a picture")
+	}
+	if recorded != nil {
+		t.Fatalf("a retryable failure was recorded as terminal (%q); the sweep will never try again", *recorded)
 	}
 }
 
 var _ = events.Service{}
 var _ = recording.RetentionSweepInterval
+
+// A picture that arrives late is still archived.
+//
+// Frigate writes snapshots asynchronously, so the first ask after an event
+// routinely misses for a short one — measured on this site, a 24-second event had
+// its picture and a 2-second one did not. Treating the first 404 as final threw
+// away pictures that appeared a minute later.
+func TestLateArrivingSnapshotIsArchived(t *testing.T) {
+	fixture, service := newEventsFixture(t)
+	ctx := context.Background()
+	service.Pools = fixture.Service.Pools
+	if _, err := fixture.DB.Pool.Exec(ctx, "UPDATE channels SET storage_pool_id=$2 WHERE id=$1", fixture.Channel, fixture.Pool.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetMappings(ctx, fixture.Admin, map[id.ID]string{fixture.Channel: "front-door"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A detector that answers 404 for the first two asks and 200 afterwards.
+	var asks int32
+	detector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/snapshot.jpg") {
+			w.WriteHeader(404)
+			return
+		}
+		if atomic.AddInt32(&asks, 1) <= 2 {
+			w.WriteHeader(404)
+			return
+		}
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write([]byte{0xFF, 0xD8, 0xFF, 0xD9})
+	}))
+	defer detector.Close()
+	service.Frigate = detector.URL
+
+	start := float64(time.Now().Add(-10 * time.Minute).Unix())
+	end := start + 20
+	if err := service.Ingest(ctx, frigatePayload("end", "late-snap", "front-door", "person", start, &end, nil, true)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx,
+		`UPDATE events SET snapshot_state='ready',snapshot_relative_path=NULL,snapshot_archive_error=NULL
+		 WHERE source_id='late-snap'`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Three passes: the first two are refused, the third gets the picture.
+	for pass := 0; pass < 3; pass++ {
+		service.ArchiveSnapshots(ctx)
+	}
+	var path *string
+	var archiveErr *string
+	if err := fixture.DB.Pool.QueryRow(ctx,
+		`SELECT snapshot_relative_path,snapshot_archive_error FROM events WHERE source_id='late-snap'`).Scan(&path, &archiveErr); err != nil {
+		t.Fatal(err)
+	}
+	if path == nil {
+		t.Fatalf("a picture that arrived on the third ask was never archived (error=%v, asks=%d)", archiveErr, asks)
+	}
+	if !strings.Contains(*path, "snapshots/") {
+		t.Fatalf("the picture was stored at %q, want a path under snapshots/", *path)
+	}
+}
+
+// A terminal failure still stops the retries: a channel with no pool cannot store
+// a picture no matter how often the sweep asks.
+func TestTerminalSnapshotFailureStopsRetrying(t *testing.T) {
+	fixture, service := newEventsFixture(t)
+	ctx := context.Background()
+	service.Pools = fixture.Service.Pools
+	service.Frigate = "http://frigate.test:5000"
+	if err := service.SetMappings(ctx, fixture.Admin, map[id.ID]string{fixture.Channel: "front-door"}); err != nil {
+		t.Fatal(err)
+	}
+	// No pool bound: terminal.
+	if _, err := fixture.DB.Pool.Exec(ctx, `UPDATE channels SET storage_pool_id=NULL WHERE id=$1`, fixture.Channel); err != nil {
+		t.Fatal(err)
+	}
+	start := float64(time.Now().Add(-10 * time.Minute).Unix())
+	end := start + 20
+	if err := service.Ingest(ctx, frigatePayload("end", "no-pool-snap", "front-door", "person", start, &end, nil, true)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.DB.Pool.Exec(ctx,
+		`UPDATE events SET snapshot_state='ready',snapshot_relative_path=NULL,snapshot_archive_error=NULL
+		 WHERE source_id='no-pool-snap'`); err != nil {
+		t.Fatal(err)
+	}
+	service.ArchiveSnapshots(ctx)
+	// The scan only considers channels with a bound pool, so the row is not even
+	// reached — and it must not be left looking retryable forever.
+	var archiveErr *string
+	if err := fixture.DB.Pool.QueryRow(ctx,
+		`SELECT snapshot_archive_error FROM events WHERE source_id='no-pool-snap'`).Scan(&archiveErr); err != nil {
+		t.Fatal(err)
+	}
+	if archiveErr != nil {
+		t.Fatalf("a channel with no pool recorded %q; the scan never reached it", *archiveErr)
+	}
+}

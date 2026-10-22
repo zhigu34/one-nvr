@@ -30,6 +30,15 @@ import (
 // costs nothing while polling harder would waste both ends.
 const SnapshotSweepInterval = 2 * time.Minute
 
+// SnapshotRetryWindow is how long the sweep keeps asking the detector for a
+// picture that is not there yet.
+//
+// Frigate writes snapshots asynchronously, so the first ask routinely misses for
+// a short event. Two hours is far longer than that write takes and short enough
+// that a detector which never produces one does not keep the event in the queue
+// indefinitely.
+const SnapshotRetryWindow = 2 * time.Hour
+
 // snapshotSweepBatch bounds one pass: fetching is network-bound and an
 // unbounded sweep would hold the worker for an arbitrarily long time on first
 // enable, when every recent event is a candidate.
@@ -95,8 +104,12 @@ func (s *Service) pendingSnapshots(ctx context.Context) ([]pendingSnapshot, erro
 		WHERE e.source='frigate' AND e.snapshot_state='ready'
 			AND e.snapshot_relative_path IS NULL
 			AND e.snapshot_archive_error IS NULL
+			-- Bounded by age: a detector that never writes a picture must not be
+			-- asked about the same event forever. Two hours covers the window in
+			-- which Frigate can still produce one; after that the answer is final.
+			AND e.started_at > clock_timestamp() - $2::interval
 		ORDER BY e.started_at DESC
-		LIMIT $1`, snapshotSweepBatch)
+		LIMIT $1`, snapshotSweepBatch, SnapshotRetryWindow.String())
 	if err != nil {
 		return nil, err
 	}
@@ -217,8 +230,12 @@ func (s *Service) fetchSnapshot(ctx context.Context, sourceID string) (io.ReadCl
 	if response.StatusCode == http.StatusNotFound {
 		response.Body.Close()
 		cancel()
-		// The detector no longer has it. Say so permanently: the event keeps its
-		// honest state instead of being retried forever.
+		// The detector does not have it YET. Frigate writes snapshots
+		// asynchronously and a short event may not have been written when the
+		// sweep first asks; measured on this site, a 24-second event had its
+		// picture and a 2-second one did not. Treating the first 404 as final
+		// threw away pictures that arrived a minute later, so the sweep keeps
+		// asking until the event is old enough that the answer cannot change.
 		return nil, &snapshotFetchError{Code: "detector_dropped"}
 	}
 	if response.StatusCode != http.StatusOK {
@@ -251,16 +268,39 @@ func (s *Service) markSnapshotArchived(ctx context.Context, item pendingSnapshot
 	return err
 }
 
-// markSnapshotFailure records why a picture is not archived. A reason of the
-// terminal kind also stops the sweep from retrying: the detector said it no
-// longer has the picture, so no amount of waiting will produce one.
+// markSnapshotFailure records why a picture is not archived, and decides whether
+// the sweep may try again.
+//
+// Only a terminal reason sets snapshot_archive_error, because that column is the
+// sweep's exclusion list (`WHERE snapshot_archive_error IS NULL`). Writing a
+// retryable reason there made the first failure final: a detector that had not
+// finished writing the file, or was briefly unreachable, permanently cost the
+// picture. The retryable reasons are logged and the row stays eligible, bounded
+// by the event's age in pendingSnapshots.
 func (s *Service) markSnapshotFailure(ctx context.Context, eventID id.ID, reason string) {
 	write, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	if _, err := s.DB.Pool.Exec(write, `UPDATE events SET snapshot_archive_error=$2,updated_at=clock_timestamp()
-		WHERE id=$1 AND snapshot_relative_path IS NULL`, eventID, reason); err != nil {
-		slog.Warn("snapshot archive failure not recorded", "error", err, "event", eventID)
+	if terminalSnapshotFailure(reason) {
+		if _, err := s.DB.Pool.Exec(write, `UPDATE events SET snapshot_archive_error=$2,updated_at=clock_timestamp()
+			WHERE id=$1 AND snapshot_relative_path IS NULL`, eventID, reason); err != nil {
+			slog.Warn("snapshot archive failure not recorded", "error", err, "event", eventID)
+		}
+		return
 	}
+	slog.Warn("snapshot archive deferred", "event", eventID, "reason", reason)
+}
+
+// terminalSnapshotFailure reports whether retrying could ever succeed.
+//
+// A pool that cannot be opened, a site with no timezone and a picture the
+// detector wrote but that arrived empty are all conditions where waiting changes
+// nothing. "The detector does not have it yet" is not one of them.
+func terminalSnapshotFailure(reason string) bool {
+	switch reason {
+	case "pool_unavailable", "pool_unwritable", "timezone_unavailable", "snapshot_incomplete":
+		return true
+	}
+	return false
 }
 
 // SnapshotRef describes where an event's picture can actually be read from. The
