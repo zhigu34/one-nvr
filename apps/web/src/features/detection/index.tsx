@@ -77,6 +77,11 @@ export function Detection() {
   const summaries = useAPI<{ items: Summary[] }>('/api/v1/channels/summary')
   const configs = useAPI<{ items: Config[] }>('/api/v1/detection/configs')
   const runtime = useAPI<Runtime>('/api/v1/detection/runtime')
+  // The detector's hardware profile: which device it runs on and how long a
+  // sample decode and inference took. It lived on the site settings page, which
+  // is where a site is configured — but these numbers are read when detection
+  // feels slow, and that question is asked here.
+  const hardware = useAPI<Schema<'HardwareReport'>>('/api/v1/settings/hardware', true, 30_000)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
@@ -166,7 +171,7 @@ export function Detection() {
       />
       <Notices notice={notice} error={error} />
       {runtime.data && (
-        <div className='grid gap-2 rounded-xl border bg-card p-4 text-sm sm:grid-cols-2 lg:grid-cols-4'>
+        <div className='grid gap-2 rounded-xl border bg-card p-4 text-sm sm:grid-cols-2 lg:grid-cols-5'>
           <div>
             <p className='text-xs text-muted-foreground'>检测服务</p>
             <p>
@@ -189,6 +194,22 @@ export function Detection() {
                 : '—'}
               {runtime.data.runtime?.overloaded ? ' · 过载' : ''}
             </p>
+          </div>
+          <div>
+            <p className='text-xs text-muted-foreground'>检测硬件</p>
+            {hardware.data ? (
+              <p>
+                {hardware.data.proposal.node || 'CPU'} · 解码{' '}
+                {hardware.data.proposal.decode_id} · 推理 {hardware.data.proposal.inference_id}
+              </p>
+            ) : (
+              <p className='text-muted-foreground'>—</p>
+            )}
+            {hardware.data && !hardware.data.validated && (
+              <p className='mt-1 text-xs text-amber-600'>
+                自检未通过：{hardware.data.error_code || 'unknown'}
+              </p>
+            )}
           </div>
           <div>
             <p className='text-xs text-muted-foreground'>最近发布</p>

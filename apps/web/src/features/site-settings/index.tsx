@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Link } from '@tanstack/react-router'
 import { useAuthStore } from '@/stores/auth-store'
 import { apiRequest, jsonRequest } from '@/lib/api-client'
-import type { Schema, Capabilities } from '@/lib/types'
+import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { useAPI, useAction, fields, text } from '@/features/foundation/hooks'
@@ -15,7 +14,6 @@ import {
   Notices,
   Forbidden,
 } from '@/features/foundation/ui'
-import { StatusBadge, type StatusTone } from '@/features/foundation/status-badge'
 import { TLSSettings } from '@/features/tls-settings'
 import { NotificationChannels } from '@/features/notification-channels'
 
@@ -24,12 +22,6 @@ export function Settings() {
   const admin = useAuthStore((s) => s.user?.role === 'admin')
   const query = useAPI<Schema<'Site'>>('/api/v1/site', admin)
   const zones = useAPI<Timezone[]>('/api/v1/timezones', admin)
-  const modules = useAPI<Capabilities>('/api/v1/capabilities', admin, 5000)
-  const hardware = useAPI<Schema<'HardwareReport'>>(
-    '/api/v1/settings/hardware',
-    admin && !!modules.data?.frigate.enabled,
-    5000
-  )
   const action = useAction(true)
   const [confirmExpand, setConfirmExpand] = useState(false)
   if (!admin) return <Forbidden />
@@ -130,52 +122,6 @@ export function Settings() {
           />
         </Panel>
       )}
-      <Panel title='功能模块'>
-        <QueryState
-          pending={modules.isPending}
-          error={modules.error}
-          retry={() => modules.refetch()}
-        />
-        {modules.data && (
-          <div className='grid gap-4 md:grid-cols-2'>
-            <ModuleStatus
-              name='智能检测'
-              testId='intelligence-status'
-              value={modules.data.frigate}
-            />
-            <ModuleStatus
-              name='云归档'
-              testId='cloud-status'
-              value={modules.data.cloud_archive}
-            />
-          </div>
-        )}
-      </Panel>
-      {modules.data?.frigate.enabled && (
-        <Panel title='智能检测硬件'>
-          <QueryState
-            pending={hardware.isPending}
-            error={hardware.error}
-            retry={() => hardware.refetch()}
-          />
-          {hardware.data && (
-            <>
-              <p>
-                自检：{hardware.data.validated ? '通过' : '失败'} ·{' '}
-                {hardware.data.error_code || 'validated'}
-              </p>
-              <p>
-                解码：{hardware.data.proposal.decode_id} · 推理：
-                {hardware.data.proposal.inference_id}
-              </p>
-              <p className='text-sm text-muted-foreground'>
-                设备：{hardware.data.proposal.node || 'CPU'} ·
-                样本自检不代表摄像头业务或容量验收。
-              </p>
-            </>
-          )}
-        </Panel>
-      )}
       <TLSSettings />
       <Panel title='通知渠道'>
         <NotificationChannels />
@@ -246,96 +192,5 @@ function SiteClock({ zone }: { zone: string }) {
       当前站点时间：
       {now.toLocaleString('zh-CN', { timeZone: zone, hour12: false })} · {zone}
     </p>
-  )
-}
-// The PRD's four operator-facing states, plus what a disabled module says. The
-// vocabulary matters: "运行异常" must never be worded as "尚未实现" — one is a
-// broken dependency the operator can look at, the other claims the product
-// lacks the feature. Each state also says where to go next, because "已启用未
-// 配置" is only useful if it points at the page that configures it.
-const MODULE_STATES: Record<
-  string,
-  { label: string; tone: StatusTone; hint: string }
-> = {
-  disabled: {
-    label: '功能未启用',
-    tone: 'neutral',
-    hint: '该模块未随本次部署启用（.env 中的开关为 no）。',
-  },
-  not_configured: {
-    label: '待配置',
-    tone: 'warning',
-    hint: '模块已启用，但还没有可用的配置。',
-  },
-  healthy: {
-    label: '运行中',
-    tone: 'success',
-    hint: '已配置，且依赖组件响应正常。',
-  },
-  unavailable: {
-    label: '运行异常',
-    tone: 'destructive',
-    hint: '已配置，但依赖组件没有响应，请到运维与审计页查看组件状态。',
-  },
-  // Configured, never tested. Saying 运行异常 here would send the operator after
-  // a fault that has not happened — measured on this site, uploads were succeeding
-  // through a target whose card claimed it was broken.
-  unverified: {
-    label: '未验证',
-    tone: 'warning',
-    hint: '已配置，但还没有测试过。到归档目标页点一次「测试」即可确认。',
-  },
-  not_available: {
-    label: '版本尚未提供',
-    tone: 'info',
-    hint: '当前版本不包含该模块。',
-  },
-}
-
-/** Where a module is configured, so a pending state is actionable. */
-const MODULE_LINKS: Record<
-  string,
-  { to: string; label: string; search?: Record<string, string> }
-> = {
-  '智能检测': { to: '/detection', label: '去配置检测' },
-  // Archive targets are a tab of the storage workspace now, so the link has to
-  // land on that tab rather than on the pool list.
-  '云归档': {
-    to: '/storage',
-    label: '去配置归档目标',
-    search: { tab: 'archive' },
-  },
-}
-
-function ModuleStatus({
-  name,
-  value,
-  testId,
-}: {
-  name: string
-  value: Schema<'Capability'>
-  testId: string
-}) {
-  const state = MODULE_STATES[value.state ?? ''] || MODULE_STATES.unavailable
-  const link = MODULE_LINKS[name]
-  return (
-    <div data-testid={testId} className='rounded-lg border p-4'>
-      <div className='flex items-center justify-between gap-2'>
-        <h3 className='font-medium'>{name}</h3>
-        <StatusBadge tone={state.tone}>{state.label}</StatusBadge>
-      </div>
-      <p className='mt-2 text-xs text-muted-foreground'>{state.hint}</p>
-      {value.state === 'not_configured' && link && (
-        <Button asChild size='sm' variant='outline' className='mt-2'>
-          <Link to={link.to} search={link.search ?? {}}>
-            {link.label}
-          </Link>
-        </Button>
-      )}
-      {/* The raw reason code is a support handle, not an explanation: the hint
-          above carries the meaning, and an operator who needs to check the
-          exact code against the logs still can. */}
-      <p className='mt-2 text-xs text-muted-foreground/70'>{value.reason}</p>
-    </div>
   )
 }
