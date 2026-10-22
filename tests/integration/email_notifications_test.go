@@ -579,3 +579,42 @@ func TestChannelTestSucceedsForTheInbox(t *testing.T) {
 		t.Fatalf("the inbox reported %s, want healthy", result)
 	}
 }
+
+// Deleting a channel a rule still tells is refused, and the refusal names the
+// rules. "仍被规则使用" over a sixteen-channel site leaves the operator hunting
+// for the binding they cannot see.
+func TestDeletingABoundChannelNamesTheRules(t *testing.T) {
+	fixture := newNotifyFixture(t)
+	ctx := context.Background()
+	channel, err := fixture.notify.RegisterChannel(ctx, fixture.fixture.Admin, notify.ChannelInput{
+		Kind: "inapp", Name: "站内", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A rule on this fixture's channel, bound to the destination.
+	fixture.createRule(t, "客厅有人", 60, channel.ID)
+
+	err = fixture.notify.DeleteChannel(ctx, fixture.fixture.Admin, channel.ID, channel.Version)
+	if err == nil {
+		t.Fatal("a bound channel was deleted")
+	}
+	var public *fault.Error
+	if !errors.As(err, &public) {
+		t.Fatalf("the refusal is not a public fault: %v", err)
+	}
+	if public.Status != 409 {
+		t.Fatalf("status is %d, want 409", public.Status)
+	}
+	if !strings.Contains(public.Message, "客厅有人") {
+		t.Fatalf("the refusal does not name the rule holding it: %q", public.Message)
+	}
+	// The channel survives.
+	var exists bool
+	if err := fixture.fixture.DB.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM notification_channels WHERE id=$1)`, channel.ID).Scan(&exists); err != nil {
+		t.Fatal(err)
+	}
+	if !exists {
+		t.Fatal("the channel was deleted despite the refusal")
+	}
+}

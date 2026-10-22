@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -35,7 +36,6 @@ const (
 var (
 	ErrChannelNotFound = auth.ErrNotFound
 	ErrChannelInvalid  = fault.New(422, "notification_channel_invalid", "通知渠道配置不完整")
-	ErrChannelInUse    = fault.New(409, "notification_channel_in_use", "该渠道仍被规则使用，请先解除绑定")
 )
 
 // Service owns notification channels, the rule bindings, and raising a
@@ -423,12 +423,33 @@ func (s *Service) DeleteChannel(ctx context.Context, p auth.Principal, channelID
 		return err
 	}
 	return s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
-		var bound int
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM rule_notification_channels WHERE channel_id=$1`, channelID).Scan(&bound); err != nil {
+		// Name the rules that hold it. "仍被规则使用" over a sixteen-channel site
+		// leaves the operator to hunt through every rule to find which one, and the
+		// binding they need to remove is exactly the thing they cannot see.
+		rows, err := tx.Query(ctx, `SELECT r.name,ch.channel_no FROM rule_notification_channels b
+			JOIN detection_rules r ON r.id=b.rule_id
+			JOIN channels ch ON ch.id=r.channel_id
+			WHERE b.channel_id=$1 ORDER BY ch.channel_no,r.name LIMIT 5`, channelID)
+		if err != nil {
 			return err
 		}
-		if bound > 0 {
-			return ErrChannelInUse
+		var holders []string
+		for rows.Next() {
+			var ruleName string
+			var channelNo int
+			if err := rows.Scan(&ruleName, &channelNo); err != nil {
+				rows.Close()
+				return err
+			}
+			holders = append(holders, fmt.Sprintf("CH%02d %s", channelNo, ruleName))
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		if len(holders) > 0 {
+			return fault.New(409, "notification_channel_in_use",
+				"该渠道仍被规则使用，请先在这些规则里解除绑定："+strings.Join(holders, "、"))
 		}
 		tag, err := tx.Exec(ctx, `DELETE FROM notification_channels WHERE id=$1 AND site_id=$2 AND version=$3`, channelID, s.siteID, expected)
 		if err != nil {
