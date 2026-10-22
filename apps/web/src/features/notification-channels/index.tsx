@@ -5,6 +5,7 @@ import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { useAPI } from '@/features/foundation/hooks'
 import { apiErrorText } from '@/features/foundation/api-errors'
@@ -290,7 +291,7 @@ export function NotificationChannels() {
             options={kinds.map((kind) => ({ value: kind, label: KIND_LABELS[kind] || kind }))}
         />
         <label className='grid gap-2 text-sm'>
-          <span>名称</span>
+          <Label>名称</Label>
           <Input
             aria-label='渠道名称'
             value={form.name}
@@ -302,7 +303,7 @@ export function NotificationChannels() {
         </label>
         {form.kind === 'webhook' && (
           <label className='grid gap-2 text-sm'>
-            <span>Webhook 地址</span>
+            <Label>Webhook 地址</Label>
             <Input
               aria-label='Webhook 地址'
               type='url'
@@ -315,7 +316,7 @@ export function NotificationChannels() {
         )}
         {form.kind === 'webhook' && (
           <label className='grid gap-2 text-sm'>
-            <span>签名密钥{editing ? '（留空保持不变）' : ''}</span>
+            <Label>签名密钥{editing ? '（留空保持不变）' : ''}</Label>
             <Input
               aria-label='签名密钥'
               type='password'
@@ -329,7 +330,7 @@ export function NotificationChannels() {
         {form.kind === 'wecom_app' && (
           <>
             <label className='grid gap-2 text-sm'>
-              <span>企业ID（corpID）</span>
+              <Label>企业ID（corpID）</Label>
               <Input
                 aria-label='企业ID'
                 value={form.wecomApp.corpID}
@@ -344,7 +345,7 @@ export function NotificationChannels() {
               </span>
             </label>
             <label className='grid gap-2 text-sm'>
-              <span>应用ID（agentID）</span>
+              <Label>应用ID（agentID）</Label>
               <Input
                 aria-label='应用ID'
                 type='number'
@@ -358,7 +359,7 @@ export function NotificationChannels() {
               />
             </label>
             <label className='grid gap-2 text-sm'>
-              <span>应用 Secret{editing ? '（留空保持不变）' : ''}</span>
+              <Label>应用 Secret{editing ? '（留空保持不变）' : ''}</Label>
               <Input
                 aria-label='应用 Secret'
                 type='password'
@@ -382,7 +383,7 @@ export function NotificationChannels() {
               ]}
             />
             <label className='grid gap-2 text-sm md:col-span-2'>
-              <span>接收人</span>
+              <Label>接收人</Label>
               <Input
                 aria-label='应用接收人'
                 value={form.wecomApp.to}
@@ -401,7 +402,7 @@ export function NotificationChannels() {
         {form.kind === 'wecom' && (
           <>
             <label className='grid gap-2 text-sm md:col-span-2'>
-              <span>群机器人 Webhook</span>
+              <Label>群机器人 Webhook</Label>
               <Input
                 aria-label='企业微信机器人地址'
                 type='url'
@@ -427,7 +428,7 @@ export function NotificationChannels() {
               ]}
             />
             <label className='grid gap-2 text-sm'>
-              <span>@ 手机号（可留空）</span>
+              <Label>@ 手机号（可留空）</Label>
               <Input
                 aria-label='企业微信提醒手机号'
                 value={form.wecom.mentions}
@@ -448,7 +449,7 @@ export function NotificationChannels() {
                 Email tab reads sender, server, then authentication. Reordering
                 for "cleaner layout" would make them hunt. */}
             <label className='grid gap-2 text-sm'>
-              <span>发件人名称</span>
+              <Label>发件人名称</Label>
               <Input
                 aria-label='发件人名称'
                 value={form.email.sender_name}
@@ -460,7 +461,7 @@ export function NotificationChannels() {
               />
             </label>
             <label className='grid gap-2 text-sm'>
-              <span>发件人地址</span>
+              <Label>发件人地址</Label>
               <Input
                 aria-label='发件人地址'
                 type='email'
@@ -473,7 +474,7 @@ export function NotificationChannels() {
               />
             </label>
             <label className='grid gap-2 text-sm'>
-              <span>SMTP 服务器</span>
+              <Label>SMTP 服务器</Label>
               <Input
                 aria-label='SMTP 服务器'
                 value={form.email.smtp_host}
@@ -485,7 +486,7 @@ export function NotificationChannels() {
               />
             </label>
             <label className='grid gap-2 text-sm'>
-              <span>SMTP 端口</span>
+              <Label>SMTP 端口</Label>
               <Input
                 aria-label='SMTP 端口'
                 type='number'
@@ -528,7 +529,7 @@ export function NotificationChannels() {
             {form.email.smtp_auth && (
               <>
                 <label className='grid gap-2 text-sm'>
-                  <span>用户名</span>
+                  <Label>用户名</Label>
                   <Input
                     aria-label='SMTP 用户名'
                     value={form.email.username}
@@ -540,7 +541,7 @@ export function NotificationChannels() {
                   />
                 </label>
                 <label className='grid gap-2 text-sm'>
-                  <span>密码{editing ? '（留空保持不变）' : ''}</span>
+                  <Label>密码{editing ? '（留空保持不变）' : ''}</Label>
                   <Input
                     aria-label='SMTP 密码'
                     type='password'

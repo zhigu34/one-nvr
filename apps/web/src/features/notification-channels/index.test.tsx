@@ -5,6 +5,10 @@ import { userEvent } from 'vitest/browser'
 import { useAuthStore } from '@/stores/auth-store'
 import type { Schema } from '@/lib/types'
 import { NotificationChannels } from './index'
+// The application stylesheet, so layout assertions measure the real page.
+// Without it every Tailwind class is inert and a pixel comparison would be
+// measuring the browser's default form controls instead.
+import '@/styles/index.css'
 
 const calls = vi.hoisted(() => ({ request: vi.fn() }))
 vi.mock('@/lib/api-client', async (original) => ({
@@ -399,6 +403,33 @@ test('saving a wecom application sends its identifiers and addressing', async ()
   // The secret travels in the shared field, and there is no URL.
   expect(body.secret).toBe('app-secret')
   expect(body.url).toBe('')
+})
+
+// With the stylesheet loaded these numbers are real: the three fields in a row
+// must share a top edge and a width. The first version of this form put each
+// field's help line in a separate grid cell, which made a field taller than its
+// neighbour and pushed the rows below out of line — the operator saw columns that
+// did not line up.
+test('fields in a row share a top edge and a width', async () => {
+  signIn()
+  const screen = await render(view(fixture([], ['inapp', 'webhook', 'email', 'wecom', 'wecom_app'])))
+  await userEvent.click(screen.getByLabelText('渠道类型'))
+  await userEvent.click(await screen.getByRole('option', { name: '企业微信 · 应用' }).first())
+
+  const box = (label: string) => screen.getByLabelText(label).element().getBoundingClientRect()
+  const first = ['渠道类型', '渠道名称', '企业ID'].map(box)
+  const tops = first.map((r) => r.top)
+  expect(Math.max(...tops) - Math.min(...tops)).toBeLessThan(2)
+  const widths = first.map((r) => r.width)
+  expect(Math.max(...widths) - Math.min(...widths)).toBeLessThan(2)
+  // A control is a control: the select is as tall as the inputs beside it.
+  expect(Math.abs(first[0].height - first[1].height)).toBeLessThan(2)
+
+  // The row below starts together and below the first row's controls.
+  const second = ['应用ID', '应用 Secret', '消息格式'].map(box)
+  const secondTops = second.map((r) => r.top)
+  expect(Math.max(...secondTops) - Math.min(...secondTops)).toBeLessThan(2)
+  expect(Math.min(...secondTops)).toBeGreaterThan(Math.max(...first.map((r) => r.bottom)))
 })
 
 // One field is one grid cell, and nothing wraps it twice.
