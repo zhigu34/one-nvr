@@ -63,12 +63,79 @@ function rowHealth(channel: Summary) {
  */
 function StatCard({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className='flex min-h-24 flex-col rounded-lg border border-border bg-card p-4'>
+    <div className='flex min-h-24 flex-col rounded-lg border border-border bg-muted/40 p-4'>
       <p className='text-xs leading-5 text-muted-foreground'>{label}</p>
       <div className='mt-1 min-w-0 flex-1 text-sm font-medium leading-5 text-foreground'>
         {children}
       </div>
     </div>
+  )
+}
+
+// PCI vendor ids are what the report carries; an operator recognises the name.
+const VENDORS: Record<string, string> = {
+  '8086': 'Intel',
+  '10de': 'NVIDIA',
+  '1a03': 'ASPEED',
+}
+
+/**
+ * The accelerators and the engine that uses them, as one card.
+ *
+ * These were two cards ("版本 / 检测器" and "检测硬件") and neither answered the
+ * question on its own: the version is meaningless without knowing which device
+ * it drives, and the device path is meaningless without knowing which detector
+ * build opened it. They are read together, so they are one card.
+ *
+ * The sub-line is one line on a wide screen and wraps rather than truncating on
+ * a narrow one. These are identifiers matched character by character against
+ * the detector's own config, so an ellipsis would cut off exactly the part that
+ * distinguishes one GPU from another.
+ */
+function HardwareEngineCard({
+  report,
+  engine,
+}: {
+  report: Schema<'HardwareReport'> | undefined
+  engine: Runtime['runtime'] | undefined
+}) {
+  const node = report?.proposal.node
+  const vendor = report?.inventory.devices.find(
+    (device) => device.id === report?.proposal.id || device.node === node
+  )?.vendor
+  return (
+    <StatCard label='检测硬件与引擎'>
+      <span className='flex min-w-0 flex-wrap items-center gap-1.5'>
+        <span className='truncate font-mono text-sm'>{node || 'CPU'}</span>
+        {vendor && (
+          <Badge
+            variant='outline'
+            className='border-solid border-border px-1.5 py-0 text-[11px] font-normal text-muted-foreground'
+          >
+            {VENDORS[vendor] || vendor}
+          </Badge>
+        )}
+        {engine?.version && (
+          <Badge
+            variant='outline'
+            className='border-solid border-border px-1.5 py-0 text-[11px] font-normal text-muted-foreground'
+          >
+            v{engine.version}
+          </Badge>
+        )}
+        {report && !report.validated && (
+          <StatusBadge tone='warning'>
+            自检未通过{report.error_code ? `：${report.error_code}` : ''}
+          </StatusBadge>
+        )}
+      </span>
+      {report && (
+        <span className='mt-1 flex flex-wrap gap-x-3 font-mono text-xs font-normal leading-4 text-muted-foreground'>
+          <span className='whitespace-nowrap'>解码 {report.proposal.decode_id || 'cpu'}</span>
+          <span className='whitespace-nowrap'>推理 {report.proposal.inference_id || 'cpu'}</span>
+        </span>
+      )}
+    </StatCard>
   )
 }
 
@@ -225,18 +292,19 @@ export function Detection() {
       />
       <Notices notice={notice} error={error} />
       {runtime.data && (
-        <section aria-label='检测状态' className='grid gap-2 sm:grid-cols-2 lg:grid-cols-5'>
+        <section
+          aria-label='检测状态'
+          className='grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4'
+        >
           <StatCard label='检测服务'>
             {runtime.data.runtime?.reachable ? (
               <LiveBadge />
             ) : (
               <StatusBadge tone='destructive'>不可达</StatusBadge>
             )}
-          </StatCard>
-          <StatCard label='版本 / 检测器'>
-            {runtime.data.runtime?.version || '—'}
-            <span className='text-muted-foreground'> · </span>
-            {runtime.data.runtime?.detector || '—'}
+            <span className='mt-1 block text-xs font-normal text-muted-foreground'>
+              检测器 {runtime.data.runtime?.detector || '—'}
+            </span>
           </StatCard>
           <StatCard label='推理耗时'>
             {runtime.data.runtime?.inference_ms ? (
@@ -246,37 +314,17 @@ export function Detection() {
             ) : (
               '—'
             )}
-            {runtime.data.runtime?.overloaded && (
+            {runtime.data.runtime?.overloaded ? (
               <StatusBadge tone='warning' className='ml-2'>
                 过载
               </StatusBadge>
-            )}
-          </StatCard>
-          <StatCard label='检测硬件'>
-            {hardware.data ? (
-              <>
-                <span className='flex flex-wrap items-center gap-1.5'>
-                  {hardware.data.proposal.node || 'CPU'}
-                  {!hardware.data.validated && (
-                    <StatusBadge tone='warning'>
-                      自检未通过{hardware.data.error_code ? `：${hardware.data.error_code}` : ''}
-                    </StatusBadge>
-                  )}
-                </span>
-                {/* Decode and inference on their own lines rather than one
-                    truncated string: both ids are identifiers an operator reads
-                    character by character when matching them against the
-                    detector's config, and an ellipsis cuts off exactly the part
-                    that distinguishes one from another. */}
-                <span className='mt-1 block space-y-0.5 text-xs font-normal leading-4 text-muted-foreground'>
-                  <span className='block break-all'>解码 {hardware.data.proposal.decode_id}</span>
-                  <span className='block break-all'>推理 {hardware.data.proposal.inference_id}</span>
-                </span>
-              </>
             ) : (
-              <span className='text-muted-foreground'>—</span>
+              <span className='mt-1 block text-xs font-normal text-muted-foreground'>
+                单帧推理耗时
+              </span>
             )}
           </StatCard>
+          <HardwareEngineCard report={hardware.data} engine={runtime.data.runtime} />
           <StatCard label='最近发布'>
             {runtime.data.revision ? (
               <>
@@ -323,7 +371,7 @@ export function Detection() {
             <div
               role='group'
               aria-label='通道筛选'
-              className='inline-flex items-center gap-0.5 rounded-lg border border-border bg-muted/30 p-0.5'
+              className='inline-flex items-center gap-1 rounded-lg border border-border bg-muted/30 p-1'
             >
               {(
                 [
@@ -342,15 +390,15 @@ export function Detection() {
                     className={cn(
                       'inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs transition-colors',
                       active
-                        ? 'bg-background font-medium text-foreground shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground'
+                        ? 'bg-background font-medium text-foreground shadow-sm ring-1 ring-border'
+                        : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
                     )}
                   >
                     {label}
                     <span
                       className={cn(
                         'tabular-nums',
-                        active ? 'text-muted-foreground' : 'text-muted-foreground/70'
+                        active ? 'text-foreground/60' : 'text-muted-foreground/70'
                       )}
                     >
                       {counts[value]}
@@ -367,7 +415,7 @@ export function Detection() {
           </div>
           <div className='overflow-hidden rounded-lg border border-border bg-card'>
             <Table>
-              <TableHeader className='bg-muted'>
+              <TableHeader className='bg-muted/80'>
                 <TableRow className='border-b border-border hover:bg-transparent'>
                   <TableHead className='w-10 py-3 pl-4 align-middle'>
                     <Checkbox
@@ -605,7 +653,7 @@ function DetectionFlag({ enabled, inert }: { enabled: boolean; inert: boolean })
       className={cn(
         'border-solid px-2 py-0 text-xs font-normal',
         enabled
-          ? 'border-emerald-600/30 bg-emerald-500/10 text-emerald-700 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-400'
+          ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:border-emerald-500/25 dark:text-emerald-400'
           : 'border-border bg-muted text-muted-foreground'
       )}
     >
@@ -663,7 +711,7 @@ function ZoneRuleToggle({
       type='button'
       size='sm'
       variant='ghost'
-      className='h-7 gap-1.5 px-2 text-xs font-normal text-muted-foreground hover:text-foreground'
+      className='h-8 gap-1.5 px-2.5 text-xs font-normal text-muted-foreground hover:bg-accent hover:text-foreground'
       aria-expanded={open}
       aria-label={`${label} 区域与规则${counts ? ` (${counts})` : ''}`}
       title={`${zoneCount ?? 0} 区域 · ${ruleCount ?? 0} 规则`}

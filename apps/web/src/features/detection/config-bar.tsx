@@ -181,7 +181,7 @@ export function DetectionConfigBar({
   }
 
   return (
-    <div className='space-y-3 rounded-lg border border-border bg-muted/40 p-4'>
+    <div className='space-y-3 rounded-lg border border-border bg-muted/30 p-4'>
       {/* Selection line: what the bar will act on, and the two ways to change
           that set. Kept apart from the settings row so "how many" never sits
           between two controls that look like they might depend on it. */}
@@ -330,7 +330,7 @@ export function DetectionConfigBar({
         </Button>
       </div>
 
-      <p className='border-t border-border/60 pt-2.5 text-xs leading-5 text-muted-foreground'>
+      <p className='border-t border-border/60 pt-2.5 text-xs leading-relaxed text-muted-foreground/80'>
         只写入改动过的项，其余保持各通道原值；选一路时回显它当前设置。
         保存后仍需点「发布检测配置」才会生效。
       </p>
