@@ -313,7 +313,10 @@ test('the availability card reports a rate with its own evidence', async () => {
   // 23 of 24 hours healthy is 95.8%, and one channel had an interruption.
   await expect.element(view.getByText('95.8%')).toBeVisible()
   await expect.element(view.getByText(/录像覆盖 50.0%/)).toBeVisible()
-  await expect.element(view.getByText(/1 路有中断/)).toBeVisible()
+  // The interruption count belongs to the status strip's alarm pill now.
+  await expect
+    .element(view.getByTestId('channel-alarms').getByText(/1 路有中断/))
+    .toBeVisible()
 })
 
 // A window with no sufficient sample must say so rather than print 0%, which

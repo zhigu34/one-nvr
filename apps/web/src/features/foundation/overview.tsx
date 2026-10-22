@@ -1,10 +1,11 @@
 import { Link } from '@tanstack/react-router'
 import {
   Activity,
+  AlertTriangle,
   ArrowRight,
-  Cctv,
   Cpu,
   HardDrive,
+  ImageOff,
   Play,
   ScanEye,
   Video,
@@ -21,7 +22,6 @@ import { useState } from 'react'
 import { useAPI } from './hooks'
 import { QueryState, PageTitle } from './ui'
 import { formatClock } from '@/features/playback/zone'
-import { AbnormalChannels } from './abnormal-channels'
 
 type Summary = Schema<'ChannelSummary'>
 type Component = Schema<'Component'>
@@ -128,6 +128,9 @@ export function Overview() {
   )
   // The patrol's right column: the latest detection events, media states
   // shown honestly, straight into playback on click.
+  // Pictures that failed to load, so the list falls back to the icon instead of
+  // the browser's broken-image glyph.
+  const [failedThumbs, setFailedThumbs] = useState<Set<string>>(new Set())
   const [eventWindow] = useState(() => {
     const end = Date.now()
     return { start: end - 7 * 86_400_000, end }
@@ -216,6 +219,12 @@ export function Overview() {
       .filter((row) => row.kind === 'main' && row.unavailable_ms > 0)
       .map((row) => row.channel_id)
   ).size
+  // Channels with too little observation to judge are counted separately: they
+  // are not evidence of a fault, and folding them into "abnormal" would name
+  // healthy cameras as failing ones.
+  const unjudgedChannels = (reliability.data?.items || []).filter(
+    (row) => row.kind === 'main' && !row.sample_sufficient
+  ).length
   const defaultPool = pools.data?.items?.find((pool) => pool.is_default) ||
     pools.data?.items?.[0]
   // Capacity facts come from the pool's own probes (total/free per service).
@@ -245,10 +254,12 @@ export function Overview() {
         }}
       />
       {site.data && (
-        // Five equal KPI columns on a wide screen. The old 4+2 layout left half
-        // of the second row empty and pushed two cards onto a row of their own,
-        // which is what made the top of the page look unfinished.
-        <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5'>
+        // Four equal KPI columns. The host-resource card moved out of this row:
+        // squeezed into a fifth column it held four meters and two lines of
+        // counters, which is a panel's worth of detail in a KPI slot. It now
+        // sits beside the component matrix, where "what is the machine doing"
+        // belongs next to "are the services up".
+        <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4'>
           {/* Channels: the headline number is what the operator patrols with. */}
           <Link
             to='/channels'
@@ -326,13 +337,10 @@ export function Overview() {
                       录像覆盖 {recordingCoverage ?? '—'}
                       <span className='text-muted-foreground/60'>（按应录时长）</span>
                     </span>
-                    {abnormalChannels > 0 ? (
-                      <span className='text-amber-600 dark:text-amber-400'>
-                        {abnormalChannels} 路有中断
-                      </span>
-                    ) : (
-                      <span className='text-muted-foreground'>无中断</span>
-                    )}
+                    {/* The interruption count lives in the alarm pill on the
+                        status strip. Printing it here as well made the same
+                        fact appear twice on one page, and the card's job is the
+                        availability rate. */}
                   </p>
                 </>
               ) : (
@@ -481,92 +489,33 @@ export function Overview() {
               </>
             )}
           </Link>
-          {/* DASH-02: what the host itself is doing. Unknown is shown as
-              unknown — a failed read is not an idle machine, and printing 0%
-              would say the opposite of the truth. */}
-          {admin && (
-            <div data-testid='host-resources' className='rounded-xl border bg-card p-4'>
-              <div className='flex items-center justify-between'>
-                <p className='flex items-center gap-1.5 text-xs text-muted-foreground'>
-                  <Cpu aria-hidden className='size-3.5' />
-                  主机资源
-                </p>
-                <ArrowRight
-                  aria-hidden
-                  className='size-4 text-muted-foreground opacity-0'
-                />
-              </div>
-              <div className='mt-2 grid gap-1.5'>
-                <Meter
-                  label='CPU'
-                  value={
-                    resources.data?.cpu_known
-                      ? resources.data.cpu_percent
-                      : null
-                  }
-                  pending={resources.isPending}
-                />
-                <Meter
-                  label='内存'
-                  value={
-                    resources.data?.memory_known
-                      ? resources.data.memory_percent
-                      : null
-                  }
-                  pending={resources.isPending}
-                />
-                {/* REC-09: the event ring buffer lives in memory, and deciding
-                    whether to enlarge it needs its fill level. A deployment
-                    that reserved no memory shows 未启用 rather than 0%, which
-                    would read as "reserved and empty". */}
-                <Meter
-                  label='缓存盘'
-                  value={
-                    resources.data?.event_cache.configured &&
-                    resources.data.event_cache.known
-                      ? resources.data.event_cache.percent
-                      : null
-                  }
-                  pending={resources.isPending}
-                  off={
-                    resources.data
-                      ? !resources.data.event_cache.configured
-                      : false
-                  }
-                />
-              </div>
-              <p className='mt-2 truncate text-xs text-muted-foreground tabular-nums'>
-                {resources.data?.memory_known
-                  ? `${gib(resources.data.memory_used_bytes)} / ${gib(resources.data.memory_total_bytes)}`
-                  : '内存未知'}
-                {resources.data?.load_known
-                  ? ` · 负载 ${resources.data.load_average}`
-                  : ''}
-                {resources.data ? ` · ${resources.data.cpu_cores} 核` : ''}
-              </p>
-              {resources.data?.event_cache.configured && (
-                <p
-                  data-testid='event-cache-detail'
-                  className='mt-1 text-xs text-muted-foreground tabular-nums'
-                >
-                  缓存盘 {gib(resources.data.event_cache.used_bytes)} /{' '}
-                  {gib(resources.data.event_cache.total_bytes)}
-                  {resources.data.event_cache.known &&
-                  resources.data.event_cache.percent >= 90
-                    ? ' · 接近上限，可考虑扩容'
-                    : ''}
-                </p>
-              )}
-            </div>
-          )}
         </div>
       )}
-      {admin && <ComponentHealthBar components={components} />}
+      {/* One strip for "is the machine healthy": components and host figures on
+          the left, channel alarms on the right. They answer the same question
+          and were three separate bands, so the page had three horizontal rules
+          cutting it — and the alarm band spanned the full width in dark red,
+          which read as a page-level emergency for one camera's outage. */}
+      {admin && (
+        <div className='rounded-xl border bg-card p-4'>
+          <div className='grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start'>
+            <div className='grid gap-4 sm:grid-cols-2'>
+              <ComponentHealthBar components={components} />
+              <HostResourcesPanel resources={resources} />
+            </div>
+            <ChannelAlarms
+              abnormal={abnormalChannels}
+              unjudged={unjudgedChannels}
+              pending={reliability.isPending}
+              error={!!reliability.error}
+            />
+          </div>
+        </div>
+      )}
       {/* The quick patrol: live channels on the left, the latest detection
           events on the right — the bottom band stays balanced at any count. */}
       {/* Abnormal channels sit above the patrol: the operator's eye should land
           on what needs attention before the list of healthy channels. */}
-      {site.data && <AbnormalChannels />}
       {site.data && (
         // No panel title: the two column headings are the titles. An outer
         // "活跃通道与快捷巡检" over a left heading "活跃通道巡检" said the same
@@ -580,56 +529,73 @@ export function Overview() {
                   暂无在线通道。接入摄像头后，这里会显示每一路的状态与快捷入口。
                 </p>
               ) : (
-                <div className='grid gap-3 sm:grid-cols-2'>
-              {active.map((channel) => {
-                const label = `CH${String(channel.channel_no).padStart(2, '0')}`
-                return (
-                  <div
-                    key={channel.channel_id}
-                    data-testid='active-channel-card'
-                    className='rounded-lg border bg-zinc-50/70 p-3 transition-colors hover:bg-zinc-100/80 dark:bg-zinc-900/50 dark:hover:bg-zinc-900/80'
-                  >
-                    <div className='flex items-center justify-between gap-2'>
-                      <p className='flex min-w-0 items-center gap-1.5'>
-                        <Cctv aria-hidden className='size-4 shrink-0 text-emerald-500' />
-                        <span className='truncate font-medium'>{channel.channel_name}</span>
-                      </p>
-                      <span className='shrink-0 font-mono text-xs text-muted-foreground'>
-                        {label}
-                      </span>
-                    </div>
-                    <p className='mt-1.5 text-xs text-muted-foreground'>
-                      主流正常
-                      {channel.bitrate_kbps
-                        ? ` · ${channel.bitrate_kbps >= 1000 ? `${(channel.bitrate_kbps / 1000).toFixed(1)} Mbps` : `${Math.round(channel.bitrate_kbps)} kbps`}`
-                        : ''}
-                    </p>
-                    <div className='mt-2 flex gap-1.5'>
-                      {channel.permissions.includes('live') && (
-                        <Link
-                          to='/live'
-                          search={{ channel: channel.channel_id }}
-                          className='inline-flex h-6 items-center gap-1 rounded-md border px-2 text-xs hover:bg-accent'
-                        >
-                          <Play aria-hidden className='size-3' />
-                          预览
-                        </Link>
-                      )}
-                      {channel.permissions.includes('playback') && (
-                        <Link
-                          to='/recordings'
-                          search={{ channel: channel.channel_id, at: '', tab: 'playback' }}
-                          className='inline-flex h-6 items-center gap-1 rounded-md border px-2 text-xs hover:bg-accent'
-                        >
-                          <Video aria-hidden className='size-3' />
-                          回放
-                        </Link>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
-                </div>
+                /* Compact read-only rows, not cards. Each tile was a bordered
+                   box with an icon, a name, a status line and two buttons —
+                   about 110px of height for four facts, so eight channels ran
+                   off the bottom of the screen. The preview/playback entries
+                   are the row's own hover affordance now, which keeps the whole
+                   patrol visible at once.
+                   No live thumbnail: there is no per-channel snapshot endpoint
+                   in this product, and a placeholder image would claim a picture
+                   the system cannot take. */
+                <ul className='grid gap-1'>
+                  {active.map((channel) => {
+                    const label = `CH${String(channel.channel_no).padStart(2, '0')}`
+                    return (
+                      <li
+                        key={channel.channel_id}
+                        data-testid='active-channel-card'
+                        className='group flex items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-sm transition-colors hover:border-border hover:bg-muted/40'
+                      >
+                        <span
+                          aria-hidden
+                          className='size-1.5 shrink-0 rounded-full bg-emerald-500'
+                        />
+                        <span className='shrink-0 font-mono text-[11px] text-muted-foreground'>
+                          {label}
+                        </span>
+                        <span className='min-w-0 flex-1 truncate'>
+                          {channel.channel_name}
+                        </span>
+                        <span className='shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground'>
+                          {channel.bitrate_kbps
+                            ? channel.bitrate_kbps >= 1000
+                              ? `${(channel.bitrate_kbps / 1000).toFixed(1)} Mbps`
+                              : `${Math.round(channel.bitrate_kbps)} kbps`
+                            : '—'}
+                        </span>
+                        <span className='flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100'>
+                          {channel.permissions.includes('live') && (
+                            <Link
+                              to='/live'
+                              search={{ channel: channel.channel_id }}
+                              aria-label={`预览 ${label}`}
+                              title='预览'
+                              className='grid size-6 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground'
+                            >
+                              <Play aria-hidden className='size-3' />
+                            </Link>
+                          )}
+                          {channel.permissions.includes('playback') && (
+                            <Link
+                              to='/recordings'
+                              search={{
+                                channel: channel.channel_id,
+                                at: '',
+                                tab: 'playback',
+                              }}
+                              aria-label={`回放 ${label}`}
+                              title='回放'
+                              className='grid size-6 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground'
+                            >
+                              <Video aria-hidden className='size-3' />
+                            </Link>
+                          )}
+                        </span>
+                      </li>
+                    )
+                  })}
+                </ul>
               )}
             </section>
             <section>
@@ -675,6 +641,32 @@ export function Overview() {
                           className='group flex items-center justify-between gap-2 rounded-lg border bg-zinc-50/70 p-2 text-xs transition-colors hover:border-zinc-300 hover:bg-zinc-100/80 dark:bg-zinc-900/50 dark:hover:border-emerald-500/30 dark:hover:bg-zinc-900/80'
                         >
                           <span className='flex min-w-0 items-center gap-2'>
+                            {/* The crop is the fastest way to recognise an event:
+                                a 40px thumbnail answers "what was it" before the
+                                label is read. Only rendered when the picture is
+                                actually there — a broken image on a healthy row
+                                reads as a fault. */}
+                            {item.snapshot_state === 'ready' &&
+                            !failedThumbs.has(item.id ?? '') ? (
+                              <img
+                                src={`/api/v1/events/${item.id}/snapshot`}
+                                alt=''
+                                loading='lazy'
+                                className='size-10 shrink-0 rounded border border-border object-cover'
+                                // A stored picture can still fail to load (the
+                                // detector was pruned). Falling back to the icon
+                                // keeps a broken-image glyph out of the list.
+                                onError={() =>
+                                  setFailedThumbs((prev) =>
+                                    new Set(prev).add(item.id ?? '')
+                                  )
+                                }
+                              />
+                            ) : (
+                              <span className='grid size-10 shrink-0 place-items-center rounded border border-border bg-muted/40 text-muted-foreground/40'>
+                                <ImageOff aria-hidden className='size-3.5' />
+                              </span>
+                            )}
                             {/* A tinted chip rather than a word: the category is
                                 the fastest thing to scan in a list of events. */}
                             <span
@@ -717,6 +709,62 @@ export function Overview() {
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * Channel alarms for the status strip.
+ *
+ * Nothing alarming is stated plainly — "最近 24 小时无通道告警" — because a strip
+ * that simply disappears when all is well leaves the operator unable to tell
+ * "no alarms" from "the alarm query failed". A failed read says so instead of
+ * claiming calm.
+ */
+function ChannelAlarms({
+  abnormal,
+  unjudged,
+  pending,
+  error,
+}: {
+  abnormal: number
+  unjudged: number
+  pending: boolean
+  error: boolean
+}) {
+  return (
+    <section
+      data-testid='channel-alarms'
+      aria-label='通道告警'
+      className='flex min-w-0 flex-col gap-1.5 lg:items-end'
+    >
+      <p className='flex items-center gap-1.5 text-xs text-muted-foreground'>
+        <AlertTriangle aria-hidden className='size-3.5' />
+        通道告警 · 最近 24 小时
+      </p>
+      {error ? (
+        <p className='text-xs text-muted-foreground'>告警数据读取失败</p>
+      ) : pending ? (
+        <p className='text-xs text-muted-foreground'>统计中…</p>
+      ) : abnormal > 0 ? (
+        <span className='inline-flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-600 dark:text-amber-400'>
+          <span className='relative flex size-1.5'>
+            <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-500 opacity-60 motion-reduce:hidden' />
+            <span className='relative inline-flex size-1.5 rounded-full bg-amber-500' />
+          </span>
+          <span className='tabular-nums'>{abnormal} 路有中断</span>
+        </span>
+      ) : (
+        <span className='inline-flex items-center gap-1.5 text-xs text-muted-foreground'>
+          <span aria-hidden className='size-1.5 rounded-full bg-emerald-500' />
+          无通道告警
+        </span>
+      )}
+      {unjudged > 0 && (
+        <p className='text-[11px] text-muted-foreground'>
+          另有 {unjudged} 路观察不足，未纳入判断
+        </p>
+      )}
+    </section>
   )
 }
 
@@ -782,6 +830,7 @@ function ComponentHealthBar({
   const list = components.data ?? []
   const enabled = list.filter((component) => component.enabled)
   const healthy = enabled.filter((component) => component.state === 'healthy')
+  const unhealthyCount = enabled.length - healthy.length
   // Problems first, then healthy, then disabled: the eye lands on the left.
   const ordered = [...list].sort((a, b) => {
     const rank = (component: Component) =>
@@ -789,24 +838,24 @@ function ComponentHealthBar({
     return rank(a) - rank(b)
   })
   return (
-    <section
-      data-testid='component-health-bar'
-      aria-label='系统组件健康'
-      className='flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card px-4 py-2.5'
-    >
-      <div className='flex min-w-0 items-baseline gap-2'>
-        <p className='shrink-0 text-xs text-muted-foreground'>
+    <section data-testid='component-health-bar' aria-label='系统组件健康' className='grid gap-2'>
+      <div className='flex flex-wrap items-center justify-between gap-2'>
+        <p className='flex items-center gap-1.5 text-xs text-muted-foreground'>
+          <Activity aria-hidden className='size-3.5' />
           站点与核心组件
         </p>
-        <p className='shrink-0 text-sm font-medium tabular-nums'>
-          {enabled.length > 0 ? `${healthy.length} / ${enabled.length}` : '—'}
-          <span className='ms-1 text-xs font-normal text-muted-foreground'>
-            正常
+        <p className='flex items-center gap-1.5 text-xs tabular-nums'>
+          <span
+            aria-hidden
+            className={cn(
+              'size-1.5 rounded-full',
+              unhealthyCount > 0 ? 'bg-red-500' : 'bg-emerald-500'
+            )}
+          />
+          <span className={unhealthyCount > 0 ? 'text-red-500' : 'text-emerald-600 dark:text-emerald-400'}>
+            {enabled.length > 0 ? `${healthy.length} / ${enabled.length} 正常` : '—'}
           </span>
         </p>
-        <span className='hidden text-[11px] text-muted-foreground/70 sm:inline'>
-          每 5 秒刷新
-        </span>
       </div>
       <QueryState
         pending={components.isPending}
@@ -830,12 +879,12 @@ function ComponentHealthBar({
                     data-testid='component-pill'
                     data-state={component.enabled ? component.state : 'disabled'}
                     className={cn(
-                      'inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs transition-colors',
+                      'inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] transition-colors',
                       component.enabled
                         ? unhealthy
                           ? 'border-red-500/40 bg-red-500/10 text-red-500 hover:bg-red-500/20'
-                          : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400'
-                        : 'border-dashed text-muted-foreground hover:bg-accent'
+                          : 'border-border bg-muted/40 text-muted-foreground hover:bg-accent'
+                        : 'border-dashed text-muted-foreground/70 hover:bg-accent'
                     )}
                   >
                     <span
@@ -864,6 +913,74 @@ function ComponentHealthBar({
           )
         })}
       </ul>
+    </section>
+  )
+}
+
+/**
+ * The host's own numbers, beside the service matrix.
+ *
+ * Every figure renders "未知" when it was not measured. A failed read is not an
+ * idle machine, so a zero-width bar or 0% would state the opposite of the truth.
+ */
+function HostResourcesPanel({
+  resources,
+}: {
+  resources: ReturnType<typeof useAPI<Schema<'HostResources'>>>
+}) {
+  const gib = (value: number) => (value / 1024 / 1024 / 1024).toFixed(1) + ' GiB'
+  const data = resources.data
+  return (
+    <section data-testid='host-resources' aria-label='主机资源' className='grid gap-2'>
+      <div className='flex flex-wrap items-center justify-between gap-2'>
+        <p className='flex items-center gap-1.5 text-xs text-muted-foreground'>
+          <Cpu aria-hidden className='size-3.5' />
+          主机资源
+        </p>
+        <p className='truncate text-xs tabular-nums text-muted-foreground'>
+          {data?.memory_known
+            ? `${gib(data.memory_used_bytes)} / ${gib(data.memory_total_bytes)}`
+            : '内存未知'}
+          {data?.load_known ? ` · 负载 ${data.load_average}` : ''}
+          {data ? ` · ${data.cpu_cores} 核` : ''}
+        </p>
+      </div>
+      <div className='grid gap-1.5'>
+        <Meter
+          label='CPU'
+          value={data?.cpu_known ? data.cpu_percent : null}
+          pending={resources.isPending}
+        />
+        <Meter
+          label='内存'
+          value={data?.memory_known ? data.memory_percent : null}
+          pending={resources.isPending}
+        />
+        {/* REC-09: the event ring buffer lives in memory, and deciding whether to
+            enlarge it needs its fill level. A deployment that reserved none shows
+            未启用 rather than 0%, which would read as "reserved and empty". */}
+        <Meter
+          label='缓存盘'
+          value={
+            data?.event_cache.configured && data.event_cache.known
+              ? data.event_cache.percent
+              : null
+          }
+          pending={resources.isPending}
+          off={data ? !data.event_cache.configured : false}
+        />
+      </div>
+      {data?.event_cache.configured && (
+        <p
+          data-testid='event-cache-detail'
+          className='text-[11px] tabular-nums text-muted-foreground'
+        >
+          缓存盘 {gib(data.event_cache.used_bytes)} / {gib(data.event_cache.total_bytes)}
+          {data.event_cache.known && data.event_cache.percent >= 90
+            ? ' · 接近上限，可考虑扩容'
+            : ''}
+        </p>
+      )}
     </section>
   )
 }
