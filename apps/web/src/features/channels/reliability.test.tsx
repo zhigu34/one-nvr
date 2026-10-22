@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, expect, test, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
-import { page } from 'vitest/browser'
+import { page, userEvent } from 'vitest/browser'
 import type { Schema } from '@/lib/types'
 import { ChannelReliability } from './reliability'
 
@@ -91,14 +91,22 @@ function mount() {
   )
 }
 
-test('renders one panel per stream kind and never merges them', async () => {
+test('keeps the three kinds as separate figures, one detail open at a time', async () => {
   stub({})
   mount()
+  // All three are always on screen as separate cards — never one merged number.
+  await expect.element(page.getByRole('button', { name: '查看主流详情' })).toBeVisible()
+  await expect.element(page.getByRole('button', { name: '查看子流详情' })).toBeVisible()
+  await expect.element(page.getByRole('button', { name: '查看录像详情' })).toBeVisible()
+  // The detail panel opens for the focused kind, so the page does not stack all
+  // three full metric panels and make the reader scroll past two of them.
   await expect.element(page.getByTestId('reliability-metrics-main')).toBeVisible()
-  await expect.element(page.getByTestId('reliability-metrics-sub')).toBeVisible()
   // Two kinds means two panels; there is no combined figure anywhere, because a
   // healthy sub stream must not stand in for a broken main one.
   await expect.element(page.getByTestId('reliability-metrics-recording')).not.toBeInTheDocument()
+  // And switching the focus swaps which detail is shown.
+  await userEvent.click(page.getByRole('button', { name: '查看子流详情' }))
+  await expect.element(page.getByTestId('reliability-metrics-sub')).toBeVisible()
 })
 
 test('every rate is shown with the inputs behind it', async () => {
@@ -190,8 +198,13 @@ test('draws a band per interval and explains that excluded time is not good news
   // than merely grey. Asserted through the DOM attribute because the band is a
   // bare div with no accessible name.
   const bands = timeline.element().querySelectorAll('div[title]')
-  const titles = Array.from(bands).map((node) => node.getAttribute('title'))
-  expect(titles).toContain('excluded · 已停用或明确关闭')
+  const titles = Array.from(bands).map((node) => node.getAttribute('title') || '')
+  // The band's hover text names the state, the reason, the span and its length.
+  const excluded = titles.find((title) => title.includes('不要求'))
+  expect(excluded).toBeTruthy()
+  expect(excluded).toContain('已停用或明确关闭')
+  expect(excluded).toContain('→')
+  expect(excluded).toContain('30 分')
 })
 
 test('lists faults and points at the operations page rather than duplicating it', async () => {

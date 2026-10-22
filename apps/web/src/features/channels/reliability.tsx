@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { type ReactNode, useMemo, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import type { Schema, PageData } from '@/lib/types'
 import { Button } from '@/components/ui/button'
@@ -13,6 +13,11 @@ import {
 } from '@/components/ui/table'
 import { useAPI } from '@/features/foundation/hooks'
 import { ReliabilityTrend } from './reliability-chart'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { QueryState, Empty } from '@/features/foundation/ui'
 import {
   BAND_LEGEND,
@@ -48,6 +53,11 @@ import {
  */
 export function ChannelReliability({ channelId }: { channelId: string }) {
   const [hours, setHours] = useState<number>(24)
+  // Which stream kind's detail is open. The three stay separate figures — REL-04
+  // forbids a healthy sub stream from standing in for a broken main one — but
+  // stacking all three panels meant scrolling past two of them to reach the
+  // one being investigated. The summary row above always shows all three.
+  const [focus, setFocus] = useState<'main' | 'sub' | 'recording'>('main')
   const [custom, setCustom] = useState<{ from: string; to: string } | null>(null)
   // The window is captured when the preset changes rather than recomputed on
   // every render: a moving `to` would make each poll ask about a different
@@ -134,15 +144,26 @@ export function ChannelReliability({ channelId }: { channelId: string }) {
         retry={() => metrics.refetch()}
       />
 
-      {(metrics.data?.items || []).map((item) => (
-        <MetricsPanel key={item.kind} metrics={item} />
-      ))}
+      {(metrics.data?.items || []).length > 0 && (
+        <KindSummary
+          items={metrics.data?.items || []}
+          focus={focus}
+          onFocus={setFocus}
+        />
+      )}
+
+      {(metrics.data?.items || [])
+        .filter((item) => item.kind === focus)
+        .map((item) => (
+          <MetricsPanel key={item.kind} metrics={item} />
+        ))}
 
       {(metrics.data?.items || []).length === 0 && !metrics.isPending && !metrics.error && (
         <Empty>这个窗口没有可靠性数据。</Empty>
       )}
 
       <TimelinePanel
+        focus={focus}
         bands={(intervals.data?.items || []) as TimeBand[]}
         pending={intervals.isPending}
         error={intervals.error}
@@ -170,6 +191,96 @@ export function ChannelReliability({ channelId }: { channelId: string }) {
 }
 
 /**
+ * The three kinds side by side, as a switch and as a comparison.
+ *
+ * PRD REL-04 forbids merging the kinds into one number, so these are three
+ * separate cards — but presenting them as one row also answers a question the
+ * stacked panels could not: whether the sub stream is fine while the main one
+ * is not. Clicking a card opens that kind's detail below.
+ */
+function KindSummary({
+  items,
+  focus,
+  onFocus,
+}: {
+  items: Schema<'ReliabilityMetrics'>[]
+  focus: string
+  onFocus: (kind: 'main' | 'sub' | 'recording') => void
+}) {
+  return (
+    <div className='grid gap-4 sm:grid-cols-3'>
+      {KIND_ORDER.map((kind) => {
+        const item = items.find((entry) => entry.kind === kind)
+        const active = focus === kind
+        const shown = item ? percentage(item.observed_availability) : null
+        return (
+          <button
+            key={kind}
+            type='button'
+            aria-pressed={active}
+            aria-label={`查看${KIND_LABEL[kind]}详情`}
+            disabled={!item}
+            onClick={() => onFocus(kind)}
+            className={[
+              'grid gap-1 rounded-lg border p-4 text-left transition-colors',
+              active
+                ? 'border-foreground/25 bg-muted/50'
+                : 'border-border hover:bg-muted/30',
+              !item && 'opacity-50',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+          >
+            <span className='flex items-center justify-between text-xs text-muted-foreground'>
+              {KIND_LABEL[kind]}
+              {!item && <span>无数据</span>}
+            </span>
+            {shown?.kind === 'percent' ? (
+              <span
+                className={[
+                  'font-mono text-2xl font-bold tabular-nums',
+                  item && item.observed_availability.denominator_ms > 0
+                    ? toneFor(item.observed_availability)
+                    : 'text-muted-foreground',
+                ].join(' ')}
+              >
+                {shown.value}
+              </span>
+            ) : (
+              <span className='text-sm text-muted-foreground'>
+                {shown?.label ?? '无数据'}
+              </span>
+            )}
+            {item && (
+              <span className='font-mono text-xs text-muted-foreground'>
+                {formatDuration(item.observed.healthy_ms)} /{' '}
+                {formatDuration(item.expected_ms)}
+              </span>
+            )}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/**
+ * toneFor colours a rate by what it says, not by "is it a percentage".
+ *
+ * Green only when time was actually available; a 0% recording rate on a channel
+ * with recording switched off is not an alarm, and painting it red would train
+ * the operator to ignore red.
+ */
+function toneFor(rate: Rate): string {
+  const shown = percentage(rate)
+  if (shown.kind !== 'percent') return 'text-muted-foreground'
+  const value = rate.numerator_ms / rate.denominator_ms
+  if (value >= 0.995) return 'text-emerald-400'
+  if (value >= 0.95) return 'text-amber-400'
+  return 'text-red-400'
+}
+
+/**
  * MetricsPanel shows one stream kind's figures.
  *
  * Deliberately one panel per kind rather than one combined table: PRD REL-04
@@ -178,15 +289,24 @@ export function ChannelReliability({ channelId }: { channelId: string }) {
  */
 function MetricsPanel({ metrics }: { metrics: Schema<'ReliabilityMetrics'> }) {
   const note = precisionNote(metrics.precision)
+  const coverage = metrics.recording_coverage
+  const coveredRatio =
+    coverage.denominator_ms > 0 ? coverage.numerator_ms / coverage.denominator_ms : null
   return (
-    <Card data-testid={`reliability-metrics-${metrics.kind}`}>
-      <CardHeader>
-        <CardTitle className='text-base'>
+    <Card data-testid={`reliability-metrics-${metrics.kind}`} className='gap-0 py-0'>
+      <CardHeader className='border-b border-border/60 py-3'>
+        <CardTitle className='flex items-center gap-2 text-sm font-medium'>
           {KIND_LABEL[metrics.kind] || metrics.kind}
+          <span className='text-xs font-normal text-muted-foreground'>
+            指标版本 {metrics.metric_version}
+          </span>
         </CardTitle>
       </CardHeader>
-      <CardContent className='space-y-4'>
-        <div className='grid gap-3 sm:grid-cols-3'>
+      <CardContent className='space-y-5 py-4'>
+        {/* The three SLA rates. Each keeps its numerator and denominator: REL-04
+            requires every ratio to be recomputable, and a bare percentage cannot
+            be checked. */}
+        <div className='grid gap-4 sm:grid-cols-3'>
           <RateCard label='源监测覆盖率' rate={metrics.monitoring_coverage} />
           <RateCard label='观测可用率' rate={metrics.observed_availability} />
           <RateCard
@@ -196,91 +316,256 @@ function MetricsPanel({ metrics }: { metrics: Schema<'ReliabilityMetrics'> }) {
           />
         </div>
 
-        <div className='grid gap-3 sm:grid-cols-4 text-sm'>
-          <Fact label='期望拉流时长' value={formatDuration(metrics.expected_ms)} />
-          <Fact label='可用' value={formatDuration(metrics.observed.healthy_ms)} />
-          <Fact label='不可用' value={formatDuration(metrics.observed.unavailable_ms)} />
-          <Fact label='未知' value={formatDuration(metrics.observed.unknown_ms)} />
+        {/* Two 4-column data panels: time accounting, then interruptions. */}
+        <div className='grid gap-4 lg:grid-cols-2'>
+          <DataPanel title='时间账'>
+            <DataCell label='期望拉流时长' value={formatDuration(metrics.expected_ms)} />
+            <DataCell label='可用' value={formatDuration(metrics.observed.healthy_ms)} tone='ok' />
+            <DataCell
+              label='不可用'
+              value={formatDuration(metrics.observed.unavailable_ms)}
+              tone={metrics.observed.unavailable_ms > 0 ? 'bad' : undefined}
+            />
+            <DataCell label='未知' value={formatDuration(metrics.observed.unknown_ms)} tone='warn' />
+          </DataPanel>
+          <InterruptionPanel interruptions={metrics.interruptions} />
         </div>
 
-        <InterruptionRow interruptions={metrics.interruptions} />
+        {/* Recording, as one bar rather than four loose durations: the question
+            is whether there is a gap, and a bar answers it before the numbers. */}
+        <DataPanel title='录像'>
+          <div className='col-span-4 space-y-2'>
+            <CoverageBar
+              covered={coverage.numerator_ms}
+              missing={metrics.recording_gaps.missing_ms}
+              unverified={coverage.unjudgeable_ms}
+              owed={coverage.denominator_ms}
+            />
+            <div className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
+              <DataCell label='应录（已结算）' value={formatDuration(coverage.denominator_ms)} />
+              <DataCell label='已覆盖' value={formatDuration(coverage.numerator_ms)} tone='ok' />
+              <DataCell
+                label='缺口'
+                value={formatDuration(metrics.recording_gaps.missing_ms)}
+                tone={metrics.recording_gaps.missing_ms > 0 ? 'bad' : undefined}
+              />
+              <DataCell label='待核验' value={formatDuration(coverage.unjudgeable_ms)} tone='warn' />
+            </div>
+            {coveredRatio != null && (
+              <p className='font-mono text-xs text-muted-foreground'>
+                覆盖率 {((coveredRatio || 0) * 100).toFixed(2)}%
+              </p>
+            )}
+          </div>
+        </DataPanel>
 
-        <div className='grid gap-3 sm:grid-cols-4 text-sm'>
-          <Fact label='应录（已结算）' value={formatDuration(metrics.recording_coverage.denominator_ms)} />
-          <Fact label='已覆盖' value={formatDuration(metrics.recording_coverage.numerator_ms)} />
-          <Fact label='缺口' value={formatDuration(metrics.recording_gaps.missing_ms)} />
-          <Fact label='待核验' value={formatDuration(metrics.recording_coverage.unjudgeable_ms)} />
-        </div>
-
-        <div className='grid gap-3 sm:grid-cols-2 text-sm'>
-          <Fact label='历史媒体可访问率（已验证下界）' value={rateText(metrics.media_accessibility.rate)} />
-          <Fact label='未核验时长' value={formatDuration(metrics.media_accessibility.unverified_ms)} />
-        </div>
+        <DataPanel title='历史媒体'>
+          <DataCell
+            label='可访问率（已验证下界）'
+            value={rateText(metrics.media_accessibility.rate)}
+          />
+          <DataCell
+            label='未核验时长'
+            value={formatDuration(metrics.media_accessibility.unverified_ms)}
+          />
+          <DataCell
+            label='远端不可达'
+            value={formatDuration(metrics.media_accessibility.remote_unknown_ms)}
+          />
+          <DataCell
+            label='已验证覆盖'
+            value={formatDuration(metrics.media_accessibility.verified_coverage_ms)}
+          />
+        </DataPanel>
 
         {metrics.observed.excluded_ms > 0 && (
-          <p className='text-sm text-muted-foreground'>
-            该窗口有 {formatDuration(metrics.observed.excluded_ms)} 不要求可用（停用/未配置/维护），
+          <p className='text-xs text-muted-foreground'>
+            另有 {formatDuration(metrics.observed.excluded_ms)} 不要求可用（停用/未配置/维护），
             不计入任何分母。
           </p>
         )}
         {note && <p className='text-xs text-amber-600 dark:text-amber-400'>{note}</p>}
-        <p className='text-xs text-muted-foreground'>指标版本 {metrics.metric_version}</p>
       </CardContent>
     </Card>
   )
 }
 
+type CellTone = 'ok' | 'bad' | 'warn'
+
+const CELL_TONE: Record<CellTone, string> = {
+  ok: 'text-emerald-400',
+  bad: 'text-red-400',
+  warn: 'text-amber-400',
+}
+
+/**
+ * One SLA rate. The percentage is the headline; the evidence line under it is
+ * what makes the number checkable (REL-04), so it stays visible rather than
+ * moving into the tooltip with the prose.
+ */
 function RateCard({ label, rate, hint }: { label: string; rate: Rate; hint?: string }) {
   const shown = percentage(rate)
   return (
-    <div className='rounded-lg border p-3'>
-      <p className='text-sm text-muted-foreground'>{label}</p>
+    <div className='min-w-0 rounded-lg border border-border bg-muted/25 p-3'>
+      <p className='flex items-center gap-1.5 text-xs text-muted-foreground'>
+        <span className='truncate'>{label}</span>
+        {hint && <InfoTip text={hint} />}
+      </p>
       {shown.kind === 'percent' ? (
-        <p className='text-2xl font-semibold tabular-nums'>{shown.value}</p>
+        <p
+          className={[
+            'mt-0.5 font-mono text-2xl font-bold tabular-nums',
+            toneFor(rate),
+          ].join(' ')}
+        >
+          {shown.value}
+        </p>
       ) : (
-        <p className='text-base text-muted-foreground'>{shown.label}</p>
+        <p className='mt-0.5 text-sm text-muted-foreground'>{shown.label}</p>
       )}
-      {/* REL-04: the inputs travel with every ratio so a reader can recompute it. */}
-      <p className='mt-1 text-xs text-muted-foreground'>{rateEvidence(rate)}</p>
-      {hint && <p className='mt-1 text-xs text-muted-foreground'>{hint}</p>}
+      <p className='mt-1 font-mono text-xs text-muted-foreground'>
+        {rateEvidence(rate)}
+      </p>
     </div>
   )
 }
 
-function Fact({ label, value }: { label: string; value: string }) {
+/** One labelled datum. Key quiet, value mono — the same pairing everywhere. */
+function DataCell({
+  label,
+  value,
+  tone,
+}: {
+  label: string
+  value: string
+  tone?: CellTone
+}) {
   return (
-    <div>
-      <p className='text-muted-foreground'>{label}</p>
-      <p className='tabular-nums'>{value}</p>
+    <div className='min-w-0'>
+      <p className='truncate text-xs text-muted-foreground' title={label}>
+        {label}
+      </p>
+      <p
+        className={[
+          'font-mono text-sm tabular-nums',
+          tone ? CELL_TONE[tone] : 'text-foreground',
+        ].join(' ')}
+      >
+        {value}
+      </p>
     </div>
   )
 }
 
-function rateText(rate: Rate): string {
-  const shown = percentage(rate)
-  return shown.kind === 'percent' ? shown.value : shown.label
+/** A recessed read-only panel: the page's one shape for "measured facts". */
+function DataPanel({
+  title,
+  children,
+}: {
+  title: string
+  children: ReactNode
+}) {
+  return (
+    <section className='rounded-lg border border-border bg-muted/25 p-4'>
+      <p className='mb-3 text-xs font-medium tracking-wide text-muted-foreground'>
+        {title}
+      </p>
+      <div className='grid grid-cols-2 gap-3 sm:grid-cols-4'>{children}</div>
+    </section>
+  )
 }
 
-function InterruptionRow({ interruptions }: { interruptions: Schema<'ReliabilityMetrics'>['interruptions'] }) {
+/**
+ * CoverageBar shows covered / missing / unverified as one stretch of the owed
+ * time. A gap is a hole in a picture; four durations in a row make the reader
+ * do that division in their head.
+ */
+function CoverageBar({
+  covered,
+  missing,
+  unverified,
+  owed,
+}: {
+  covered: number
+  missing: number
+  unverified: number
+  owed: number
+}) {
+  if (owed <= 0) {
+    return (
+      <p className='text-xs text-muted-foreground'>
+        该窗口没有应录时间（录像关闭或未配置），因此没有覆盖率。
+      </p>
+    )
+  }
+  const parts = [
+    { ms: covered, tone: 'bg-emerald-500/70', label: '已覆盖' },
+    { ms: missing, tone: 'bg-red-500/70', label: '缺口' },
+    { ms: unverified, tone: 'bg-amber-500/60', label: '待核验' },
+  ].filter((part) => part.ms > 0)
+  return (
+    <div
+      className='flex h-3 w-full overflow-hidden rounded-full bg-muted'
+      role='img'
+      aria-label={parts.map((p) => `${p.label} ${formatDuration(p.ms)}`).join('，')}
+    >
+      {parts.map((part) => (
+        <span
+          key={part.label}
+          title={`${part.label} ${formatDuration(part.ms)}`}
+          className={part.tone}
+          style={{ width: `${Math.max(0.5, (part.ms / owed) * 100)}%` }}
+        />
+      ))}
+    </div>
+  )
+}
+
+/** Interruptions, in the same 4-cell shape as the time account. */
+function InterruptionPanel({
+  interruptions,
+}: {
+  interruptions: Schema<'ReliabilityMetrics'>['interruptions']
+}) {
   const mean = percentage(interruptions.mean_time_to_recovery)
   const categories = Object.entries(interruptions.by_category || {})
+  if (interruptions.count === 0) {
+    return (
+      <section className='rounded-lg border border-border bg-muted/25 p-4'>
+        <p className='mb-3 text-xs font-medium tracking-wide text-muted-foreground'>
+          非计划中断
+        </p>
+        <p className='text-sm text-muted-foreground'>无中断事件</p>
+      </section>
+    )
+  }
   return (
-    <div className='rounded-lg border p-3 text-sm'>
-      <p className='text-muted-foreground'>非计划中断</p>
-      <div className='mt-1 flex flex-wrap gap-x-6 gap-y-1'>
-        <span className='tabular-nums'>次数 {interruptions.count}</span>
-        <span className='tabular-nums'>总时长 {formatDuration(interruptions.total_ms)}</span>
-        <span className='tabular-nums'>最长一次 {formatDuration(interruptions.longest_ms)}</span>
-        {interruptions.open_count > 0 && (
-          <span className='tabular-nums text-red-600 dark:text-red-400'>
-            持续中 {interruptions.open_count} 次 · 已 {formatDuration(interruptions.open_ms)}
-          </span>
-        )}
-        <span>平均恢复 {mean.kind === 'percent' ? mean.value : mean.label}</span>
+    <section className='rounded-lg border border-border bg-muted/25 p-4'>
+      <p className='mb-3 text-xs font-medium tracking-wide text-muted-foreground'>
+        非计划中断
+      </p>
+      <div className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
+        <DataCell label='次数' value={String(interruptions.count)} />
+        <DataCell label='总时长' value={formatDuration(interruptions.total_ms)} />
+        <DataCell label='最长一次' value={formatDuration(interruptions.longest_ms)} />
+        <DataCell
+          label='平均恢复'
+          value={
+            mean.kind === 'percent' && interruptions.mean_time_to_recovery.numerator_ms <= interruptions.mean_time_to_recovery.denominator_ms
+              ? mean.value
+              : formatDuration(interruptions.mean_time_to_recovery.numerator_ms)
+          }
+        />
       </div>
+      {interruptions.open_count > 0 && (
+        <p className='mt-2 text-xs text-red-600 dark:text-red-400'>
+          持续中 {interruptions.open_count} 次 · 已 {formatDuration(interruptions.open_ms)}
+        </p>
+      )}
       {(interruptions.component_count > 0 || interruptions.maintenance_count > 0) && (
-        <p className='mt-1 text-xs text-muted-foreground'>
-          其中组件级 {interruptions.component_count} 次、计划维护 {interruptions.maintenance_count} 次（单列，不全部归责摄像头）
+        <p className='mt-2 text-xs text-muted-foreground'>
+          其中组件级 {interruptions.component_count} 次、计划维护{' '}
+          {interruptions.maintenance_count} 次（单列，不全部归责摄像头）
         </p>
       )}
       {categories.length > 0 && (
@@ -288,7 +573,38 @@ function InterruptionRow({ interruptions }: { interruptions: Schema<'Reliability
           归因：{categories.map(([name, count]) => `${name} ${count}`).join(' · ')}
         </p>
       )}
-    </div>
+    </section>
+  )
+}
+
+function rateText(rate: Rate): string {
+  const shown = percentage(rate)
+  if (shown.kind !== 'percent') return shown.label
+  // A numerator larger than its denominator is not a rate; some metrics reuse the
+  // Rate shape to carry a duration, and printing "33000000.00%" would be worse
+  // than saying the number is not a percentage at all.
+  if (rate.numerator_ms > rate.denominator_ms) {
+    return formatDuration(rate.numerator_ms)
+  }
+  return shown.value
+}
+
+/** A label's explanation behind a hover icon, so the panel stays quiet. */
+function InfoTip({ text }: { text: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          tabIndex={0}
+          role='img'
+          aria-label={text}
+          className='inline-grid size-3.5 shrink-0 cursor-help place-items-center rounded-full border border-border text-[9px] text-muted-foreground/70 hover:text-foreground'
+        >
+          ?
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className='max-w-64 text-xs'>{text}</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -300,11 +616,13 @@ function InterruptionRow({ interruptions }: { interruptions: Schema<'Reliability
  * so they tile the row by construction.
  */
 function TimelinePanel({
+  focus,
   bands,
   pending,
   error,
   windowEnd,
 }: {
+  focus: string
   bands: TimeBand[]
   pending: boolean
   error: Error | null
@@ -344,28 +662,36 @@ function TimelinePanel({
         <QueryState pending={pending} error={error} />
         {!pending && !error && bands.length === 0 && <Empty>该窗口没有状态记录。</Empty>}
         {bounds &&
-          KIND_ORDER.filter((kind) => byKind[kind]?.length).map((kind) => (
-            <div key={kind} className='space-y-1'>
-              <p className='text-sm text-muted-foreground'>{KIND_LABEL[kind]}</p>
-              <div className='relative h-6 w-full overflow-hidden rounded bg-muted'>
-                {byKind[kind].map((band, index) => {
-                  const start = new Date(band.started_at).getTime()
-                  const end = band.ended_at ? new Date(band.ended_at).getTime() : windowEnd
-                  const span = bounds.end - bounds.start
-                  const left = ((Math.max(start, bounds.start) - bounds.start) / span) * 100
-                  const width = Math.max(0.2, ((end - start) / span) * 100)
-                  return (
-                    <div
-                      key={`${band.started_at}-${index}`}
-                      className={`absolute inset-y-0 ${bandTone(band)}`}
-                      style={{ left: `${left}%`, width: `${width}%` }}
-                      title={`${band.state} · ${bandReason(band)}`}
-                    />
-                  )
-                })}
+          KIND_ORDER.filter((kind) => kind === focus && byKind[kind]?.length).map(
+            (kind) => (
+              <div key={kind} className='space-y-1.5'>
+                <div className='relative h-3.5 w-full overflow-hidden rounded-full bg-muted'>
+                  {byKind[kind].map((band, index) => {
+                    const start = new Date(band.started_at).getTime()
+                    const end = band.ended_at
+                      ? new Date(band.ended_at).getTime()
+                      : windowEnd
+                    const span = bounds.end - bounds.start
+                    const left =
+                      ((Math.max(start, bounds.start) - bounds.start) / span) * 100
+                    const width = Math.max(0.2, ((end - start) / span) * 100)
+                    return (
+                      <div
+                        key={`${band.started_at}-${index}`}
+                        className={`absolute inset-y-0 ${bandTone(band)}`}
+                        style={{ left: `${left}%`, width: `${width}%` }}
+                        title={bandTitle(band, windowEnd)}
+                      />
+                    )
+                  })}
+                </div>
+                <div className='flex justify-between font-mono text-[10px] text-muted-foreground'>
+                  <span>{timeLabel(bounds.start)}</span>
+                  <span>{timeLabel(bounds.end)}</span>
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          )}
         {bands.length > 0 && (
           <div className='flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground'>
             {BAND_LEGEND.map((entry) => (
@@ -379,6 +705,34 @@ function TimelinePanel({
       </CardContent>
     </Card>
   )
+}
+
+/** The hover text for one band: when it ran, how long, and why. */
+function bandTitle(band: TimeBand, windowEnd: number): string {
+  const start = new Date(band.started_at)
+  const end = band.ended_at ? new Date(band.ended_at) : new Date(windowEnd)
+  const state = band.exclusion ? '不要求' : STATE_LABEL[band.state] || band.state
+  const reason = bandReason(band)
+  return [
+    `${state}${reason ? ` · ${reason}` : ''}`,
+    `${timeLabel(start.getTime())} → ${timeLabel(end.getTime())}`,
+    formatDuration(end.getTime() - start.getTime()),
+  ].join('\n')
+}
+
+const STATE_LABEL: Record<string, string> = {
+  healthy: '可用',
+  unavailable: '不可用',
+  unknown: '未知',
+  excluded: '不要求',
+}
+
+function timeLabel(epoch: number): string {
+  return new Date(epoch).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
 }
 
 /**
@@ -408,11 +762,21 @@ function CompletenessPanel({
         <QueryState pending={pending} error={error} />
         {integrity && (
           <>
-            <div className='grid gap-3 sm:grid-cols-4'>
-              <Fact label='应录' value={formatDuration(integrity.owed_ms)} />
-              <Fact label='有效' value={formatDuration(integrity.covered_ms)} />
-              <Fact label='缺口' value={formatDuration(integrity.missing_ms)} />
-              <Fact label='待核验' value={formatDuration(integrity.unverified_ms)} />
+            <CoverageBar
+              covered={integrity.covered_ms}
+              missing={integrity.missing_ms}
+              unverified={integrity.unverified_ms}
+              owed={integrity.owed_ms}
+            />
+            <div className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
+              <DataCell label='应录' value={formatDuration(integrity.owed_ms)} />
+              <DataCell label='有效' value={formatDuration(integrity.covered_ms)} tone='ok' />
+              <DataCell
+                label='缺口'
+                value={formatDuration(integrity.missing_ms)}
+                tone={integrity.missing_ms > 0 ? 'bad' : undefined}
+              />
+              <DataCell label='待核验' value={formatDuration(integrity.unverified_ms)} tone='warn' />
             </div>
             {exclusions.length > 0 && (
               <p className='text-xs text-muted-foreground'>
