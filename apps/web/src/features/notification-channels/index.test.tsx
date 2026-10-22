@@ -4,6 +4,7 @@ import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
 import { useAuthStore } from '@/stores/auth-store'
 import type { Schema } from '@/lib/types'
+import { ApiError } from '@/lib/api-client'
 import { NotificationChannels } from './index'
 // The application stylesheet, so layout assertions measure the real page.
 // Without it every Tailwind class is inert and a pixel comparison would be
@@ -462,4 +463,34 @@ test('each field is one grid cell, with SelectField unwrapped', async () => {
     const nested = cell.querySelectorAll(':scope > .grid')
     expect(nested.length).toBe(0)
   }
+})
+
+// The server names the exact field. A page-level mapping for the same code would
+// replace that with a generic sentence — which is how a WeCom application came to
+// be told about a webhook's requirements. apiErrorText falls back to the server's
+// message when the page does not list the code, so the page must not list it.
+test('a rejection shows the field the server named', async () => {
+  signIn()
+  calls.request.mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path === '/api/v1/notification-channels' && (!init || !init.method))
+      return { items: [], kinds: ['inapp', 'webhook', 'email', 'wecom', 'wecom_app'] }
+    if (path === '/api/v1/notification-channels' && init?.method === 'POST')
+      throw new ApiError(422, 'notification_channel_invalid', '缺少或无效的配置：应用 Secret')
+    throw new Error('unexpected path ' + path)
+  })
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const screen = await render(view(client))
+
+  await userEvent.click(screen.getByLabelText('渠道类型'))
+  await userEvent.click(await screen.getByRole('option', { name: '企业微信 · 应用' }).first())
+  await userEvent.fill(screen.getByLabelText('渠道名称').element() as HTMLInputElement, '值班')
+  await userEvent.fill(screen.getByLabelText('企业ID').element() as HTMLInputElement, 'corp')
+  await userEvent.fill(screen.getByLabelText('应用ID').element() as HTMLInputElement, '1')
+  await userEvent.fill(screen.getByLabelText('应用 Secret').element() as HTMLInputElement, 's')
+  await userEvent.fill(screen.getByLabelText('应用接收人').element() as HTMLInputElement, '@all')
+  await userEvent.click(screen.getByRole('button', { name: '添加', exact: true }))
+
+  // The server's sentence survives; the old generic one must not appear.
+  await expect.element(screen.getByText(/缺少或无效的配置：应用 Secret/)).toBeVisible()
+  expect(screen.getByText(/渠道配置不完整，请检查必填项/).query()).toBeNull()
 })

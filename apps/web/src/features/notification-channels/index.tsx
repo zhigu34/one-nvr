@@ -13,11 +13,12 @@ import { CheckboxField, Empty, Notices, QueryState, SelectField } from '@/featur
 
 type Channel = Schema<'NotificationChannel'>
 
+// `notification_channel_invalid` is deliberately absent: the server names the
+// exact field ("缺少或无效的配置：应用 Secret"), and a map entry here would
+// replace that with a generic sentence — which is what told a WeCom application
+// about a webhook's requirements. apiErrorText falls back to the server's own
+// message when a code is not listed.
 const ERROR_CODES: Record<string, string> = {
-  // The server names the missing field, so the UI must not overwrite it with a
-  // sentence about one kind: a WeCom application was told about a webhook's
-  // requirements. The fallback only covers a payload with no message at all.
-  notification_channel_invalid: '渠道配置不完整，请检查必填项',
   notification_channel_in_use: '该渠道仍被规则使用，请先在规则里解除绑定',
   notification_channel_version_conflict: '渠道已被他人修改，请刷新后重试',
 }
@@ -276,7 +277,12 @@ export function NotificationChannels() {
           {testResult}
         </p>
       )}
+      {/* noValidate: the server is the single judge of what is missing, and it
+          names the field. The browser's own bubble says "请填写此字段" without
+          saying which channel kind's rules apply, and it blocks the request
+          before the server can answer with something actionable. */}
       <form
+        noValidate
         className='grid content-start items-start gap-x-4 gap-y-3 rounded-xl border bg-card p-4 md:grid-cols-3'
         onSubmit={(event) => {
           event.preventDefault()
