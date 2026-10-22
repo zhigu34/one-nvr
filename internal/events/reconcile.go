@@ -41,10 +41,37 @@ const ReconcileInterval = 5 * time.Minute
 // stopped looking, and the whole time the event's clip sat 'finalizing' (the page
 // says 写入中) even though later clips had already appeared.
 //
-// Two minutes is still well above a typical detection, and the sweep never closes
-// an event the detector has not reported an end for — a live event cannot be
-// mistaken for an abandoned one by arriving early.
-const reconcileMinAge = 2 * time.Minute
+// The age gate is per-event now, not one number for every detection.
+//
+// The old comment justified two minutes with "the median detection lasts 47
+// seconds". Measured again on this site after sensitivity was raised: the median
+// is 4 seconds and the 90th percentile is 33 seconds. A single two-minute gate
+// therefore spent two minutes saying "抓拍待同步 · 稍后自动核对" about events that
+// had ended in one second and could never have a picture — the operator read a
+// pending state that was already decided.
+//
+// The gate exists to avoid touching a live event, and a live event has no
+// end time. So the wait is now proportional to how long the event itself lasted:
+// a detection that ended after one second is worth asking about immediately, one
+// that ran five minutes is worth waiting on in case its picture is still being
+// written.
+const (
+	// reconcileMinAge is the floor for a CLOSED event: no event is examined
+	// sooner than this after it ends, because the detector writes the picture
+	// around the end message.
+	reconcileMinAge = 30 * time.Second
+	// reconcileMaxAge caps the proportional wait. An event that ran longer than
+	// this is checked at this interval, not at its own duration.
+	reconcileMaxAge = 2 * time.Minute
+	// openEventMinAge is how long an event with NO end time must age before the
+	// sweep asks the detector about it.
+	//
+	// This is deliberately the old two-minute gate and not the 30-second floor:
+	// without an end time there is nothing to be proportional to, and an event
+	// that is genuinely still running must not be interrogated. Dropping this to
+	// 30 seconds closed a detection that had only been running for a minute.
+	openEventMinAge = 2 * time.Minute
+)
 
 // reconcileBatch bounds one pass. Each candidate costs one HTTP call to the
 // detector, and an unbounded sweep on first enable would hammer it.
@@ -130,13 +157,15 @@ func (s *Service) openEvents(ctx context.Context) ([]openEvent, error) {
 	rows, err := s.DB.Pool.Query(ctx, `SELECT id,source_id,started_at,ended_at,snapshot_state FROM events
 		WHERE source='frigate' AND (
 			-- The stream never closed it.
-			(ended_at IS NULL AND started_at < clock_timestamp() - $1::interval)
-			-- It closed but the picture never arrived. The age test uses the
-			-- end, because that is when the detector stopped reporting on it.
-			OR (ended_at IS NOT NULL AND ended_at < clock_timestamp() - $1::interval AND snapshot_state='pending')
+			(ended_at IS NULL AND started_at < clock_timestamp() - $4::interval)
+			-- It closed but the picture never arrived. The wait is proportional to
+			-- the event's own length: a one-second detection is asked about after
+			-- $1, a five-minute one after $3.
+			OR (ended_at IS NOT NULL AND snapshot_state='pending'
+			    AND ended_at < clock_timestamp() - LEAST(GREATEST(ended_at - started_at, $1::interval), $3::interval))
 		)
 		ORDER BY started_at DESC LIMIT $2`,
-		reconcileMinAge.String(), reconcileBatch)
+		reconcileMinAge.String(), reconcileBatch, reconcileMaxAge.String(), openEventMinAge.String())
 	if err != nil {
 		return nil, err
 	}

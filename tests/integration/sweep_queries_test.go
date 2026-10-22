@@ -241,3 +241,75 @@ func TestTerminalSnapshotFailureStopsRetrying(t *testing.T) {
 		t.Fatalf("a channel with no pool recorded %q; the scan never reached it", *archiveErr)
 	}
 }
+
+// A one-second event is examined almost immediately; a five-minute one waits.
+//
+// The gate exists to avoid touching a live event, and a live event has no end
+// time. Waiting two minutes for every event meant a detection that ended after
+// one second sat on "抓拍待同步 · 稍后自动核对" long after the answer was decided —
+// measured on this site, the median detection lasts four seconds.
+func TestShortEventsAreReconciledSooner(t *testing.T) {
+	fixture, service := newEventsFixture(t)
+	ctx := context.Background()
+	// A detector that has no picture for anything, so every examined event is
+	// settled as gone. That is what makes "was it examined" observable.
+	detector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/snapshot.jpg") {
+			w.WriteHeader(404)
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	defer detector.Close()
+	service.Frigate = detector.URL
+	if err := service.SetMappings(ctx, fixture.Admin, map[id.ID]string{fixture.Channel: "front-door"}); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC()
+	// A short event that ended 45 seconds ago: past the 30s floor, well inside the
+	// old two-minute gate.
+	short := mustID(t)
+	if _, err := fixture.DB.Pool.Exec(ctx,
+		`INSERT INTO events(id,channel_id,source,source_id,category,score,zones,started_at,ended_at,snapshot_state,media_state,raw)
+		 VALUES($1,$2,'frigate','short-1','person',0.5,'[]',$3,$4,'pending','pending','{}')`,
+		short, fixture.Channel, now.Add(-46*time.Second), now.Add(-45*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	// A long event (five minutes) that also ended 45 seconds ago: its own wait is
+	// the two-minute cap, so it must be left alone.
+	longFresh := mustID(t)
+	if _, err := fixture.DB.Pool.Exec(ctx,
+		`INSERT INTO events(id,channel_id,source,source_id,category,score,zones,started_at,ended_at,snapshot_state,media_state,raw)
+		 VALUES($1,$2,'frigate','long-fresh','person',0.5,'[]',$3,$4,'pending','pending','{}')`,
+		longFresh, fixture.Channel, now.Add(-6*time.Minute), now.Add(-45*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		service.ReconcileOpenEvents(ctx)
+	}()
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("reconciliation did not finish")
+	}
+
+	stateOf := func(eventID id.ID) string {
+		var state string
+		if err := fixture.DB.Pool.QueryRow(ctx, `SELECT snapshot_state FROM events WHERE id=$1`, eventID).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	// The short event was examined and settled: the detector has no picture.
+	if got := stateOf(short); got != "gone" {
+		t.Fatalf("a 1-second event that ended 45s ago is still %q; it is past its 30s wait", got)
+	}
+	// The long event was NOT: its own duration puts its wait at the two-minute cap.
+	if got := stateOf(longFresh); got != "pending" {
+		t.Fatalf("a 5-minute event that ended 45s ago became %q; its wait should still be running", got)
+	}
+}
