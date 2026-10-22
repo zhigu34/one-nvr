@@ -336,13 +336,14 @@ test('a viewer sees no availability card', async () => {
 })
 
 // DASH-02: the host figures are shown for an administrator.
-test('the host resource card reports cpu, memory and load', async () => {
+test('the host resource panel reports cpu, memory and load', async () => {
   const setup = fixture()
   const view = await render(setup.view)
-  await expect.element(view.getByTestId('host-resources')).toBeVisible()
-  await expect.element(view.getByText('12.5%')).toBeVisible()
-  await expect.element(view.getByText('34.2%')).toBeVisible()
-  await expect.element(view.getByText('1.4')).toBeVisible()
+  const panel = view.getByTestId('host-resources')
+  await expect.element(panel).toBeVisible()
+  await expect.element(panel.getByText('12.5%')).toBeVisible()
+  await expect.element(panel.getByText('34.2%')).toBeVisible()
+  await expect.element(view.getByTestId('host-load')).toHaveTextContent('1.4')
 })
 
 // A failed read must read "未知", not "0%": zero is indistinguishable from an
@@ -375,7 +376,10 @@ test('an unmeasured host shows 未知 rather than zero', async () => {
   })
   const view = await render(setup.view)
   await expect.element(view.getByTestId('host-resources')).toBeVisible()
-  expect(view.getByText('未知').elements().length).toBe(3)
+  // CPU, memory, load and the cache each report 未知. The load average used to
+  // sit on a counters line and fell through to its own text; it is an indicator
+  // now, so it is counted here too.
+  expect(view.getByText('未知').elements().length).toBe(4)
   expect(view.getByText('0%').query()).toBeNull()
 })
 

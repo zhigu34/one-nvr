@@ -529,69 +529,80 @@ export function Overview() {
                   暂无在线通道。接入摄像头后，这里会显示每一路的状态与快捷入口。
                 </p>
               ) : (
-                /* Compact read-only rows, not cards. Each tile was a bordered
-                   box with an icon, a name, a status line and two buttons —
-                   about 110px of height for four facts, so eight channels ran
-                   off the bottom of the screen. The preview/playback entries
-                   are the row's own hover affordance now, which keeps the whole
-                   patrol visible at once.
-                   No live thumbnail: there is no per-channel snapshot endpoint
-                   in this product, and a placeholder image would claim a picture
-                   the system cannot take. */
-                <ul className='grid gap-1'>
+                /* Two columns of compact cards. A single column of 22px rows
+                   left the left half of this band as bare background while the
+                   event list on the right ran to eight rows — the two columns
+                   were never the same shape. Two columns of cards fill the same
+                   width with the same number of channels, and each card can hold
+                   the channel's own detail without becoming a tile again. */
+                <ul className='grid gap-2 sm:grid-cols-2'>
                   {active.map((channel) => {
                     const label = `CH${String(channel.channel_no).padStart(2, '0')}`
+                    const streaming =
+                      channel.main_media?.width && channel.main_media?.height
+                        ? `${channel.main_media.width}×${channel.main_media.height}`
+                        : ''
                     return (
                       <li
                         key={channel.channel_id}
                         data-testid='active-channel-card'
-                        className='group flex items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-sm transition-colors hover:border-border hover:bg-muted/40'
+                        className='group flex items-center justify-between gap-2 rounded-lg border border-border bg-muted/30 p-3 transition-colors hover:border-muted-foreground/30 hover:bg-muted/50'
                       >
-                        <span
-                          aria-hidden
-                          className='size-1.5 shrink-0 rounded-full bg-emerald-500'
-                        />
-                        <span className='shrink-0 font-mono text-[11px] text-muted-foreground'>
-                          {label}
-                        </span>
-                        <span className='min-w-0 flex-1 truncate'>
-                          {channel.channel_name}
-                        </span>
-                        <span className='shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground'>
-                          {channel.bitrate_kbps
-                            ? channel.bitrate_kbps >= 1000
-                              ? `${(channel.bitrate_kbps / 1000).toFixed(1)} Mbps`
-                              : `${Math.round(channel.bitrate_kbps)} kbps`
-                            : '—'}
-                        </span>
-                        <span className='flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100'>
-                          {channel.permissions.includes('live') && (
-                            <Link
-                              to='/live'
-                              search={{ channel: channel.channel_id }}
-                              aria-label={`预览 ${label}`}
-                              title='预览'
-                              className='grid size-6 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground'
-                            >
-                              <Play aria-hidden className='size-3' />
-                            </Link>
-                          )}
-                          {channel.permissions.includes('playback') && (
-                            <Link
-                              to='/recordings'
-                              search={{
-                                channel: channel.channel_id,
-                                at: '',
-                                tab: 'playback',
-                              }}
-                              aria-label={`回放 ${label}`}
-                              title='回放'
-                              className='grid size-6 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground'
-                            >
-                              <Video aria-hidden className='size-3' />
-                            </Link>
-                          )}
-                        </span>
+                        <div className='min-w-0'>
+                          <p className='flex min-w-0 items-center gap-1.5'>
+                            <span
+                              aria-hidden
+                              className='size-1.5 shrink-0 rounded-full bg-emerald-500'
+                            />
+                            <span className='shrink-0 font-mono text-[11px] text-muted-foreground'>
+                              {label}
+                            </span>
+                            <span className='truncate text-sm font-medium'>
+                              {channel.channel_name}
+                            </span>
+                          </p>
+                          <p className='mt-0.5 truncate pl-3 text-[11px] text-muted-foreground/70'>
+                            {streaming || '主流正常'}
+                            {channel.sub.state === 'healthy' ? ' · 子流正常' : ''}
+                          </p>
+                        </div>
+                        <div className='flex shrink-0 items-center gap-1.5'>
+                          <span className='font-mono text-xs tabular-nums text-muted-foreground'>
+                            {channel.bitrate_kbps
+                              ? channel.bitrate_kbps >= 1000
+                                ? `${(channel.bitrate_kbps / 1000).toFixed(1)} Mbps`
+                                : `${Math.round(channel.bitrate_kbps)} kbps`
+                              : '—'}
+                          </span>
+                          <span className='flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100'>
+                            {channel.permissions.includes('live') && (
+                              <Link
+                                to='/live'
+                                search={{ channel: channel.channel_id }}
+                                aria-label={`预览 ${label}`}
+                                title='预览'
+                                className='grid size-6 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground'
+                              >
+                                <Play aria-hidden className='size-3' />
+                              </Link>
+                            )}
+                            {channel.permissions.includes('playback') && (
+                              <Link
+                                to='/recordings'
+                                search={{
+                                  channel: channel.channel_id,
+                                  at: '',
+                                  tab: 'playback',
+                                }}
+                                aria-label={`回放 ${label}`}
+                                title='回放'
+                                className='grid size-6 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground'
+                              >
+                                <Video aria-hidden className='size-3' />
+                              </Link>
+                            )}
+                          </span>
+                        </div>
                       </li>
                     )
                   })}
@@ -640,7 +651,7 @@ export function Overview() {
                           data-testid='overview-event-row'
                           className='group flex items-center justify-between gap-2 rounded-lg border bg-zinc-50/70 p-2 text-xs transition-colors hover:border-zinc-300 hover:bg-zinc-100/80 dark:bg-zinc-900/50 dark:hover:border-emerald-500/30 dark:hover:bg-zinc-900/80'
                         >
-                          <span className='flex min-w-0 items-center gap-2'>
+                          <span className='flex min-w-0 items-center gap-2.5'>
                             {/* The crop is the fastest way to recognise an event:
                                 a 40px thumbnail answers "what was it" before the
                                 label is read. Only rendered when the picture is
@@ -652,7 +663,7 @@ export function Overview() {
                                 src={`/api/v1/events/${item.id}/snapshot`}
                                 alt=''
                                 loading='lazy'
-                                className='size-10 shrink-0 rounded border border-border object-cover'
+                                className='size-10 shrink-0 rounded-md border border-border object-cover'
                                 // A stored picture can still fail to load (the
                                 // detector was pruned). Falling back to the icon
                                 // keeps a broken-image glyph out of the list.
@@ -663,7 +674,7 @@ export function Overview() {
                                 }
                               />
                             ) : (
-                              <span className='grid size-10 shrink-0 place-items-center rounded border border-border bg-muted/40 text-muted-foreground/40'>
+                              <span className='grid size-10 shrink-0 place-items-center rounded-md border border-border bg-muted/40 text-muted-foreground/40'>
                                 <ImageOff aria-hidden className='size-3.5' />
                               </span>
                             )}
@@ -687,7 +698,7 @@ export function Overview() {
                             </span>
                           </span>
                           <span className='flex shrink-0 items-center gap-2 tabular-nums text-muted-foreground'>
-                            <span>
+                            <span className='font-mono text-xs'>
                               {formatClock(Date.parse(item.started_at ?? ''), zone).slice(5)}
                               {` · ${durationLabel}`}
                             </span>
@@ -769,13 +780,14 @@ function ChannelAlarms({
 }
 
 /**
- * Meter is one labelled percentage with a 4px bar.
+ * A percentage as a short label and a number, with a hairline bar under it.
  *
- * A null value means "not measured", which renders as 未知 and no bar — never as
- * a zero-width bar, because an empty bar at 0% says the machine is idle, and an
- * unmeasured machine is not an idle one.
+ * The full-width Meter was right for a KPI card and wrong here: three stacked
+ * bars made the resource block taller than the component pills beside it, so the
+ * strip could not be read as one line. This keeps the number — which is what an
+ * operator quotes — and reduces the bar to a fill hint.
  */
-function Meter({
+function Indicator({
   label,
   value,
   pending,
@@ -784,28 +796,44 @@ function Meter({
   label: string
   value: number | null
   pending: boolean
-  // off means the resource does not exist on this deployment. Rendering it as
-  // "0%" would claim it is reserved and unused, which is the opposite.
   off?: boolean
 }) {
+  // One decimal, not rounded to whole percent: 12.5% and 12% are different
+  // readings of the same host, and the figure is what an operator quotes.
+  const text =
+    value != null
+      ? `${value.toFixed(1)}%`
+      : pending
+        ? '…'
+        : off
+          ? '未启用'
+          : '未知'
   return (
-    <div className='grid grid-cols-[auto_1fr_auto] items-center gap-2 text-xs'>
-      <span className='text-muted-foreground'>{label}</span>
-      <span className='h-1 overflow-hidden rounded-full bg-muted'>
-        {value != null && (
+    <span className='inline-flex items-center gap-1.5 text-muted-foreground'>
+      <span>{label}</span>
+      <span
+        className={cn(
+          'font-mono',
+          value != null ? 'text-foreground' : 'text-muted-foreground/70'
+        )}
+      >
+        {text}
+      </span>
+      {value != null && (
+        <span
+          aria-hidden
+          className='relative h-1 w-8 overflow-hidden rounded-full bg-muted'
+        >
           <span
             className={cn(
-              'block h-full rounded-full',
+              'absolute inset-y-0 left-0 rounded-full',
               value >= 85 ? 'bg-amber-500' : 'bg-emerald-500'
             )}
-            style={{ width: `${Math.max(1, Math.min(100, value))}%` }}
+            style={{ width: `${Math.max(4, Math.min(100, value))}%` }}
           />
-        )}
-      </span>
-      <span className='w-12 text-right tabular-nums'>
-        {off ? '未启用' : value != null ? `${value}%` : pending ? '…' : '未知'}
-      </span>
-    </div>
+        </span>
+      )}
+    </span>
   )
 }
 
@@ -945,21 +973,27 @@ function HostResourcesPanel({
           {data ? ` · ${data.cpu_cores} 核` : ''}
         </p>
       </div>
-      <div className='grid gap-1.5'>
-        <Meter
+      {/* Compact indicators, not three full-width bars: this strip is the
+          machine's summary line, and the bars pushed the component pills into
+          a second row of their own. */}
+      <div className='flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums'>
+        <Indicator
           label='CPU'
           value={data?.cpu_known ? data.cpu_percent : null}
           pending={resources.isPending}
         />
-        <Meter
+        <Indicator
           label='内存'
           value={data?.memory_known ? data.memory_percent : null}
           pending={resources.isPending}
         />
-        {/* REC-09: the event ring buffer lives in memory, and deciding whether to
-            enlarge it needs its fill level. A deployment that reserved none shows
-            未启用 rather than 0%, which would read as "reserved and empty". */}
-        <Meter
+        <span className='text-muted-foreground'>
+          负载{' '}
+          <span data-testid='host-load' className='font-mono'>
+            {data?.load_known ? data.load_average : '未知'}
+          </span>
+        </span>
+        <Indicator
           label='缓存盘'
           value={
             data?.event_cache.configured && data.event_cache.known
