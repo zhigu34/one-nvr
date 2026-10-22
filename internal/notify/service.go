@@ -136,14 +136,6 @@ func scanChannel(row pgx.Row) (ChannelView, error) {
 			TLS: useTLS, UseAuth: useAuth, Username: username,
 		}
 	}
-	if out.Kind == "wecom" {
-		out.WeCom = &WeComConfig{MsgType: wecomMsgType, Mentions: wecomMentions}
-	}
-	if out.Kind == "wecom_app" {
-		out.WeComApp = &WeComAppConfig{
-			CorpID: wecomCorpID, AgentID: wecomAgentID, To: wecomTo, MsgType: wecomMsgType,
-		}
-	}
 	return out, nil
 }
 
@@ -525,6 +517,18 @@ func (s *Service) channelConfig(ctx context.Context, channelID id.ID) (ChannelCo
 	}
 	if url != nil {
 		out.URL = *url
+	}
+	// The adapter is built from this value, so every kind that has settings must
+	// populate them here. Leaving a kind out made Build fail with "no settings"
+	// and TestChannel answer 422 — the channel was stored correctly and still
+	// could not be tested, which reads as a validation bug to the operator.
+	if out.Kind == "wecom" {
+		out.WeCom = &WeComConfig{MsgType: wecomMsgType, Mentions: wecomMentions}
+	}
+	if out.Kind == "wecom_app" {
+		out.WeComApp = &WeComAppConfig{
+			CorpID: wecomCorpID, AgentID: wecomAgentID, To: wecomTo, MsgType: wecomMsgType,
+		}
 	}
 	if out.Kind == "email" {
 		out.Email = &SMTPConfig{

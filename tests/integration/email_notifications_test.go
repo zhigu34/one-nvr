@@ -499,3 +499,83 @@ func TestChannelRejectionNamesTheMissingField(t *testing.T) {
 		}
 	}
 }
+
+// Testing a channel must work for every kind that can be stored.
+//
+// This is the regression that shipped: `channelConfig` loaded the email settings
+// but not the WeCom ones, so `registry.Build` failed with "no settings" and the
+// test endpoint answered 422 — for a channel the server had just accepted. The
+// operator saw "配置不完整" about a form they had filled completely.
+//
+// It also covers the earlier gap in coverage: no test called TestChannel at all,
+// so a whole endpoint could be broken for two kinds without anything failing.
+func TestChannelTestEndpointWorksForEveryKind(t *testing.T) {
+	fixture := newNotifyFixture(t)
+	ctx := context.Background()
+
+	// A closed port: the send must fail, but with a TRANSPORT error, not a
+	// configuration one. That distinction is the whole assertion.
+	dead := "http://127.0.0.1:1"
+	cases := map[string]notify.ChannelInput{
+		"webhook": {
+			Kind: "webhook", Name: "值班群", URL: dead, Secret: "s", Enabled: true,
+		},
+		"wecom": {
+			Kind: "wecom", Name: "群机器人", URL: dead + "/hook?key=k", Enabled: true,
+			WeCom: &notify.WeComConfig{MsgType: "markdown"},
+		},
+		"wecom_app": {
+			Kind: "wecom_app", Name: "应用", Secret: "s", Enabled: true,
+			WeComApp: &notify.WeComAppConfig{CorpID: "corp", AgentID: 1, To: "user:a", MsgType: "text"},
+		},
+		"email": {
+			Kind: "email", Name: "邮件", Secret: "s", Enabled: true,
+			Email: &notify.SMTPConfig{
+				SenderAddress: "a@example.com", Host: "127.0.0.1", Port: 1, UseAuth: false,
+			},
+			Recipients: &[]notify.RecipientInput{{Address: "b@example.com"}},
+		},
+		"inapp": {Kind: "inapp", Name: "站内", Enabled: true},
+	}
+	for kind, in := range cases {
+		channel, err := fixture.notify.RegisterChannel(ctx, fixture.fixture.Admin, in)
+		if err != nil {
+			t.Fatalf("%s: could not register: %v", kind, err)
+		}
+		result, testErr := fixture.notify.TestChannel(ctx, fixture.fixture.Admin, channel.ID)
+		if result == nil {
+			t.Fatalf("%s: the test returned no result: %v", kind, testErr)
+		}
+		// Whatever happened, it must be recorded on the channel: the page shows
+		// the measured outcome, not a claim.
+		var raw []byte
+		if err := fixture.fixture.DB.Pool.QueryRow(ctx, `SELECT last_check FROM notification_channels WHERE id=$1`, channel.ID).Scan(&raw); err != nil {
+			t.Fatalf("%s: last_check not stored: %v", kind, err)
+		}
+		if len(raw) == 0 {
+			t.Fatalf("%s: the test left no outcome on the channel", kind)
+		}
+		if strings.Contains(string(result), "channel_kind_unavailable") {
+			t.Fatalf("%s: the adapter could not be built from the stored settings: %s", kind, result)
+		}
+	}
+}
+
+// The in-app inbox always succeeds: there is nothing to send.
+func TestChannelTestSucceedsForTheInbox(t *testing.T) {
+	fixture := newNotifyFixture(t)
+	ctx := context.Background()
+	channel, err := fixture.notify.RegisterChannel(ctx, fixture.fixture.Admin, notify.ChannelInput{
+		Kind: "inapp", Name: "站内", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := fixture.notify.TestChannel(ctx, fixture.fixture.Admin, channel.ID)
+	if err != nil {
+		t.Fatalf("the inbox test failed: %v (%s)", err, result)
+	}
+	if !strings.Contains(string(result), `"state":"healthy"`) {
+		t.Fatalf("the inbox reported %s, want healthy", result)
+	}
+}
