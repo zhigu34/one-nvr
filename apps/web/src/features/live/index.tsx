@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { configuredChannels } from '@/features/foundation/channels'
 import { Link } from '@tanstack/react-router'
 import {
+  History,
   Loader2,
   Maximize,
   Minimize,
@@ -145,18 +146,16 @@ function Tile({
       onClick={onSelect}
       onDoubleClick={() => channel && onZoom()}
       className={cn(
-        'group relative flex h-full min-w-0 flex-col overflow-hidden rounded-lg border bg-black text-zinc-100 transition-shadow duration-150',
+        'group relative h-full min-w-0 overflow-hidden rounded-lg border bg-black text-zinc-100 transition-shadow duration-150',
         selected ? 'ring-2 ring-primary' : 'border-video-border',
-        dropActive && 'ring-2 ring-sky-400'
+        dropActive && 'ring-2 ring-sky-400',
+        !channel && 'border-dashed border-border bg-muted/20'
       )}
     >
-      <div
-        data-testid='live-video-area'
-        // The grid cell governs the box; object-contain letterboxes any stream
-        // shape inside it. (The old aspect-ratio injection fought the fixed
-        // grid rows and produced mis-sized tiles.)
-        className='relative min-h-0 flex-1'
-      >
+      {/* The picture fills the cell. The controls float over it, because a
+          permanent bar at the bottom took height away from every stream — on a
+          16-cell grid that was a measurable loss of pixels on all sixteen. */}
+      <div data-testid='live-video-area' className='absolute inset-0'>
         <video
           ref={video}
           data-testid='live-video'
@@ -165,29 +164,31 @@ function Tile({
           muted={!selected || !audio}
           className='h-full w-full object-contain'
         />
-        {/* LIVE pill: always visible so a wall of tiles reads at a glance. */}
+      </div>
+
+      {/* Top bar: always visible, a gradient rather than a panel, so a wall of
+          tiles still reads at a glance without a black strip on each one. */}
+      <div className='pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-2 bg-gradient-to-b from-black/75 to-transparent p-2 text-xs'>
+        <span className='flex min-w-0 items-center gap-1.5'>
+          {channel && <TileDot state={state} paused={paused} />}
+          <span className='truncate'>{channel ? label(channel) : '空闲画面'}</span>
+        </span>
         {channel && (
-          <div className='absolute left-2 top-2 z-10 flex items-center gap-1.5 rounded-full border border-white/15 bg-black/55 px-2 py-0.5 text-[11px] text-white shadow-sm backdrop-blur'>
-            <TileDot state={state} paused={paused} />
-            <span className='max-w-32 truncate'>{label(channel)}</span>
-          </div>
-        )}
-        {/* Header floats over the picture and fades with the controls. */}
-        <div
-          className={cn(
-            'absolute inset-x-0 top-0 flex min-h-9 items-center justify-between gap-2 bg-gradient-to-b from-black/70 to-transparent px-2 pb-2 pt-1 text-xs transition-opacity duration-200',
-            fullscreen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-          )}
-        >
-          <span className='truncate'>
-            {channel ? label(channel) : '选择通道开始预览'}
-          </span>
-          {channel && (
+          <span className='flex shrink-0 items-center gap-1.5'>
+            {live && media && (
+              <span
+                data-testid='live-media-info'
+                className='truncate font-mono text-[11px] text-white/70'
+                title={liveMediaTitle(media)}
+              >
+                {liveMediaLabel(media)}
+              </span>
+            )}
             <Button
               variant='ghost'
               size='icon'
               aria-label={`关闭 ${label(channel)}`}
-              className='size-6 shrink-0 rounded p-1 text-white hover:bg-white/15'
+              className='pointer-events-auto size-6 rounded p-1 text-white/80 hover:bg-white/15 hover:text-white'
               onClick={(e) => {
                 e.stopPropagation()
                 onClose()
@@ -195,46 +196,62 @@ function Tile({
             >
               <X size={14} />
             </Button>
-          )}
-        </div>
-        {(!channel || paused || state.phase !== 'playing') && (
-          <div className='absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70 px-4 text-center text-xs text-zinc-300 transition-opacity duration-200'>
-            {!channel ? (
-              // An empty slot is a waiting state, not a loading one: a static
-              // icon tells "pick a camera" apart from "buffering".
-              <MonitorPlay size={26} className='text-zinc-600' />
-            ) : state.phase === 'connecting' || state.phase === 'retrying' ? (
-              <Loader2 size={26} className='animate-spin' />
-            ) : (
-              <MonitorPlay size={26} />
-            )}
-            <p role='status'>
-              {channel
-                ? message
-                : `空画面 #${slotIndex + 1} · 点击或拖拽左侧通道至此`}
-            </p>
-            {channel && !paused && state.phase === 'error' && (
-              <Button
-                size='sm'
-                variant='secondary'
-                onClick={() => setRetry((v) => v + 1)}
-              >
-                <RefreshCw size={14} />
-                重新连接
-              </Button>
-            )}
-          </div>
+          </span>
         )}
       </div>
-      {channel && (
-        <div className='flex items-center justify-between gap-2 bg-black/60 px-2 py-1.5 text-xs backdrop-blur-sm'>
-          <div className='flex min-w-0 flex-1 items-center gap-2'>
-            <span
-              className={cn(
-                'shrink-0',
-                live ? 'text-emerald-400' : 'text-zinc-400'
+
+      {(!channel || paused || state.phase !== 'playing') && (
+        <div className='absolute inset-0 flex flex-col items-center justify-center gap-3 px-4 text-center text-xs text-zinc-400'>
+          {!channel ? (
+            <>
+              {/* An empty slot is a target, not a placeholder: the dashed border
+                  and the matte icon say "drop a camera here", and the hover
+                  brightens both so the slot responds before the drag lands. */}
+              <MonitorPlay
+                size={26}
+                className='text-zinc-600 transition-colors group-hover:text-zinc-400'
+              />
+              <p role='status' className='text-zinc-500'>
+                空画面 #{slotIndex + 1}
+              </p>
+              <p className='text-[11px] text-zinc-600'>
+                点击或拖拽左侧通道至此
+              </p>
+            </>
+          ) : (
+            <>
+              {state.phase === 'connecting' || state.phase === 'retrying' ? (
+                <Loader2 size={26} className='animate-spin' />
+              ) : (
+                <MonitorPlay size={26} />
               )}
-            >
+              <p role='status'>{message}</p>
+              {!paused && state.phase === 'error' && (
+                <Button
+                  size='sm'
+                  variant='secondary'
+                  onClick={() => setRetry((v) => v + 1)}
+                >
+                  <RefreshCw size={14} />
+                  重新连接
+                </Button>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Bottom controls: hover-only, so the stream is unobstructed until the
+          operator asks for them. Focus-within keeps them reachable by keyboard. */}
+      {channel && (
+        <div
+          className={cn(
+            'absolute inset-x-2 bottom-2 z-10 flex items-center justify-between gap-2 rounded-lg bg-black/60 p-1.5 text-[11px] backdrop-blur-sm transition-opacity duration-150',
+            fullscreen ? 'opacity-100' : 'opacity-0 focus-within:opacity-100 group-hover:opacity-100'
+          )}
+        >
+          <span className='flex min-w-0 items-center gap-1.5 pl-1'>
+            <span className={cn('shrink-0', live ? 'text-emerald-400' : 'text-zinc-400')}>
               {live
                 ? state.fallback
                   ? '主流 · 未配置子流'
@@ -243,21 +260,18 @@ function Tile({
                     : '子流'
                 : '未播放'}
             </span>
-            {live && media && (
-              <span
-                data-testid='live-media-info'
-                className='truncate text-zinc-300'
-                title={liveMediaTitle(media)}
-              >
-                {liveMediaLabel(media)}
-              </span>
+            {/* No bit rate here: the browser's own stats are the only honest
+                source for one, and this tile does not read them. What it does
+                know is that the stream is passed through untranscoded. */}
+            {live && (
+              <span className='shrink-0 text-zinc-500'>直通</span>
             )}
-          </div>
-          <div className='flex shrink-0 items-center gap-1.5'>
+          </span>
+          <span className='flex shrink-0 items-center gap-1'>
             <SelectField
               ariaLabel={`${label(channel)} 码流`}
               size='sm'
-              triggerClassName='w-fit px-2 text-xs border-white/20 bg-white/10 text-white hover:bg-white/15'
+              triggerClassName='h-7 w-fit border-white/20 bg-white/10 px-2 text-xs text-white hover:bg-white/15'
               value={stream}
               disabled={zoomed}
               onValueChange={(next) => {
@@ -275,29 +289,46 @@ function Tile({
               aria-label='切换声音'
               disabled={!selected}
               onClick={() => setAudio((v) => !v)}
-              className='size-6 p-1 text-white hover:bg-white/15 disabled:opacity-30'
+              className='size-7 p-1 text-white hover:bg-white/15 disabled:opacity-30'
             >
-              {audio && selected ? (
-                <Volume2 size={14} />
-              ) : (
-                <VolumeX size={14} />
-              )}
+              {audio && selected ? <Volume2 size={14} /> : <VolumeX size={14} />}
             </Button>
+            {/* The selected tile is the one whose playback link lives in the
+                rail; surfacing it here puts it where the operator is looking. */}
+            {channel.permissions.includes('playback') && (
+              <Button
+                asChild
+                variant='ghost'
+                size='icon'
+                className='size-7 p-1 text-white hover:bg-white/15'
+              >
+                <Link
+                  to='/recordings'
+                  search={{
+                    channel: channel.id ?? '',
+                    at: new Date().toISOString(),
+                    tab: 'playback',
+                  }}
+                  aria-label={`${label(channel)} 即时回放`}
+                  title='即时回放'
+                >
+                  <History size={14} />
+                </Link>
+              </Button>
+            )}
             <Button
               variant='ghost'
               size='icon'
               aria-label={fullscreen ? '退出全屏' : '全屏画面'}
-              className='size-6 p-1 text-white hover:bg-white/15'
+              className='size-7 p-1 text-white hover:bg-white/15'
               onClick={() => {
-                if (fullscreen)
-                  void document.exitFullscreen().catch(() => {})
-                else
-                  void container.current?.requestFullscreen().catch(() => {})
+                if (fullscreen) void document.exitFullscreen().catch(() => {})
+                else void container.current?.requestFullscreen().catch(() => {})
               }}
             >
               {fullscreen ? <Minimize size={14} /> : <Maximize size={14} />}
             </Button>
-          </div>
+          </span>
         </div>
       )}
     </section>
@@ -447,36 +478,48 @@ function LiveWorkspace({
           <div
             role='toolbar'
             aria-label='分屏布局'
-            className='flex gap-1 rounded-lg border p-1'
+            className='inline-flex items-center gap-0.5 rounded-lg border border-border bg-muted/30 p-0.5'
           >
-            {([1, 4, 9, 16] as Layout[]).map((layout) => (
-              <Button
-                key={layout}
-                size='sm'
-                variant={view.layout === layout ? 'secondary' : 'ghost'}
-                aria-pressed={view.layout === layout}
-                aria-label={`${layout} 画面`}
-                title={`${layout} 画面`}
-                onClick={() => {
-                  change({ ...view, layout })
-                  setSelected(0)
-                }}
-              >
-                <LayoutGlyph layout={layout} />
-                {layout}
-              </Button>
-            ))}
+            {([1, 4, 9, 16] as Layout[]).map((layout) => {
+              const active = view.layout === layout
+              return (
+                <button
+                  key={layout}
+                  type='button'
+                  aria-pressed={active}
+                  aria-label={`${layout} 画面`}
+                  title={`${layout} 画面`}
+                  onClick={() => {
+                    change({ ...view, layout })
+                    setSelected(0)
+                  }}
+                  className={cn(
+                    'inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs transition-colors',
+                    active
+                      ? 'bg-background font-medium text-foreground shadow-sm ring-1 ring-border'
+                      : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
+                  )}
+                >
+                  <LayoutGlyph layout={layout} />
+                  {layout}
+                </button>
+              )
+            })}
           </div>
           <Button
-            variant='outline'
+            variant='ghost'
+            size='sm'
+            className='h-9'
             disabled={!anyPlaying}
             onClick={() => change({ ...view, channels: [] })}
           >
-            <Square size={16} />
+            <Square size={14} />
             停止全部
           </Button>
           <Button
-            variant='outline'
+            variant='ghost'
+            size='sm'
+            className='h-9'
             disabled={
               !channels.some(
                 (c) =>
@@ -508,12 +551,14 @@ function LiveWorkspace({
             自动填充
           </Button>
           <Button
-            variant='outline'
+            variant='ghost'
+            size='sm'
+            className='h-9'
             onClick={() =>
               void grid.current?.requestFullscreen().catch(() => {})
             }
           >
-            <Maximize size={16} />
+            <Maximize size={14} />
             全屏
           </Button>
         </div>
@@ -579,7 +624,7 @@ function LiveWorkspace({
                   className={cn(
                     'h-auto w-full justify-start gap-2 truncate px-2 py-2 text-left text-sm font-normal transition-colors',
                     displayed[selected]?.id === channel.id &&
-                      'bg-accent font-medium',
+                      'bg-accent font-medium ring-1 ring-border',
                     unconfigured && 'text-muted-foreground/60'
                   )}
                 >
@@ -587,23 +632,33 @@ function LiveWorkspace({
                     aria-hidden
                     title={dot.title}
                     className={cn(
-                      'inline-block size-1.5 shrink-0 rounded-full',
+                      'relative inline-block size-1.5 shrink-0 rounded-full',
                       dot.cls
                     )}
-                  />
+                  >
+                    {/* Only the channel on screen pulses: a still dot says "the
+                        source is up", a pulsing one says "you are watching it". */}
+                    {onGrid && (
+                      <span className='absolute inset-0 animate-ping rounded-full bg-emerald-500 opacity-60 motion-reduce:hidden' />
+                    )}
+                  </span>
                   <span className='inline-grid min-w-5 shrink-0 place-items-center rounded bg-black/10 px-1 text-[10px] font-semibold tabular-nums dark:bg-white/10'>
                     {String(channel.channel_no).padStart(2, '0')}
                   </span>
                   <span className='flex-1 truncate'>{channel.channel_name}</span>
+                  {/* Position and group are context, not status: green on every
+                      row spent the operator's attention on twelve identical
+                      chips, so a row that is actually playing had nothing left
+                      to stand out with. */}
                   {onGrid && (
-                    <span className='shrink-0 rounded bg-emerald-500/15 px-1 py-0.5 text-[10px] tabular-nums text-emerald-600 dark:text-emerald-400'>
+                    <span className='shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground'>
                       画面 {slot + 1}
                     </span>
                   )}
                   {channel.channel_group && (
                     <span
                       title={`分组 · ${channel.channel_group}`}
-                      className='shrink-0 rounded bg-black/10 px-1 py-0.5 text-[10px] text-muted-foreground dark:bg-white/10'
+                      className='shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground'
                     >
                       {channel.channel_group}
                     </span>
