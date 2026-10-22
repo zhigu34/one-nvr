@@ -181,6 +181,11 @@ func Run(name string) error {
 		// swept to match.
 		background.Add(1)
 		go func() { defer background.Done(); runDeliveryReconciliation(ctx, notifications) }()
+		// Faults are recorded in abnormal_events by the operations service; this
+		// loop is what tells anyone about them. Without it the product noticed a
+		// camera was offline and had no way to say so.
+		background.Add(1)
+		go func() { defer background.Done(); runOperationalNotifications(ctx, notifications) }()
 		// The archive service exists before any publisher starts so the
 		// immediate-upload hook is set for the very first published segment.
 		//

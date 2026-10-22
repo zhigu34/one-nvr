@@ -224,3 +224,23 @@ func runAbnormalSweep(ctx context.Context, db *database.DB, c config.Config) {
 		}
 	}
 }
+
+// runOperationalNotifications tells someone when the system is broken (EVT-04).
+//
+// Separate from the delivery reconciliation above: that loop fixes up delivery
+// rows whose job died, while this one produces notifications for faults that
+// were recorded but never announced. The cadence matches the abnormal-event sweep
+// — a fault recorded now is announced within a sweep, and the announcement column
+// keeps a second pass from repeating it.
+func runOperationalNotifications(ctx context.Context, s *notify.Service) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		s.DispatchOperational(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}

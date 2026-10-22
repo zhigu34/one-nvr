@@ -317,3 +317,44 @@ func (r *router) testNotificationRecipient(w http.ResponseWriter, q *http.Reques
 	}
 	respond(w, q, 200, result)
 }
+
+// listOperationalSubscriptions handles GET /api/v1/notification-channels/operational:
+// which destinations hear about which faults.
+func (r *router) listOperationalSubscriptions(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Notify == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
+	items, err := r.d.Notify.ListSubscriptions(q.Context(), p)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, struct {
+		Items []notify.Subscription `json:"items"`
+		// Kinds is the fault vocabulary this build records, so the UI offers the
+		// categories that exist instead of a list that can drift.
+		Kinds []string `json:"kinds"`
+	}{items, notify.OperationalKinds()})
+}
+
+// setOperationalSubscriptions handles PUT /api/v1/notification-channels/operational/{kind}.
+func (r *router) setOperationalSubscriptions(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Notify == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
+	kind := q.PathValue("kind")
+	var in struct {
+		Items []notify.SubscriptionInput `json:"items"`
+	}
+	if err := decode(w, q, &in); err != nil {
+		fail(w, q, err)
+		return
+	}
+	if err := r.d.Notify.SetSubscriptions(q.Context(), p, kind, in.Items); err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, struct{}{})
+}

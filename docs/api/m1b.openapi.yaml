@@ -6785,6 +6785,93 @@
         }
       }
     },
+    "/api/v1/notification-channels/operational": {
+      "get": {
+        "operationId": "operationalSubscriptionsList",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "description": "Which destinations hear about which operational faults. Detection rule hits have their own bindings; this is the separate list for 'the system is broken'.",
+        "responses": {
+          "200": {
+            "description": "Subscriptions plus the fault vocabulary this build records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/OperationalSubscription" }
+                    },
+                    "kinds": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    }
+                  },
+                  "required": ["items", "kinds"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notification-channels/operational/{kind}": {
+      "put": {
+        "operationId": "operationalSubscriptionsSet",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "admin",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "description": "Replace the destinations for one fault kind. A set operation: destinations left out are removed.",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["items"],
+                "properties": {
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["channel_id", "min_severity"],
+                      "properties": {
+                        "channel_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+                        "min_severity": { "type": "string", "enum": ["critical", "warning", "info"] }
+                      },
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Subscriptions replaced." }
+        }
+      }
+    },
     "/api/v1/notification-channels/{id}/recipients/{recipientID}/test": {
       "post": {
         "operationId": "notificationRecipientTest",
@@ -10087,6 +10174,20 @@
             "nullable": true
           }
         }
+      },
+      "OperationalSubscription": {
+        "type": "object",
+        "properties": {
+          "id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+          "kind": { "type": "string" },
+          "channel_id": { "$ref": "m1a.openapi.yaml#/components/schemas/UUID" },
+          "channel_name": { "type": "string" },
+          "channel_kind": { "type": "string" },
+          "min_severity": { "type": "string", "enum": ["critical", "warning", "info"] },
+          "enabled": { "type": "boolean" }
+        },
+        "required": ["id", "kind", "channel_id", "min_severity", "enabled"],
+        "additionalProperties": false
       },
       "NotificationChannel": {
         "type": "object",

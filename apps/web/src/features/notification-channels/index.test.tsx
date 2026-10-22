@@ -122,7 +122,9 @@ test('editing keeps the stored secret when the field is left empty', async () =>
   // comes back to be re-submitted.
   await expect.element(screen.getByText('签名密钥（留空保持不变）')).toBeVisible()
   await userEvent.fill(screen.getByLabelText('渠道名称'), '值班群 2')
-  await screen.getByRole('button', { name: '保存' }).click()
+  // The form's submit button. The operational panel below has one 保存 per fault
+  // kind, so the name alone is ambiguous.
+  await screen.getByRole('button', { name: '保存', exact: true }).first().click()
   await vi.waitFor(() =>
     expect(calls.request.mock.calls.some(([path, init]) => path.endsWith('/' + channelFixture().id) && init?.method === 'PATCH')).toBe(true)
   )
@@ -493,4 +495,75 @@ test('a rejection shows the field the server named', async () => {
   // The server's sentence survives; the old generic one must not appear.
   await expect.element(screen.getByText(/缺少或无效的配置：应用 Secret/)).toBeVisible()
   expect(screen.getByText(/渠道配置不完整，请检查必填项/).query()).toBeNull()
+})
+
+// The operational panel lists every fault kind the build records, and says which
+// ones currently notify nobody. "不通知" has to be visible: a kind with no
+// destination is the failure mode this panel exists to make impossible to miss.
+test('the operational panel lists every fault kind and marks the unsubscribed ones', async () => {
+  signIn()
+  const kinds = ['camera_offline', 'recording_stalled', 'detector_unavailable']
+  calls.request.mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path === '/api/v1/notification-channels/operational')
+      return {
+        items: [
+          {
+            id: 'sub-1',
+            kind: 'camera_offline',
+            channel_id: '00000000-0000-4000-8000-0000000000aa',
+            channel_name: '值班群',
+            channel_kind: 'wecom',
+            min_severity: 'warning',
+            enabled: true,
+          },
+        ],
+        kinds,
+      }
+    if (path === '/api/v1/notification-channels' && (!init || !init.method))
+      return { items: [channelFixture()], kinds: ['inapp', 'webhook', 'email', 'wecom', 'wecom_app'] }
+    throw new Error('unexpected path ' + path)
+  })
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const screen = await render(view(client))
+
+  // One row per kind the server reports.
+  await expect.element(screen.getByTestId('operational-kind')).toHaveLength(3)
+  // The subscribed one names its destination; the others say 不通知.
+  const rows = screen.getByTestId('operational-kind')
+  await expect.element(rows.nth(0)).toHaveTextContent('摄像头离线')
+  await expect.element(rows.nth(0)).toHaveTextContent('值班群')
+  await expect.element(rows.nth(1)).toHaveTextContent('不通知')
+  await expect.element(rows.nth(2)).toHaveTextContent('不通知')
+})
+
+// Adding a destination writes the whole set for that kind: it is one decision, and
+// a partial write would leave a destination nobody meant to keep.
+test('saving a kind sends its full destination list', async () => {
+  signIn()
+  calls.request.mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path === '/api/v1/notification-channels/operational')
+      return { items: [], kinds: ['camera_offline'] }
+    if (path === '/api/v1/notification-channels' && (!init || !init.method))
+      return { items: [channelFixture({ name: '值班群' })], kinds: ['inapp', 'webhook'] }
+    if (path.startsWith('/api/v1/notification-channels/operational/') && init?.method === 'PUT')
+      return {}
+    throw new Error('unexpected path ' + path)
+  })
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const screen = await render(view(client))
+
+  const row = screen.getByTestId('operational-kind').first()
+  await userEvent.click(row.getByLabelText('摄像头离线 新增通知渠道'))
+  await userEvent.click(await screen.getByRole('option', { name: '值班群' }).first())
+  await userEvent.click(row.getByRole('button', { name: '保存' }))
+
+  const put = calls.request.mock.calls.find(
+    ([path, init]) =>
+      String(path).endsWith('/operational/camera_offline') &&
+      (init as RequestInit)?.method === 'PUT'
+  )
+  const body = JSON.parse(String((put?.[1] as RequestInit | undefined)?.body ?? '{}'))
+  expect(body.items).toEqual([
+    { channel_id: '00000000-0000-4000-8000-0000000000aa', min_severity: 'warning' },
+  ])
 })

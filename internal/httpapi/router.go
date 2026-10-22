@@ -205,6 +205,8 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("DELETE /api/v1/notification-channels/{id}", r.protected(r.deleteNotificationChannel))
 	r.mux.HandleFunc("POST /api/v1/notification-channels/{id}/test", r.protected(r.testNotificationChannel))
 	r.mux.HandleFunc("POST /api/v1/notification-channels/{id}/recipients/{recipientID}/test", r.protected(r.testNotificationRecipient))
+	r.mux.HandleFunc("GET /api/v1/notification-channels/operational", r.protected(r.listOperationalSubscriptions))
+	r.mux.HandleFunc("PUT /api/v1/notification-channels/operational/{kind}", r.protected(r.setOperationalSubscriptions))
 	r.mux.HandleFunc("GET /api/v1/event-mappings", r.protected(r.eventMappings))
 	r.mux.HandleFunc("PUT /api/v1/event-mappings", r.protected(r.setEventMappings))
 	r.mux.HandleFunc("GET /api/v1/archive-policies", r.protected(r.listArchivePolicies))

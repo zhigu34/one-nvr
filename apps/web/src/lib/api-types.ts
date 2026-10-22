@@ -1625,6 +1625,40 @@ export interface paths {
         patch: operations["notificationChannelUpdate"];
         trace?: never;
     };
+    "/api/v1/notification-channels/operational": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Which destinations hear about which operational faults. Detection rule hits have their own bindings; this is the separate list for 'the system is broken'. */
+        get: operations["operationalSubscriptionsList"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notification-channels/operational/{kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Replace the destinations for one fault kind. A set operation: destinations left out are removed. */
+        put: operations["operationalSubscriptionsSet"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/notification-channels/{id}/recipients/{recipientID}/test": {
         parameters: {
             query?: never;
@@ -2884,6 +2918,16 @@ export interface components {
             items?: components["schemas"]["Event"][];
             /** Format: uuid */
             next_cursor?: string | null;
+        };
+        OperationalSubscription: {
+            id: components["schemas"]["UUID"];
+            kind: string;
+            channel_id: components["schemas"]["UUID"];
+            channel_name?: string;
+            channel_kind?: string;
+            /** @enum {string} */
+            min_severity: "critical" | "warning" | "info";
+            enabled: boolean;
         };
         NotificationChannel: {
             id?: components["schemas"]["UUID"];
@@ -9107,6 +9151,59 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["NotificationChannel"];
                 };
+            };
+        };
+    };
+    operationalSubscriptionsList: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Subscriptions plus the fault vocabulary this build records. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["OperationalSubscription"][];
+                        kinds: string[];
+                    };
+                };
+            };
+        };
+    };
+    operationalSubscriptionsSet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kind: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    items: {
+                        channel_id: components["schemas"]["UUID"];
+                        /** @enum {string} */
+                        min_severity: "critical" | "warning" | "info";
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Subscriptions replaced. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

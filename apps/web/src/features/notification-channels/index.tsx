@@ -10,6 +10,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { useAPI } from '@/features/foundation/hooks'
 import { apiErrorText } from '@/features/foundation/api-errors'
 import { CheckboxField, Empty, Notices, QueryState, SelectField } from '@/features/foundation/ui'
+import { OperationalSubscriptions } from './operational'
 
 type Channel = Schema<'NotificationChannel'>
 
@@ -803,6 +804,7 @@ export function NotificationChannels() {
           )
         })}
       </div>
+      <OperationalSubscriptions />
       <ConfirmDialog
         open={!!deleting}
         onOpenChange={(open) => !open && setDeleting(null)}
