@@ -11,7 +11,7 @@ import {
   Notices,
 } from '@/features/foundation/ui'
 import { connectionError, type SaveConnection } from './source-connect'
-import { SourceOnvifPanel } from './source-onvif'
+import { InfoHint, OnvifProbeBar } from './source-onvif'
 import {
   BRAND_PRESETS,
   CAMERA_TYPES,
@@ -23,9 +23,19 @@ type Props = {
   channel: { id: string; version: number }
   revision: Schema<'SourceRevision'> | null
   history: Schema<'SourceRevision'>[]
-  // The test panel renders beside the fields it proves, so the results and the
+  // The side panel renders beside the fields it proves, so the results and the
   // button that produces them are never a scroll apart.
   testPanel?: ReactNode
+  // The probe's stream list, rendered into the same sticky side panel: a list of
+  // returned URIs is evidence to compare, not a form field.
+  streamsPanel?: (
+    probe: Schema<'OnvifProbe'> | null,
+    tokens: { main: string; sub: string },
+    choose: (
+      main: Schema<'OnvifStream'>,
+      sub: Schema<'OnvifStream'> | null
+    ) => void
+  ) => ReactNode
   onSaved: (
     value: Schema<'SourceRevision'>,
     signal: AbortSignal,
@@ -40,6 +50,7 @@ function SourceEditor({
   revision,
   history,
   testPanel,
+  streamsPanel,
   onSaved,
 }: Props) {
   const [passwordAction, setPasswordAction] = useState<
@@ -49,7 +60,7 @@ function SourceEditor({
     revision ? 'modify' : 'replace'
   )
   // ONVIF is a manual add method now: the operator names the camera and the
-  // panel asks it for its own stream configuration. The connection fields are
+  // probe asks it for its own stream configuration. The connection fields are
   // controlled so a probe can fill them, while every write still happens through
   // the same save / save-and-enable submission below.
   const [method, setMethod] = useState<'rtsp' | 'onvif'>('rtsp')
@@ -65,7 +76,12 @@ function SourceEditor({
     revision?.config.onvif_port ? String(revision.config.onvif_port) : ''
   )
   const [probed, setProbed] = useState(false)
-  const [pathsOpen, setPathsOpen] = useState(true)
+  // The probe result is held here rather than inside the probe bar: the side
+  // panel shows the returned streams, and a child's local state cannot reach a
+  // sibling.
+  const [probe, setProbe] = useState<Schema<'OnvifProbe'> | null>(null)
+  const [mainToken, setMainToken] = useState('')
+  const [subToken, setSubToken] = useState('')
   // Device metadata. `recognised` records which fields the probe filled, so the
   // form can mark them as device-reported instead of pretending the operator
   // typed them — and so editing one clears its badge.
@@ -91,7 +107,9 @@ function SourceEditor({
       revision?.config.onvif_port ? String(revision.config.onvif_port) : ''
     )
     setProbed(false)
-    setPathsOpen(true)
+    setProbe(null)
+    setMainToken('')
+    setSubToken('')
     setBrand(revision?.config.brand || '')
     setModel(revision?.config.model || '')
     setCameraType((revision?.config.camera_type as CameraType) || '')
@@ -121,9 +139,6 @@ function SourceEditor({
     setMainPath(main.path)
     setSubPath(sub ? sub.path : '')
     setProbed(true)
-    // What the device returned is worth showing, so the row that holds the
-    // filled paths opens instead of hiding them behind a summary line.
-    setPathsOpen(true)
   }
   const [pending, setPending] = useState(false),
     [error, setError] = useState(''),
@@ -230,8 +245,12 @@ function SourceEditor({
         }}
       >
         <fieldset disabled={pending} className='contents'>
-          <div className='grid gap-5 lg:grid-cols-[minmax(0,1fr)_240px]'>
-            <div className='grid content-start gap-4'>
+          {/* 8:4. The form is a sequence of short field groups; the side column
+              holds the evidence and the decisions about it (test, streams,
+              save), which is why it is sticky: the operator keeps the verdict
+              in view while editing the address it refers to. */}
+          <div className='grid items-start gap-5 lg:grid-cols-12'>
+            <div className='grid content-start gap-5 lg:col-span-8'>
               <div className='grid gap-2'>
                 <span className='text-sm font-medium'>添加方式</span>
                 <div
@@ -244,12 +263,7 @@ function SourceEditor({
                     size='sm'
                     variant={method === 'rtsp' ? 'secondary' : 'ghost'}
                     aria-pressed={method === 'rtsp'}
-                    onClick={() => {
-                      setMethod('rtsp')
-                      // RTSP means typing the paths, so they are shown; ONVIF
-                      // receives them from the device and only needs a summary.
-                      setPathsOpen(true)
-                    }}
+                    onClick={() => setMethod('rtsp')}
                   >
                     RTSP 手动
                   </Button>
@@ -258,44 +272,45 @@ function SourceEditor({
                     size='sm'
                     variant={method === 'onvif' ? 'secondary' : 'ghost'}
                     aria-pressed={method === 'onvif'}
-                    onClick={() => {
-                      setMethod('onvif')
-                      setPathsOpen(false)
-                    }}
+                    onClick={() => setMethod('onvif')}
                   >
                     ONVIF 手动
                   </Button>
                 </div>
-                {/* One sentence only: the ONVIF panel repeats the rest where
-                    the probe actually happens, and two copies read as two
-                    different instructions. */}
-                {method === 'rtsp' && (
-                  <p className='text-xs text-muted-foreground'>
-                    手动填写 RTSP 端口与主/子流路径。
-                  </p>
-                )}
               </div>
-              {/* items-start keeps the two labels on one line. The IP column is
-                  taller than the port column (it may carry a prefix and always
-                  carries help text), and with the default stretch the port block
-                  floated down to the vertical centre of its neighbour — its label
-                  landed beside the IP input instead of above its own. */}
-              <div className='grid items-start gap-4 sm:grid-cols-[minmax(0,1fr)_140px]'>
-                <div className='grid gap-2'>
+
+              {/* Network: address, port and — in ONVIF mode — the probe, all on
+                  one baseline. The explanation that used to sit under this row
+                  ("地址与凭据会用于探测…") is on the label's info icon now. */}
+              <div className='grid gap-2'>
+                <div className='flex items-center gap-1.5'>
                   <label
                     htmlFor='source-ip'
                     className='text-sm font-medium leading-none'
                   >
                     IP 地址
                   </label>
-                  <div className='flex'>
+                  <InfoHint
+                    text={
+                      method === 'onvif'
+                        ? '地址与凭据只用于探测，不会保存探测凭据。'
+                        : '填写摄像头地址；路径在下方「码流路径」里。'
+                    }
+                  />
+                </div>
+                <div className='flex flex-wrap items-start gap-2'>
+                  <div
+                    className={cn(
+                      'flex min-w-0 items-end',
+                      method === 'onvif' ? 'w-56 flex-none' : 'flex-1 basis-56'
+                    )}
+                  >
                     {/* The prefix exists to show that the field is a URL in RTSP
                         mode. ONVIF probes over HTTP/SOAP, so there the prefix
                         both named the wrong protocol and duplicated the field
-                        label — and at that width the Chinese label wrapped into
-                        two lines. In ONVIF mode the input starts at the edge. */}
+                        label. */}
                     {method === 'rtsp' && (
-                      <span className='inline-flex items-center rounded-l-md border border-r-0 bg-muted/50 px-2 font-mono text-xs text-muted-foreground'>
+                      <span className='inline-flex items-center rounded-l-md border border-r-0 border-input bg-muted/50 px-2 font-mono text-xs text-muted-foreground'>
                         rtsp://
                       </span>
                     )}
@@ -307,33 +322,71 @@ function SourceEditor({
                       value={ip}
                       onChange={(event) => setIP(event.target.value)}
                       className={cn(
-                        'flex h-9 w-full min-w-0 border border-input bg-transparent px-3 py-1 text-base shadow-xs outline-none md:text-sm dark:bg-input/30',
+                        'flex h-9 w-full min-w-0 border border-input bg-transparent px-3 py-1 font-mono text-base shadow-xs outline-none md:text-sm dark:bg-input/30',
                         method === 'rtsp' ? 'rounded-r-md' : 'rounded-md'
                       )}
                     />
                   </div>
-                </div>
-                {(method === 'rtsp' || probed) && (
-                  <Field
-                    label='RTSP 端口'
-                    name='rtsp_port'
-                    type='number'
-                    min={1}
-                    max={65535}
-                    value={rtspPort}
-                    onChange={(event) => setRTSPPort(event.target.value)}
-                    required
+                  {(method === 'rtsp' || probed) && (
+                    <div className='grid w-24 gap-1'>
+                      <span className='text-[10px] leading-none text-muted-foreground'>
+                        RTSP 端口
+                      </span>
+                      <input
+                        aria-label='RTSP 端口'
+                        name='rtsp_port'
+                        type='number'
+                        required
+                        min={1}
+                        max={65535}
+                        value={rtspPort}
+                        onChange={(event) => setRTSPPort(event.target.value)}
+                        className='flex h-9 w-full rounded-md border border-input bg-transparent px-3 font-mono text-sm shadow-xs outline-none dark:bg-input/30'
+                      />
+                    </div>
+                  )}
+                  {method === 'onvif' && (
+                    <OnvifProbeBar
+                        channelId={channel.id}
+                        ip={ip}
+                        port={onvifPort}
+                        onPortChange={setONVIFPort}
+                        credentials={enteredCredentials}
+                        onStreams={applyStreams}
+                        savedPassword={passwordAction === 'keep' && !!revision}
+                        busy={pending}
+                        onDevice={(device) => {
+                          if (device.brand) setBrand(device.brand)
+                          if (device.model) setModel(device.model)
+                          if (device.cameraType) {
+                            setCameraType(device.cameraType as CameraType)
+                          }
+                          setRecognised({
+                            brand: !!device.brand,
+                            model: !!device.model,
+                            cameraType: !!device.cameraType,
+                          })
+                        }}
+                        onPasswordNeeded={() => setPasswordAction('replace')}
+                        probe={probe}
+                        onProbe={setProbe}
+                        onChoose={(main, sub) => {
+                          setMainToken(main.token)
+                          setSubToken(sub ? sub.token : '')
+                          applyStreams(main, sub)
+                        }}
                   />
+                  )}
+                </div>
+                {method === 'rtsp' && (
+                  <p className='text-[11px] text-muted-foreground'>
+                    手动填写端口与主/子流路径。
+                  </p>
                 )}
-                {/* Spans both columns: as a child of the IP column it added
-                    height that the port column did not have, which is what made
-                    the two rows disagree. */}
-                <p className='text-[11px] text-muted-foreground sm:col-span-2'>
-                  {method === 'onvif'
-                    ? '地址与凭据会用于探测，不保存凭据。'
-                    : '填写摄像头地址，路径在下方「码流路径」。'}
-                </p>
               </div>
+
+              {/* Credentials, 2×2. Four fields on two lines instead of four
+                  lines: they are read together when a camera rejects a login. */}
               <div className='grid gap-4 sm:grid-cols-2'>
                 <Field
                   label='用户名'
@@ -374,9 +427,6 @@ function SourceEditor({
                     }}
                   />
                 )}
-                {/* Choosing what happens to the stored password is an ordinary
-                    step of editing a camera, so it stays beside the credential
-                    fields instead of hiding behind a collapsible section. */}
                 <SelectField
                   label='密码处理'
                   value={passwordAction}
@@ -402,45 +452,19 @@ function SourceEditor({
                   ]}
                 />
               </div>
-              {method === 'onvif' && (
-                <SourceOnvifPanel
-                  channelId={channel.id}
-                  ip={ip}
-                  port={onvifPort}
-                  onPortChange={setONVIFPort}
-                  credentials={enteredCredentials}
-                  onStreams={applyStreams}
-                  savedPassword={passwordAction === 'keep' && !!revision}
-                  busy={pending}
-                  onDevice={(device) => {
-                    if (device.brand) setBrand(device.brand)
-                    if (device.model) setModel(device.model)
-                    if (device.cameraType) {
-                      setCameraType(device.cameraType as CameraType)
-                    }
-                    setRecognised({
-                      brand: !!device.brand,
-                      model: !!device.model,
-                      cameraType: !!device.cameraType,
-                    })
-                  }}
-                  onPasswordNeeded={() => {
-                    // Typing a password is the same intent as choosing "replace";
-                    // making the operator pick it from a dropdown afterwards is
-                    // one step too many.
-                    setPasswordAction('replace')
-                  }}
-                />
-              )}
-              <div className='grid gap-4 rounded-lg border p-3 sm:grid-cols-3'>
+
+              {/* Device metadata, 3 across. The probe fills these, so each one
+                  carries the badge when its value came from the camera. */}
+              <div className='grid gap-4 sm:grid-cols-3'>
                 <div className='grid gap-2'>
-                  <label htmlFor='source-brand' className='text-sm font-medium'>
+                  <label
+                    htmlFor='source-brand'
+                    className='flex items-center gap-1.5 text-sm font-medium'
+                  >
                     摄像头品牌
                     {recognised.brand && <RecognisedBadge />}
+                    <InfoHint text='只用于展示与检索，不影响取流；ONVIF 探测会读取品牌与型号。' />
                   </label>
-                  {/* The label above carries the "已自动识别" badge, so this
-                      input is not wrapped in <Field>: that component renders its
-                      own label and would produce a second, empty one. */}
                   <Input
                     id='source-brand'
                     name='brand'
@@ -462,7 +486,10 @@ function SourceEditor({
                   </datalist>
                 </div>
                 <div className='grid gap-2'>
-                  <label htmlFor='source-model' className='text-sm font-medium'>
+                  <label
+                    htmlFor='source-model'
+                    className='flex items-center gap-1.5 text-sm font-medium'
+                  >
                     设备型号
                     {recognised.model && <RecognisedBadge />}
                   </label>
@@ -470,7 +497,7 @@ function SourceEditor({
                     id='source-model'
                     name='model'
                     maxLength={128}
-                    placeholder='选填，或通过 ONVIF 探测自动回填'
+                    placeholder='选填'
                     value={model}
                     onChange={(event) => {
                       setModel(event.target.value)
@@ -479,7 +506,7 @@ function SourceEditor({
                   />
                 </div>
                 <div className='grid gap-2'>
-                  <label className='text-sm font-medium'>
+                  <label className='flex items-center gap-1.5 text-sm font-medium'>
                     摄像头类型
                     {recognised.cameraType && <RecognisedBadge />}
                   </label>
@@ -502,21 +529,14 @@ function SourceEditor({
                     ]}
                   />
                 </div>
-                <p className='text-xs text-muted-foreground sm:col-span-3'>
-                  设备信息只用于展示与检索，不影响取流；ONVIF 探测会读取品牌与型号，并据 PTZ 能力推断类型，可手动修改。
-                </p>
               </div>
               {(method === 'rtsp' || probed) && (
                 <details
                   className='rounded-lg border'
-                  open={pathsOpen}
-                  onToggle={(event) => setPathsOpen(event.currentTarget.open)}
+                  open={method === 'rtsp' || probed}
                 >
                   <summary className='flex cursor-pointer items-center justify-between gap-3 px-3 py-2.5 text-sm font-medium'>
                     <span>码流路径</span>
-                    {/* The paths themselves are one line below in the fields;
-                        repeating them here just competed with the template
-                        action. */}
                     {method === 'rtsp' && template ? (
                       <span
                         role='button'
@@ -608,34 +628,42 @@ function SourceEditor({
                 </p>
               </details>
             </div>
-            {testPanel ? (
-              <div className='lg:sticky lg:top-4'>{testPanel}</div>
-            ) : (
-              <div />
-            )}
-          </div>
-          <div className='flex flex-wrap items-center justify-between gap-3 border-t pt-4'>
-            <p className='text-xs text-muted-foreground'>
-              {blocked
-                ? '请先「获取码流」，码流地址由摄像头返回后再保存'
-                : '保存只记录配置，不影响正在取流；启用会先测试、再切换，约 30 秒内生效。'}
-            </p>
-            <div className='flex items-center gap-2'>
-              {/* Tree order decides which button Enter submits, so the primary
-                  action stays first in the DOM and `order` puts the quieter one
-                  on the left where it reads as secondary. */}
-              <Button className='order-2' disabled={pending || blocked}>
-                {pending ? '正在处理…' : '保存并启用'}
-              </Button>
-              <Button
-                type='submit'
-                value='save'
-                variant='ghost'
-                className='order-1'
-                disabled={pending || blocked}
-              >
-                仅保存
-              </Button>
+
+            {/* The side column: test evidence, the returned streams, and the
+                two actions that conclude the edit. Sticky, because all three
+                answer "is this right" while the operator is still typing. */}
+            <div className='grid gap-4 lg:sticky lg:top-4 lg:col-span-4'>
+              {testPanel}
+              {streamsPanel &&
+                streamsPanel(
+                  probe,
+                  { main: mainToken, sub: subToken },
+                  (main, sub) => {
+                    setMainToken(main.token)
+                    setSubToken(sub ? sub.token : '')
+                    applyStreams(main, sub)
+                  }
+                )}
+              <div className='grid gap-2 rounded-lg border bg-card p-3'>
+                <p className='text-xs text-muted-foreground'>
+                  {blocked
+                    ? '先「探测设备与码流」，码流地址由摄像头返回'
+                    : '保存只记录配置；启用会先测试、再切换，约 30 秒生效'}
+                </p>
+                {/* Tree order decides which button Enter submits, so the primary
+                    action stays first in the DOM. */}
+                <Button disabled={pending || blocked}>
+                  {pending ? '正在处理…' : '保存并启用'}
+                </Button>
+                <Button
+                  type='submit'
+                  value='save'
+                  variant='outline'
+                  disabled={pending || blocked}
+                >
+                  仅保存
+                </Button>
+              </div>
             </div>
           </div>
         </fieldset>
@@ -654,7 +682,7 @@ function SourceEditor({
  */
 function RecognisedBadge() {
   return (
-    <span className='ml-1.5 rounded border border-emerald-500/30 bg-emerald-500/10 px-1 py-px align-middle text-[10px] font-normal text-emerald-500'>
+    <span className='rounded border border-emerald-500/30 bg-emerald-500/10 px-1 py-px text-[10px] font-normal text-emerald-500'>
       已自动识别
     </span>
   )

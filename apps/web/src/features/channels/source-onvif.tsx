@@ -2,7 +2,15 @@ import { useState } from 'react'
 import { ApiError, apiRequest, jsonRequest } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import { Info } from 'lucide-react'
 import { Notices, SelectField } from '@/features/foundation/ui'
+import { cn } from '@/lib/utils'
 import {
   cameraTypeLabel,
   chooseDefaultStreams,
@@ -13,7 +21,7 @@ import {
 } from './device-meta'
 
 // ONVIF is a manual add method, not a scan: the operator names the camera and
-// this panel asks it for its own stream configuration. Nothing is stored here —
+// this control asks it for its own stream configuration. Nothing is stored —
 // the answer only fills the form, and saving still goes through the normal
 // revision, test and apply flow.
 type Props = {
@@ -34,7 +42,15 @@ type Props = {
   onDevice: (device: { brand: string; model: string; cameraType: string }) => void
   /** Switches the password action to "replace" when the operator starts typing. */
   onPasswordNeeded: () => void
+  /** The probe result, owned by the caller so the side panel can show it. */
+  probe: Schema<'OnvifProbe'> | null
+  onProbe: (value: Schema<'OnvifProbe'> | null) => void
+  /** Applies the chosen profiles: the caller owns the paths they fill. */
+  onChoose: (main: Schema<'OnvifStream'>, sub: Schema<'OnvifStream'> | null) => void
 }
+
+/** Quick-pick ports: the three values ONVIF cameras actually ship with. */
+const QUICK_PORTS = ['80', '8000', '8899']
 
 function streamLabel(stream: Schema<'OnvifStream'>) {
   const size =
@@ -45,7 +61,19 @@ function streamLabel(stream: Schema<'OnvifStream'>) {
   return `${stream.name || stream.token} · ${size}${encoding}`
 }
 
-export function SourceOnvifPanel({
+/**
+ * The probe, as one inline action bar rather than a panel of its own.
+ *
+ * It used to be a bordered dark box in the middle of the form, which did two
+ * things wrong. It read as a section of the page when it is really a step of
+ * one field group ("give me the address, then ask the camera"); and it pushed
+ * the credential and device fields below it out of view, so the operator could
+ * not see the username they were about to send. The controls now sit in the
+ * connection row — address, port, quick picks, action — and only the result is
+ * rendered elsewhere (the side panel), because a stream list is not a form
+ * field.
+ */
+export function OnvifProbeBar({
   channelId,
   ip,
   port,
@@ -56,32 +84,20 @@ export function SourceOnvifPanel({
   busy,
   onDevice,
   onPasswordNeeded,
+  probe,
+  onProbe,
+  onChoose,
 }: Props) {
-  const [probe, setProbe] = useState<Schema<'OnvifProbe'> | null>(null)
-  const [mainToken, setMainToken] = useState('')
-  const [subToken, setSubToken] = useState('')
   const [pending, setPending] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
-
-  function choose(
-    value: Schema<'OnvifProbe'>,
-    main: string,
-    sub: string
-  ): void {
-    setMainToken(main)
-    setSubToken(sub)
-    const find = (token: string) =>
-      value.streams.find((stream) => stream.token === token) || null
-    onStreams(find(main), find(sub))
-  }
 
   async function request() {
     if (pending || busy) return
     setPending(true)
     setError('')
     setNotice('')
-    setProbe(null)
+    onProbe(null)
     onStreams(null, null)
     const { username, password } = credentials()
     try {
@@ -94,7 +110,7 @@ export function SourceOnvifPanel({
           password,
         })
       )
-      setProbe(value)
+      onProbe(value)
       // The device reports its own manufacturer and model; the type can only be
       // inferred from the PTZ node. All three land in the form as suggestions the
       // operator may overwrite.
@@ -116,10 +132,10 @@ export function SourceOnvifPanel({
         setError('设备未提供可用的码流，请检查摄像头配置')
         return
       }
-      choose(value, main.token, sub ? sub.token : '')
+      onChoose(main, sub)
       setNotice(
         value.streams.length > 1
-          ? '已读取码流配置，可按需调整主/子码流后再保存'
+          ? '已读取码流配置，可在右侧核对后再保存'
           : '设备只提供了一个码流，已填入主码流'
       )
     } catch (e) {
@@ -129,37 +145,39 @@ export function SourceOnvifPanel({
     }
   }
 
-  const streamOptions = probe
-    ? probe.streams.map((stream) => ({
-        value: stream.token,
-        label: streamLabel(stream),
-      }))
-    : []
   return (
-    <section className='grid gap-3 rounded-lg border p-4'>
-      <p className='text-xs text-muted-foreground'>
-        探测只读取配置，不保存、不切换当前源。
-      </p>
-      {/* One row: the port, its common values and the action that uses it sit
-          on the same line. Stacking them cost two extra lines of height for
-          three controls that belong together. */}
-      <div className='flex flex-wrap items-center gap-2'>
-        <input
-          aria-label='ONVIF 端口'
-          className='h-9 w-40 rounded-md border bg-background px-3 text-sm'
+    <div className='grid min-w-0 flex-1 gap-1.5'>
+      {/* One line: port, its common values, and the action that uses them. The
+          address is the field to their left, so "fill IP/port → probe" reads
+          left to right in the order it is performed. */}
+      <div className='flex flex-wrap items-end gap-2'>
+        <div className='grid gap-1'>
+          <span className='text-[10px] leading-none text-muted-foreground'>
+            ONVIF 端口
+          </span>
+          <Input
+            aria-label='ONVIF 端口'
+            className='h-9 w-28 font-mono'
           type='number'
           min={1}
           max={65535}
-          placeholder='ONVIF 端口（默认 80）'
-          value={port}
-          onChange={(event) => onPortChange(event.target.value)}
-        />
-        <span className='flex items-center gap-1 text-[11px] text-muted-foreground'>
-          {['80', '8000', '8899'].map((value) => (
+            placeholder='80'
+            value={port}
+            onChange={(event) => onPortChange(event.target.value)}
+          />
+        </div>
+        <span className='flex items-center gap-1 pb-1.5'>
+          {QUICK_PORTS.map((value) => (
             <button
               key={value}
               type='button'
-              className='rounded border px-1.5 py-0.5 hover:bg-accent'
+              aria-pressed={port === value}
+              className={cn(
+                'h-7 rounded border px-2 font-mono text-[11px] transition-colors',
+                port === value
+                  ? 'border-foreground/30 bg-foreground/10 text-foreground'
+                  : 'border-border text-muted-foreground hover:bg-accent hover:text-foreground'
+              )}
               onClick={() => onPortChange(value)}
             >
               {value}
@@ -170,77 +188,120 @@ export function SourceOnvifPanel({
           type='button'
           variant='outline'
           size='sm'
+          className='h-9'
           disabled={pending || busy || ip.trim() === ''}
+          title={ip.trim() === '' ? '请先填写左侧的 IP 地址' : undefined}
           onClick={() => void request()}
         >
           {pending ? '探测中…' : '探测设备与码流'}
         </Button>
-        {ip.trim() === '' && (
-          <span className='text-xs text-muted-foreground'>请先填写 IP 地址</span>
-        )}
       </div>
-      {/* The saved password is reused, so this is no longer a warning: it only
-          says what will happen, and offers the override for the case where the
-          camera's credential changed and the stored one is now wrong. */}
+      {/* The saved-password note is a sub-line of the port field, not a banner:
+          it explains what the probe will send, which is a detail of this one
+          action. */}
       {savedPassword && (
-        <p className='flex flex-wrap items-center gap-2 text-xs text-muted-foreground'>
-          将使用已保存的密码探测。
+        <p className='flex w-full flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground'>
+          探测使用已保存的密码
           <button
             type='button'
-            className='rounded border px-1.5 py-0.5 hover:bg-accent'
+            className='rounded border px-1.5 py-0.5 hover:bg-accent hover:text-foreground'
             onClick={onPasswordNeeded}
           >
             改用新密码
           </button>
         </p>
       )}
-      <Notices error={error} notice={notice} />
-      {probe && (
-        <div className='grid gap-3 rounded-lg border p-3 text-sm'>
-          {/* One compact fingerprint line. The three fields below already say
-              what was recognised; repeating a badge here made four green tags
-              for the same fact. */}
-          <p className='flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground'>
-            <span className='text-foreground'>
-              {[probe.device.manufacturer, probe.device.model]
-                .filter(Boolean)
-                .join(' ') || '未报告品牌与型号'}
-            </span>
-            {probe.device.firmware_version && (
-              <span>固件 {probe.device.firmware_version}</span>
-            )}
-            {probe.device.serial_number && (
-              <span>序列号 {probe.device.serial_number}</span>
-            )}
-            <span>
-              {probe.ptz
-                ? `· 已按 PTZ 推断为${cameraTypeLabel('ptz')}`
-                : '· 未报告 PTZ，类型需手选'}
-            </span>
-          </p>
-          <SelectField
-            label='主码流'
-            className='text-sm'
-            value={mainToken}
-            onValueChange={(next) => {
-              if (probe) choose(probe, next, subToken)
-            }}
-            options={streamOptions}
-          />
-          <SelectField
-            label='子码流（可留空）'
-            className='text-sm'
-            value={subToken}
-            onValueChange={(next) => {
-              if (probe) choose(probe, mainToken, next)
-            }}
-            options={[
-              { value: '', label: '不使用子码流' },
-              ...streamOptions,
-            ]}
-          />
+      {(error || notice) && (
+        <div className='w-full text-[11px]'>
+          <Notices error={error} notice={notice} />
         </div>
       )}
-    </section>
+      {probe && (
+        <p className='flex w-full flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground'>
+          <span className='text-foreground'>
+            {[probe.device.manufacturer, probe.device.model]
+              .filter(Boolean)
+              .join(' ') || '未报告品牌与型号'}
+          </span>
+          {probe.device.firmware_version && (
+            <span>固件 {probe.device.firmware_version}</span>
+          )}
+          <span>
+            {probe.ptz
+              ? `已按 PTZ 推断为${cameraTypeLabel('ptz')}`
+              : '未报告 PTZ，类型需手选'}
+          </span>
+        </p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The streams the device reported, as the caller's side panel renders them.
+ *
+ * It lives here rather than in the form because a probe result is evidence to
+ * compare, not a field to fill: the operator checks the returned URIs against
+ * what they expected, and the two selects decide which one becomes main.
+ */
+export function OnvifStreamList({
+  probe,
+  mainToken,
+  subToken,
+  onChoose,
+}: {
+  probe: Schema<'OnvifProbe'>
+  mainToken: string
+  subToken: string
+  onChoose: (main: Schema<'OnvifStream'>, sub: Schema<'OnvifStream'> | null) => void
+}) {
+  const options = probe.streams.map((stream) => ({
+    value: stream.token,
+    label: streamLabel(stream),
+  }))
+  const find = (token: string) =>
+    probe.streams.find((stream) => stream.token === token) ?? null
+  return (
+    <div className='grid gap-3'>
+      <SelectField
+        label='主码流'
+        className='text-xs'
+        value={mainToken}
+        onValueChange={(next) => {
+          const main = find(next)
+          if (main) onChoose(main, find(subToken))
+        }}
+        options={options}
+      />
+      <SelectField
+        label='子码流（可留空）'
+        className='text-xs'
+        value={subToken}
+        onValueChange={(next) => {
+          const main = find(mainToken)
+          if (main) onChoose(main, find(next))
+        }}
+        options={[{ value: '', label: '不使用子码流' }, ...options]}
+      />
+    </div>
+  )
+}
+
+/** A label with a hover-only explanation, so the form stays free of grey prose. */
+export function InfoHint({ text }: { text: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          tabIndex={0}
+          role='img'
+          aria-label={text}
+          className='inline-grid size-3.5 cursor-help place-items-center rounded-full border border-border text-muted-foreground/70 hover:text-foreground'
+        >
+          <Info aria-hidden className='size-2.5' />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className='max-w-64 text-xs'>{text}</TooltipContent>
+    </Tooltip>
   )
 }

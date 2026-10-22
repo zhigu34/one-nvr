@@ -25,6 +25,7 @@ import { CredentialReveal } from './source-credentials'
 import { SourceForm } from './source-form'
 import { SourceHistory } from './source-history'
 import { SourceTestControls } from './source-test'
+import { OnvifStreamList } from './source-onvif'
 import { cameraTypeLabel } from './device-meta'
 import { ChannelReliability } from './reliability'
 
@@ -620,6 +621,22 @@ function ConfigureChannel({
           channel={{ id, version }}
           revision={current}
           history={revisions}
+          streamsPanel={(probe, tokens, choose) =>
+            probe ? (
+              <section
+                data-testid='onvif-streams'
+                className='grid gap-3 rounded-lg border bg-card p-3'
+              >
+                <p className='text-sm font-medium'>探测到的码流</p>
+                <OnvifStreamList
+                  probe={probe}
+                  mainToken={tokens.main}
+                  subToken={tokens.sub}
+                  onChoose={choose}
+                />
+              </section>
+            ) : null
+          }
           testPanel={
             activeRevision ? (
               <SourceTestControls
