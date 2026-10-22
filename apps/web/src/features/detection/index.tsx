@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { apiRequest } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
   Table,
@@ -62,9 +63,9 @@ function rowHealth(channel: Summary) {
  */
 function StatCard({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className='flex h-full flex-col rounded-lg border border-border bg-muted/30 px-3.5 py-2.5'>
+    <div className='flex min-h-24 flex-col rounded-lg border border-border bg-card p-4'>
       <p className='text-xs leading-5 text-muted-foreground'>{label}</p>
-      <div className='mt-0.5 min-w-0 text-sm font-medium leading-5 text-foreground'>
+      <div className='mt-1 min-w-0 flex-1 text-sm font-medium leading-5 text-foreground'>
         {children}
       </div>
     </div>
@@ -254,7 +255,7 @@ export function Detection() {
           <StatCard label='检测硬件'>
             {hardware.data ? (
               <>
-                <span className='flex items-center gap-1.5'>
+                <span className='flex flex-wrap items-center gap-1.5'>
                   {hardware.data.proposal.node || 'CPU'}
                   {!hardware.data.validated && (
                     <StatusBadge tone='warning'>
@@ -262,9 +263,14 @@ export function Detection() {
                     </StatusBadge>
                   )}
                 </span>
-                <span className='block truncate text-xs font-normal text-muted-foreground'>
-                  解码 {hardware.data.proposal.decode_id} · 推理{' '}
-                  {hardware.data.proposal.inference_id}
+                {/* Decode and inference on their own lines rather than one
+                    truncated string: both ids are identifiers an operator reads
+                    character by character when matching them against the
+                    detector's config, and an ellipsis cuts off exactly the part
+                    that distinguishes one from another. */}
+                <span className='mt-1 block space-y-0.5 text-xs font-normal leading-4 text-muted-foreground'>
+                  <span className='block break-all'>解码 {hardware.data.proposal.decode_id}</span>
+                  <span className='block break-all'>推理 {hardware.data.proposal.inference_id}</span>
                 </span>
               </>
             ) : (
@@ -361,10 +367,11 @@ export function Detection() {
           </div>
           <div className='overflow-hidden rounded-lg border border-border bg-card'>
             <Table>
-              <TableHeader className='bg-muted/50'>
-                <TableRow className='hover:bg-transparent'>
-                  <TableHead className='w-10 pl-4'>
+              <TableHeader className='bg-muted'>
+                <TableRow className='border-b border-border hover:bg-transparent'>
+                  <TableHead className='w-10 py-3 pl-4 align-middle'>
                     <Checkbox
+                      className='translate-y-0 border-border hover:border-foreground/40'
                       aria-label='全选可配置通道'
                       checked={
                         selectableCount > 0 && selectedActionableCount === selectableCount
@@ -499,16 +506,21 @@ function ChannelRow({
         )}
         onClick={() => interactive && onSelect(!selected)}
       >
-        <TableCell className='py-3 pl-4'>
+        <TableCell className='py-3 pl-4 align-middle'>
           {/* The checkbox mirrors the row: clicking either is the same act. It
               stays disabled on a row the server would refuse, so a selection can
-              never contain something Apply is guaranteed to reject. */}
+              never contain something Apply is guaranteed to reject.
+
+              The table cell defaults to align-top (a plan row may expand an
+              editor below its controls); this column is a single 16px box, so
+              top alignment would leave it floating above the row's baseline. */}
           <Checkbox
             aria-label={`选择 ${label}`}
             checked={selected}
             disabled={!interactive}
             onCheckedChange={(state) => onSelect(state === true)}
             onClick={(event) => event.stopPropagation()}
+            className='translate-y-0 border-border hover:border-foreground/40 data-[state=checked]:border-primary'
           />
         </TableCell>
         <TableCell className='py-3 font-medium'>{label}</TableCell>
@@ -583,12 +595,22 @@ function HealthBadge({ badge }: { badge: { tone: StatusTone; text: string } }) {
  */
 function DetectionFlag({ enabled, inert }: { enabled: boolean; inert: boolean }) {
   if (inert) return <span className='text-xs text-muted-foreground/70'>—</span>
-  if (!enabled) return <span className='text-xs text-muted-foreground'>未启用</span>
+  // A badge, not a dot: the detection flag is a configuration value this page
+  // writes, and it should read as one. The online dot stays a dot because it is
+  // a measurement that changes on its own — the two must not look like the same
+  // kind of fact.
   return (
-    <span className='inline-flex items-center gap-1.5 text-xs text-foreground'>
-      <span aria-hidden className='size-1.5 rounded-full bg-emerald-500' />
-      已启用
-    </span>
+    <Badge
+      variant='outline'
+      className={cn(
+        'border-solid px-2 py-0 text-xs font-normal',
+        enabled
+          ? 'border-emerald-600/30 bg-emerald-500/10 text-emerald-700 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-400'
+          : 'border-border bg-muted text-muted-foreground'
+      )}
+    >
+      {enabled ? '已启用' : '未启用'}
+    </Badge>
   )
 }
 
@@ -641,7 +663,7 @@ function ZoneRuleToggle({
       type='button'
       size='sm'
       variant='ghost'
-      className='h-8 gap-1.5 px-2 text-xs font-normal text-muted-foreground hover:text-foreground'
+      className='h-7 gap-1.5 px-2 text-xs font-normal text-muted-foreground hover:text-foreground'
       aria-expanded={open}
       aria-label={`${label} 区域与规则${counts ? ` (${counts})` : ''}`}
       title={`${zoneCount ?? 0} 区域 · ${ruleCount ?? 0} 规则`}

@@ -359,18 +359,22 @@ test('apply explains why it is disabled on the button itself', async () => {
   expect(screen.getByText('先勾选要修改的通道').query()).toBeNull()
 })
 
-// A healthy site must not read as a wall of alerts. Health keeps its colour, but
-// the healthy case is a quiet dot; the detection flag is text, because "enabled"
-// is the expected value and colouring it green on every row competes with the
-// one row that is actually offline.
-test('a healthy row is quiet: no green pill on the normal case', async () => {
+// The two columns answer different questions and must not look like the same
+// kind of fact: "在线" is a measurement that changes on its own, "已启用" is a
+// configuration value this page writes. So the health keeps a compact dot and
+// the detection flag is a badge — neither is allowed to become a coloured pill
+// on the healthy case that competes with the one row that is actually offline.
+test('health is a dot and detection is a badge, not two look-alike pills', async () => {
   const screen = await render(view(fixture(true)))
   const row = screen.getByTestId('detection-row')
   await expect.element(row).toHaveTextContent('在线')
   await expect.element(row).toHaveTextContent('已启用')
-  // Neither is a StatusBadge (which renders as a bordered pill): both are plain
-  // spans with a dot or text only.
-  expect(row.getByRole('status').query()).toBeNull()
-  // Nothing in this row is a bordered badge: both facts are drawn as dots/text.
-  expect(row.element().querySelectorAll('[data-slot="badge"]').length).toBe(0)
+  const el = row.element()
+
+  // Exactly one badge in the row: the detection flag. Health stays a dot.
+  expect(el.querySelectorAll('[data-slot="badge"]').length).toBe(1)
+  expect(el.querySelector('[data-slot="badge"]')?.textContent).toContain('已启用')
+  // And it is the subtle variant, not an alert: no destructive/warning tone.
+  const badge = el.querySelector('[data-slot="badge"]')
+  expect(badge?.className).toContain('emerald')
 })

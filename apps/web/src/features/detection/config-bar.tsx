@@ -181,7 +181,7 @@ export function DetectionConfigBar({
   }
 
   return (
-    <div className='space-y-2.5 rounded-lg border border-border bg-card p-3.5'>
+    <div className='space-y-3 rounded-lg border border-border bg-muted/40 p-4'>
       {/* Selection line: what the bar will act on, and the two ways to change
           that set. Kept apart from the settings row so "how many" never sits
           between two controls that look like they might depend on it. */}
@@ -309,7 +309,12 @@ export function DetectionConfigBar({
         <Button
           type='button'
           size='sm'
-          className={cn('h-9', canApply && 'bg-emerald-500 font-medium text-zinc-950 hover:bg-emerald-400')}
+          className={cn(
+            'h-9 transition-opacity',
+            canApply
+              ? 'bg-emerald-500 font-medium text-zinc-950 hover:bg-emerald-400'
+              : 'opacity-40'
+          )}
           disabled={!canApply || action.pending}
           title={
             canApply
