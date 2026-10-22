@@ -149,9 +149,15 @@ test('a playing tile shows the decoded media facts instead of a bare status', as
     })
   })
   await expect.element(screen.getByText('主流', { exact: true })).toBeVisible()
+  // The top bar carries only the facts that differ between tiles. The
+  // passthrough mode and the audio verdict are constant across a wall, so they
+  // left the label: the mode moved to the hover title and audio became an icon.
   await expect
     .element(tile.getByTestId('live-media-info'))
-    .toHaveTextContent('2560×1440 · 25fps · 直通 · 音 PCMA')
+    .toHaveTextContent('2560×1440 · 25fps')
+  await expect
+    .element(tile.getByTestId('live-media-info'))
+    .not.toHaveTextContent('直通')
   // The grid cell now governs the video box (object-contain letterboxes any
   // stream shape), so no inline aspect-ratio is injected.
   const area = tile.getByTestId('live-video-area')

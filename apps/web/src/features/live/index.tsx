@@ -23,8 +23,8 @@ import { QueryState, SelectField } from '@/features/foundation/ui'
 import { cn } from '@/lib/utils'
 import { LivePlayer, type PlayerState } from './player'
 import {
-  liveMediaLabel,
   liveMediaTitle,
+  mediaLabelBrief,
   type LiveMediaInfo,
 } from './media-info'
 import { restoreView, type Layout, type View } from './view'
@@ -146,10 +146,14 @@ function Tile({
       onClick={onSelect}
       onDoubleClick={() => channel && onZoom()}
       className={cn(
-        'group relative h-full min-w-0 overflow-hidden rounded-lg border bg-black text-zinc-100 transition-shadow duration-150',
+        'group relative h-full min-w-0 overflow-hidden rounded-md border bg-black text-zinc-100 transition-colors duration-150',
         selected ? 'ring-2 ring-primary' : 'border-video-border',
         dropActive && 'ring-2 ring-sky-400',
-        !channel && 'border-dashed border-border bg-muted/20'
+        // An empty cell is drawn lighter than a playing one so the grid's
+        // outline stays even: a solid black hole made the mosaic look broken
+        // rather than full. Hover and drag raise the edge one step each.
+        !channel &&
+          'border-dashed border-border/70 bg-muted/20 hover:border-muted-foreground/40'
       )}
     >
       {/* The picture fills the cell. The controls float over it, because a
@@ -168,33 +172,59 @@ function Tile({
 
       {/* Top bar: always visible, a gradient rather than a panel, so a wall of
           tiles still reads at a glance without a black strip on each one. */}
-      <div className='pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-2 bg-gradient-to-b from-black/75 to-transparent p-2 text-xs'>
+      {/* A three-stop gradient with a tall fade, not a thin one: a wall lit by
+          direct sun is close to white at the top of the frame, and a short fade
+          left the channel name unreadable on exactly those cameras.
+          `pointer-events-none` keeps the picture draggable underneath. */}
+      <div className='pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-2 bg-gradient-to-b from-black/80 via-black/40 to-transparent px-3 pb-6 pt-2.5 text-xs'>
         <span className='flex min-w-0 items-center gap-1.5'>
           {channel && <TileDot state={state} paused={paused} />}
-          <span className='truncate'>{channel ? label(channel) : '空闲画面'}</span>
+          <span className='truncate font-medium text-white/95'>
+            {channel ? label(channel) : '空闲画面'}
+          </span>
         </span>
         {channel && (
-          <span className='flex shrink-0 items-center gap-1.5'>
+          <span className='flex shrink-0 items-center'>
             {live && media && (
               <span
                 data-testid='live-media-info'
-                className='truncate font-mono text-[11px] text-white/70'
+                className='truncate font-mono text-[11px] text-white/75'
                 title={liveMediaTitle(media)}
               >
-                {liveMediaLabel(media)}
+                {mediaLabelBrief(media)}
+              </span>
+            )}
+            {/* Audio is an icon, not a word: the absence of sound is the normal
+                case on these cameras, and "· 无音频" on every tile spent the
+                right-hand side on the one fact that never changes. */}
+            {live && media && (
+              <span
+                aria-label={media.audioCodec ? `音频 ${media.audioCodec}` : '无音频'}
+                title={
+                  media.audioCodec
+                    ? `音频编码 ${media.audioCodec}`
+                    : '无音频：摄像头未提供音频，或编码不被浏览器 WebRTC 支持'
+                }
+                className='ml-1.5 inline-flex text-white/60'
+              >
+                {media.audioCodec ? (
+                  <Volume2 aria-hidden size={11} />
+                ) : (
+                  <VolumeX aria-hidden size={11} />
+                )}
               </span>
             )}
             <Button
               variant='ghost'
               size='icon'
               aria-label={`关闭 ${label(channel)}`}
-              className='pointer-events-auto size-6 rounded p-1 text-white/80 hover:bg-white/15 hover:text-white'
+              className='pointer-events-auto ml-2 size-5 rounded p-0.5 text-white/70 hover:bg-white/20 hover:text-white'
               onClick={(e) => {
                 e.stopPropagation()
                 onClose()
               }}
             >
-              <X size={14} />
+              <X size={13} />
             </Button>
           </span>
         )}
@@ -694,21 +724,6 @@ function LiveWorkspace({
                 下一组
               </Button>
             </div>
-          )}
-          {displayed[selected]?.permissions.includes('playback') && (
-            <Button asChild variant='link' className='h-auto p-0'>
-              <Link
-                to='/recordings'
-                search={{
-                  channel: displayed[selected]!.id,
-                  at: new Date().toISOString(),
-                  // The instant-playback entry belongs to the playback tab.
-                  tab: 'playback',
-                }}
-              >
-                查看 {label(displayed[selected]!)} 即时回放
-              </Link>
-            </Button>
           )}
         </aside>
         <div

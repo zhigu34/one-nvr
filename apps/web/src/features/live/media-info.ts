@@ -10,13 +10,17 @@ export type LiveMediaInfo = {
   audioCodec: string | null
 }
 
-export function liveMediaLabel(info: LiveMediaInfo): string {
+/**
+ * The headline for a tile's top bar: resolution and frame rate only.
+ *
+ * The full label adds the passthrough mode and the audio verdict, which are on
+ * every tile and therefore carry no information: a narrow cell cannot afford a
+ * string whose tail never differs. Both survive on the hover title.
+ */
+export function mediaLabelBrief(info: LiveMediaInfo): string {
   const parts: string[] = []
-  if (info.width > 0 && info.height > 0)
-    parts.push(`${info.width}×${info.height}`)
+  if (info.width > 0 && info.height > 0) parts.push(`${info.width}×${info.height}`)
   if (info.fps > 0) parts.push(`${Math.round(info.fps)}fps`)
-  parts.push('直通')
-  parts.push(info.audioCodec ? `音 ${info.audioCodec}` : '无音频')
   return parts.join(' · ')
 }
 
