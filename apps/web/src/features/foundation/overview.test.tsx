@@ -186,7 +186,7 @@ function fixture(
   return { client, view: <RouterProvider router={router} /> }
 }
 
-test('the five KPI cards read live channel, detection, storage and host facts', async () => {
+test('the KPI row reads live channel, detection and storage facts', async () => {
   const setup = fixture()
   const view = await render(setup.view)
   // Channels card: one healthy main stream of two rows, with the breakdown.
@@ -200,8 +200,9 @@ test('the five KPI cards read live channel, detection, storage and host facts', 
   await expect.element(view.getByText(/301\.3 GiB/)).toBeVisible()
   await expect.element(view.getByText(/共 401\.6 GiB/)).toBeVisible()
   await expect.element(view.getByText('就绪').nth(0)).toBeVisible()
-  // The host card is the fifth KPI: CPU and memory with their bars.
-  await expect.element(view.getByTestId('host-resources')).toBeVisible()
+  // The host figures are NOT a fifth KPI: four cards, then the status strip.
+  expect(view.getByTestId('host-resources').query()).toBeNull()
+  await expect.element(view.getByTestId('host-load')).toBeVisible()
   setup.client.clear()
 })
 
@@ -335,14 +336,16 @@ test('a viewer sees no availability card', async () => {
   expect(view.getByText('24 小时可用性').query()).toBeNull()
 })
 
-// DASH-02: the host figures are shown for an administrator.
-test('the host resource panel reports cpu, memory and load', async () => {
+// DASH-02: the host figures live in the status strip, as key/value pairs on one
+// line. The percentage is rounded for the strip (12.5% → 13%) because it shares
+// a line with three other figures; the memory pair keeps one decimal.
+test('the status strip reports cpu, memory and load on one line', async () => {
   const setup = fixture()
   const view = await render(setup.view)
-  const panel = view.getByTestId('host-resources')
-  await expect.element(panel).toBeVisible()
-  await expect.element(panel.getByText('12.5%')).toBeVisible()
-  await expect.element(panel.getByText('34.2%')).toBeVisible()
+  await expect.element(view.getByTestId('host-cpu')).toHaveTextContent('13%')
+  await expect
+    .element(view.getByTestId('host-memory'))
+    .toHaveTextContent(/34%.*\(/)
   await expect.element(view.getByTestId('host-load')).toHaveTextContent('1.4')
 })
 
@@ -375,11 +378,9 @@ test('an unmeasured host shows 未知 rather than zero', async () => {
     },
   })
   const view = await render(setup.view)
-  await expect.element(view.getByTestId('host-resources')).toBeVisible()
-  // CPU, memory, load and the cache each report 未知. The load average used to
-  // sit on a counters line and fell through to its own text; it is an indicator
-  // now, so it is counted here too.
-  expect(view.getByText('未知').elements().length).toBe(4)
+  // CPU, memory, load each report 未知; the cache says 未启用, which is its own
+  // answer rather than a fourth unknown.
+  expect(view.getByText('未知').elements().length).toBe(3)
   expect(view.getByText('0%').query()).toBeNull()
 })
 
@@ -420,7 +421,7 @@ test('the event cache reports its usage and warns near the limit', async () => {
     },
   })
   const view = await render(setup.view)
-  await expect.element(view.getByTestId('event-cache-detail')).toBeVisible()
+  await expect.element(view.getByTestId('host-cache')).toBeVisible()
   await expect.element(view.getByText(/接近上限/)).toBeVisible()
 })
 
@@ -450,9 +451,6 @@ test('a deployment without the event cache says 未启用', async () => {
     },
   })
   const view = await render(setup.view)
-  const host = view.getByTestId('host-resources')
-  await expect.element(host.getByText('未启用')).toBeVisible()
-  await expect
-    .element(view.getByTestId('event-cache-detail'))
-    .not.toBeInTheDocument()
+  await expect.element(view.getByTestId('host-cache')).toHaveTextContent('未启用')
+  await expect.element(view.getByTestId('host-cache')).not.toHaveTextContent('接近上限')
 })

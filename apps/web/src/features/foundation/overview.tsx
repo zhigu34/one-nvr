@@ -3,7 +3,6 @@ import {
   Activity,
   AlertTriangle,
   ArrowRight,
-  Cpu,
   HardDrive,
   ImageOff,
   Play,
@@ -491,25 +490,85 @@ export function Overview() {
           </Link>
         </div>
       )}
-      {/* One strip for "is the machine healthy": components and host figures on
-          the left, channel alarms on the right. They answer the same question
-          and were three separate bands, so the page had three horizontal rules
-          cutting it — and the alarm band spanned the full width in dark red,
-          which read as a page-level emergency for one camera's outage. */}
+      {/* One strip, two poles: components on the left, the machine's summary
+          figures in the middle, channel alarms hard right.
+          The middle figures used to be a nested two-column block with its own
+          heading, a second line of indicators and a third line for the cache
+          detail — three rows of small text stacked inside half a strip, which is
+          what made this band read as crowded and kept pushing the component
+          pills onto a line of their own. */}
       {admin && (
-        <div className='rounded-xl border bg-card p-4'>
-          <div className='grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start'>
-            <div className='grid gap-4 sm:grid-cols-2'>
-              <ComponentHealthBar components={components} />
-              <HostResourcesPanel resources={resources} />
-            </div>
-            <ChannelAlarms
-              abnormal={abnormalChannels}
-              unjudged={unjudgedChannels}
-              pending={reliability.isPending}
-              error={!!reliability.error}
+        <div className='flex flex-wrap items-center justify-between gap-x-6 gap-y-3 rounded-xl border bg-card p-3'>
+          <ComponentHealthBar components={components} />
+          <div className='flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs tabular-nums text-muted-foreground'>
+            <ResourceStat
+              label='CPU'
+              testId='host-cpu'
+              value={
+                resources.data?.cpu_known
+                  ? `${Math.round(resources.data.cpu_percent)}%`
+                  : resources.isPending
+                    ? '…'
+                    : '未知'
+              }
             />
+            <ResourceStat
+              label='内存'
+              testId='host-memory'
+              value={
+                resources.data?.memory_known
+                  ? `${Math.round(resources.data.memory_percent)}% (${gibShort(resources.data.memory_used_bytes)}/${gibShort(resources.data.memory_total_bytes)})`
+                  : resources.isPending
+                    ? '…'
+                    : '未知'
+              }
+            />
+            <ResourceStat
+              label='负载'
+              value={
+                resources.data?.load_known
+                  ? String(resources.data.load_average)
+                  : resources.isPending
+                    ? '…'
+                    : '未知'
+              }
+              testId='host-load'
+            />
+            {/* The cache only exists on deployments that reserved memory for it;
+              elsewhere it is absent rather than zero. */}
+            {resources.data && !resources.data.event_cache.configured && (
+              <span
+                data-testid='host-cache'
+                className='inline-flex items-baseline gap-1 whitespace-nowrap'
+              >
+                <span>缓存盘</span>
+                <span className='text-muted-foreground/70'>未启用</span>
+              </span>
+            )}
+            {resources.data?.event_cache.configured && (
+              <span
+                data-testid='host-cache'
+                className='inline-flex items-baseline gap-1 whitespace-nowrap'
+              >
+                <span>缓存盘</span>
+                <span className='font-mono text-foreground'>
+                  {resources.data.event_cache.known
+                    ? `${Math.round(resources.data.event_cache.percent)}%`
+                    : '未知'}
+                </span>
+                {resources.data.event_cache.known &&
+                  resources.data.event_cache.percent >= 90 && (
+                    <span className='text-amber-600 dark:text-amber-400'>接近上限</span>
+                  )}
+              </span>
+            )}
           </div>
+          <ChannelAlarms
+            abnormal={abnormalChannels}
+            unjudged={unjudgedChannels}
+            pending={reliability.isPending}
+            error={!!reliability.error}
+          />
         </div>
       )}
       {/* The quick patrol: live channels on the left, the latest detection
@@ -546,7 +605,7 @@ export function Overview() {
                       <li
                         key={channel.channel_id}
                         data-testid='active-channel-card'
-                        className='group flex items-center justify-between gap-2 rounded-lg border border-border bg-muted/30 p-3 transition-colors hover:border-muted-foreground/30 hover:bg-muted/50'
+                        className='group flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3.5 transition-colors hover:border-muted-foreground/40 hover:bg-muted/50'
                       >
                         <div className='min-w-0'>
                           <p className='flex min-w-0 items-center gap-1.5'>
@@ -561,20 +620,21 @@ export function Overview() {
                               {channel.channel_name}
                             </span>
                           </p>
-                          <p className='mt-0.5 truncate pl-3 text-[11px] text-muted-foreground/70'>
-                            {streaming || '主流正常'}
+                          {/* The metadata line carries all three facts an
+                              operator scans for, in the order they read them:
+                              what the main stream is, whether the sub stream is
+                              healthy, and the bit rate. Two of them used to live
+                              in different corners of the card. */}
+                          <p className='mt-1 truncate pl-3 text-[11px] text-muted-foreground/70'>
+                            主流 {streaming || '正常'}
                             {channel.sub.state === 'healthy' ? ' · 子流正常' : ''}
+                            {channel.bitrate_kbps
+                              ? ` · ${channel.bitrate_kbps >= 1000 ? `${(channel.bitrate_kbps / 1000).toFixed(1)} Mbps` : `${Math.round(channel.bitrate_kbps)} kbps`}`
+                              : ''}
                           </p>
                         </div>
-                        <div className='flex shrink-0 items-center gap-1.5'>
-                          <span className='font-mono text-xs tabular-nums text-muted-foreground'>
-                            {channel.bitrate_kbps
-                              ? channel.bitrate_kbps >= 1000
-                                ? `${(channel.bitrate_kbps / 1000).toFixed(1)} Mbps`
-                                : `${Math.round(channel.bitrate_kbps)} kbps`
-                              : '—'}
-                          </span>
-                          <span className='flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100'>
+                        <div className='flex shrink-0 items-center gap-0.5'>
+                          <span className='flex items-center gap-0.5 opacity-60 transition-opacity group-hover:opacity-100 focus-within:opacity-100'>
                             {channel.permissions.includes('live') && (
                               <Link
                                 to='/live'
@@ -692,13 +752,13 @@ export function Overview() {
                             >
                               {CATEGORY_LABELS[item.category ?? ''] || item.category}
                             </span>
-                            <span className='truncate text-foreground'>
+                            <span className='min-w-0 flex-1 truncate text-foreground'>
                               {label}
                               {item.zones?.length ? ` · ${item.zones.join('/')}` : ''}
                             </span>
                           </span>
                           <span className='flex shrink-0 items-center gap-2 tabular-nums text-muted-foreground'>
-                            <span className='font-mono text-xs'>
+                            <span className='whitespace-nowrap text-right font-mono text-xs'>
                               {formatClock(Date.parse(item.started_at ?? ''), zone).slice(5)}
                               {` · ${durationLabel}`}
                             </span>
@@ -780,61 +840,38 @@ function ChannelAlarms({
 }
 
 /**
- * A percentage as a short label and a number, with a hairline bar under it.
+ * One key/value pair in the status strip: `CPU 46%`.
  *
- * The full-width Meter was right for a KPI card and wrong here: three stacked
- * bars made the resource block taller than the component pills beside it, so the
- * strip could not be read as one line. This keeps the number — which is what an
- * operator quotes — and reduces the bar to a fill hint.
+ * Plain text, no bar. At this width three bars plus their labels were the reason
+ * the strip needed two rows and the figures ran together; the number is what an
+ * operator quotes, and the bar answered "how full" for a resource whose absolute
+ * value is already on the line.
  */
-function Indicator({
+function ResourceStat({
   label,
   value,
-  pending,
-  off,
+  testId,
 }: {
   label: string
-  value: number | null
-  pending: boolean
-  off?: boolean
+  value: string
+  testId?: string
 }) {
-  // One decimal, not rounded to whole percent: 12.5% and 12% are different
-  // readings of the same host, and the figure is what an operator quotes.
-  const text =
-    value != null
-      ? `${value.toFixed(1)}%`
-      : pending
-        ? '…'
-        : off
-          ? '未启用'
-          : '未知'
   return (
-    <span className='inline-flex items-center gap-1.5 text-muted-foreground'>
+    <span className='inline-flex items-baseline gap-1 whitespace-nowrap'>
       <span>{label}</span>
       <span
-        className={cn(
-          'font-mono',
-          value != null ? 'text-foreground' : 'text-muted-foreground/70'
-        )}
+        data-testid={testId}
+        className='font-mono text-foreground'
       >
-        {text}
+        {value}
       </span>
-      {value != null && (
-        <span
-          aria-hidden
-          className='relative h-1 w-8 overflow-hidden rounded-full bg-muted'
-        >
-          <span
-            className={cn(
-              'absolute inset-y-0 left-0 rounded-full',
-              value >= 85 ? 'bg-amber-500' : 'bg-emerald-500'
-            )}
-            style={{ width: `${Math.max(4, Math.min(100, value))}%` }}
-          />
-        </span>
-      )}
     </span>
   )
+}
+
+/** GiB with one decimal, for the memory pair inside a single line of text. */
+function gibShort(value: number): string {
+  return `${(value / 1024 / 1024 / 1024).toFixed(1)}G`
 }
 
 /**
@@ -951,70 +988,3 @@ function ComponentHealthBar({
  * Every figure renders "未知" when it was not measured. A failed read is not an
  * idle machine, so a zero-width bar or 0% would state the opposite of the truth.
  */
-function HostResourcesPanel({
-  resources,
-}: {
-  resources: ReturnType<typeof useAPI<Schema<'HostResources'>>>
-}) {
-  const gib = (value: number) => (value / 1024 / 1024 / 1024).toFixed(1) + ' GiB'
-  const data = resources.data
-  return (
-    <section data-testid='host-resources' aria-label='主机资源' className='grid gap-2'>
-      <div className='flex flex-wrap items-center justify-between gap-2'>
-        <p className='flex items-center gap-1.5 text-xs text-muted-foreground'>
-          <Cpu aria-hidden className='size-3.5' />
-          主机资源
-        </p>
-        <p className='truncate text-xs tabular-nums text-muted-foreground'>
-          {data?.memory_known
-            ? `${gib(data.memory_used_bytes)} / ${gib(data.memory_total_bytes)}`
-            : '内存未知'}
-          {data?.load_known ? ` · 负载 ${data.load_average}` : ''}
-          {data ? ` · ${data.cpu_cores} 核` : ''}
-        </p>
-      </div>
-      {/* Compact indicators, not three full-width bars: this strip is the
-          machine's summary line, and the bars pushed the component pills into
-          a second row of their own. */}
-      <div className='flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums'>
-        <Indicator
-          label='CPU'
-          value={data?.cpu_known ? data.cpu_percent : null}
-          pending={resources.isPending}
-        />
-        <Indicator
-          label='内存'
-          value={data?.memory_known ? data.memory_percent : null}
-          pending={resources.isPending}
-        />
-        <span className='text-muted-foreground'>
-          负载{' '}
-          <span data-testid='host-load' className='font-mono'>
-            {data?.load_known ? data.load_average : '未知'}
-          </span>
-        </span>
-        <Indicator
-          label='缓存盘'
-          value={
-            data?.event_cache.configured && data.event_cache.known
-              ? data.event_cache.percent
-              : null
-          }
-          pending={resources.isPending}
-          off={data ? !data.event_cache.configured : false}
-        />
-      </div>
-      {data?.event_cache.configured && (
-        <p
-          data-testid='event-cache-detail'
-          className='text-[11px] tabular-nums text-muted-foreground'
-        >
-          缓存盘 {gib(data.event_cache.used_bytes)} / {gib(data.event_cache.total_bytes)}
-          {data.event_cache.known && data.event_cache.percent >= 90
-            ? ' · 接近上限，可考虑扩容'
-            : ''}
-        </p>
-      )}
-    </section>
-  )
-}
