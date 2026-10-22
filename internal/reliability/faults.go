@@ -128,10 +128,24 @@ func stateTransition(previous *Interval, next Observation) (fault bool, resolved
 func (s *Service) recordFaultsTx(ctx context.Context, tx pgx.Tx, in Observation, previous *Interval) error {
 	// Recovery first: closing an open fault is how a healthy sample is
 	// interpreted, and it must happen even if no new fault opens.
-	if in.State == "healthy" && in.Exclusion == "" {
-		if err := s.resolveFaultsTx(ctx, tx, in); err != nil {
-			return err
+	//
+	// An exclusion closes it too. "This channel is not required to run right now"
+	// (recording switched off, source cleared, planned maintenance) is a reason
+	// for the fault to be over, not a reason to keep it open — and leaving it
+	// open made the fault permanent, because an excluded kind never produces a
+	// healthy sample again. Measured on the live site: a recording fault on a
+	// channel whose recording mode had been switched to none stayed open for four
+	// days, and the overview reported 中断中 beside a card showing that channel's
+	// live main-stream bitrate. The two facts were both true and together
+	// meaningless.
+	if in.Exclusion == "" {
+		if in.State == "healthy" {
+			if err := s.resolveFaultsTx(ctx, tx, in, "auto"); err != nil {
+				return err
+			}
 		}
+	} else if err := s.resolveFaultsTx(ctx, tx, in, "excluded"); err != nil {
+		return err
 	}
 	fault, _ := stateTransition(previous, in)
 	if !fault {
@@ -168,7 +182,13 @@ func (s *Service) recordFaultsTx(ctx context.Context, tx pgx.Tx, in Observation,
 	return err
 }
 
-func (s *Service) resolveFaultsTx(ctx context.Context, tx pgx.Tx, in Observation) error {
+// resolveFaultsTx closes every open fault of this channel and kind.
+//
+// Recovery names HOW it ended, and the two answers are not interchangeable: a
+// stream that came back was `auto`, while a kind that stopped being required was
+// `excluded`. Reporting the second as a recovery would claim the camera got
+// better when the operator switched the feature off.
+func (s *Service) resolveFaultsTx(ctx context.Context, tx pgx.Tx, in Observation, recovery string) error {
 	faultKind := faultKindFor(in.Kind)
 	// Everything that was open for this channel and kind is over: the stream is
 	// producing video again. The duration is measured from the fault's own start
@@ -176,9 +196,9 @@ func (s *Service) resolveFaultsTx(ctx context.Context, tx pgx.Tx, in Observation
 	_, err := tx.Exec(ctx, `UPDATE fault_events SET
 			state='resolved',ended_at=$3,
 			duration_ms=GREATEST(0,EXTRACT(EPOCH FROM ($3-started_at))*1000)::bigint,
-			recovery='auto',updated_at=clock_timestamp()
+			recovery=$4,updated_at=clock_timestamp()
 		WHERE channel_id=$1 AND kind=$2 AND state='open'`,
-		in.ChannelID, faultKind, in.ObservedAt.UTC())
+		in.ChannelID, faultKind, in.ObservedAt.UTC(), recovery)
 	return err
 }
 

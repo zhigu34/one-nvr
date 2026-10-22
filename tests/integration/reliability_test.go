@@ -392,6 +392,50 @@ func TestExcludedStateOpensNoFault(t *testing.T) {
 	}
 }
 
+// A kind that stops being required closes its fault.
+//
+// This is the live-site defect: recording went unavailable, the operator then
+// switched the channel's recording mode to none, and the fault stayed open for
+// four days. An excluded kind never produces a healthy sample again, so a
+// resolve-on-healthy-only rule can never close it — and the overview reported
+// 中断中 next to a card showing that channel's live main-stream bitrate.
+//
+// The recovery is recordered as "excluded", not "auto": the fault ended because
+// the requirement went away, not because the camera got better. Reporting it as
+// a recovery would credit the device with a fix the operator made in a menu.
+func TestExclusionResolvesAnOpenFault(t *testing.T) {
+	fixture, service := newReliabilityFixture(t)
+	ctx := context.Background()
+	base := time.Now().UTC().Add(-2 * time.Minute)
+
+	steps := []reliability.Observation{
+		{ChannelID: fixture.Channel, Kind: "recording", State: "healthy", Reason: "frame_progress_observed", ObservedAt: base},
+		{ChannelID: fixture.Channel, Kind: "recording", State: "unavailable", Reason: "pool_evidence_stale", ObservedAt: base.Add(30 * time.Second)},
+		// Recording is switched off: not required to run any more.
+		{ChannelID: fixture.Channel, Kind: "recording", State: "excluded", Reason: "recording_disabled", Exclusion: "disabled", ObservedAt: base.Add(90 * time.Second)},
+	}
+	for _, in := range steps {
+		if err := service.Fold(ctx, in); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var state, recovery string
+	var duration *int64
+	if err := fixture.DB.Pool.QueryRow(ctx, `SELECT state,recovery,duration_ms FROM fault_events WHERE channel_id=$1 AND kind='recording'`, fixture.Channel).Scan(&state, &recovery, &duration); err != nil {
+		t.Fatal(err)
+	}
+	if state != "resolved" {
+		t.Fatalf("an excluded kind must close its fault, got state=%s", state)
+	}
+	if recovery != "excluded" {
+		t.Fatalf("the ending was a policy change, not a recovery; got recovery=%s", recovery)
+	}
+	if duration == nil || *duration < 59000 {
+		t.Fatalf("the duration must span start to the exclusion, got %v", duration)
+	}
+}
+
 // Confirming a cause adds an interpretation beside the automatic one and keeps
 // a revision. PRD REL-02 forbids rewriting the original classification, because
 // that is how a bad record gets quietly improved.
