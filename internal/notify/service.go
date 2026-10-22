@@ -147,9 +147,19 @@ func scanChannel(row pgx.Row) (ChannelView, error) {
 	return out, nil
 }
 
+// invalidField names the field that made a channel undeliverable.
+//
+// Every rejection used to return one sentence — "配置不完整：webhook 需要地址与
+// 签名密钥" — regardless of kind, so a WeCom application told the operator about
+// a webhook's requirements and named no field at all. The form is long enough
+// that "something is missing" is not actionable.
+func invalidField(field string) error {
+	return fault.New(422, "notification_channel_invalid", "缺少或无效的配置："+field)
+}
+
 func validateChannelInput(in ChannelInput, creating bool) error {
 	if len(in.Name) < 1 || len(in.Name) > 64 {
-		return ErrChannelInvalid
+		return invalidField("名称（1–64 字）")
 	}
 	switch in.Kind {
 	case "inapp":
@@ -157,27 +167,30 @@ func validateChannelInput(in ChannelInput, creating bool) error {
 		return nil
 	case "webhook":
 		if in.URL == "" {
-			return ErrChannelInvalid
+			return invalidField("Webhook 地址")
 		}
 		return nil
 	case "wecom":
 		// The robot URL already contains the key; an empty one cannot deliver.
 		if strings.TrimSpace(in.URL) == "" {
-			return ErrChannelInvalid
+			return invalidField("群机器人 Webhook 地址")
 		}
 		if in.WeCom == nil || (in.WeCom.MsgType != "markdown" && in.WeCom.MsgType != "news") {
-			return ErrChannelInvalid
+			return invalidField("消息格式（Markdown 文本或图文卡片）")
 		}
 		return nil
 	case "wecom_app":
 		if in.WeComApp == nil {
-			return ErrChannelInvalid
+			return invalidField("企业微信应用配置（企业ID、应用ID、接收人）")
 		}
-		if strings.TrimSpace(in.WeComApp.CorpID) == "" || in.WeComApp.AgentID <= 0 {
-			return ErrChannelInvalid
+		if strings.TrimSpace(in.WeComApp.CorpID) == "" {
+			return invalidField("企业ID（corpID）")
+		}
+		if in.WeComApp.AgentID <= 0 {
+			return invalidField("应用ID（agentID，必须是正整数）")
 		}
 		if strings.TrimSpace(in.WeComApp.To) == "" {
-			return ErrChannelInvalid
+			return invalidField("接收人（@all 或 user:/party:/tag: 列表）")
 		}
 		// The secret is exchanged for a token; without it nothing can be sent.
 		// An update may omit it (nil keeps the stored one), handled by the caller.
@@ -187,13 +200,16 @@ func validateChannelInput(in ChannelInput, creating bool) error {
 		// channel that could never deliver is refused at save time instead of at
 		// the first real alarm.
 		if in.Email == nil {
-			return ErrChannelInvalid
+			return invalidField("邮件配置（发件人、SMTP 服务器、端口）")
 		}
-		if strings.TrimSpace(in.Email.SenderAddress) == "" || strings.TrimSpace(in.Email.Host) == "" {
-			return ErrChannelInvalid
+		if strings.TrimSpace(in.Email.SenderAddress) == "" {
+			return invalidField("发件人地址")
+		}
+		if strings.TrimSpace(in.Email.Host) == "" {
+			return invalidField("SMTP 服务器")
 		}
 		if in.Email.Port < 1 || in.Email.Port > 65535 {
-			return ErrChannelInvalid
+			return invalidField("SMTP 端口（1–65535）")
 		}
 		// A new channel must have at least one mailbox. An update may omit the
 		// list entirely (nil keeps the stored one — the rename path relies on
@@ -201,17 +217,17 @@ func validateChannelInput(in ChannelInput, creating bool) error {
 		// channel undeliverable while looking configured.
 		if in.Recipients == nil {
 			if creating {
-				return ErrChannelInvalid
+				return invalidField("收件人（至少一个邮箱地址）")
 			}
 		} else if len(trimRecipients(*in.Recipients)) == 0 {
-			return ErrChannelInvalid
+			return invalidField("收件人（至少一个邮箱地址）")
 		}
 		if in.Email.UseAuth && strings.TrimSpace(in.Email.Username) == "" {
-			return ErrChannelInvalid
+			return invalidField("SMTP 用户名（已启用服务器认证）")
 		}
 		return nil
 	default:
-		return ErrChannelInvalid
+		return invalidField("渠道类型（" + in.Kind + "）")
 	}
 }
 
@@ -253,8 +269,11 @@ func (s *Service) RegisterChannel(ctx context.Context, p auth.Principal, in Chan
 	// A pushing kind that needs a credential cannot be saved without it: one
 	// stored empty could never deliver, and finding that out on the first real
 	// alarm is too late.
-	if (in.Kind == "webhook" || in.Kind == "wecom_app") && in.Secret == "" {
-		return ChannelView{}, ErrChannelInvalid
+	if in.Kind == "webhook" && in.Secret == "" {
+		return ChannelView{}, invalidField("签名密钥")
+	}
+	if in.Kind == "wecom_app" && in.Secret == "" {
+		return ChannelView{}, invalidField("应用 Secret")
 	}
 	channelID, err := id.New()
 	if err != nil {
@@ -329,8 +348,11 @@ func (s *Service) UpdateChannel(ctx context.Context, p auth.Principal, channelID
 		}
 		// A webhook that would end up with no secret cannot deliver; refuse it
 		// here rather than at the first event.
-		if (in.Kind == "webhook" || in.Kind == "wecom_app") && in.Secret == "" && !hasSecret {
-			return ErrChannelInvalid
+		if in.Kind == "webhook" && in.Secret == "" && !hasSecret {
+			return invalidField("签名密钥")
+		}
+		if in.Kind == "wecom_app" && in.Secret == "" && !hasSecret {
+			return invalidField("应用 Secret")
 		}
 		var url *string
 		if in.URL != "" {

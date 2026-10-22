@@ -9,10 +9,12 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/zhigu34/one-nvr/internal/auth"
+	"github.com/zhigu34/one-nvr/internal/fault"
 	"github.com/zhigu34/one-nvr/internal/notify"
 )
 
@@ -448,5 +450,52 @@ func TestWeComAppKeepsItsSecretOnRename(t *testing.T) {
 	}
 	if updated.WeComApp.To != "user:a" || updated.WeComApp.MsgType != "markdown" {
 		t.Fatalf("the update did not take: %+v", *updated.WeComApp)
+	}
+}
+
+// A rejection has to name the field. One shared sentence — "配置不完整：
+// webhook 需要地址与签名密钥" — was shown for every kind, so a WeCom application
+// told the operator about a webhook's requirements and named nothing they could
+// fix. The operator is looking at a long form; "something is missing" is not an
+// answer.
+func TestChannelRejectionNamesTheMissingField(t *testing.T) {
+	fixture := newNotifyFixture(t)
+	ctx := context.Background()
+
+	email := emailChannelInput()
+	email.Email.SenderAddress = ""
+	app := notify.ChannelInput{
+		Kind: "wecom_app", Name: "值班应用", Secret: "s", Enabled: true,
+		WeComApp: &notify.WeComAppConfig{CorpID: "", AgentID: 1, To: "@all", MsgType: "text"},
+	}
+	robot := notify.ChannelInput{
+		Kind: "wecom", Name: "值班群", Enabled: true,
+		WeCom: &notify.WeComConfig{MsgType: "markdown"},
+	}
+	cases := map[string]struct {
+		in   notify.ChannelInput
+		want string
+	}{
+		"email sender": {email, "发件人地址"},
+		"app corp id":  {app, "企业ID"},
+		"robot url":    {robot, "群机器人 Webhook 地址"},
+	}
+	for name, item := range cases {
+		_, err := fixture.notify.RegisterChannel(ctx, fixture.fixture.Admin, item.in)
+		if err == nil {
+			t.Fatalf("%s: an incomplete channel was accepted", name)
+		}
+		// fault.Error carries the operator-facing text in Message; Error() is the
+		// code. Assert on the message, which is what the browser shows.
+		var public *fault.Error
+		if !errors.As(err, &public) {
+			t.Fatalf("%s: rejection is not a public fault: %v", name, err)
+		}
+		if !strings.Contains(public.Message, item.want) {
+			t.Fatalf("%s: the rejection does not name %q: %q", name, item.want, public.Message)
+		}
+		if strings.Contains(public.Message, "webhook 需要地址与签名密钥") {
+			t.Fatalf("%s: the rejection still uses the old generic sentence: %q", name, public.Message)
+		}
 	}
 }

@@ -14,7 +14,10 @@ import { CheckboxField, Empty, Notices, QueryState, SelectField } from '@/featur
 type Channel = Schema<'NotificationChannel'>
 
 const ERROR_CODES: Record<string, string> = {
-  notification_channel_invalid: '渠道配置不完整：webhook 需要地址与签名密钥',
+  // The server names the missing field, so the UI must not overwrite it with a
+  // sentence about one kind: a WeCom application was told about a webhook's
+  // requirements. The fallback only covers a payload with no message at all.
+  notification_channel_invalid: '渠道配置不完整，请检查必填项',
   notification_channel_in_use: '该渠道仍被规则使用，请先在规则里解除绑定',
   notification_channel_version_conflict: '渠道已被他人修改，请刷新后重试',
 }
