@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import { Play, Search, Video } from 'lucide-react'
+import { MoreHorizontal, Play, Power, Search, Settings2, Video } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth-store'
 import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
@@ -14,6 +14,13 @@ import {
 } from './list-format'
 import { Input } from '@/components/ui/input'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import {
   Table,
   TableBody,
@@ -32,7 +39,7 @@ import {
 } from '@/features/foundation/ui'
 import { cn } from '@/lib/utils'
 import { downloadLocal, sourceCommand } from './api'
-import { StatusLabel } from './channel-status'
+import { type ObservedState, type StatusTone, statusReason, statusText, statusTone } from './status-labels'
 import { reasonLabel } from './status-reasons'
 import { MediaParamsCell } from './media-cell'
 import { ThumbnailSlot } from './thumbnail-slot'
@@ -42,6 +49,147 @@ type Channel = Schema<'ChannelSummary'>
 
 function numberLabel(channel: { channel_no: number }) {
   return `CH${String(channel.channel_no).padStart(2, '0')}`
+}
+
+/**
+ * The occasional actions, behind one icon.
+ *
+ * Recording review and enabling/disabling a channel stay reachable without
+ * competing for the row's attention. Their accessible names keep the channel
+ * number (a screen reader and a test both need the row identified), so moving
+ * them into a menu changes how they are found, never what they say.
+ */
+function ChannelRowMenu({
+  channel,
+  unconfigured,
+  admin,
+  pending,
+  onDisable,
+  onEnable,
+}: {
+  channel: Channel
+  unconfigured: boolean
+  admin: boolean
+  pending: boolean
+  onDisable: () => void
+  onEnable: () => void
+}) {
+  const canRecord = !unconfigured && channel.permissions.includes('playback')
+  const canToggle =
+    admin && !unconfigured && channel.permissions.includes('configure')
+  if (!canRecord && !canToggle) return null
+  const label = numberLabel(channel)
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type='button'
+          variant='ghost'
+          size='sm'
+          className='h-7 w-7 px-0'
+          aria-label={`更多 ${label}`}
+          title={`更多 ${label}`}
+        >
+          <MoreHorizontal className='size-3.5' />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align='end' className='w-44'>
+        {canRecord && (
+          <DropdownMenuItem asChild>
+            <Link
+              to='/recordings'
+              search={{ channel: channel.channel_id, at: '', tab: 'playback' }}
+              aria-label={`录像 ${label}`}
+            >
+              <Video aria-hidden className='size-3.5' />
+              查看录像
+            </Link>
+          </DropdownMenuItem>
+        )}
+        {canToggle && (
+          <>
+            {canRecord && <DropdownMenuSeparator />}
+            {channel.enabled ? (
+              <DropdownMenuItem
+                variant='destructive'
+                disabled={pending}
+                aria-label={`停用 ${label}`}
+                onSelect={() => onDisable()}
+              >
+                <Power aria-hidden className='size-3.5' />
+                停用通道
+              </DropdownMenuItem>
+            ) : (
+              <DropdownMenuItem
+                disabled={pending}
+                aria-label={`启用 ${label}`}
+                onSelect={() => onEnable()}
+              >
+                <Power aria-hidden className='size-3.5' />
+                启用通道
+              </DropdownMenuItem>
+            )}
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/**
+ * The three observations on one line: main, sub, recording.
+ *
+ * They were three columns, each with its own coloured dot and label, so a
+ * healthy site was a wall of identical green marks and the one channel with a
+ * real problem had to be found by reading eighteen of them. They answer one
+ * question together — "is this channel working" — so they share one cell, and
+ * colour is spent only on the states that need attention: healthy is a quiet
+ * emerald tint, recording-off is a neutral chip (it is a policy, not a fault).
+ */
+function StreamStatus({ value }: { value: Channel }) {
+  const kinds = [
+    { key: 'main' as const, label: '主' },
+    { key: 'sub' as const, label: '子' },
+    { key: 'recording' as const, label: '录' },
+  ]
+  return (
+    <div className='flex items-center gap-1 whitespace-nowrap'>
+      {kinds.map(({ key, label }) => (
+        <StatusPill key={key} label={label} value={value[key]} />
+      ))}
+    </div>
+  )
+}
+
+const PILL_TONES: Record<StatusTone, string> = {
+  ok: 'border-emerald-800/50 bg-emerald-950/40 text-emerald-400',
+  warn: 'border-amber-800/50 bg-amber-950/40 text-amber-400',
+  bad: 'border-red-900/50 bg-red-950/40 text-red-400',
+  muted: 'border-border bg-muted/50 text-muted-foreground',
+}
+
+function StatusPill({
+  label,
+  value,
+}: {
+  label: string
+  value: { state: ObservedState; reason?: string }
+}) {
+  const tone = statusTone(value)
+  const text = statusText(value)
+  return (
+    <span
+      title={statusReason(value) || `${label}流：${text}`}
+      className={cn(
+        'inline-flex items-center gap-1 rounded border px-1.5 py-px text-[11px] leading-4 whitespace-nowrap',
+        PILL_TONES[tone]
+      )}
+    >
+      <span aria-hidden className='opacity-60'>{label}</span>
+      <span aria-hidden className='size-1 rounded-full bg-current' />
+      <span>{text}</span>
+    </span>
+  )
 }
 
 // Rounding only: a rate is never invented, only shortened for display.
@@ -492,13 +640,13 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
           ) : (
             <div className='overflow-x-auto rounded-xl border bg-card'>
               <Table>
-                <TableHeader>
-                  <TableRow>
+                <TableHeader className='bg-muted/80 [&_th]:text-xs [&_th]:font-medium [&_th]:tracking-wider [&_th]:text-muted-foreground'>
+                  <TableRow className='border-b border-border hover:bg-transparent'>
                     {admin && (
-                      <TableHead className='w-10'>
+                      <TableHead className='w-10 align-middle'>
                         <Checkbox
                           aria-label='选择当前结果'
-                          className='rounded border-zinc-600'
+                          className='translate-y-0 rounded border-border'
                           checked={allChecked}
                           disabled={!selectable.length}
                           onCheckedChange={(state) => {
@@ -519,14 +667,12 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                     <TableHead>名称</TableHead>
                     <TableHead>分组</TableHead>
                     <TableHead>摄像头</TableHead>
-                    <TableHead className='w-20 text-center'>主流</TableHead>
-                    <TableHead className='w-20 text-center'>子流</TableHead>
-                    <TableHead className='w-20 text-center'>录像</TableHead>
-                    <TableHead className='min-w-36'>媒体参数</TableHead>
-                    <TableHead className='w-20 pr-6 text-right'>码率</TableHead>
+                    <TableHead className='w-56'>流与录像</TableHead>
+                    <TableHead className='min-w-72'>媒体参数</TableHead>
+                    <TableHead className='w-16 pr-6 text-right'>码率</TableHead>
                     <TableHead className='w-24'>最近错误</TableHead>
-                    <TableHead className='w-32'>更新时间</TableHead>
-                    <TableHead className='w-40 text-right'>操作</TableHead>
+                    <TableHead className='w-28'>更新时间</TableHead>
+                    <TableHead className='w-32 text-right'>操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -537,16 +683,13 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                       <TableRow
                         key={channel.channel_id}
                         data-testid='channel-row'
-                        className={cn(
-                          normal &&
-                            'bg-emerald-950/15 hover:bg-emerald-950/25'
-                        )}
+                        className='transition-colors hover:bg-muted/40 data-[state=selected]:bg-muted/60'
                       >
                         {admin && (
-                          <TableCell>
+                          <TableCell className='align-middle'>
                             <Checkbox
                               aria-label={`选择 ${numberLabel(channel)}`}
-                              className='rounded border-zinc-600'
+                              className='translate-y-0 rounded border-border'
                               checked={chosen.some(
                                 (item) =>
                                   item.channel_id === channel.channel_id
@@ -580,7 +723,7 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                             <span
                               className={cn(
                                 'font-medium',
-                                unconfigured && 'text-zinc-500'
+                                unconfigured && 'text-muted-foreground'
                               )}
                             >
                               {channel.channel_name}
@@ -591,7 +734,7 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                               </span>
                             )}
                             {unconfigured && (
-                              <span className='rounded-md border border-border bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800/80 dark:text-zinc-400'>
+                              <span className='rounded border border-border bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground'>
                                 未配置
                               </span>
                             )}
@@ -623,23 +766,21 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                                 ))}
                             </span>
                           ) : (
-                            <span className={unconfigured ? 'text-zinc-600' : 'text-zinc-500'}>
+                            <span className='text-muted-foreground/70'>
                               未配置摄像头
                             </span>
                           )}
                         </TableCell>
-                        {(['main', 'sub', 'recording'] as const).map((kind) => (
-                          <TableCell key={kind} className='text-center'>
-                            {unconfigured ? (
-                              <span className='text-xs text-zinc-600'>—</span>
-                            ) : (
-                              <StatusLabel value={channel[kind]} />
-                            )}
-                          </TableCell>
-                        ))}
+                        <TableCell>
+                          {unconfigured ? (
+                            <span className='text-xs text-muted-foreground/60'>—</span>
+                          ) : (
+                            <StreamStatus value={channel} />
+                          )}
+                        </TableCell>
                         <TableCell className='text-xs'>
                           {unconfigured ? (
-                            <span className='text-zinc-600'>—</span>
+                            <span className='text-muted-foreground/50'>—</span>
                           ) : (
                             <MediaParamsCell channel={channel} zone={zone} />
                           )}
@@ -649,7 +790,7 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                             read as one string. */}
                         <TableCell className='pr-6 text-right text-sm tabular-nums'>
                           {unconfigured ? (
-                            <span className='text-zinc-600'>—</span>
+                            <span className='text-muted-foreground/50'>—</span>
                           ) : (
                             bitrateLabel(channel.bitrate_kbps)
                           )}
@@ -660,7 +801,7 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                               that does not exist yet; it reads "—" like the rest
                               of its empty cells. */}
                           {unconfigured ? (
-                            <span className='text-zinc-600'>—</span>
+                            <span className='text-muted-foreground/50'>—</span>
                           ) : channel.last_error ? (
                             reasonLabel(channel.last_error)
                           ) : (
@@ -683,77 +824,55 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                           )}
                         </TableCell>
                         <TableCell className='text-right'>
-                          <div className='flex items-center justify-end gap-1'>
+                          {/* Two visible shortcuts and a menu. Preview and
+                              configure are what an operator does to a channel
+                              mid-shift; recording review and the enable toggle
+                              are occasional, and four equal-weight text links
+                              widened the last column past everything beside it. */}
+                          <div className='flex items-center justify-end gap-0.5'>
                             {normal &&
                               channel.permissions.includes('live') && (
-                                <Link
-                                  to='/live'
-                                  search={{ channel: channel.channel_id }}
-                                  aria-label={`预览 ${numberLabel(channel)}`}
-                                  title={`预览 ${numberLabel(channel)}`}
-                                  className='inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs hover:bg-accent'
+                                <Button
+                                  asChild
+                                  variant='ghost'
+                                  size='sm'
+                                  className='h-7 gap-1 px-2 text-xs'
                                 >
-                                  <Play className='size-3' />
-                                  预览
-                                </Link>
+                                  <Link
+                                    to='/live'
+                                    search={{ channel: channel.channel_id }}
+                                    aria-label={`预览 ${numberLabel(channel)}`}
+                                    title={`预览 ${numberLabel(channel)}`}
+                                  >
+                                    <Play className='size-3' />
+                                    预览
+                                  </Link>
+                                </Button>
                               )}
-                            {/* Disabling a channel stops streaming and
-                                recording but keeps history playable, so the
-                                recording shortcut belongs to every configured
-                                channel, not just the online ones. */}
-                            {!unconfigured &&
-                              channel.permissions.includes('playback') && (
-                                <Link
-                                  to='/recordings'
-                                  search={{
-                                    channel: channel.channel_id,
-                                    at: '',
-                                    tab: 'playback',
-                                  }}
-                                  aria-label={`录像 ${numberLabel(channel)}`}
-                                  title={`查看 ${numberLabel(channel)} 录像`}
-                                  className='inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs hover:bg-accent'
-                                >
-                                  <Video className='size-3' />
-                                  录像
-                                </Link>
-                              )}
-                            <Link
-                              to='/channels/configure'
-                              search={{ channel: channel.channel_id, tab: '' }}
-                              aria-label={`配置 ${numberLabel(channel)}`}
-                              className='inline-flex h-7 items-center rounded-md border px-2 text-xs font-medium hover:bg-accent'
+                            <Button
+                              asChild
+                              variant='ghost'
+                              size='sm'
+                              className='h-7 gap-1 px-2 text-xs'
                             >
-                              配置
-                            </Link>
-                            {admin &&
-                              !unconfigured &&
-                              channel.permissions.includes('configure') &&
-                              (channel.enabled ? (
-                                <Button
-                                  type='button'
-                                  variant='ghost'
-                                  size='sm'
-                                  className='h-7 px-2 text-xs'
-                                  disabled={enableAction.pending}
-                                  aria-label={`停用 ${numberLabel(channel)}`}
-                                  onClick={() => setConfirmDisable(channel)}
-                                >
-                                  停用
-                                </Button>
-                              ) : (
-                                <Button
-                                  type='button'
-                                  variant='ghost'
-                                  size='sm'
-                                  className='h-7 px-2 text-xs'
-                                  disabled={enableAction.pending}
-                                  aria-label={`启用 ${numberLabel(channel)}`}
-                                  onClick={() => void setEnabled(channel, true)}
-                                >
-                                  启用
-                                </Button>
-                              ))}
+                              <Link
+                                to='/channels/configure'
+                                search={{ channel: channel.channel_id, tab: '' }}
+                                aria-label={`配置 ${numberLabel(channel)}`}
+                                title={`配置 ${numberLabel(channel)}`}
+                              >
+                                <Settings2 className='size-3' />
+                                配置
+                              </Link>
+                            </Button>
+                            <ChannelRowMenu
+                              channel={channel}
+                              unconfigured={unconfigured}
+                              admin={admin}
+                              pending={enableAction.pending}
+                              onDisable={() => setConfirmDisable(channel)}
+                              onEnable={() => void setEnabled(channel, true)}
+                            />
                           </div>
                         </TableCell>
                       </TableRow>
@@ -762,7 +881,7 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                   {tail.collapsed && tail.hidden.length > 0 && (
                     <TableRow>
                       <TableCell
-                        colSpan={admin ? 13 : 12}
+                        colSpan={admin ? 11 : 10}
                         className='bg-muted/30 text-xs text-muted-foreground'
                       >
                         <button
@@ -780,7 +899,7 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                   {!tail.collapsed && tail.hidden.length > 0 && (
                     <TableRow>
                       <TableCell
-                        colSpan={admin ? 13 : 12}
+                        colSpan={admin ? 11 : 10}
                         className='bg-muted/30 text-xs text-muted-foreground'
                       >
                         <button

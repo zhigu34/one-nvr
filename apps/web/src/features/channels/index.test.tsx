@@ -260,9 +260,12 @@ test('unconfigured rows cannot be selected and expose no enable toggle', async (
   await expect.element(row).toHaveTextContent('未配置摄像头')
   expect((row.element() as HTMLElement).textContent).not.toContain('正常')
   expect((row.element() as HTMLElement).textContent).not.toContain('启用')
-  // Every configured row keeps its enable/disable control.
+  // Every configured row keeps its enable/disable control, now inside the
+  // row's 更多 menu: opening it is the extra step the redesign traded for a
+  // narrower action column.
+  await userEvent.click(view.getByRole('button', { name: '更多 CH01' }))
   await expect
-    .element(view.getByRole('button', { name: '停用 CH01' }))
+    .element(view.getByRole('menuitem', { name: '停用 CH01' }))
     .toBeInTheDocument()
   setup.client.clear()
 })
@@ -379,9 +382,8 @@ test('revoked selection never broadens export to every other channel', async () 
 test('disabling a channel is confirmed and sends only the enabled flag', async () => {
   const setup = fixture()
   const view = await render(setup.view)
-  await userEvent.click(
-    view.getByRole('button', { name: '停用 CH01', exact: true })
-  )
+  await userEvent.click(view.getByRole('button', { name: '更多 CH01' }))
+  await userEvent.click(view.getByRole('menuitem', { name: '停用 CH01' }))
   await userEvent.click(view.getByRole('button', { name: '停用', exact: true }))
   await expect
     .poll(() => calls.request.mock.calls.filter(([, init]) => init?.method === 'PATCH').length)
@@ -433,41 +435,42 @@ test('media parameters, access badge and healthy-row shortcuts', async () => {
   // Main stream leads with the megapixel shorthand and then states the exact
   // pixel count, codec profile, frame rate and declared bit rate; the sub stream
   // sits dimmed beneath; audio is a pill and "no audio" never prints.
-  await expect.element(rows.nth(0)).toHaveTextContent('3MP')
+  // The megapixel shorthand and the bit rate live in the hover title: the
+  // visible line keeps the facts that must not be truncated.
   await expect.element(rows.nth(0)).toHaveTextContent('2560×1440')
   await expect.element(rows.nth(0)).toHaveTextContent('H.264')
-  await expect.element(rows.nth(0)).toHaveTextContent('High')
   await expect.element(rows.nth(0)).toHaveTextContent('25fps')
-  await expect.element(rows.nth(0)).toHaveTextContent('4.1M')
-  await expect.element(rows.nth(0)).toHaveTextContent('子: 704×576')
-  await expect.element(rows.nth(0)).toHaveTextContent('Main')
-  // Audio is stated per stream now: "主 PCMA" says the MAIN stream carries it.
-  await expect.element(rows.nth(0)).toHaveTextContent('主 PCMA')
+  await expect.element(rows.nth(0)).toHaveTextContent('704×576')
+  // The compression profile is gone from the visible line: "Main" there read as
+  // the main STREAM, which the leading badge already says. It survives in the
+  // hover title.
+  await expect.element(rows.nth(0)).not.toHaveTextContent('Main')
+  await expect.element(rows.nth(0)).not.toHaveTextContent('High')
+  // Audio is a per-line pill holding only the codec; the stream it belongs to
+  // is the line's own badge, so the pill no longer repeats 主/子.
+  await expect.element(rows.nth(0)).toHaveTextContent('PCMA')
   await expect.element(rows.nth(0)).not.toHaveTextContent('无音频')
   await expect.element(rows.nth(0)).toHaveTextContent('192.168.66.114')
   await expect
     .element(rows.nth(0))
     .not.toHaveTextContent('/Streaming/Channels/101')
   await expect
-    .element(
-      view.getByRole('link', { name: '预览 CH01' })
-    )
-    .toHaveAttribute(
-      'href',
-      `/live?channel=${summaries[0].channel_id}`
-    )
+    .element(view.getByRole('link', { name: '预览 CH01' }))
+    .toHaveAttribute('href', `/live?channel=${summaries[0].channel_id}`)
+  // Recording review lives in the row menu now; its target is unchanged.
+  await userEvent.click(view.getByRole('button', { name: '更多 CH01' }))
   await expect
-    .element(view.getByRole('link', { name: '录像 CH01' }))
+    .element(view.getByRole('menuitem', { name: '录像 CH01' }))
     .toHaveAttribute(
       'href',
       `/recordings?channel=${summaries[0].channel_id}&at=&tab=playback`
     )
   // The cell now carries the facts that explain a soft or unplayable picture:
   // the exact pixel count and the declared bit rate, not just the shorthand.
-  await expect.element(rows.nth(3)).toHaveTextContent('4MP')
   await expect.element(rows.nth(3)).toHaveTextContent('2560×1920')
   await expect.element(rows.nth(3)).toHaveTextContent('H.265')
-  await expect.element(rows.nth(3)).toHaveTextContent('主 AAC')
+  // CH04 has audio on both streams; each line ends with its own AAC pill.
+  expect((rows.nth(3).element() as HTMLElement).textContent).toContain('AAC')
   setup.client.clear()
 })
 test('thumbnail slot and recording shortcut on configured channels', async () => {
@@ -482,12 +485,14 @@ test('thumbnail slot and recording shortcut on configured channels', async () =>
   await expect
     .element(rows.nth(2).getByTestId('channel-thumbnail'))
     .toHaveAttribute('data-state', 'unconfigured')
-  // CH02 is configured but unhealthy: no preview shortcut, recording stays.
+  // CH02 is configured but unhealthy: no preview shortcut, recording remains
+  // reachable from the row menu.
   await expect
-    .element(view.getByRole('link', { name: '预览 CH02' }).query())
+    .element(view.getByRole('button', { name: '预览 CH02' }).query())
     .toBeNull()
+  await userEvent.click(view.getByRole('button', { name: '更多 CH02' }))
   await expect
-    .element(view.getByRole('link', { name: '录像 CH02' }))
-    .toBeVisible()
+    .element(view.getByRole('menuitem', { name: '录像 CH02' }))
+    .toBeInTheDocument()
   setup.client.clear()
 })
