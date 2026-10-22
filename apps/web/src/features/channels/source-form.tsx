@@ -250,7 +250,7 @@ function SourceEditor({
               save), which is why it is sticky: the operator keeps the verdict
               in view while editing the address it refers to. */}
           <div className='grid items-start gap-5 lg:grid-cols-12'>
-            <div className='grid content-start gap-5 lg:col-span-8'>
+            <div className='grid content-start gap-5 lg:col-span-9'>
               <div className='grid gap-2'>
                 <span className='text-sm font-medium'>添加方式</span>
                 <div
@@ -282,35 +282,32 @@ function SourceEditor({
               {/* Network: address, port and — in ONVIF mode — the probe, all on
                   one baseline. The explanation that used to sit under this row
                   ("地址与凭据会用于探测…") is on the label's info icon now. */}
-              <div className='grid gap-2'>
-                <div className='flex items-center gap-1.5'>
-                  <label
-                    htmlFor='source-ip'
-                    className='text-sm font-medium leading-none'
-                  >
-                    IP 地址
-                  </label>
-                  <InfoHint
-                    text={
-                      method === 'onvif'
-                        ? '地址与凭据只用于探测，不会保存探测凭据。'
-                        : '填写摄像头地址；路径在下方「码流路径」里。'
-                    }
-                  />
-                </div>
-                <div className='flex flex-wrap items-start gap-2'>
+              {/* Network, on a 9/3 grid with both captions on their own inputs.
+                  It was a flex row before, which put "IP 地址" at the far left and
+                  "RTSP 端口" at the far right with their inputs at different
+                  heights — the two halves of one address read as two unrelated
+                  fields. */}
+              <div className='grid grid-cols-12 items-end gap-3'>
+                <div className='col-span-9 grid gap-1.5'>
+                  <span className='flex items-center gap-1.5 text-xs text-muted-foreground'>
+                    <label htmlFor='source-ip'>IP 地址</label>
+                    <InfoHint
+                      text={
+                        method === 'onvif'
+                          ? '地址与凭据只用于探测，不会保存探测凭据。'
+                          : '摄像头地址；端口与路径在右侧。'
+                      }
+                    />
+                  </span>
                   <div
                     className={cn(
-                      'flex min-w-0 items-end',
-                      method === 'onvif' ? 'w-56 flex-none' : 'flex-1 basis-56'
+                      'flex overflow-hidden rounded-md border border-input bg-transparent shadow-xs transition-colors focus-within:border-ring dark:bg-input/30'
                     )}
                   >
-                    {/* The prefix exists to show that the field is a URL in RTSP
-                        mode. ONVIF probes over HTTP/SOAP, so there the prefix
-                        both named the wrong protocol and duplicated the field
-                        label. */}
+                    {/* The prefix belongs to the field in RTSP mode only: ONVIF
+                        probes over HTTP/SOAP, where it named the wrong protocol. */}
                     {method === 'rtsp' && (
-                      <span className='inline-flex items-center rounded-l-md border border-r-0 border-input bg-muted/50 px-2 font-mono text-xs text-muted-foreground'>
+                      <span className='inline-flex select-none items-center border-r border-input bg-muted/50 px-3 font-mono text-xs text-muted-foreground'>
                         rtsp://
                       </span>
                     )}
@@ -318,70 +315,68 @@ function SourceEditor({
                       id='source-ip'
                       name='ip'
                       required
-                      placeholder='192.168.33.20'
+                      placeholder='192.168.66.110'
                       value={ip}
                       onChange={(event) => setIP(event.target.value)}
-                      className={cn(
-                        'flex h-9 w-full min-w-0 border border-input bg-transparent px-3 py-1 font-mono text-base shadow-xs outline-none md:text-sm dark:bg-input/30',
-                        method === 'rtsp' ? 'rounded-r-md' : 'rounded-md'
-                      )}
+                      className='h-9 min-w-0 flex-1 bg-transparent px-3 font-mono text-sm outline-none'
                     />
                   </div>
-                  {(method === 'rtsp' || probed) && (
-                    <div className='grid w-24 gap-1'>
-                      <span className='text-[10px] leading-none text-muted-foreground'>
-                        RTSP 端口
-                      </span>
-                      <input
-                        aria-label='RTSP 端口'
-                        name='rtsp_port'
-                        type='number'
-                        required
-                        min={1}
-                        max={65535}
-                        value={rtspPort}
-                        onChange={(event) => setRTSPPort(event.target.value)}
-                        className='flex h-9 w-full rounded-md border border-input bg-transparent px-3 font-mono text-sm shadow-xs outline-none dark:bg-input/30'
-                      />
-                    </div>
-                  )}
-                  {method === 'onvif' && (
-                    <OnvifProbeBar
-                        channelId={channel.id}
-                        ip={ip}
-                        port={onvifPort}
-                        onPortChange={setONVIFPort}
-                        credentials={enteredCredentials}
-                        onStreams={applyStreams}
-                        savedPassword={passwordAction === 'keep' && !!revision}
-                        busy={pending}
-                        onDevice={(device) => {
-                          if (device.brand) setBrand(device.brand)
-                          if (device.model) setModel(device.model)
-                          if (device.cameraType) {
-                            setCameraType(device.cameraType as CameraType)
-                          }
-                          setRecognised({
-                            brand: !!device.brand,
-                            model: !!device.model,
-                            cameraType: !!device.cameraType,
-                          })
-                        }}
-                        onPasswordNeeded={() => setPasswordAction('replace')}
-                        probe={probe}
-                        onProbe={setProbe}
-                        onChoose={(main, sub) => {
-                          setMainToken(main.token)
-                          setSubToken(sub ? sub.token : '')
-                          applyStreams(main, sub)
-                        }}
-                  />
-                  )}
                 </div>
-                {method === 'rtsp' && (
-                  <p className='text-[11px] text-muted-foreground'>
-                    手动填写端口与主/子流路径。
-                  </p>
+                {(method === 'rtsp' || probed) && (
+                  <div className='col-span-3 grid gap-1.5'>
+                    <label
+                      htmlFor='source-rtsp-port'
+                      className='text-xs text-muted-foreground'
+                    >
+                      RTSP 端口
+                    </label>
+                    <input
+                      id='source-rtsp-port'
+                      aria-label='RTSP 端口'
+                      name='rtsp_port'
+                      type='number'
+                      required
+                      min={1}
+                      max={65535}
+                      value={rtspPort}
+                      onChange={(event) => setRTSPPort(event.target.value)}
+                      className='h-9 w-full rounded-md border border-input bg-transparent px-3 font-mono text-sm shadow-xs outline-none dark:bg-input/30'
+                    />
+                  </div>
+                )}
+                {method === 'onvif' && (
+                  <div className='col-span-9 grid gap-1.5'>
+                    <OnvifProbeBar
+                      channelId={channel.id}
+                      ip={ip}
+                      port={onvifPort}
+                      onPortChange={setONVIFPort}
+                      credentials={enteredCredentials}
+                      onStreams={applyStreams}
+                      savedPassword={passwordAction === 'keep' && !!revision}
+                      busy={pending}
+                      onDevice={(device) => {
+                        if (device.brand) setBrand(device.brand)
+                        if (device.model) setModel(device.model)
+                        if (device.cameraType) {
+                          setCameraType(device.cameraType as CameraType)
+                        }
+                        setRecognised({
+                          brand: !!device.brand,
+                          model: !!device.model,
+                          cameraType: !!device.cameraType,
+                        })
+                      }}
+                      onPasswordNeeded={() => setPasswordAction('replace')}
+                      probe={probe}
+                      onProbe={setProbe}
+                      onChoose={(main, sub) => {
+                        setMainToken(main.token)
+                        setSubToken(sub ? sub.token : '')
+                        applyStreams(main, sub)
+                      }}
+                    />
+                  </div>
                 )}
               </div>
 
@@ -531,43 +526,28 @@ function SourceEditor({
                 </div>
               </div>
               {(method === 'rtsp' || probed) && (
-                <details
-                  className='rounded-lg border'
-                  open={method === 'rtsp' || probed}
-                >
-                  <summary className='flex cursor-pointer items-center justify-between gap-3 px-3 py-2.5 text-sm font-medium'>
-                    <span>码流路径</span>
+                <div className='grid gap-2 border-t border-border/60 pt-4'>
+                  <div className='flex flex-wrap items-center justify-between gap-2'>
+                    <span className='text-sm font-medium'>码流路径</span>
                     {method === 'rtsp' && template ? (
-                      <span
-                        role='button'
-                        tabIndex={0}
+                      <button
+                        type='button'
                         title={template.hint}
-                        className='rounded-md border px-2 py-0.5 text-[11px] font-normal text-muted-foreground hover:bg-accent hover:text-foreground'
-                        onClick={(event) => {
-                          // The button lives inside <summary>: without this the
-                          // click would also toggle the disclosure.
-                          event.preventDefault()
-                          event.stopPropagation()
-                          setMainPath(template.main)
-                          setSubPath(template.sub)
-                        }}
-                        onKeyDown={(event) => {
-                          if (event.key !== 'Enter' && event.key !== ' ') return
-                          event.preventDefault()
-                          event.stopPropagation()
+                        className='rounded-md border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground'
+                        onClick={() => {
                           setMainPath(template.main)
                           setSubPath(template.sub)
                         }}
                       >
                         填入{template.hint}
-                      </span>
+                      </button>
                     ) : (
-                      <span className='text-[11px] font-normal text-muted-foreground'>
+                      <span className='text-[11px] text-muted-foreground'>
                         {method === 'onvif' ? '由摄像头返回' : ''}
                       </span>
                     )}
-                  </summary>
-                  <div className='grid gap-4 border-t p-3 sm:grid-cols-2'>
+                  </div>
+                  <div className='grid gap-4 sm:grid-cols-2'>
                     <Field
                       label='主流路径'
                       name='main_path'
@@ -583,7 +563,7 @@ function SourceEditor({
                       placeholder='/sub'
                     />
                   </div>
-                </details>
+                </div>
               )}
               <details className='rounded-lg border'>
                 <summary className='cursor-pointer px-3 py-2.5 text-sm font-medium'>
@@ -632,7 +612,7 @@ function SourceEditor({
             {/* The side column: test evidence, the returned streams, and the
                 two actions that conclude the edit. Sticky, because all three
                 answer "is this right" while the operator is still typing. */}
-            <div className='grid gap-4 lg:sticky lg:top-4 lg:col-span-4'>
+            <div className='grid gap-4 lg:sticky lg:top-4 lg:col-span-3'>
               {testPanel}
               {streamsPanel &&
                 streamsPanel(

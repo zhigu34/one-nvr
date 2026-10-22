@@ -21,6 +21,38 @@ type Props = {
 // This control only proves the stream and switches the source; it never asks
 // for a recording mode, because a first apply starts stream-only and the
 // recording plan page owns everything after that.
+/**
+ * The measured facts of one stream, on one line. Absent values are omitted
+ * rather than printed as a dash: a five-field row of dashes reads as a fault.
+ */
+function StreamFacts({
+  label,
+  test,
+}: {
+  label: string
+  test: Schema<'SourceTestResult'>['main']
+}) {
+  const facts = [
+    test.codec ? test.codec.toUpperCase().replace('H264', 'H.264').replace('HEVC', 'H.265') : '',
+    test.width && test.height ? `${test.width}×${test.height}` : '',
+    test.fps ? `${parseFloat(test.fps.toFixed(2))}fps` : '',
+    test.audio_codec === null
+      ? '音频未测'
+      : test.audio_codec === ''
+        ? '无音'
+        : test.audio_codec,
+  ].filter(Boolean)
+  if (!facts.length) return null
+  return (
+    <p
+      aria-label={`${label}实测参数`}
+      className='font-mono text-[10px] leading-4 text-muted-foreground'
+    >
+      {facts.join(' · ')}
+    </p>
+  )
+}
+
 export function SourceTestControls({
   channelId,
   version,
@@ -125,10 +157,15 @@ export function SourceTestControls({
             <span>主流</span>
             <StatusLabel value={proof.main} />
           </div>
+          {/* What the test actually saw. A "通过" alone does not tell an operator
+              whether the camera sent the resolution they configured, or whether
+              it is delivering the frame rate the detection setting assumes. */}
+          <StreamFacts label='主流' test={proof.main} />
           <div className='flex items-center justify-between'>
             <span>子流</span>
             <StatusLabel value={proof.sub} />
           </div>
+          <StreamFacts label='子流' test={proof.sub} />
           <p className='border-t pt-2 text-[11px] text-muted-foreground'>
             测试状态：
             {

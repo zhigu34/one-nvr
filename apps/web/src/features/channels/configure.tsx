@@ -376,43 +376,17 @@ function ConfigureChannel({
         </TabsList>
         <TabsContent value='configure'>
       <Card className='mb-5 gap-0 py-0'>
-        <div className='flex flex-wrap items-start justify-between gap-4 p-5'>
+        {/* Two ends of one line. Left: which channel this is. Right: how it is
+            doing and the switch that changes it. The tags that used to sit
+            between them (group, method, brand) were five chips of equal weight
+            competing with the channel's own name, so they are one grey parameter
+            line under it — the same facts, read as context rather than news. */}
+        <div className='flex flex-wrap items-center justify-between gap-x-6 gap-y-3 p-5'>
           <div className='min-w-0'>
-            <div className='flex flex-wrap items-center gap-2'>
-              <span className='font-mono text-xs text-muted-foreground'>
+            <h2 className='flex items-center gap-2 text-lg font-semibold'>
+              <span className='font-mono text-xs font-normal text-muted-foreground'>
                 {numberLabel(channel)}
               </span>
-              {channel.channel_group && (
-                <span className='rounded border px-1.5 py-0.5 text-[11px] text-muted-foreground'>
-                  {channel.channel_group}
-                </span>
-              )}
-              {configured && (
-                <span className='rounded border px-1.5 py-0.5 text-[11px] text-muted-foreground'>
-                  {channel.onvif_port != null ? 'ONVIF 手动' : 'RTSP 手动'}
-                </span>
-              )}
-              {/* What the hardware is, when it was recorded. Rendered beside the
-                  connection method because the two together answer "which camera
-                  is this" — the IP alone does not. */}
-              {/* Brand, model and type together: "which camera is this" needs
-                  all three, and the IP alone says nothing about the hardware. */}
-              {(channel.brand || channel.model || channel.camera_type) && (
-                <span className='flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground'>
-                  {(channel.brand || channel.model) && (
-                    <span className='rounded border border-border bg-muted/50 px-1.5 py-0.5'>
-                      {[channel.brand, channel.model].filter(Boolean).join(' ')}
-                    </span>
-                  )}
-                  {channel.camera_type && (
-                    <span className='rounded border border-border bg-muted/50 px-1.5 py-0.5'>
-                      {cameraTypeLabel(channel.camera_type)}
-                    </span>
-                  )}
-                </span>
-              )}
-            </div>
-            <h2 className='mt-1.5 flex items-center gap-2 text-lg font-semibold'>
               {channel.channel_name}
               <Button
                 type='button'
@@ -426,36 +400,36 @@ function ConfigureChannel({
                 编辑
               </Button>
             </h2>
-            <p
-              className='mt-1 font-mono text-xs text-muted-foreground'
-              title={
-                channel.source_ip && channel.main_path
-                  ? `${channel.source_ip}${channel.main_path}`
-                  : undefined
-              }
-            >
-              {channel.source_ip
-                ? `${channel.source_ip} · ${channel.main_path || '未填写主流路径'}`
-                : '未配置摄像头'}
+            <p className='mt-1 truncate font-mono text-xs text-muted-foreground'>
+              {[
+                configured
+                  ? channel.onvif_port != null
+                    ? 'ONVIF 手动'
+                    : 'RTSP 手动'
+                  : null,
+                channel.channel_group || null,
+                channel.source_ip
+                  ? `${channel.source_ip}${channel.main_path || ''}`
+                  : '未配置摄像头',
+                [channel.brand, channel.model].filter(Boolean).join(' ') || null,
+                channel.camera_type ? cameraTypeLabel(channel.camera_type) : null,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
             </p>
           </div>
-          <div className='flex flex-col items-end gap-2'>
-            <ChannelStatus value={status.data} />
-            <div className='flex items-center gap-3'>
-              <span className='inline-flex items-center gap-1.5 text-xs'>
-                <span
-                  aria-hidden
-                  className={`size-1.5 rounded-full ${
-                    channel.enabled ? dotTones.ok : dotTones.muted
-                  }`}
-                />
-                {channel.enabled ? '通道启用中' : '通道已停用'}
-              </span>
-              <ChannelEnableToggle
-                channel={channel}
-                version={version}
+          <div className='flex flex-wrap items-center gap-3'>
+            {status.data && <ChannelStatus value={status.data} />}
+            <span className='inline-flex items-center gap-1.5 text-xs text-muted-foreground'>
+              <span
+                aria-hidden
+                className={`size-1.5 rounded-full ${
+                  channel.enabled ? dotTones.ok : dotTones.muted
+                }`}
               />
-            </div>
+              {channel.enabled ? '已启用' : '已停用'}
+            </span>
+            <ChannelEnableToggle channel={channel} version={version} />
           </div>
         </div>
         {editing && (
@@ -466,21 +440,27 @@ function ConfigureChannel({
             />
           </div>
         )}
-        <div className='flex flex-wrap items-center justify-between gap-3 border-t px-5 py-3'>
-          <p className='text-xs text-muted-foreground'>
+        {/* One hairline, two quiet links. The recording mode is a fact about
+            this channel and clearing the camera is a rare destructive act; both
+            were competing with the form above, so they read as footer meta now
+            instead of a second toolbar. */}
+        <div className='flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border/60 px-5 py-2 text-[11px] text-muted-foreground'>
+          <span>
             录像方式：
             <span className='text-foreground'>
               {policy.data
                 ? MODE_LABELS[policy.data.mode] || policy.data.mode
                 : '—'}
             </span>
-            <span className='mx-1'>·</span>
-            <a href='/recording-plan' className='underline underline-offset-2'>
-              在录像计划页修改
+            <a
+              href='/recording-plan'
+              className='ml-2 underline underline-offset-2 hover:text-foreground'
+            >
+              修改
             </a>
-          </p>
-          <details className='text-xs'>
-            <summary className='cursor-pointer text-muted-foreground'>
+          </span>
+          <details>
+            <summary className='cursor-pointer hover:text-foreground'>
               危险操作
             </summary>
             <div className='mt-2 flex flex-wrap items-center gap-2'>
@@ -488,16 +468,14 @@ function ConfigureChannel({
                 type='button'
                 variant='outline'
                 size='sm'
-                className='border-destructive/40 text-destructive'
+                className='h-7 border-destructive/40 px-2 text-xs text-destructive'
                 disabled={pending || !configured}
                 onClick={() => setConfirmClear(true)}
               >
                 清空摄像头配置
               </Button>
               {!configured && (
-                <span className='text-[11px] text-muted-foreground'>
-                  通道尚未接入摄像头
-                </span>
+                <span className='text-[11px]'>通道尚未接入摄像头</span>
               )}
             </div>
           </details>

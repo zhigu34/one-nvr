@@ -336,9 +336,11 @@ test('the header shows the recording mode read-only and links to the plan page',
   await expect
     .element(view.getByText('全天录像', { exact: true }))
     .toBeVisible()
+  // The footer is meta now, so the link is just 修改; what it points at and the
+  // guarantee that this page never writes a policy are unchanged.
   await expect
-    .element(view.getByRole('link', { name: '在录像计划页修改' }))
-    .toBeVisible()
+    .element(view.getByRole('link', { name: '修改', exact: true }))
+    .toHaveAttribute('href', '/recording-plan')
   // Naming, grouping and the mode are separate from the source: nothing on this
   // page writes a recording policy.
   expect(
