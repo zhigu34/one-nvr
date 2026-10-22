@@ -181,9 +181,12 @@ export function DetectionConfigBar({
   }
 
   return (
-    <div className='space-y-2 rounded-xl border bg-card p-3'>
-      <div className='flex flex-wrap items-center gap-x-3 gap-y-2'>
-        <span className='text-sm font-medium'>
+    <div className='space-y-2.5 rounded-lg border border-border bg-card p-3.5'>
+      {/* Selection line: what the bar will act on, and the two ways to change
+          that set. Kept apart from the settings row so "how many" never sits
+          between two controls that look like they might depend on it. */}
+      <div className='flex flex-wrap items-center gap-2'>
+        <span className='text-sm font-medium tabular-nums'>
           已选 {chosenCount} / {total} 路
         </span>
         <Button
@@ -204,10 +207,16 @@ export function DetectionConfigBar({
         >
           清空
         </Button>
+      </div>
 
-        <span className='mx-1 h-5 w-px bg-border' />
-
-        <label className='flex items-center gap-2 text-sm'>
+      {/* The settings, on one baseline. Every control carries the same height
+          (h-9): a switch, three selects and a dropdown trigger are four
+          different widgets, and any difference in their height reads as a
+          difference in their importance. The height is set per control rather
+          than with a descendant selector — the dropdown's menu also lives in
+          this subtree, and a blanket rule would stretch every menu item. */}
+      <div className='flex flex-wrap items-center gap-x-3 gap-y-2'>
+        <label className='inline-flex h-9 items-center gap-2 pr-1 text-sm'>
           <Switch
             checked={effective.enabled}
             aria-label='批量启用检测'
@@ -216,7 +225,7 @@ export function DetectionConfigBar({
           启用检测
         </label>
 
-        <div className='flex items-center gap-1.5'>
+        <div className='inline-flex items-center gap-1.5'>
           <span className='text-xs text-muted-foreground'>码流</span>
           <SelectField
             ariaLabel='批量检测码流'
@@ -224,9 +233,10 @@ export function DetectionConfigBar({
             onValueChange={(next) => patch({ stream: next ?? 'sub' })}
             options={STREAM_OPTIONS}
             className='w-24'
+            triggerClassName='h-9'
           />
         </div>
-        <div className='flex items-center gap-1.5'>
+        <div className='inline-flex items-center gap-1.5'>
           <span className='text-xs text-muted-foreground'>帧率</span>
           <SelectField
             ariaLabel='批量检测帧率'
@@ -234,9 +244,10 @@ export function DetectionConfigBar({
             onValueChange={(next) => patch({ fps: Number(next ?? 5) })}
             options={FPS_OPTIONS}
             className='w-20'
+            triggerClassName='h-9'
           />
         </div>
-        <div className='flex items-center gap-1.5'>
+        <div className='inline-flex items-center gap-1.5'>
           <span className='text-xs text-muted-foreground'>灵敏度</span>
           <SelectField
             ariaLabel='批量检测灵敏度'
@@ -245,14 +256,15 @@ export function DetectionConfigBar({
               patch({ sensitivity: (next ?? 'balanced') as Sensitivity })
             }
             options={SENSITIVITY_OPTIONS}
-            className='w-20'
+            className='w-24'
+            triggerClassName='h-9'
           />
         </div>
-        <div className='flex items-center gap-1.5'>
+        <div className='inline-flex items-center gap-1.5'>
           <span className='text-xs text-muted-foreground'>目标</span>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant='outline' size='sm' aria-label='批量目标类别'>
+              <Button variant='outline' size='sm' className='h-9' aria-label='批量目标类别'>
                 {effective.labels.length === 0
                   ? '未选择'
                   : effective.labels.length <= 3
@@ -289,32 +301,41 @@ export function DetectionConfigBar({
           </DropdownMenu>
         </div>
 
+        <span className='mx-1 hidden h-5 w-px bg-border sm:block' />
+
+        {/* Disabled with a reason attached rather than explained by a sentence
+            below: the operator's cursor is already here when they wonder why
+            the button is grey, so the answer belongs on the button. */}
         <Button
           type='button'
           size='sm'
+          className={cn('h-9', canApply && 'bg-emerald-500 font-medium text-zinc-950 hover:bg-emerald-400')}
           disabled={!canApply || action.pending}
+          title={
+            canApply
+              ? undefined
+              : chosenCount === 0
+                ? '先在下方勾选要修改的通道'
+                : '先修改上面任意一项设置'
+          }
           onClick={() => void apply()}
-          className={cn(
-            canApply && 'bg-emerald-500 font-medium text-zinc-950 hover:bg-emerald-400'
-          )}
         >
           <Check aria-hidden className='size-3.5' />
           应用到所选通道{chosenCount > 0 ? ` (${chosenCount})` : ''}
         </Button>
       </div>
-      <p className='text-[11px] text-muted-foreground'>
-        只写入改动过的项，其余保持各通道原值。选一路时回显它当前的设置；保存后仍需点「发布检测配置」才会生效。
+
+      <p className='border-t border-border/60 pt-2.5 text-xs leading-5 text-muted-foreground'>
+        只写入改动过的项，其余保持各通道原值；选一路时回显它当前设置。
+        保存后仍需点「发布检测配置」才会生效。
       </p>
-      {chosenCount === 0 && (
-        <p className='text-xs text-muted-foreground'>先勾选要修改的通道</p>
-      )}
       {outcome && (
         <p role='status' className='text-xs text-muted-foreground'>
           {outcome}
         </p>
       )}
       {action.error && (
-        <p role='alert' className='text-xs text-red-500'>
+        <p role='alert' className='text-xs text-destructive'>
           {action.error}
         </p>
       )}

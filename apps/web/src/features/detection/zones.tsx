@@ -121,7 +121,7 @@ export function ZoneWorkbench({
         />
       </div>
       <div className='col-span-12 flex flex-col gap-4 lg:col-span-5'>
-        <section className='rounded-xl border bg-card p-3'>
+        <section className='rounded-lg border border-border bg-card p-3'>
           <h4 className='text-sm font-medium'>区域</h4>
           <p className='mt-1 text-xs text-muted-foreground'>
             判定由检测服务完成；删除区域会一并删除引用它的规则。
@@ -174,7 +174,7 @@ export function ZoneWorkbench({
             </p>
           )}
         </section>
-        <section className='rounded-xl border bg-card p-3'>
+        <section className='rounded-lg border border-border bg-card p-3'>
           <h4 className='text-sm font-medium'>规则</h4>
           <p className='mt-1 text-xs text-muted-foreground'>
             规则在事件入库时评估；命中会记进事件详情。

@@ -129,7 +129,7 @@ test('zones and rules stay behind a disclosure until asked for', async () => {
   const screen = await render(view(fixture(true, { zones: 2, rules: 3 })))
   await expect.element(screen.getByTestId('detection-row')).toBeVisible()
   // The toggle carries the counts so fences are visible unexpanded.
-  const toggle = screen.getByRole('button', { name: 'CH05 大门 区域与规则 (2 区域 · 3 规则)' })
+  const toggle = screen.getByRole('button', { name: 'CH05 大门 区域与规则 (2/3)' })
   await expect.element(toggle).toBeVisible()
   expect(document.querySelector('[data-testid="zone-canvas"]')).toBeNull()
 
@@ -170,12 +170,9 @@ test('an unconfigured channel is dimmed out with inert controls', async () => {
     )
   )
   await expect.element(screen.getByText('未配置源')).toBeVisible()
-  const toggle = screen.getByRole('button', { name: 'CH05 大门 区域与规则' })
+  const toggle = screen.getByRole('button', { name: /CH05 大门 区域与规则/ })
   await expect.element(toggle).toBeDisabled()
-  await expect
-    .element(screen.getByRole('button', { name: 'CH05 大门 区域与规则' }))
-    .toBeDisabled()
-  await expect.element(screen.getByText(/请先在通道管理中接入摄像头/)).toBeVisible()
+  await expect.element(screen.getByText(/先在通道管理接入摄像头/)).toBeVisible()
 })
 
 test('the filter pills narrow the rows by state', async () => {
@@ -323,4 +320,57 @@ test('sensitivity is edited in the bar and carried into the write', async () => 
   )
   const body = JSON.parse(String((put?.[1] as RequestInit | undefined)?.body ?? '{}'))
   expect(body.sensitivity).toBe('sensitive')
+})
+
+// The selection used to live only on row clicks, which meant the header had no
+// way to say "all of these". The header checkbox is now the third path to the
+// same set, and it must agree with the rows rather than keep its own state.
+test('the header checkbox selects every actionable channel and mirrors the rows', async () => {
+  const screen = await render(view(fixture(true)))
+  const header = screen.getByRole('checkbox', { name: '全选可配置通道' })
+  const rowBox = screen.getByRole('checkbox', { name: '选择 CH05 大门' })
+  await expect.element(rowBox).not.toBeChecked()
+
+  await userEvent.click(header)
+  await expect.element(screen.getByText(/已选 1 \/ 1 路/)).toBeVisible()
+  await expect.element(rowBox).toBeChecked()
+
+  // Unticking one row takes the header out of "all": a header that stayed
+  // checked would claim a set the operator no longer has.
+  await userEvent.click(rowBox)
+  await expect.element(rowBox).not.toBeChecked()
+  await expect.element(screen.getByText(/已选 0 \/ 1 路/)).toBeVisible()
+})
+
+// "Apply" is only meaningful once there is both a target and a change. The
+// reason used to be a line of text under the bar, far from the disabled button
+// the operator was looking at; it is now the button's own title.
+test('apply explains why it is disabled on the button itself', async () => {
+  const screen = await render(view(fixture(true)))
+  const apply = screen.getByRole('button', { name: /应用到所选通道/ })
+  await expect.element(apply).toBeDisabled()
+  await expect.element(apply).toHaveAttribute('title', '先在下方勾选要修改的通道')
+
+  // Selected but unedited: applying would rewrite each channel's own values.
+  await screen.getByTestId('detection-row').click()
+  await expect.element(apply).toBeDisabled()
+  await expect.element(apply).toHaveAttribute('title', '先修改上面任意一项设置')
+  // The old standalone hint is gone: the button carries it now.
+  expect(screen.getByText('先勾选要修改的通道').query()).toBeNull()
+})
+
+// A healthy site must not read as a wall of alerts. Health keeps its colour, but
+// the healthy case is a quiet dot; the detection flag is text, because "enabled"
+// is the expected value and colouring it green on every row competes with the
+// one row that is actually offline.
+test('a healthy row is quiet: no green pill on the normal case', async () => {
+  const screen = await render(view(fixture(true)))
+  const row = screen.getByTestId('detection-row')
+  await expect.element(row).toHaveTextContent('在线')
+  await expect.element(row).toHaveTextContent('已启用')
+  // Neither is a StatusBadge (which renders as a bordered pill): both are plain
+  // spans with a dot or text only.
+  expect(row.getByRole('status').query()).toBeNull()
+  // Nothing in this row is a bordered badge: both facts are drawn as dots/text.
+  expect(row.element().querySelectorAll('[data-slot="badge"]').length).toBe(0)
 })

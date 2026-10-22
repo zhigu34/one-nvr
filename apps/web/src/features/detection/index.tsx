@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react'
+import { type ReactNode, useMemo, useState } from 'react'
 import { configuredChannels } from '@/features/foundation/channels'
 import { useQueryClient } from '@tanstack/react-query'
 import { apiRequest } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Table,
   TableBody,
@@ -12,10 +13,11 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { SlidersHorizontal } from 'lucide-react'
 import { useAPI } from '@/features/foundation/hooks'
 import { apiErrorText } from '@/features/foundation/api-errors'
 import { LoadingButton } from '@/features/foundation/loading-button'
-import { StatusBadge } from '@/features/foundation/status-badge'
+import { StatusBadge, type StatusTone } from '@/features/foundation/status-badge'
 import { Empty, Notices, PageTitle, QueryState } from '@/features/foundation/ui'
 import { cn } from '@/lib/utils'
 import { DetectionConfigBar } from './config-bar'
@@ -49,18 +51,55 @@ function rowHealth(channel: Summary) {
   return 'offline'
 }
 
-const HEALTH_BADGES: Record<
-  RowHealth,
-  { tone: 'success' | 'warning' | 'neutral' | 'destructive'; text: string }
-> = {
+/**
+ * One metric in the page's status grid.
+ *
+ * The five facts differ in kind — a liveness verdict, two versions, a latency, a
+ * hardware profile, a publish outcome — but they are read together ("is
+ * detection working, and with what"), so they share one row of equal cards
+ * rather than a paragraph of label/value pairs. The label carries the weight
+ * here: the values are read once, the labels orient every glance.
+ */
+function StatCard({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className='flex h-full flex-col rounded-lg border border-border bg-muted/30 px-3.5 py-2.5'>
+      <p className='text-xs leading-5 text-muted-foreground'>{label}</p>
+      <div className='mt-0.5 min-w-0 text-sm font-medium leading-5 text-foreground'>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The liveness badge for a service that is answering.
+ *
+ * A pulsing dot rather than a static pill: "运行中" is a claim about right now,
+ * and a badge that looks the same whether the poll just succeeded or never has
+ * makes the operator read the colour instead of the timestamp. The pulse stops
+ * under prefers-reduced-motion.
+ */
+function LiveBadge() {
+  return (
+    <span className='inline-flex items-center gap-1.5 rounded-full border border-emerald-600/30 bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-700 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-400'>
+      <span className='relative flex size-1.5'>
+        <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-60 motion-reduce:hidden' />
+        <span className='relative inline-flex size-1.5 rounded-full bg-emerald-500' />
+      </span>
+      运行中
+    </span>
+  )
+}
+
+type RowFilter = 'all' | 'enabled' | 'unconfigured'
+
+const HEALTH_BADGES: Record<RowHealth, { tone: StatusTone; text: string }> = {
   online: { tone: 'success', text: '在线' },
   offline: { tone: 'warning', text: '离线' },
   disabled: { tone: 'neutral', text: '通道已停用' },
   unconfigured: { tone: 'neutral', text: '未配置源' },
   unknown: { tone: 'neutral', text: '未知' },
 }
-
-type RowFilter = 'all' | 'enabled' | 'unconfigured'
 type RowHealth = 'online' | 'offline' | 'disabled' | 'unconfigured' | 'unknown'
 
 /**
@@ -119,6 +158,20 @@ export function Detection() {
     return true
   })
   const pendingPublish = runtime.data?.revision?.pending ?? false
+  // The header checkbox speaks for the channels the server will accept. It is
+  // "select all that can be changed", not "select all rows": ticking a row the
+  // server refuses would make Apply report a failure the operator cannot fix
+  // from this page.
+  const selectableCount = actionable.length
+  const selectedActionableCount = actionable.filter((channel) =>
+    selected.has(channel.id ?? '')
+  ).length
+  // A filtered table still selects across filters — the selection is the thing
+  // Apply acts on, and losing it when the operator peeks at another tab would
+  // silently shrink a batch they already assembled.
+  const visibleSelectedCount = visibleRows.filter((channel) =>
+    selected.has(channel.id ?? '')
+  ).length
 
   async function run(action: () => Promise<void>, message: string) {
     setPending(true)
@@ -171,66 +224,80 @@ export function Detection() {
       />
       <Notices notice={notice} error={error} />
       {runtime.data && (
-        <div className='grid gap-2 rounded-xl border bg-card p-4 text-sm sm:grid-cols-2 lg:grid-cols-5'>
-          <div>
-            <p className='text-xs text-muted-foreground'>检测服务</p>
-            <p>
-              <StatusBadge tone={runtime.data.runtime?.reachable ? 'success' : 'destructive'}>
-                {runtime.data.runtime?.reachable ? '运行中' : '不可达'}
-              </StatusBadge>
-            </p>
-          </div>
-          <div>
-            <p className='text-xs text-muted-foreground'>版本 / 检测器</p>
-            <p>
-              {runtime.data.runtime?.version || '—'} · {runtime.data.runtime?.detector || '—'}
-            </p>
-          </div>
-          <div>
-            <p className='text-xs text-muted-foreground'>推理耗时</p>
-            <p>
-              {runtime.data.runtime?.inference_ms
-                ? `${runtime.data.runtime.inference_ms.toFixed(1)} ms`
-                : '—'}
-              {runtime.data.runtime?.overloaded ? ' · 过载' : ''}
-            </p>
-          </div>
-          <div>
-            <p className='text-xs text-muted-foreground'>检测硬件</p>
-            {hardware.data ? (
-              <p>
-                {hardware.data.proposal.node || 'CPU'} · 解码{' '}
-                {hardware.data.proposal.decode_id} · 推理 {hardware.data.proposal.inference_id}
-              </p>
+        <section aria-label='检测状态' className='grid gap-2 sm:grid-cols-2 lg:grid-cols-5'>
+          <StatCard label='检测服务'>
+            {runtime.data.runtime?.reachable ? (
+              <LiveBadge />
             ) : (
-              <p className='text-muted-foreground'>—</p>
+              <StatusBadge tone='destructive'>不可达</StatusBadge>
             )}
-            {hardware.data && !hardware.data.validated && (
-              <p className='mt-1 text-xs text-amber-600'>
-                自检未通过：{hardware.data.error_code || 'unknown'}
-              </p>
+          </StatCard>
+          <StatCard label='版本 / 检测器'>
+            {runtime.data.runtime?.version || '—'}
+            <span className='text-muted-foreground'> · </span>
+            {runtime.data.runtime?.detector || '—'}
+          </StatCard>
+          <StatCard label='推理耗时'>
+            {runtime.data.runtime?.inference_ms ? (
+              <span className='tabular-nums'>
+                {runtime.data.runtime.inference_ms.toFixed(1)} ms
+              </span>
+            ) : (
+              '—'
             )}
-          </div>
-          <div>
-            <p className='text-xs text-muted-foreground'>最近发布</p>
-            <p>
-              {runtime.data.revision
-                ? `${runtime.data.revision.state === 'published' ? '成功' : '失败'} · ${runtime.data.revision.camera_count} 路`
-                : '尚未发布'}
-            </p>
-            {runtime.data.revision && (
-              <p
-                className={
-                  runtime.data.revision.pending
-                    ? 'mt-1 text-xs text-amber-600'
-                    : 'mt-1 text-xs text-muted-foreground'
-                }
-              >
-                {runtime.data.revision.pending ? '有设置尚未发布' : '与检测服务一致'}
-              </p>
+            {runtime.data.runtime?.overloaded && (
+              <StatusBadge tone='warning' className='ml-2'>
+                过载
+              </StatusBadge>
             )}
-          </div>
-        </div>
+          </StatCard>
+          <StatCard label='检测硬件'>
+            {hardware.data ? (
+              <>
+                <span className='flex items-center gap-1.5'>
+                  {hardware.data.proposal.node || 'CPU'}
+                  {!hardware.data.validated && (
+                    <StatusBadge tone='warning'>
+                      自检未通过{hardware.data.error_code ? `：${hardware.data.error_code}` : ''}
+                    </StatusBadge>
+                  )}
+                </span>
+                <span className='block truncate text-xs font-normal text-muted-foreground'>
+                  解码 {hardware.data.proposal.decode_id} · 推理{' '}
+                  {hardware.data.proposal.inference_id}
+                </span>
+              </>
+            ) : (
+              <span className='text-muted-foreground'>—</span>
+            )}
+          </StatCard>
+          <StatCard label='最近发布'>
+            {runtime.data.revision ? (
+              <>
+                <span className='flex flex-wrap items-center gap-1.5'>
+                  <StatusBadge
+                    tone={
+                      runtime.data.revision.state === 'published' ? 'success' : 'destructive'
+                    }
+                  >
+                    {runtime.data.revision.state === 'published' ? '成功' : '失败'}
+                  </StatusBadge>
+                  <span className='text-xs font-normal tabular-nums text-muted-foreground'>
+                    {runtime.data.revision.camera_count} 路
+                  </span>
+                  {runtime.data.revision.pending && (
+                    <StatusBadge tone='warning'>未发布</StatusBadge>
+                  )}
+                </span>
+                <span className='block text-xs font-normal text-muted-foreground'>
+                  {runtime.data.revision.pending ? '检测服务仍用上一份配置' : '与检测服务一致'}
+                </span>
+              </>
+            ) : (
+              <span className='text-muted-foreground'>尚未发布</span>
+            )}
+          </StatCard>
+        </section>
       )}
       {!permitted.length && channels.data ? (
         <Empty>没有可配置检测的通道，请联系管理员分配通道配置权限。</Empty>
@@ -246,52 +313,84 @@ export function Detection() {
             onClear={() => setSelected(new Set())}
             configOf={configOf}
           />
-          <div
-            role='group'
-            aria-label='通道筛选'
-            className='flex flex-wrap items-center gap-1'
-          >
-            {(
-              [
-                { value: 'all', label: '全部' },
-                { value: 'enabled', label: '已启用检测' },
-                { value: 'unconfigured', label: '未配置源' },
-              ] as const
-            ).map(({ value, label }) => {
-              const active = filter === value
-              return (
-                <button
-                  key={value}
-                  type='button'
-                  aria-pressed={active}
-                  onClick={() => setFilter(value)}
-                  className={cn(
-                    'inline-flex h-7 items-center gap-1 rounded-full border px-2.5 text-xs transition-colors',
-                    active
-                      ? 'border-primary bg-primary/10 font-medium text-primary'
-                      : 'border-border text-muted-foreground hover:bg-accent hover:text-foreground'
-                  )}
-                >
-                  {label}
-                  <span className={cn('tabular-nums', active ? '' : 'opacity-70')}>
-                    {counts[value]}
-                  </span>
-                </button>
-              )
-            })}
+          <div className='flex flex-wrap items-center justify-between gap-3'>
+            <div
+              role='group'
+              aria-label='通道筛选'
+              className='inline-flex items-center gap-0.5 rounded-lg border border-border bg-muted/30 p-0.5'
+            >
+              {(
+                [
+                  { value: 'all', label: '全部' },
+                  { value: 'enabled', label: '已启用检测' },
+                  { value: 'unconfigured', label: '未配置源' },
+                ] as const
+              ).map(({ value, label }) => {
+                const active = filter === value
+                return (
+                  <button
+                    key={value}
+                    type='button'
+                    aria-pressed={active}
+                    onClick={() => setFilter(value)}
+                    className={cn(
+                      'inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs transition-colors',
+                      active
+                        ? 'bg-background font-medium text-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    {label}
+                    <span
+                      className={cn(
+                        'tabular-nums',
+                        active ? 'text-muted-foreground' : 'text-muted-foreground/70'
+                      )}
+                    >
+                      {counts[value]}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+            <p className='text-xs text-muted-foreground'>
+              {visibleSelectedCount > 0
+                ? `当前筛选内已选 ${visibleSelectedCount} 路`
+                : '勾选通道后可在上方批量修改'}
+            </p>
           </div>
-          <div className='overflow-hidden rounded-xl border bg-card'>
+          <div className='overflow-hidden rounded-lg border border-border bg-card'>
             <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className='w-20'>通道</TableHead>
-                  <TableHead className='w-24'>状态</TableHead>
-                  <TableHead className='w-24'>检测</TableHead>
-                  <TableHead className='w-24'>码流</TableHead>
-                  <TableHead className='w-20'>帧率</TableHead>
-                  <TableHead className='w-24'>灵敏度</TableHead>
-                  <TableHead>目标</TableHead>
-                  <TableHead className='w-40'>区域与规则</TableHead>
+              <TableHeader className='bg-muted/50'>
+                <TableRow className='hover:bg-transparent'>
+                  <TableHead className='w-10 pl-4'>
+                    <Checkbox
+                      aria-label='全选可配置通道'
+                      checked={
+                        selectableCount > 0 && selectedActionableCount === selectableCount
+                          ? true
+                          : selectedActionableCount > 0
+                            ? 'indeterminate'
+                            : false
+                      }
+                      disabled={selectableCount === 0}
+                      onCheckedChange={(state) =>
+                        setSelected(
+                          state === true
+                            ? new Set(actionable.map((channel) => channel.id ?? ''))
+                            : new Set()
+                        )
+                      }
+                    />
+                  </TableHead>
+                  <TableHead className='w-28 py-3'>通道</TableHead>
+                  <TableHead className='w-24 py-3'>状态</TableHead>
+                  <TableHead className='w-24 py-3'>检测</TableHead>
+                  <TableHead className='w-24 py-3'>码流</TableHead>
+                  <TableHead className='w-20 py-3'>帧率</TableHead>
+                  <TableHead className='w-24 py-3'>灵敏度</TableHead>
+                  <TableHead className='py-3'>目标</TableHead>
+                  <TableHead className='w-36 py-3 pr-4 text-right'>区域与规则</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -338,9 +437,9 @@ export function Detection() {
       {pendingPublish && permitted.length > 0 && (
         <div
           data-testid='publish-bar'
-          className='sticky bottom-0 z-20 -mx-4 flex flex-wrap items-center justify-between gap-3 border-t border-amber-600/40 bg-card/95 px-4 py-2.5 backdrop-blur'
+          className='sticky bottom-0 z-20 -mx-4 flex flex-wrap items-center justify-between gap-3 rounded-t-lg border-t border-amber-600/40 bg-card/95 px-4 py-2.5 backdrop-blur'
         >
-          <span className='text-sm text-amber-600'>
+          <span className='text-sm text-amber-600 dark:text-amber-400'>
             有设置尚未发布，检测服务仍在使用上一份配置
           </span>
           <LoadingButton pending={pending} pendingText='发布中…' onClick={publish}>
@@ -375,7 +474,7 @@ function ChannelRow({
   label,
 }: {
   channel: Channel
-  badge: { tone: 'success' | 'warning' | 'neutral' | 'destructive'; text: string }
+  badge: { tone: StatusTone; text: string }
   inert: boolean
   enabled: boolean
   stream: string
@@ -393,33 +492,49 @@ function ChannelRow({
     <>
       <TableRow
         data-testid='detection-row'
+        data-selected={selected || undefined}
         className={cn(
           interactionClass(interactive, selected),
           inert && 'opacity-60'
         )}
         onClick={() => interactive && onSelect(!selected)}
       >
-        <TableCell className='font-medium'>{label}</TableCell>
-        <TableCell>
-          <StatusBadge tone={badge.tone}>{badge.text}</StatusBadge>
+        <TableCell className='py-3 pl-4'>
+          {/* The checkbox mirrors the row: clicking either is the same act. It
+              stays disabled on a row the server would refuse, so a selection can
+              never contain something Apply is guaranteed to reject. */}
+          <Checkbox
+            aria-label={`选择 ${label}`}
+            checked={selected}
+            disabled={!interactive}
+            onCheckedChange={(state) => onSelect(state === true)}
+            onClick={(event) => event.stopPropagation()}
+          />
         </TableCell>
-        <TableCell>
-          <StatusBadge tone={enabled ? 'success' : 'neutral'}>
-            {enabled ? '已启用' : '未启用'}
-          </StatusBadge>
+        <TableCell className='py-3 font-medium'>{label}</TableCell>
+        <TableCell className='py-3'>
+          <HealthBadge badge={badge} />
         </TableCell>
-        <TableCell className='text-sm'>{STREAM_TEXT[stream] ?? stream}</TableCell>
-        <TableCell className='tabular-nums text-sm'>{fps} fps</TableCell>
-        <TableCell className='text-sm'>
+        <TableCell className='py-3'>
+          <DetectionFlag enabled={enabled} inert={inert} />
+        </TableCell>
+        <TableCell className='py-3 text-muted-foreground'>
+          {STREAM_TEXT[stream] ?? stream}
+        </TableCell>
+        <TableCell className='py-3 tabular-nums text-muted-foreground'>{fps} fps</TableCell>
+        <TableCell className='py-3 text-muted-foreground'>
           {SENSITIVITY_TEXT[sensitivity as keyof typeof SENSITIVITY_TEXT] ?? sensitivity}
         </TableCell>
-        <TableCell className='text-sm'>
+        <TableCell className='py-3 text-muted-foreground'>
           {configSummary(labels)}
           {inert && (
-            <span className='ml-2 text-xs text-muted-foreground'>请先在通道管理中接入摄像头</span>
+            <span className='ml-2 text-xs text-muted-foreground/70'>先在通道管理接入摄像头</span>
           )}
         </TableCell>
-        <TableCell onClick={(event) => event.stopPropagation()}>
+        <TableCell
+          className='py-3 pr-4 text-right'
+          onClick={(event) => event.stopPropagation()}
+        >
           <ZoneRuleToggle
             open={workbenchOpen}
             disabled={!interactive}
@@ -431,7 +546,7 @@ function ChannelRow({
       </TableRow>
       {workbenchOpen && (
         <TableRow>
-          <TableCell colSpan={8} className='bg-card/40 p-0'>
+          <TableCell colSpan={9} className='bg-muted/20 p-0'>
             <ZoneWorkbench channelID={channel.id ?? ''} detectionEnabled={enabled} />
           </TableCell>
         </TableRow>
@@ -440,9 +555,51 @@ function ChannelRow({
   )
 }
 
+/**
+ * Health keeps a coloured pill only when something is wrong.
+ *
+ * A healthy channel is the normal case: painting it green on every row spends
+ * the operator's attention on the thing that needs none, and then a genuine
+ * amber row has to compete with eight green ones. So "online" is a quiet dot,
+ * and the states that need action keep the badge.
+ */
+function HealthBadge({ badge }: { badge: { tone: StatusTone; text: string } }) {
+  if (badge.tone === 'success') {
+    return (
+      <span className='inline-flex items-center gap-1.5 text-xs text-muted-foreground'>
+        <span aria-hidden className='size-1.5 rounded-full bg-emerald-500' />
+        {badge.text}
+      </span>
+    )
+  }
+  return <StatusBadge tone={badge.tone}>{badge.text}</StatusBadge>
+}
+
+/**
+ * The detection flag, drawn as a state rather than as a second status pill.
+ *
+ * It repeats what the bar's switch does to each channel, so it reads as on or
+ * off in quiet text: the healthy, expected value must not look like an alert.
+ */
+function DetectionFlag({ enabled, inert }: { enabled: boolean; inert: boolean }) {
+  if (inert) return <span className='text-xs text-muted-foreground/70'>—</span>
+  if (!enabled) return <span className='text-xs text-muted-foreground'>未启用</span>
+  return (
+    <span className='inline-flex items-center gap-1.5 text-xs text-foreground'>
+      <span aria-hidden className='size-1.5 rounded-full bg-emerald-500' />
+      已启用
+    </span>
+  )
+}
+
 function interactionClass(interactive: boolean, selected: boolean) {
   if (!interactive) return 'cursor-not-allowed'
-  return cn('cursor-pointer transition-colors', selected ? 'bg-primary/10 hover:bg-primary/15' : 'hover:bg-accent/50')
+  return cn(
+    'cursor-pointer transition-colors',
+    selected
+      ? 'bg-primary/[0.12] hover:bg-primary/[0.16]'
+      : 'hover:bg-muted/40'
+  )
 }
 
 /**
@@ -474,20 +631,26 @@ function ZoneRuleToggle({
   )
   const zoneCount = zones.data?.items?.length
   const ruleCount = rules.data?.items?.length
-  const text = open
-    ? '收起区域与规则'
-    : `区域与规则${zoneCount != null && ruleCount != null ? ` (${zoneCount} 区域 · ${ruleCount} 规则)` : ''}`
+  // The counts are the useful part: "configured or not" is answerable without
+  // opening anything, which is the whole reason the toggle stays in the row.
+  const counts =
+    zoneCount != null && ruleCount != null ? `${zoneCount}/${ruleCount}` : ''
+  const text = open ? '收起' : '配置规则'
   return (
     <Button
       type='button'
       size='sm'
       variant='ghost'
+      className='h-8 gap-1.5 px-2 text-xs font-normal text-muted-foreground hover:text-foreground'
       aria-expanded={open}
-      aria-label={`${label} ${text}`}
+      aria-label={`${label} 区域与规则${counts ? ` (${counts})` : ''}`}
+      title={`${zoneCount ?? 0} 区域 · ${ruleCount ?? 0} 规则`}
       disabled={disabled}
       onClick={onToggle}
     >
+      <SlidersHorizontal aria-hidden className='size-3.5' />
       {text}
+      {counts && <span className='tabular-nums opacity-70'>({counts})</span>}
     </Button>
   )
 }

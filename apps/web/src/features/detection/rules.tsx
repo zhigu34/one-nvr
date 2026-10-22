@@ -288,7 +288,7 @@ function RuleEditor({
       : `该区域已有${draft.kind === 'dwell' ? '进入' : '停留'}规则「${(draft.kind === 'dwell' ? enterOnZone : dwellOnZone)?.name}」：检测器对同一区域只保留一个进入判定，进入会被停留阈值延后`
 
   return (
-    <div data-testid='rule-editor' className='space-y-3 rounded-xl border bg-card p-3'>
+    <div data-testid='rule-editor' className='space-y-3 rounded-lg border border-border bg-card p-3'>
       <div className='grid gap-3 sm:grid-cols-2'>
         <Field
           label='规则名称'
