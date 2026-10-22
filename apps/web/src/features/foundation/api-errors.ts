@@ -7,7 +7,6 @@ import { ApiError } from '@/lib/api-client'
  * live here so every page words them identically.
  */
 const SHARED_CODES: Record<string, string> = {
-  event_version_conflict: '该事件已被他人处理，请刷新后重试',
   detection_version_conflict: '配置已被他人修改，请刷新后重试',
   channel_source_version_conflict: '该通道刚被他人修改，请刷新后重试',
   snapshot_pending: '抓拍尚未生成，稍后再看',

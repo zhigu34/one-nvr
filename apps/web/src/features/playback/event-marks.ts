@@ -14,7 +14,6 @@ export type EventMark = {
   end: number
   category: string
   score: number
-  handleState: string
 }
 
 /**
@@ -34,7 +33,6 @@ export function eventMarks(
       end: Date.parse(event.ended_at ?? '') || Date.parse(event.started_at ?? ''),
       category: event.category ?? '',
       score: event.score ?? 0,
-      handleState: event.handle_state ?? 'open',
     }))
     .filter(
       (mark) =>

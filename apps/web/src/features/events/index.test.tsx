@@ -29,8 +29,6 @@ function fixture(
   hits: Schema<'RuleHit'>[],
   options: {
     events?: Schema<'Event'>[]
-    handleStates?: Record<string, string>
-    versions?: Record<string, number>
     deliveries?: Schema<'NotificationDelivery'>[]
     // Overrides the event's media verdict so the three states can be rendered
     // without inventing a whole event per case. Typed as the schema's union:
@@ -62,9 +60,6 @@ function fixture(
       snapshot_state: 'gone',
       media_state: options.mediaState ?? 'linked',
       media_start_at: options.mediaStartAt,
-      handle_state: 'open',
-      version: 3,
-      handling: [],
     }
   const events: Schema<'Event'>[] = options.events ?? [event]
   // A PATCH mutates the in-memory list so a follow-up render sees the new
@@ -72,15 +67,6 @@ function fixture(
   calls.request.mockImplementation(async (path: string, init?: RequestInit) => {
     const method = init?.method && init.method !== 'GET' ? init.method : 'GET'
     if (method !== 'GET') mutations.push({ path, init: init as RequestInit })
-    if (method === 'PATCH' && /^\/api\/v1\/events\//.test(path)) {
-      const body = JSON.parse(String(init?.body))
-      const target = events.find((entry) => path.endsWith(`/${entry.id}`))
-      if (target) {
-        target.handle_state = body.state
-        target.version = (target.version ?? 0) + 1
-      }
-      return { ...target, hits }
-    }
     if (path === '/api/v1/site')
       return { timezone: 'Asia/Shanghai', site_name: '测试站点' }
     if (path.startsWith('/api/v1/channels?'))
@@ -264,9 +250,6 @@ test('cards show channel and zone, and the filter bar counts and batch-marks', a
       ended_at: new Date(Date.parse(recent) + 12_000).toISOString(),
       snapshot_state: 'gone',
       media_state: 'linked',
-      handle_state: 'open',
-      version: 3,
-      handling: [],
     },
     {
       id: '00000000-0000-4000-8000-0000000000e2',
@@ -281,12 +264,9 @@ test('cards show channel and zone, and the filter bar counts and batch-marks', a
       ended_at: null,
       snapshot_state: 'pending',
       media_state: 'unavailable',
-      handle_state: 'open',
-      version: 1,
-      handling: [],
     },
   ]
-  const { client, mutations } = fixture([], { events })
+  const { client } = fixture([], { events })
   const screen = await view(client)
   const cards = screen.getByTestId('event-card')
   await expect.element(cards).toHaveLength(2)
@@ -298,15 +278,15 @@ test('cards show channel and zone, and the filter bar counts and batch-marks', a
   await expect.element(cards.nth(0)).toHaveTextContent('12s')
   await expect.element(cards.nth(1)).toHaveTextContent('结束未知')
   await expect.element(cards.nth(1)).toHaveTextContent('抓拍未到达')
-  // The bar counts what has been FETCHED, not what exists — "已加载" beside a
-  // "全部…" button read as "these are all of them".
+  // The bar counts what has been FETCHED, not what exists: "已取 2 条" beside a
+  // "还有更早的" hint never claims to be the whole index.
   await expect.element(screen.getByText(/已取 2 条/)).toBeVisible()
-  // One click retires both open events; the PATCHes carry per-row versions.
-  await screen.getByRole('button', { name: /全部标为已处理/ }).click()
-  await vi.waitFor(() => expect(mutations.length).toBe(2))
-  const bodies = mutations.map((m) => JSON.parse(String(m.init.body)))
-  expect(bodies[0]).toMatchObject({ state: 'acknowledged', version: 3 })
-  expect(bodies[1]).toMatchObject({ state: 'acknowledged', version: 1 })
+  // Handling was withdrawn from the product: no batch triage action, and no
+  // worklist filter. What the card carries instead is the recording verdict.
+  expect(screen.getByRole('button', { name: /全部标为已处理/ }).query()).toBeNull()
+  expect(screen.getByLabelText('处理状态筛选').query()).toBeNull()
+  await expect.element(cards.nth(0)).toHaveTextContent('已录像')
+  await expect.element(cards.nth(1)).toHaveTextContent('未录像')
   client.clear()
 })
 
@@ -325,9 +305,6 @@ test('an event with no upstream close says so instead of showing a bare dead til
     ended_at: null,
     snapshot_state: 'pending',
     media_state: 'unavailable',
-    handle_state: 'open',
-    version: 3,
-    handling: [],
   }
   const { client } = fixture([], { events: [stale] })
   const screen = await view(client)
@@ -359,9 +336,6 @@ test('a closed event with no snapshot reads as an ordinary missing picture', asy
     ended_at: new Date(Date.now() - 3_590_000).toISOString(),
     snapshot_state: 'gone',
     media_state: 'unavailable',
-    handle_state: 'open',
-    version: 1,
-    handling: [],
   }
   const { client } = fixture([], { events: [closed] })
   const screen = await view(client)
@@ -374,19 +348,24 @@ test('a closed event with no snapshot reads as an ordinary missing picture', asy
   client.clear()
 })
 
-test('reviewing the footage is a visible action, not a hover affordance', async () => {
+// The card is the way into the footage, and the timestamp is the precise way in.
+// Clicking the picture opens the drawer (that is what an operator points at);
+// clicking the time jumps to that moment in playback.
+test('the timestamp is the way into the footage, the card opens the drawer', async () => {
   const { client } = fixture([])
   const screen = await view(client)
-  // The card's job is "something happened here, go look": the replay link is on
-  // every card without hovering.
+  const card = screen.getByTestId('event-card')
+  // The recording verdict sits where the worklist used to: top-right corner.
+  await expect.element(card).toHaveTextContent('已录像')
   const replay = screen.getByRole('link', { name: /查看事件录像/ })
   await expect.element(replay).toBeVisible()
-  await expect.element(replay).toHaveTextContent('查看录像')
-  // Nothing on the card triages the event any more — the operator asked to be
-  // told and to watch, and the triage buttons competed with that for the same
-  // corner. They remain in the drawer and in the toolbar's batch action.
-  const card = screen.getByTestId('event-card')
+  // It is the timestamp itself, not a separate row under the card: one glyph
+  // for "this moment", and clicking it is what "go there" means.
+  await expect.element(replay).toHaveTextContent(/\d\d:\d\d:\d\d/)
+  // Nothing on the card triages the event any more — that whole vocabulary is
+  // gone from the product.
   expect(card.getByRole('button', { name: '标为已处理' }).query()).toBeNull()
+  client.clear()
 })
 
 test('the drawer says what happened to the alert, including a refusal', async () => {
@@ -453,9 +432,6 @@ test('a closed event waiting for its picture says so, not "no picture"', async (
     ended_at: new Date(Date.now() - 3_540_000).toISOString(),
     snapshot_state: 'pending',
     media_state: 'linked',
-    handle_state: 'open',
-    version: 1,
-    handling: [],
   }
   const { client } = fixture([], { events: [pending] })
   const screen = await view(client)
@@ -489,22 +465,22 @@ function mediaEvent(overrides: Partial<Schema<'Event'>>): Schema<'Event'> {
     ended_at: new Date(Date.parse(started) + 12_000).toISOString(),
     snapshot_state: 'gone',
     media_state: 'linked',
-    handle_state: 'open',
-    version: 3,
-    handling: [],
     ...overrides,
   }
 }
 
-test('an event without footage says so instead of showing a play button', async () => {
+test('an event without footage is not a link and says 未录像', async () => {
   const { client } = fixture([], {
     events: [mediaEvent({ media_state: 'unavailable' })],
   })
   const screen = await view(client)
-  await expect.element(screen.getByText('本机无录像')).toBeVisible()
+  // The verdict is on the card, not a second row underneath it: the two lines
+  // ("本机无录像 · 可复制时间人工查询") repeated what the tile already showed.
+  await expect.element(screen.getByTestId('event-card')).toHaveTextContent('未录像')
   await expect
     .element(screen.getByRole('link', { name: /查看事件录像/ }))
     .not.toBeInTheDocument()
+  await expect.element(screen.getByText('本机无录像')).not.toBeInTheDocument()
   client.clear()
 })
 
@@ -525,7 +501,7 @@ test('a linked event seeks to the available start', async () => {
 
 // Partial coverage keeps the link — footage exists — but states the limit, so
 // the operator is not surprised when playback stops early.
-test('a partially covered event keeps playback and states the limit', async () => {
+test('a partially covered event keeps playback and says so in the badge', async () => {
   const { client } = fixture([], {
     events: [mediaEvent({ media_state: 'partial' })],
   })
@@ -533,7 +509,7 @@ test('a partially covered event keeps playback and states the limit', async () =
   await expect
     .element(screen.getByRole('link', { name: /查看事件录像/ }))
     .toBeVisible()
-  await expect.element(screen.getByText(/录像只覆盖事件的一部分/)).toBeVisible()
+  await expect.element(screen.getByTestId('event-card')).toHaveTextContent('部分录像')
   client.clear()
 })
 
@@ -546,7 +522,11 @@ test('a running event says its recording is still being produced', async () => {
     events: [mediaEvent({ media_state: 'linked', ended_at: undefined })],
   })
   const screen = await view(client)
-  await expect.element(screen.getByText('录像生成中')).toBeVisible()
+  // A running event's segment is not published yet, so the card must not claim
+  // 已录像 and its timestamp must not link: the player would open a file that
+  // grows underneath it.
+  await expect.element(screen.getByTestId('event-card')).toHaveTextContent('录像生成中')
+  await expect.element(screen.getByTestId('event-card')).not.toHaveTextContent('已录像')
   await expect
     .element(screen.getByRole('link', { name: /查看事件录像/ }))
     .not.toBeInTheDocument()

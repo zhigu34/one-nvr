@@ -196,7 +196,6 @@ func NewHandler(d Dependencies) http.Handler {
 	r.mux.HandleFunc("GET /api/v1/detection/runtime", r.protected(r.detectionRuntime))
 	r.mux.HandleFunc("GET /api/v1/events", r.protected(r.listEvents))
 	r.mux.HandleFunc("GET /api/v1/events/{id}", r.protected(r.getEvent))
-	r.mux.HandleFunc("PATCH /api/v1/events/{id}", r.protected(r.handleEvent))
 	r.mux.HandleFunc("GET /api/v1/events/{id}/snapshot", r.protected(r.eventSnapshot))
 	r.mux.HandleFunc("GET /api/v1/events/{id}/deliveries", r.protected(r.listEventDeliveries))
 	r.mux.HandleFunc("GET /api/v1/notification-channels", r.protected(r.listNotificationChannels))

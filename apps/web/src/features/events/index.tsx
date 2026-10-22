@@ -2,11 +2,10 @@ import { useEffect, useState } from 'react'
 import { configuredChannels } from '@/features/foundation/channels'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { AlertTriangle, CheckCheck, Clock, ImageOff, Loader2, Play, User, VideoOff } from 'lucide-react'
+import { AlertTriangle, ImageOff, User } from 'lucide-react'
 import { apiRequest, jsonRequest } from '@/lib/api-client'
 import type { PageData, Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import {
   Sheet,
   SheetContent,
@@ -16,7 +15,6 @@ import {
 } from '@/components/ui/sheet'
 import { useAPI } from '@/features/foundation/hooks'
 import { apiErrorText } from '@/features/foundation/api-errors'
-import { LoadingButton } from '@/features/foundation/loading-button'
 import { StatusBadge } from '@/features/foundation/status-badge'
 import { CardsSkeleton } from '@/features/foundation/skeletons'
 import { Empty, QueryState, SelectField } from '@/features/foundation/ui'
@@ -45,11 +43,42 @@ const DELIVERY_TONES: Record<string, string> = {
   exhausted: 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400',
 }
 
-const HANDLE_LABELS: Record<string, string> = {
-  open: '未处理',
-  acknowledged: '已确认',
-  closed: '已关闭',
-  false_positive: '误报',
+/**
+ * The badge answers "can I watch this", because that is the one thing the card
+ * is for: an event is evidence, not a ticket. Handling states were removed from
+ * the product; what remains is whether footage exists, and the time is the way
+ * into it.
+ */
+const MEDIA_BADGES: Record<string, { label: string; tone: string }> = {
+  linked: {
+    label: '已录像',
+    tone: 'border-emerald-500/40 bg-emerald-950/60 text-emerald-300',
+  },
+  partial: {
+    label: '部分录像',
+    tone: 'border-amber-500/40 bg-amber-950/60 text-amber-300',
+  },
+  unavailable: {
+    label: '未录像',
+    tone: 'border-white/10 bg-black/50 text-zinc-300',
+  },
+  pending: {
+    label: '录像生成中',
+    tone: 'border-white/10 bg-black/50 text-zinc-300',
+  },
+}
+
+/**
+ * The badge for one event. A running event's clip is still being extended — the
+ * segment is not published yet — so claiming 已录像 would promise a file the
+ * player cannot open. That is the same reason the timestamp is not a link while
+ * the event runs.
+ */
+function mediaBadge(event: Schema<'Event'>, running: boolean) {
+  if (running && (event.media_state === 'linked' || event.media_state === 'partial')) {
+    return MEDIA_BADGES.pending
+  }
+  return MEDIA_BADGES[event.media_state ?? 'pending'] ?? MEDIA_BADGES.pending
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -165,7 +194,6 @@ export function Events() {
   )
   const [channel, setChannel] = useState('')
   const [category, setCategory] = useState('')
-  const [handleState, setHandleState] = useState('')
   const [selected, setSelected] = useState<string>('')
   const [openingEvent, setOpeningEvent] = useState<string>('')
   // The ticking clock drives the ongoing/closed decision; one refresh a
@@ -180,10 +208,10 @@ export function Events() {
   // until the backend says the window is exhausted. Nothing is hidden. The
   // appended pages belong to one filter combination — changing any filter
   // resets them during render (the adjusted-state pattern, no effect needed).
-  const [scope, setScope] = useState({ channel: '', category: '', handleState: '' })
+  const [scope, setScope] = useState({ channel: '', category: '' })
   const [pages, setPages] = useState<Schema<'EventPage'>[]>([])
-  if (scope.channel !== channel || scope.category !== category || scope.handleState !== handleState) {
-    setScope({ channel, category, handleState })
+  if (scope.channel !== channel || scope.category !== category) {
+    setScope({ channel, category })
     setPages([])
   }
   // The 7-day window is anchored once per mount: re-anchoring it on every
@@ -203,7 +231,6 @@ export function Events() {
     })
     if (channel) params.set('channel_id', channel)
     if (category) params.set('category', category)
-    if (handleState) params.set('handle_state', handleState)
     return params.toString()
   })()
   const events = useAPI<Schema<'EventPage'>>(
@@ -219,7 +246,6 @@ export function Events() {
           cursor: events.data.next_cursor,
           ...(channel ? { channel_id: channel } : {}),
           ...(category ? { category } : {}),
-          ...(handleState ? { handle_state: handleState } : {}),
         }).toString()}`
       : ''
   const more = useAPI<Schema<'EventPage'>>(morePath, active && !!morePath && pages.length > 0)
@@ -231,34 +257,6 @@ export function Events() {
   const loadMore = () => {
     if (!more.data) return
     setPages((current) => [...current, more.data!])
-  }
-  const client = useQueryClient()
-  const [markAllPending, setMarkAllPending] = useState(false)
-  const [markAllError, setMarkAllError] = useState('')
-  const openCount = items.filter((item) => item.handle_state === 'open').length
-
-  // One request per open event, sequentially: a mass transition is a rare
-  // cleanup, and each row's version travels with its own PATCH.
-  async function markAllHandled() {
-    setMarkAllPending(true)
-    setMarkAllError('')
-    try {
-      for (const item of items.filter((entry) => entry.handle_state === 'open')) {
-        await apiRequest(
-          `/api/v1/events/${item.id}`,
-          jsonRequest('PATCH', {
-            state: 'acknowledged',
-            note: '',
-            version: item.version ?? 0,
-          })
-        )
-      }
-      await client.invalidateQueries()
-    } catch (cause) {
-      setMarkAllError(apiErrorText(cause))
-    } finally {
-      setMarkAllPending(false)
-    }
   }
 
   if (!permitted.length && channels.data)
@@ -311,44 +309,8 @@ export function Events() {
                   className='w-24'
                 />
               </div>
-              <div
-                role='group'
-                aria-label='处理状态筛选'
-                className='flex items-center gap-1'
-              >
-                {(
-                  [
-                    { value: '', label: '全部' },
-                    { value: 'open', label: '未处理' },
-                    { value: 'acknowledged', label: '已处理' },
-                  ] as const
-                ).map(({ value, label }) => {
-                  const isActive = handleState === value
-                  return (
-                    <button
-                      key={value || 'all'}
-                      type='button'
-                      aria-pressed={isActive}
-                      onClick={() => setHandleState(value)}
-                      className={cn(
-                        'inline-flex h-7 items-center rounded-full border px-2.5 text-xs transition-colors',
-                        isActive
-                          ? 'border-primary bg-primary/10 font-medium text-primary'
-                          : 'border-border text-muted-foreground hover:bg-accent hover:text-foreground'
-                      )}
-                    >
-                      {label}
-                    </button>
-                  )
-                })}
-              </div>
             </div>
             <div className='flex flex-wrap items-center gap-3'>
-              {markAllError && (
-                <span role='alert' className='text-xs text-destructive'>
-                  {markAllError}
-                </span>
-              )}
               {/* "已加载" beside a "全部…" button read as "these are all of
                   them". The count is the first page, and saying so is what
                   stops an operator from believing the index holds 50 events. */}
@@ -359,16 +321,6 @@ export function Events() {
                 已取 {items.length} 条
                 {hasMore ? '（还有更早的）' : ''}
               </span>
-              <Button
-                type='button'
-                size='sm'
-                variant='outline'
-                disabled={markAllPending || openCount === 0}
-                onClick={() => void markAllHandled()}
-              >
-                <CheckCheck aria-hidden className='size-3.5' />
-                {markAllPending ? '标记中…' : `全部标为已处理${openCount ? ` (${openCount})` : ''}`}
-              </Button>
             </div>
           </div>
           <QueryState
@@ -388,8 +340,19 @@ export function Events() {
                 ? `CH${String(channelItem.channel_no ?? 0).padStart(2, '0')} ${channelItem.channel_name}`
                 : '未知通道'
               const ongoing = isOngoing(item, now)
-              const handleState = item.handle_state ?? 'open'
               const scorePct = Math.round((item.score ?? 0) * 100)
+              const badge = mediaBadge(item, ongoing)
+              // Where the timestamp would jump to. Null means "not a link":
+              // no footage, still being produced, or no playback grant. Seek to
+              // the available start rather than the event's own start — the
+              // segment boundary lands wherever the keyframe put it.
+              const hasFootage =
+                (item.media_state === 'linked' || item.media_state === 'partial') && !!item.ended_at
+              const playbackAt = hasFootage
+                ? item.media_start_at
+                  ? Date.parse(item.media_start_at)
+                  : Date.parse(item.started_at ?? '')
+                : null
               return (
                 <div
                   key={item.id}
@@ -481,7 +444,9 @@ export function Events() {
                         )}
                       </div>
                     )}
-                    {/* Corner overlays: category score top-left, handling top-right. */}
+                    {/* Corner overlays: category score top-left, recording state
+                        top-right. The badge answers the one question the card is
+                        for — is there something to watch. */}
                     <span
                       className={cn(
                         'absolute left-2 top-2 inline-flex items-center gap-1 rounded-full border border-white/10 bg-black/50 px-2 py-0.5 text-xs backdrop-blur',
@@ -494,12 +459,10 @@ export function Events() {
                     <span
                       className={cn(
                         'absolute right-2 top-2 inline-flex items-center rounded-full border px-2 py-0.5 text-xs backdrop-blur',
-                        handleState === 'open'
-                          ? 'border-amber-500/40 bg-amber-950/60 text-amber-300'
-                          : 'border-white/10 bg-black/50 text-zinc-300'
+                        badge.tone
                       )}
                     >
-                      {HANDLE_LABELS[handleState]}
+                      {badge.label}
                     </span>
                   </div>
                   <div className='flex items-center justify-between gap-2 px-3 py-2.5 text-xs'>
@@ -514,9 +477,36 @@ export function Events() {
                       ) : null}
                     </div>
                     <div className='flex shrink-0 items-center gap-2 text-muted-foreground'>
-                      <span title={formatClock(Date.parse(item.started_at ?? ''), zone)}>
-                        {cardTimestamp(item.started_at, zone, now)}
-                      </span>
+                      {/* The time is the way into the footage. Clicking the card
+                          still opens the drawer (the picture is what an operator
+                          points at); the timestamp is the thing that means "this
+                          moment", so that is what jumps to the recording. Only
+                          when footage exists: a link into an empty range reads
+                          as a broken recording. */}
+                      {playbackAt != null ? (
+                        <Link
+                          to='/recordings'
+                          search={{
+                            channel: item.channel_id ?? '',
+                            at: wallClockInput(playbackAt, zone),
+                            tab: 'playback',
+                          }}
+                          aria-label={`查看事件录像 ${formatClock(Date.parse(item.started_at ?? ''), zone)}`}
+                          title={`跳到录像 ${formatClock(playbackAt, zone)}`}
+                          className='rounded px-0.5 tabular-nums underline decoration-dotted underline-offset-2 transition-colors hover:text-foreground'
+                          onClick={(event) => event.stopPropagation()}
+                          onKeyDown={(event) => event.stopPropagation()}
+                        >
+                          {cardTimestamp(item.started_at, zone, now)}
+                        </Link>
+                      ) : (
+                        <span
+                          className='tabular-nums'
+                          title={formatClock(Date.parse(item.started_at ?? ''), zone)}
+                        >
+                          {cardTimestamp(item.started_at, zone, now)}
+                        </span>
+                      )}
                       <span
                         className={cn(
                           'inline-flex items-center rounded-full border px-1.5 py-px tabular-nums',
@@ -529,15 +519,6 @@ export function Events() {
                       </span>
                     </div>
                   </div>
-                  {/* The reason this page exists: watch what happened. It is a
-                      visible action rather than a hover affordance, because the
-                      operator's job here is reviewing footage, not triage. */}
-                  <EventMediaAction
-                    event={item}
-                    zone={zone}
-                    now={now}
-                    canPlayback={!!channelItem?.permissions.includes('playback')}
-                  />
                 </div>
               )
             })}
@@ -597,15 +578,21 @@ function EventDetail({
     `/api/v1/events/${eventID}/deliveries`,
     !!eventID
   )
-  const [note, setNote] = useState('')
   const [error, setError] = useState('')
-  const [pending, setPending] = useState(false)
-  const [pendingAction, setPendingAction] = useState('')
   const [feedbackPending, setFeedbackPending] = useState('')
   const item = event.data
   const deliveryItems = deliveries.data?.items ?? []
   const [now] = useState(() => Date.now())
   const ongoing = isOngoing(item ?? {}, now)
+  // Same rule as the card, so the drawer and the tile cannot disagree about
+  // whether footage exists.
+  const hasFootage =
+    !!item && (item.media_state === 'linked' || item.media_state === 'partial') && !!item.ended_at
+  const playbackAt = hasFootage
+    ? item?.media_start_at
+      ? Date.parse(item.media_start_at)
+      : Date.parse(item?.started_at ?? '')
+    : null
 
   // Rule-hit feedback is operational: it records the operator's judgement and
   // keeps the original reason. It never edits the rule or retrains anything.
@@ -625,24 +612,6 @@ function EventDetail({
     }
   }
 
-  async function transition(state: string) {
-    if (!item) return
-    setPending(true)
-    setPendingAction(state)
-    setError('')
-    try {
-      const init = jsonRequest('PATCH', { state, note, version: item.version ?? 0 })
-      await apiRequest(`/api/v1/events/${eventID}`, init)
-      setNote('')
-      await client.invalidateQueries()
-    } catch (cause) {
-      setError(apiErrorText(cause))
-    } finally {
-      setPending(false)
-      setPendingAction('')
-    }
-  }
-
   return (
     <Sheet open onOpenChange={(next) => !next && onClose()}>
       <SheetContent className='flex flex-col gap-4 overflow-y-auto sm:max-w-lg'>
@@ -650,11 +619,16 @@ function EventDetail({
           <SheetTitle>事件详情</SheetTitle>
           <SheetDescription>
             {item
-              ? `${CATEGORY_LABELS[item.category ?? ''] || item.category} · ${HANDLE_LABELS[item.handle_state ?? 'open']}`
+              ? `${CATEGORY_LABELS[item.category ?? ''] || item.category} · ${mediaBadge(item, ongoing).label}`
               : '正在读取…'}
           </SheetDescription>
         </SheetHeader>
         <QueryState pending={event.isPending} error={event.error} retry={event.refetch} />
+        {error && (
+          <p role='alert' className='text-sm text-destructive'>
+            {error}
+          </p>
+        )}
         {item && (
           <div className='space-y-3 text-sm'>
             {item.snapshot_state === 'ready' && !snapshotFailed ? (
@@ -693,21 +667,28 @@ function EventDetail({
               <span>{item.expires_at ? formatMinute(Date.parse(item.expires_at), zone) : '—'}</span>
             </div>
             <div className='flex flex-wrap items-center gap-2'>
-              <Button asChild size='sm' variant='outline'>
-                <Link
-                  to='/recordings'
-                  search={{
-                    channel: item.channel_id ?? '',
-                    at: (() => {
-                      const at = new Date(Date.parse(item.started_at ?? '')).getTime() - 10_000
-                      return wallClockInput(at, zone)
-                    })(),
-                    tab: 'playback',
-                  }}
-                >
-                  查看事件录像
-                </Link>
-              </Button>
+              {/* The same rule as the card: a link means footage exists. The
+                  badge in the header already says 未录像, so an absent link
+                  needs no second explanation here. */}
+              {hasFootage && (
+                <Button asChild size='sm' variant='outline'>
+                  <Link
+                    to='/recordings'
+                    search={{
+                      channel: item.channel_id ?? '',
+                      at: wallClockInput(playbackAt ?? Date.parse(item.started_at ?? ''), zone),
+                      tab: 'playback',
+                    }}
+                  >
+                    查看事件录像
+                  </Link>
+                </Button>
+              )}
+              {!hasFootage && (
+                <span className='text-xs text-muted-foreground'>
+                  本机无录像 · {formatClock(Date.parse(item.started_at ?? ''), zone)}
+                </span>
+              )}
             </div>
             <div className='space-y-2 rounded-lg border p-3'>
               <p className='font-medium'>命中规则</p>
@@ -787,95 +768,6 @@ function EventDetail({
                 站内提醒入队即达；Webhook 最多重试 5 次。这里的「已重试」表示还在重试窗口内，「最终失败」表示重试次数已用尽或接收端拒绝。
               </p>
             </div>
-            <div className='space-y-2 rounded-lg border p-3'>
-              <p className='font-medium'>处理</p>
-              {error && (
-                <p role='alert' className='text-sm text-destructive'>
-                  {error}
-                </p>
-              )}
-              <Input
-                aria-label='处理备注'
-                placeholder='备注（可选）'
-                value={note}
-                maxLength={500}
-                onChange={(input) => setNote(input.target.value)}
-              />
-              {/* Each action owns its pending state, so the operator sees which
-                  transition is running; the rest stay clickable-disabled. */}
-              <div className='flex flex-wrap gap-2'>
-                <LoadingButton
-                  size='sm'
-                  pending={pendingAction === 'acknowledged'}
-                  disabled={pending && pendingAction !== 'acknowledged'}
-                  pendingText='确认中…'
-                  onClick={() => void transition('acknowledged')}
-                >
-                  已确认
-                </LoadingButton>
-                <LoadingButton
-                  size='sm'
-                  variant='outline'
-                  pending={pendingAction === 'closed'}
-                  disabled={pending && pendingAction !== 'closed'}
-                  pendingText='关闭中…'
-                  onClick={() => void transition('closed')}
-                >
-                  已关闭
-                </LoadingButton>
-                <LoadingButton
-                  size='sm'
-                  variant='outline'
-                  pending={pendingAction === 'false_positive'}
-                  disabled={pending && pendingAction !== 'false_positive'}
-                  pendingText='标记中…'
-                  onClick={() => void transition('false_positive')}
-                >
-                  误报
-                </LoadingButton>
-                <LoadingButton
-                  size='sm'
-                  variant='ghost'
-                  pending={pendingAction === 'open'}
-                  disabled={pending && pendingAction !== 'open'}
-                  pendingText='打开中…'
-                  onClick={() => void transition('open')}
-                >
-                  重新打开
-                </LoadingButton>
-              </div>
-            </div>
-            <div className='space-y-2'>
-              <p className='font-medium'>处理记录</p>
-              {!item.handling?.length && (
-                <p className='text-xs text-muted-foreground'>暂无处理记录。</p>
-              )}
-              {/* The trail reads as a timeline: one rail, one node per action. */}
-              {item.handling && item.handling.length > 0 && (
-                <ol className='relative space-y-3 border-l pl-4'>
-                  {(item.handling || []).map((record) => (
-                    <li key={record.id} className='relative'>
-                      <span
-                        aria-hidden
-                        className='absolute -left-[21px] top-1.5 size-2 rounded-full bg-muted-foreground/50'
-                      />
-                      <p className='text-xs'>
-                        {HANDLE_LABELS[record.state ?? ''] || record.state}
-                        <span className='ml-2 text-muted-foreground'>
-                          {record.actor_name} ·{' '}
-                          {formatClock(Date.parse(record.created_at ?? ''), zone)}
-                        </span>
-                      </p>
-                      {record.note && (
-                        <p className='mt-0.5 text-xs text-muted-foreground'>
-                          {record.note}
-                        </p>
-                      )}
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </div>
           </div>
         )}
       </SheetContent>
@@ -883,103 +775,3 @@ function EventDetail({
   )
 }
 
-/**
- * What this event has to watch (PRD REC-09).
- *
- * The three media states are deliberately rendered differently, because they
- * mean different things to an operator deciding whether to investigate:
- *
- *   linked/partial — footage exists. The link seeks to the *available* start,
- *     not to "event start minus ten seconds": the segment boundary lands where
- *     the keyframe put it, and seeking into a gap produces an empty player that
- *     reads as a broken recording.
- *   unavailable — the channel was not recording around this event. Saying so
- *     plainly, with the time to copy for an external NVR, is the honest answer;
- *     a play button that opens an empty range is not.
- *   pending — the segment containing this event has not been published yet.
- *     Rare and short (one publish interval), but showing "no footage" during it
- *     would be a false negative.
- */
-function EventMediaAction({
-  event,
-  zone,
-  now,
-  canPlayback,
-}: {
-  event: Schema<'Event'>
-  zone: string
-  now: number
-  canPlayback: boolean
-}) {
-  const state = event.media_state ?? 'pending'
-  const startedAt = Date.parse(event.started_at ?? '')
-  const label = cardTimestamp(event.started_at, zone, now)
-
-  if (!canPlayback) return null
-
-  // An event that has not ended has a clip that is still being extended. Its
-  // segment is not published yet (the backend keeps it 'finalizing'), so playing
-  // it would open a file that grows underneath the player — and the last seconds
-  // an operator most wants to see are exactly the ones not written yet. Saying
-  // 录像生成中 is the honest answer; a play button that stops early is not.
-  if (state === 'linked' || state === 'partial') {
-    if (!event.ended_at) {
-      return (
-        <div className='border-t px-3 py-2'>
-          <p className='inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-border px-2 py-1 text-xs text-muted-foreground'>
-            <Loader2 aria-hidden className='size-3 animate-spin' />
-            录像生成中
-          </p>
-          <p className='mt-1 text-center text-[11px] text-muted-foreground'>
-            事件结束后可回看
-          </p>
-        </div>
-      )
-    }
-    const at = event.media_start_at ? Date.parse(event.media_start_at) : startedAt
-    return (
-      <div className='border-t px-3 py-2'>
-        <Link
-          to='/recordings'
-          search={{ channel: event.channel_id ?? '', at: wallClockInput(at, zone), tab: 'playback' }}
-          aria-label={`查看事件录像 ${label}`}
-          className='inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-foreground transition-colors hover:bg-accent'
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => e.stopPropagation()}
-        >
-          <Play aria-hidden className='size-3' />
-          查看录像
-        </Link>
-        {state === 'partial' && (
-          <p className='mt-1 text-center text-[11px] text-amber-600 dark:text-amber-400'>
-            录像只覆盖事件的一部分
-          </p>
-        )}
-      </div>
-    )
-  }
-
-  if (state === 'pending') {
-    return (
-      <div className='border-t px-3 py-2'>
-        <p className='inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-border px-2 py-1 text-xs text-muted-foreground'>
-          <Clock aria-hidden className='size-3' />
-          录像待归档
-        </p>
-      </div>
-    )
-  }
-
-  // unavailable
-  return (
-    <div className='border-t px-3 py-2'>
-      <p className='inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-border px-2 py-1 text-xs text-muted-foreground'>
-        <VideoOff aria-hidden className='size-3' />
-        本机无录像
-      </p>
-      <p className='mt-1 text-center text-[11px] text-muted-foreground'>
-        {formatClock(startedAt, zone)} · 可复制时间人工查询
-      </p>
-    </div>
-  )
-}

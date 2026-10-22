@@ -30,10 +30,7 @@ const EventIndexRetention = 90 * 24 * time.Hour
 // message lost) stops being "active" after this, so it can expire normally.
 const StaleOpenThreshold = 24 * time.Hour
 
-var (
-	ErrEventNotFound = auth.ErrNotFound
-	ErrEventConflict = fault.New(409, "event_version_conflict", "事件已被他人处理，请刷新后重试")
-)
+var ErrEventNotFound = auth.ErrNotFound
 
 // Event is the API view. raw stays private; zones are the normalized strings
 // Frigate reported, and the snapshot is proxied, never a direct path.
@@ -56,41 +53,18 @@ type Event struct {
 	MediaStartAt  *time.Time `json:"media_start_at"`
 	MediaEndAt    *time.Time `json:"media_end_at"`
 	MediaSegments int        `json:"media_segments"`
-	HandleState   string     `json:"handle_state"`
-	HandleNote    string     `json:"handle_note"`
-	// MergedIDs lists the further upstream detections folded into this row.
-	//
-	// The detector tracks each object separately and sometimes assigns a new id
-	// to the same person when it is briefly occluded — the documented failure
-	// mode of frame-to-frame tracking. Three rows for one walk-past is noise, not
-	// information: the operator sees "three events" where one thing happened.
-	//
-	// Folding happens on READ, never in storage. The upstream ids stay indexed in
-	// full, so nothing is lost and the list can still be un-folded if the
-	// clustering ever gets it wrong.
-	MergedIDs []id.ID `json:"merged_ids,omitempty"`
 	// Box is the detector's last reported bounding box for this event, as
 	// fractions of the frame: [x, y, w, h]. Absent for rows stored before the box
 	// was captured, and for events that never reported one.
-	Box       []float64      `json:"box,omitempty"`
-	Version   int64          `json:"version"`
-	ExpiresAt *time.Time     `json:"expires_at"`
-	Handling  []HandleRecord `json:"handling"`
+	Box       []float64  `json:"box,omitempty"`
+	ExpiresAt *time.Time `json:"expires_at"`
 	// Hits are the rules this event tripped (AI-06), carried on the detail view
 	// so the operator sees why it was flagged without a second request. The
 	// list view stays lean.
 	Hits []RuleHit `json:"hits,omitempty"`
 }
 
-type HandleRecord struct {
-	ID        id.ID     `json:"id"`
-	ActorName string    `json:"actor_name"`
-	State     string    `json:"state"`
-	Note      string    `json:"note"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-// Service owns ingestion, reading, handling and expiry.
+// Service owns ingestion, reading and expiry.
 type Service struct {
 	DB      *database.DB
 	Auth    *auth.Service
@@ -122,12 +96,12 @@ func New(db *database.DB, accounts *auth.Service, frigateURL string, siteID id.I
 	return &Service{DB: db, Auth: accounts, Frigate: strings.TrimRight(frigateURL, "/"), siteID: siteID, now: time.Now}
 }
 
-const eventColumns = `e.id,e.channel_id,e.source_revision_id,e.source,e.source_id,e.category,e.score,e.zones,e.started_at,e.ended_at,e.snapshot_state,e.media_state,e.media_start_at,e.media_end_at,e.media_segments,e.handle_state,e.handle_note,e.version,e.expires_at,e.raw`
+const eventColumns = `e.id,e.channel_id,e.source_revision_id,e.source,e.source_id,e.category,e.score,e.zones,e.started_at,e.ended_at,e.snapshot_state,e.media_state,e.media_start_at,e.media_end_at,e.media_segments,e.expires_at,e.raw`
 
 func scanEvent(row pgx.Row) (Event, error) {
 	var out Event
 	var zones, raw []byte
-	err := row.Scan(&out.ID, &out.ChannelID, &out.SourceRevisionID, &out.Source, &out.SourceID, &out.Category, &out.Score, &zones, &out.StartedAt, &out.EndedAt, &out.SnapshotState, &out.MediaState, &out.MediaStartAt, &out.MediaEndAt, &out.MediaSegments, &out.HandleState, &out.HandleNote, &out.Version, &out.ExpiresAt, &raw)
+	err := row.Scan(&out.ID, &out.ChannelID, &out.SourceRevisionID, &out.Source, &out.SourceID, &out.Category, &out.Score, &zones, &out.StartedAt, &out.EndedAt, &out.SnapshotState, &out.MediaState, &out.MediaStartAt, &out.MediaEndAt, &out.MediaSegments, &out.ExpiresAt, &raw)
 	if err != nil {
 		return out, err
 	}
@@ -266,7 +240,6 @@ type ListQuery struct {
 	ChannelID        id.ID
 	SourceRevisionID id.ID
 	Category         string
-	HandleState      string
 	Start, End       time.Time
 	Cursor           id.ID
 	Limit            int
@@ -323,7 +296,7 @@ func (s *Service) List(ctx context.Context, p auth.Principal, q ListQuery) (Even
 				-- duration is unknown, and hiding something that is happening right
 				-- now would be the worst possible answer.
 				e.ended_at IS NOT NULL
-				AND COALESCE(EXTRACT(EPOCH FROM (e.ended_at - e.started_at)), 0) <= $10
+				AND COALESCE(EXTRACT(EPOCH FROM (e.ended_at - e.started_at)), 0) <= $9
 				AND e.snapshot_relative_path IS NULL
 				AND NOT EXISTS (SELECT 1 FROM recording_segments rs
 				                WHERE rs.channel_id=e.channel_id AND rs.state IN ('ready','finalizing')
@@ -334,8 +307,7 @@ func (s *Service) List(ctx context.Context, p auth.Principal, q ListQuery) (Even
 			AND ($5::uuid IS NULL OR e.channel_id=$5)
 			AND ($6::uuid IS NULL OR e.source_revision_id=$6)
 			AND ($7::text IS NULL OR e.category=$7)
-			AND ($8::text IS NULL OR e.handle_state=$8)
-			ORDER BY e.started_at DESC,e.id DESC LIMIT $9`, q.End.UTC(), q.Start.UTC(), nullableNull(q.Cursor), cursorTime, nullableID(q.ChannelID), nullableID(q.SourceRevisionID), nullableText(q.Category), nullableText(q.HandleState), q.Limit+1, EvidenceFreeSeconds)
+			ORDER BY e.started_at DESC,e.id DESC LIMIT $8`, q.End.UTC(), q.Start.UTC(), nullableNull(q.Cursor), cursorTime, nullableID(q.ChannelID), nullableID(q.SourceRevisionID), nullableText(q.Category), q.Limit+1, EvidenceFreeSeconds)
 		if err != nil {
 			return err
 		}
@@ -400,22 +372,6 @@ func (s *Service) Get(ctx context.Context, p auth.Principal, eventID id.ID) (Eve
 			}
 		}
 		out = item
-		rows, err := tx.Query(ctx, `SELECT id,actor_name,state,note,created_at FROM event_handling WHERE event_id=$1 ORDER BY created_at,id`, eventID)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var record HandleRecord
-			if err := rows.Scan(&record.ID, &record.ActorName, &record.State, &record.Note, &record.CreatedAt); err != nil {
-				return err
-			}
-			out.Handling = append(out.Handling, record)
-		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		rows.Close()
 		// Rule hits ride with the detail view: they are the reason the event is
 		// interesting, so one request answers "what happened and why".
 		hitRows, err := tx.Query(ctx, `SELECT h.id,h.event_id,h.rule_id,r.name,r.severity,h.zone_name,h.reason,h.notified_at,h.false_positive,h.false_positive_note,h.created_at
@@ -434,57 +390,6 @@ func (s *Service) Get(ctx context.Context, p auth.Principal, eventID id.ID) (Eve
 		return hitRows.Err()
 	})
 	return out, err
-}
-
-// Handle records one handling transition with the operator's note, guarded by
-// the version (EVT-03: concurrent updates must not overwrite each other).
-func (s *Service) Handle(ctx context.Context, p auth.Principal, eventID id.ID, state, note string, expected int64) (Event, error) {
-	if state != "open" && state != "acknowledged" && state != "closed" && state != "false_positive" {
-		return Event{}, auth.ErrInvalid
-	}
-	if len(note) > 500 {
-		return Event{}, auth.ErrInvalid
-	}
-	err := s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
-		item, err := scanEvent(tx.QueryRow(ctx, `SELECT `+eventColumns+` FROM events e WHERE e.id=$1 FOR UPDATE`, eventID))
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return auth.ErrNotFound
-			}
-			return err
-		}
-		if item.ChannelID != nil {
-			if err := s.Auth.RequireChannelTx(ctx, p, *item.ChannelID, auth.Playback, tx); err != nil {
-				if errors.Is(err, auth.ErrForbidden) {
-					return auth.ErrNotFound
-				}
-				return err
-			}
-		}
-		if expected > 0 && item.Version != expected {
-			return ErrEventConflict
-		}
-		var actor string
-		if err := tx.QueryRow(ctx, `SELECT username FROM users WHERE id=$1`, p.UserID).Scan(&actor); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `UPDATE events SET handle_state=$2,handle_note=$3,version=version+1,updated_at=clock_timestamp() WHERE id=$1`, eventID, state, note); err != nil {
-			return err
-		}
-		recordID, err := id.New()
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO event_handling(id,event_id,actor_id,actor_name,state,note) VALUES($1,$2,$3,$4,$5,$6)`, recordID, eventID, p.UserID, actor, state, note); err != nil {
-			return err
-		}
-		details, _ := json.Marshal(map[string]any{"state": state})
-		return audit.Append(ctx, tx, audit.Entry{ActorID: p.UserID, Action: "event.handled", ObjectID: eventID, Details: details})
-	})
-	if err != nil {
-		return Event{}, err
-	}
-	return s.Get(ctx, p, eventID)
 }
 
 // SweepExpiry drops the index of ordinary finished events past 90 days.

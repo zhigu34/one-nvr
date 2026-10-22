@@ -17,8 +17,7 @@ func (r *router) listEvents(w http.ResponseWriter, q *http.Request, p auth.Princ
 		return
 	}
 	query := events.ListQuery{
-		Category:    q.URL.Query().Get("category"),
-		HandleState: q.URL.Query().Get("handle_state"),
+		Category: q.URL.Query().Get("category"),
 	}
 	if raw := q.URL.Query().Get("channel_id"); raw != "" {
 		parsed, err := id.Parse(raw)
@@ -73,34 +72,6 @@ func (r *router) getEvent(w http.ResponseWriter, q *http.Request, p auth.Princip
 		return
 	}
 	event, err := r.d.Events.Get(q.Context(), p, eventID)
-	if err != nil {
-		fail(w, q, err)
-		return
-	}
-	respond(w, q, 200, event)
-}
-
-// handleEvent implements EVT-03: one transition with a note, version-guarded.
-func (r *router) handleEvent(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
-	if r.d.Events == nil {
-		fail(w, q, auth.ErrNotFound)
-		return
-	}
-	eventID, err := pathID(q)
-	if err != nil {
-		fail(w, q, err)
-		return
-	}
-	var in struct {
-		State   string `json:"state"`
-		Note    string `json:"note"`
-		Version int64  `json:"version"`
-	}
-	if err := decode(w, q, &in); err != nil {
-		fail(w, q, err)
-		return
-	}
-	event, err := r.d.Events.Handle(q.Context(), p, eventID, in.State, in.Note, in.Version)
 	if err != nil {
 		fail(w, q, err)
 		return

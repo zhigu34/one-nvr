@@ -12,7 +12,6 @@ const event = (overrides: Partial<Schema<'Event'>>): Schema<'Event'> => ({
   started_at: new Date(base + 60_000).toISOString(),
   ended_at: new Date(base + 90_000).toISOString(),
   snapshot_state: 'ready',
-  handle_state: 'open',
   ...overrides,
 })
 
@@ -102,7 +101,6 @@ describe('clusterMarks', () => {
       end: base + offset + 1,
       category: 'person',
       score: 0.5 + index / 100,
-      handleState: 'open',
     }))
 
   test('marks within the pixel minimum fold into one cluster', () => {
@@ -120,8 +118,8 @@ describe('clusterMarks', () => {
   test('a cluster keeps the highest score and the widest end', () => {
     const clustered = clusterMarks(
       [
-        { id: 'a', at: base, end: base + 10, category: 'car', score: 0.9, handleState: 'open' },
-        { id: 'b', at: base + 1, end: base + 12, category: 'person', score: 0.6, handleState: 'open' },
+        { id: 'a', at: base, end: base + 10, category: 'car', score: 0.9 },
+        { id: 'b', at: base + 1, end: base + 12, category: 'person', score: 0.6 },
       ],
       base,
       base + 1000,
@@ -143,10 +141,9 @@ describe('markLabel', () => {
 })
 
 
-// The event track answers "when did something happen", so a mark's drawn
-// appearance must not depend on its worklist state. Handle state lives on the
-// events page; putting it on a time axis made an operator wonder whether a
-// hollow block meant a different kind of event.
+// The event track answers "when did something happen". A mark carries time,
+// category and score — nothing about a worklist, because there no longer is one,
+// and a time axis is not where a handling state would belong anyway.
 test('a mark carries no drawing-relevant state beyond time and category', () => {
   const [mark] = eventMarks(
     [
@@ -162,9 +159,6 @@ test('a mark carries no drawing-relevant state beyond time and category', () => 
         ended_at: '2026-10-19T10:00:30Z',
         snapshot_state: 'ready',
         media_state: 'linked',
-        handle_state: 'handled',
-        version: 1,
-        handling: [],
       } as never,
     ],
     Date.parse('2026-10-19T09:00:00Z'),

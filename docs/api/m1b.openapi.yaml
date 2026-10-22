@@ -4994,13 +4994,6 @@
             }
           },
           {
-            "name": "handle_state",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "name": "cursor",
             "in": "query",
             "schema": {
@@ -5054,7 +5047,7 @@
         ],
         "responses": {
           "200": {
-            "description": "One event with its handling trail.",
+            "description": "One event, with its rule hits and delivery trail.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5062,73 +5055,6 @@
                 }
               }
             }
-          }
-        }
-      },
-      "patch": {
-        "operationId": "eventHandle",
-        "x-one-nvr-implementation": "implemented",
-        "x-one-nvr-permission": "playback",
-        "security": [
-          {
-            "sessionCookie": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "state"
-                ],
-                "properties": {
-                  "state": {
-                    "type": "string",
-                    "enum": [
-                      "open",
-                      "acknowledged",
-                      "closed",
-                      "false_positive"
-                    ]
-                  },
-                  "note": {
-                    "type": "string",
-                    "maxLength": 500
-                  },
-                  "version": {
-                    "type": "integer",
-                    "description": "Expected current version; 0 skips the check."
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "The updated event with the new handling record.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Event"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Version conflict: someone else handled it first."
           }
         }
       }
@@ -10089,25 +10015,6 @@
             "type": "integer",
             "description": "How many segments cover the window. A window split by a source switch is several files that play as one stretch."
           },
-          "handle_state": {
-            "type": "string",
-            "enum": [
-              "open",
-              "acknowledged",
-              "closed",
-              "false_positive"
-            ]
-          },
-          "handle_note": {
-            "type": "string"
-          },
-          "merged_ids": {
-            "type": "array",
-            "description": "Further upstream detections folded into this row. The detector assigns a new id to the same subject after a brief occlusion; overlapping same-category events in nearly the same place are merged for display and their ids listed here. Storage keeps every row.",
-            "items": {
-              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
-            }
-          },
           "box": {
             "type": "array",
             "description": "The detector's last reported bounding box as fractions of the frame, [x, y, w, h]. Absent when the event never reported one or predates box capture.",
@@ -10115,19 +10022,10 @@
               "type": "number"
             }
           },
-          "version": {
-            "type": "integer"
-          },
           "expires_at": {
             "type": "string",
             "format": "date-time",
             "nullable": true
-          },
-          "handling": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/EventHandlingRecord"
-            }
           },
           "hits": {
             "type": "array",
@@ -10135,27 +10033,6 @@
             "items": {
               "$ref": "#/components/schemas/RuleHit"
             }
-          }
-        }
-      },
-      "EventHandlingRecord": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
-          },
-          "actor_name": {
-            "type": "string"
-          },
-          "state": {
-            "type": "string"
-          },
-          "note": {
-            "type": "string"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
           }
         }
       },

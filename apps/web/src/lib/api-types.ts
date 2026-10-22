@@ -1410,7 +1410,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch: operations["eventHandle"];
+        patch?: never;
         trace?: never;
     };
     "/api/v1/events/{id}/snapshot": {
@@ -2892,27 +2892,12 @@ export interface components {
             media_end_at?: string | null;
             /** @description How many segments cover the window. A window split by a source switch is several files that play as one stretch. */
             media_segments?: number;
-            /** @enum {string} */
-            handle_state?: "open" | "acknowledged" | "closed" | "false_positive";
-            handle_note?: string;
-            /** @description Further upstream detections folded into this row. The detector assigns a new id to the same subject after a brief occlusion; overlapping same-category events in nearly the same place are merged for display and their ids listed here. Storage keeps every row. */
-            merged_ids?: components["schemas"]["UUID"][];
             /** @description The detector's last reported bounding box as fractions of the frame, [x, y, w, h]. Absent when the event never reported one or predates box capture. */
             box?: number[];
-            version?: number;
             /** Format: date-time */
             expires_at?: string | null;
-            handling?: components["schemas"]["EventHandlingRecord"][];
             /** @description The rules this event tripped, on the detail response. Absent from list rows. */
             hits?: components["schemas"]["RuleHit"][];
-        };
-        EventHandlingRecord: {
-            id?: components["schemas"]["UUID"];
-            actor_name?: string;
-            state?: string;
-            note?: string;
-            /** Format: date-time */
-            created_at?: string;
         };
         EventPage: {
             items?: components["schemas"]["Event"][];
@@ -8095,7 +8080,6 @@ export interface operations {
                 channel_id?: components["schemas"]["UUID"];
                 source_revision_id?: components["schemas"]["UUID"];
                 category?: string;
-                handle_state?: string;
                 cursor?: components["schemas"]["UUID"];
                 limit?: number;
             };
@@ -8127,7 +8111,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description One event with its handling trail. */
+            /** @description One event, with its rule hits and delivery trail. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -8135,45 +8119,6 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Event"];
                 };
-            };
-        };
-    };
-    eventHandle: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["schemas"]["UUID"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @enum {string} */
-                    state: "open" | "acknowledged" | "closed" | "false_positive";
-                    note?: string;
-                    /** @description Expected current version; 0 skips the check. */
-                    version?: number;
-                };
-            };
-        };
-        responses: {
-            /** @description The updated event with the new handling record. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Event"];
-                };
-            };
-            /** @description Version conflict: someone else handled it first. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
         };
     };

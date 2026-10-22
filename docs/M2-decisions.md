@@ -92,7 +92,7 @@
 2. **归一与去重**（AI-05 落地侧）：上游事件 id 唯一（`UNIQUE(source,source_id)`）；「update」只做单调前进（结束时间取最新、分数取最大、抓拍 pending→ready），迟到的「new」不会重开已结束事件；**未映射摄像头记审计丢弃，不猜通道**（CH-07/CH-08）。
 3. **流中断即记录**：订阅断开写 `event_stream_gaps`（含原因），恢复留痕——静默会被误读为「没有事件」（EVT-04 雏形）。
 4. **抓拍不落盘**：`GET /events/{id}/snapshot` 代理 Frigate HTTP API（`http://frigate:5000`），未授权 404、未生成 409 `snapshot_pending`、远端 404 把 `snapshot_state` 对账为 gone；抓拍字节不进 one-nvr 存储。
-5. **处理流程**（EVT-03）：`PATCH /events/{id}` 状态机 open/acknowledged/closed/false_positive，版本守卫（409 `event_version_conflict`），`event_handling` 记录操作者姓名/时间/备注；事件可重开。
+5. **处理流程**（EVT-03）：`PATCH /events/{id}` 状态机 open/acknowledged/closed/false_positive，版本守卫（409 `event_version_conflict`），`event_handling` 记录操作者姓名/时间/备注；事件可重开。**2026-10-22 撤销**：站点所有者裁定不需要这套工作流——事件是要看的东西，不是要派的单。端点、`handle_state`/`handle_note`/`version` 列与 `event_handling` 表一并删除（迁移 `0056`；删除前现场核验 0 行处理记录、全部为 open、备注全空）。卡片右上角改为录像状态，时间戳成为进入录像的入口。
 6. **90 天到期**（EVT-07）：`expires_at = ended_at + 90 天`；未处理**不**延长期限；唯一例外是「与受保护分片时间重叠」（±回放窗口）；只清事件索引，不动录像/云对象/审计。
 7. **权限**：列表/详情/抓拍/处理都走通道级 `playback` grant；无授权的行缺席而非报错；映射表 admin-only。
 8. 前端新增「事件」一级菜单（监控组）：7 天窗口、通道/类别/处理状态筛选、抓拍卡片、详情抽屉（处理按钮+记录+「查看事件录像」深链带事件前 10 秒定位）。

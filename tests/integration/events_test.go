@@ -3,13 +3,11 @@ package integration
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 	"time"
 
 	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/events"
-	"github.com/zhigu34/one-nvr/internal/fault"
 	"github.com/zhigu34/one-nvr/internal/id"
 )
 
@@ -91,26 +89,6 @@ func TestEventIngestLifecycle(t *testing.T) {
 	}
 	if item.ExpiresAt == nil {
 		t.Fatal("a finished event carries its 90-day index deadline", item)
-	}
-	// Handling: version-guarded, trail recorded, reopen possible.
-	if _, err := service.Handle(ctx, fixture.Admin, item.ID, "acknowledged", "已确认", item.Version); err != nil {
-		t.Fatal(err)
-	}
-	_, err = service.Handle(ctx, fixture.Admin, item.ID, "closed", "并发操作", item.Version)
-	var conflict *fault.Error
-	if !errors.As(err, &conflict) || conflict.Code != "event_version_conflict" {
-		t.Fatal("a stale version must be refused", err)
-	}
-	updated, err := service.Get(ctx, fixture.Admin, item.ID)
-	if err != nil || updated.HandleState != "acknowledged" || updated.Version != item.Version+1 || len(updated.Handling) != 1 {
-		t.Fatal("the handling trail must record actor, state and time", updated, err)
-	}
-	if _, err := service.Handle(ctx, fixture.Admin, item.ID, "open", "重开", updated.Version); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := service.Get(ctx, fixture.Admin, item.ID)
-	if err != nil || reopened.HandleState != "open" || len(reopened.Handling) != 2 {
-		t.Fatal("an event must be reopenable", reopened, err)
 	}
 }
 
