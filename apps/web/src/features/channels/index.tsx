@@ -718,6 +718,7 @@ export function Channels({ initialBatch = '' }: { initialBatch?: string }) {
                               online={normal}
                               disabled={!channel.enabled}
                               unconfigured={unconfigured}
+                              cameraType={channel.camera_type}
                               label={`${numberLabel(channel)} ${channel.channel_name}`}
                             />
                             <span

@@ -37,6 +37,7 @@ const summaries: Schema<'ChannelSummary'>[] = [
     version: 3,
     permissions: ['configure', 'live', 'playback'],
         current_revision_id: '00000000-0000-4000-8000-0000000000aa',
+    camera_type: 'bullet',
     source_ip: '192.168.66.114',
     main_path: '/Streaming/Channels/101',
     sub_path: '/Streaming/Channels/102',
@@ -118,6 +119,7 @@ const summaries: Schema<'ChannelSummary'>[] = [
     version: 2,
     permissions: ['configure', 'live'],
         current_revision_id: '00000000-0000-4000-8000-0000000000bb',
+    camera_type: 'ptz',
     source_ip: '192.168.66.115',
     main_path: '/onvif/profile1',
     sub_path: '/onvif/profile2',
@@ -494,5 +496,23 @@ test('thumbnail slot and recording shortcut on configured channels', async () =>
   await expect
     .element(view.getByRole('menuitem', { name: '录像 CH02' }))
     .toBeInTheDocument()
+  setup.client.clear()
+})
+
+// One glyph for every row said "camera" sixteen times and never which kind. The
+// type is recorded on the channel, so the slot can show it — and a channel with
+// no recorded type keeps the generic outline rather than guessing.
+test('the thumbnail glyph reflects the recorded camera type', async () => {
+  const setup = fixture()
+  const view = await render(setup.view)
+  const slots = view.getByTestId('channel-thumbnail')
+  // CH01 is a bullet, CH04 a PTZ; CH02 and CH03 record no type.
+  await expect.element(slots.nth(0)).toHaveAttribute('data-camera-type', 'bullet')
+  await expect.element(slots.nth(3)).toHaveAttribute('data-camera-type', 'ptz')
+  await expect.element(slots.nth(1)).toHaveAttribute('data-camera-type', 'unknown')
+  // Distinct SVGs, not the same icon with a different label.
+  const bullets = slots.nth(0).element().innerHTML
+  const ptz = slots.nth(3).element().innerHTML
+  expect(bullets).not.toBe(ptz)
   setup.client.clear()
 })
