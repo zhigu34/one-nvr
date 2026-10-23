@@ -24,6 +24,11 @@ type Channel struct {
 	Permissions  []auth.Action `json:"permissions"`
 	// RecordingQuotaBytes 0 means no per-channel quota.
 	RecordingQuotaBytes int64 `json:"recording_quota_bytes"`
+	// Camera identity. Absent fields mean "not recorded", which is different from
+	// a camera reported with an empty model string.
+	Brand      string `json:"brand,omitempty"`
+	Model      string `json:"model,omitempty"`
+	CameraType string `json:"camera_type,omitempty"`
 	// Configured reports whether an applied camera source exists. It is computed
 	// here, in the same query that lists the channels, so every page filters on the
 	// same fact instead of re-deriving it from summary fields — the pages that
@@ -31,6 +36,23 @@ type Channel struct {
 	// own refusal to stream from a channel that has no source.
 	Configured bool `json:"configured"`
 }
+
+// boundedText trims an optional free-text field and rejects control characters.
+//
+// nil stays nil so "leave unchanged" survives: an absent JSON field must not
+// clear a stored value, and an explicit "" must. That is the whole reason the
+// update input uses pointers.
+func boundedText(value *string, max int) (*string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if len(trimmed) > max || strings.ContainsAny(trimmed, "\x00\r\n") {
+		return nil, auth.ErrInvalid
+	}
+	return &trimmed, nil
+}
+
 type Page struct {
 	Items      []Channel `json:"items"`
 	NextCursor *id.ID    `json:"next_cursor"`
@@ -49,6 +71,13 @@ type UpdateInput struct {
 	// quota. It is a housekeeping limit, not a filesystem quota: pressure
 	// cleanup on the whole volume is a separate policy (STO-02 vs STO-03).
 	RecordingQuotaBytes *int64 `json:"recording_quota_bytes,omitempty"`
+	// Camera identity: what the hardware IS, not what a probe saw. These live on
+	// the channel so editing them does not create a source revision — a revision
+	// is what triggers a re-test and a stream switch, and telling the system that
+	// a camera is a Hikvision model X must not interrupt its stream.
+	Brand      *string `json:"brand,omitempty"`
+	Model      *string `json:"model,omitempty"`
+	CameraType *string `json:"camera_type,omitempty"`
 }
 
 // Slot contains only grant-management metadata, never video permissions or URLs.
@@ -115,7 +144,7 @@ func (s *Service) List(ctx context.Context, p auth.Principal, cursor id.ID, limi
 			return out, err
 		}
 	}
-	rows, err := s.DB.Pool.Query(ctx, `SELECT c.id,c.channel_no,c.channel_name,c.channel_group,c.enabled,c.version,c.recording_quota_bytes,g.live,g.playback,g.export,g.configure,g.archive,c.current_revision_id IS NOT NULL FROM channels c JOIN channel_grants g ON g.channel_id=c.id WHERE g.user_id=$1 AND c.channel_no>$2 AND (g.live OR g.playback OR g.export OR g.archive OR (g.configure AND $3<>'viewer')) ORDER BY c.channel_no LIMIT $4`, p.UserID, from, u.Role, limit+1)
+	rows, err := s.DB.Pool.Query(ctx, `SELECT c.id,c.channel_no,c.channel_name,c.channel_group,c.enabled,c.version,c.recording_quota_bytes,c.brand,c.model,c.camera_type,g.live,g.playback,g.export,g.configure,g.archive,c.current_revision_id IS NOT NULL FROM channels c JOIN channel_grants g ON g.channel_id=c.id WHERE g.user_id=$1 AND c.channel_no>$2 AND (g.live OR g.playback OR g.export OR g.archive OR (g.configure AND $3<>'viewer')) ORDER BY c.channel_no LIMIT $4`, p.UserID, from, u.Role, limit+1)
 	if err != nil {
 		return out, err
 	}
@@ -123,7 +152,7 @@ func (s *Service) List(ctx context.Context, p auth.Principal, cursor id.ID, limi
 	for rows.Next() {
 		var c Channel
 		var live, playback, export, configure, archive bool
-		if err := rows.Scan(&c.ID, &c.ChannelNo, &c.ChannelName, &c.ChannelGroup, &c.Enabled, &c.Version, &c.RecordingQuotaBytes, &live, &playback, &export, &configure, &archive, &c.Configured); err != nil {
+		if err := rows.Scan(&c.ID, &c.ChannelNo, &c.ChannelName, &c.ChannelGroup, &c.Enabled, &c.Version, &c.RecordingQuotaBytes, &c.Brand, &c.Model, &c.CameraType, &live, &playback, &export, &configure, &archive, &c.Configured); err != nil {
 			return out, err
 		}
 		c.Permissions = permissions(u.Role, live, playback, export, configure, archive)
@@ -147,7 +176,12 @@ func (s *Service) List(ctx context.Context, p auth.Principal, cursor id.ID, limi
 // stops fetching and recording without discarding the source or its history.
 func (s *Service) Update(ctx context.Context, p auth.Principal, channelID id.ID, expected int64, in UpdateInput) (Channel, error) {
 	var out Channel
-	if expected < 1 || in.ChannelName == nil && in.ChannelGroup == nil && in.Enabled == nil && in.RecordingQuotaBytes == nil {
+	// An update with no field at all is a mistake worth refusing; an update that
+	// carries only an identity field is legitimate and must not be caught here.
+	if expected < 1 ||
+		(in.ChannelName == nil && in.ChannelGroup == nil && in.Enabled == nil &&
+			in.RecordingQuotaBytes == nil && in.Brand == nil && in.Model == nil &&
+			in.CameraType == nil) {
 		return out, auth.ErrInvalid
 	}
 	if in.RecordingQuotaBytes != nil && (*in.RecordingQuotaBytes < 0 || *in.RecordingQuotaBytes > 1<<50) {
@@ -170,11 +204,25 @@ func (s *Service) Update(ctx context.Context, p auth.Principal, channelID id.ID,
 		}
 		group = &value
 	}
-	err := s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
+	// Empty is a valid value for all three: "not recorded" is a state an operator
+	// must be able to return to after a wrong automatic classification.
+	brand, err := boundedText(in.Brand, 64)
+	if err != nil {
+		return out, err
+	}
+	model, err := boundedText(in.Model, 128)
+	if err != nil {
+		return out, err
+	}
+	cameraType, err := boundedText(in.CameraType, 32)
+	if err != nil {
+		return out, err
+	}
+	err = s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
 		if err := s.Auth.RequireChannelTx(ctx, p, channelID, auth.Configure, tx); err != nil {
 			return err
 		}
-		err := tx.QueryRow(ctx, `UPDATE channels SET channel_name=coalesce($2::text,channel_name),channel_group=coalesce($3::text,channel_group),enabled=coalesce($4::boolean,enabled),recording_quota_bytes=coalesce($6::bigint,recording_quota_bytes),version=version+1 WHERE id=$1 AND version=$5 RETURNING id,channel_no,channel_name,channel_group,enabled,version,recording_quota_bytes`, channelID, name, group, in.Enabled, expected, in.RecordingQuotaBytes).Scan(&out.ID, &out.ChannelNo, &out.ChannelName, &out.ChannelGroup, &out.Enabled, &out.Version, &out.RecordingQuotaBytes)
+		err := tx.QueryRow(ctx, `UPDATE channels SET channel_name=coalesce($2::text,channel_name),channel_group=coalesce($3::text,channel_group),enabled=coalesce($4::boolean,enabled),recording_quota_bytes=coalesce($6::bigint,recording_quota_bytes),brand=coalesce($7::text,brand),model=coalesce($8::text,model),camera_type=coalesce($9::text,camera_type),version=version+1 WHERE id=$1 AND version=$5 RETURNING id,channel_no,channel_name,channel_group,enabled,version,recording_quota_bytes,brand,model,camera_type`, channelID, name, group, in.Enabled, expected, in.RecordingQuotaBytes, brand, model, cameraType).Scan(&out.ID, &out.ChannelNo, &out.ChannelName, &out.ChannelGroup, &out.Enabled, &out.Version, &out.RecordingQuotaBytes, &out.Brand, &out.Model, &out.CameraType)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return auth.ErrConflict
 		}
@@ -209,6 +257,25 @@ func (s *Service) Update(ctx context.Context, p auth.Principal, channelID id.ID,
 				action = "channel.enabled"
 			}
 			if err := audit.Append(ctx, tx, audit.Entry{ActorID: p.UserID, Action: action, ObjectID: channelID}); err != nil {
+				return err
+			}
+		}
+		if brand != nil || model != nil || cameraType != nil {
+			changed := []string{}
+			if brand != nil {
+				changed = append(changed, "brand")
+			}
+			if model != nil {
+				changed = append(changed, "model")
+			}
+			if cameraType != nil {
+				changed = append(changed, "camera_type")
+			}
+			details, err := json.Marshal(map[string]any{"fields": changed})
+			if err != nil {
+				return err
+			}
+			if err := audit.Append(ctx, tx, audit.Entry{ActorID: p.UserID, Action: "channel.identity_updated", ObjectID: channelID, Details: details}); err != nil {
 				return err
 			}
 		}

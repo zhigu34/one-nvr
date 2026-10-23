@@ -2050,6 +2050,10 @@ export interface components {
             permissions: ("live" | "playback" | "export" | "configure" | "archive")[];
             /** @description Per-channel recording quota in bytes; 0 means no quota. Housekeeping limit, not a filesystem quota. */
             recording_quota_bytes?: number;
+            /** @description Camera brand as recorded on the channel. Absent when not recorded. */
+            brand?: string;
+            model?: string;
+            camera_type?: string;
             /** @description Whether an applied camera source exists. Only channel management lists unconfigured slots; every other page hides them, and the server refuses to stream from a channel with no source, so this is the same fact the API acts on. */
             configured: boolean;
         };
@@ -3838,6 +3842,12 @@ export interface operations {
                     enabled?: boolean;
                     /** @description Per-channel recording quota in bytes; 0 clears it. */
                     recording_quota_bytes?: number;
+                    /** @description Camera brand. Stored on the channel, not on a source revision: editing it must not re-test or rebuild the stream. */
+                    brand?: string;
+                    /** @description Camera model. Empty clears it. */
+                    model?: string;
+                    /** @description Camera form factor (bullet/dome/ptz/...). Empty clears it. */
+                    camera_type?: string;
                 };
             };
         };

@@ -898,6 +898,21 @@
                     "minimum": 0,
                     "maximum": 1125899906842624,
                     "description": "Per-channel recording quota in bytes; 0 clears it."
+                  },
+                  "brand": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "Camera brand. Stored on the channel, not on a source revision: editing it must not re-test or rebuild the stream."
+                  },
+                  "model": {
+                    "type": "string",
+                    "maxLength": 128,
+                    "description": "Camera model. Empty clears it."
+                  },
+                  "camera_type": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "description": "Camera form factor (bullet/dome/ptz/...). Empty clears it."
                   }
                 },
                 "minProperties": 1,
@@ -3213,6 +3228,16 @@
             "type": "integer",
             "minimum": 0,
             "description": "Per-channel recording quota in bytes; 0 means no quota. Housekeeping limit, not a filesystem quota."
+          },
+          "brand": {
+            "type": "string",
+            "description": "Camera brand as recorded on the channel. Absent when not recorded."
+          },
+          "model": {
+            "type": "string"
+          },
+          "camera_type": {
+            "type": "string"
           },
           "configured": {
             "type": "boolean",

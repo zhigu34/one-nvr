@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { apiRequest, jsonRequest, newRequestKey } from '@/lib/api-client'
 import type { Schema } from '@/lib/types'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import {
   Field,
@@ -12,15 +11,17 @@ import {
 } from '@/features/foundation/ui'
 import { connectionError, type SaveConnection } from './source-connect'
 import { InfoHint, OnvifProbeBar } from './source-onvif'
-import {
-  BRAND_PRESETS,
-  CAMERA_TYPES,
-  pathTemplate,
-  type CameraType,
-} from './device-meta'
+import { pathTemplate, type CameraType } from './device-meta'
 
 type Props = {
-  channel: { id: string; version: number }
+  channel: {
+    id: string
+    version: number
+    // Read-only here: the brand selects the RTSP path template. It is edited in
+    // the channel header, because writing it belongs on the channel — a change
+    // to it must not produce a source revision.
+    brand?: string
+  }
   revision: Schema<'SourceRevision'> | null
   history: Schema<'SourceRevision'>[]
   // The side panel renders beside the fields it proves, so the results and the
@@ -68,6 +69,10 @@ function SourceEditor({
   const [rtspPort, setRTSPPort] = useState(
     String(revision?.config.rtsp_port || 554)
   )
+  // Seeded from the channel (the storage of record) and overwritten by a probe.
+  // It is not edited here — see the header editor — but both the RTSP path
+  // template and the identity patch need its current value.
+  const [brand, setBrand] = useState(channel.brand || revision?.config.brand || '')
   const [mainPath, setMainPath] = useState(
     revision?.config.main_path || '/main'
   )
@@ -85,12 +90,10 @@ function SourceEditor({
   // Device metadata. `recognised` records which fields the probe filled, so the
   // form can mark them as device-reported instead of pretending the operator
   // typed them — and so editing one clears its badge.
-  const [brand, setBrand] = useState(revision?.config.brand || '')
   const [model, setModel] = useState(revision?.config.model || '')
   const [cameraType, setCameraType] = useState<CameraType>(
     (revision?.config.camera_type as CameraType) || ''
   )
-  const [recognised, setRecognised] = useState<Record<string, boolean>>({})
   const [intentRevision, setIntentRevision] = useState(revision?.id)
   const [password, setPassword] = useState('')
   const form = useRef<HTMLFormElement>(null)
@@ -110,10 +113,9 @@ function SourceEditor({
     setProbe(null)
     setMainToken('')
     setSubToken('')
-    setBrand(revision?.config.brand || '')
     setModel(revision?.config.model || '')
+    setBrand(channel.brand || revision?.config.brand || '')
     setCameraType((revision?.config.camera_type as CameraType) || '')
-    setRecognised({})
   }
   // The probe uses what the operator is entering right now, so it reads the same
   // fields the submission will send instead of keeping a second copy.
@@ -153,8 +155,31 @@ function SourceEditor({
   // unavailable before a probe fills the paths.
   // Only offered in the manual-RTSP mode: in ONVIF mode the device supplies the
   // paths, and a brand template would overwrite what it just returned.
-  const template = pathTemplate(brand)
+  const template = pathTemplate(channel.brand || revision?.config.brand || '')
   const blocked = method === 'onvif' && !probed
+  /**
+   * The identity fields that differ from what the channel already holds.
+   *
+   * Returns null when nothing changed, so a plain stream edit issues no second
+   * request. The probe fills these freely; the operator may overwrite them; both
+   * end up on the channel because that is where "what this camera is" lives.
+   */
+  function identityPatch() {
+    const next = {
+      brand: brand.trim(),
+      model: model.trim(),
+      camera_type: cameraType,
+    }
+    const current = {
+      brand: (revision?.config.brand || '').trim(),
+      model: (revision?.config.model || '').trim(),
+      camera_type: revision?.config.camera_type || '',
+    }
+    const changed = (Object.keys(next) as (keyof typeof next)[]).some(
+      (key) => next[key] !== current[key]
+    )
+    return changed ? next : null
+  }
   return (
     <section className='grid gap-4'>
       <Notices error={error} notice={notice} />
@@ -194,11 +219,11 @@ function SourceEditor({
           // the saved revision and only replaced when the operator sets one, so
           // data that came from an import is never silently dropped.
           if (onvifPort.trim() !== '') config.onvif_port = Number(onvifPort)
-          // Empty is a valid value: it means "not recorded", and sending the
-          // field anyway keeps clearing it expressible.
-          config.brand = brand.trim()
-          config.model = model.trim()
-          config.camera_type = cameraType
+          // The probe's answer is applied to the CHANNEL, not baked into the
+          // revision. Identity is not part of what a revision describes, so it
+          // is written by its own PATCH after the revision is saved — see
+          // `identityPatch` below. Sending it here would tie a brand correction
+          // to a re-test and a stream switch.
           const input: Schema<'DraftInput'> = {
             config,
             credentials,
@@ -225,6 +250,25 @@ function SourceEditor({
               }
             )
             if (!abort.signal.aborted && result.channel_id === channel.id) {
+              // Identity is written after the revision, in its own request with
+              // its own version check: it must not ride on the revision, and it
+              // must not block the save if it fails.
+              const identity = identityPatch()
+              if (identity) {
+                try {
+                  await apiRequest(`/api/v1/channels/${channel.id}`, {
+                    ...jsonRequest('PATCH', identity, channel.version + 1),
+                    signal: abort.signal,
+                  })
+                } catch {
+                  // Reported as a notice rather than an error: the stream
+                  // configuration was saved, and only the description of the
+                  // hardware failed to.
+                  if (!abort.signal.aborted) {
+                    setNotice('摄像头型号未更新（其余配置已保存）')
+                  }
+                }
+              }
               const message = await onSaved(result, abort.signal, {
                 action,
                 version: channel.version + 1,
@@ -361,11 +405,6 @@ function SourceEditor({
                         if (device.cameraType) {
                           setCameraType(device.cameraType as CameraType)
                         }
-                        setRecognised({
-                          brand: !!device.brand,
-                          model: !!device.model,
-                          cameraType: !!device.cameraType,
-                        })
                       }}
                       onPasswordNeeded={() => setPasswordAction('replace')}
                       probe={probe}
@@ -448,83 +487,6 @@ function SourceEditor({
                 />
               </div>
 
-              {/* Device metadata, 3 across. The probe fills these, so each one
-                  carries the badge when its value came from the camera. */}
-              <div className='grid gap-4 sm:grid-cols-3'>
-                <div className='grid gap-2'>
-                  <label
-                    htmlFor='source-brand'
-                    className='flex items-center gap-1.5 text-sm font-medium'
-                  >
-                    摄像头品牌
-                    {recognised.brand && <RecognisedBadge />}
-                    <InfoHint text='只用于展示与检索，不影响取流；ONVIF 探测会读取品牌与型号。' />
-                  </label>
-                  <Input
-                    id='source-brand'
-                    name='brand'
-                    list='brand-presets'
-                    maxLength={64}
-                    placeholder='如 海康威视'
-                    value={brand}
-                    onChange={(event) => {
-                      setBrand(event.target.value)
-                      // Editing a device-reported value makes it the operator's
-                      // own, so the badge must not keep claiming the device said it.
-                      setRecognised((current) => ({ ...current, brand: false }))
-                    }}
-                  />
-                  <datalist id='brand-presets'>
-                    {BRAND_PRESETS.map((value) => (
-                      <option key={value} value={value} />
-                    ))}
-                  </datalist>
-                </div>
-                <div className='grid gap-2'>
-                  <label
-                    htmlFor='source-model'
-                    className='flex items-center gap-1.5 text-sm font-medium'
-                  >
-                    设备型号
-                    {recognised.model && <RecognisedBadge />}
-                  </label>
-                  <Input
-                    id='source-model'
-                    name='model'
-                    maxLength={128}
-                    placeholder='选填'
-                    value={model}
-                    onChange={(event) => {
-                      setModel(event.target.value)
-                      setRecognised((current) => ({ ...current, model: false }))
-                    }}
-                  />
-                </div>
-                <div className='grid gap-2'>
-                  <label className='flex items-center gap-1.5 text-sm font-medium'>
-                    摄像头类型
-                    {recognised.cameraType && <RecognisedBadge />}
-                  </label>
-                  <SelectField
-                    ariaLabel='摄像头类型'
-                    value={cameraType}
-                    onValueChange={(value) => {
-                      setCameraType(value as CameraType)
-                      setRecognised((current) => ({
-                        ...current,
-                        cameraType: false,
-                      }))
-                    }}
-                    options={[
-                      { value: '', label: '未记录' },
-                      ...CAMERA_TYPES.map((entry) => ({
-                        value: entry.value,
-                        label: entry.label,
-                      })),
-                    ]}
-                  />
-                </div>
-              </div>
               {(method === 'rtsp' || probed) && (
                 <div className='grid gap-2 border-t border-border/60 pt-4'>
                   <div className='flex flex-wrap items-center justify-between gap-2'>
@@ -652,18 +614,3 @@ function SourceEditor({
   )
 }
 
-/**
- * RecognisedBadge marks a field the ONVIF probe filled.
- *
- * The operator needs to know which values came from the device and which they
- * typed: a device-reported model is evidence about the hardware, while a typed
- * one is a note. Editing the field clears the badge, because the value is then
- * the operator's own.
- */
-function RecognisedBadge() {
-  return (
-    <span className='rounded border border-emerald-500/30 bg-emerald-500/10 px-1 py-px text-[10px] font-normal text-emerald-500'>
-      已自动识别
-    </span>
-  )
-}

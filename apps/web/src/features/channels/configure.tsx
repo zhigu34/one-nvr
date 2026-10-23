@@ -26,7 +26,7 @@ import { SourceForm } from './source-form'
 import { SourceHistory } from './source-history'
 import { SourceTestControls } from './source-test'
 import { OnvifStreamList } from './source-onvif'
-import { cameraTypeLabel } from './device-meta'
+import { CAMERA_TYPES, cameraTypeLabel } from './device-meta'
 import { ChannelReliability } from './reliability'
 
 // GiB keeps the quota field readable; the API stores exact bytes.
@@ -596,7 +596,7 @@ function ConfigureChannel({
         </p>
       ) : (
         <SourceForm
-          channel={{ id, version }}
+          channel={{ id, version, brand: channel.brand }}
           revision={current}
           history={revisions}
           streamsPanel={(probe, tokens, choose) =>
@@ -706,6 +706,13 @@ function ChannelBasics({
                         Number(text(data, 'recording_quota_gib') || '0') *
                           GIB
                       ) || 0,
+                    // Camera identity travels here, not through a source
+                    // revision: a revision is what triggers a re-test and a
+                    // stream switch, and correcting the brand must not drop the
+                    // picture.
+                    brand: text(data, 'brand'),
+                    model: text(data, 'model'),
+                    camera_type: text(data, 'camera_type'),
                   },
                   channel.version
                 )
@@ -738,12 +745,44 @@ function ChannelBasics({
             Math.round((channel.recording_quota_bytes ?? 0) / GIB)
           )}
         />
+        <Field
+          label='摄像头品牌'
+          name='brand'
+          defaultValue={channel.brand ?? ''}
+          maxLength={64}
+          placeholder='如 海康威视'
+        />
+        <Field
+          label='设备型号'
+          name='model'
+          defaultValue={channel.model ?? ''}
+          maxLength={128}
+          placeholder='选填'
+        />
+        <div className='grid gap-2'>
+          <label htmlFor='basics-camera-type' className='text-sm font-medium'>
+            摄像头类型
+          </label>
+          <select
+            id='basics-camera-type'
+            name='camera_type'
+            defaultValue={channel.camera_type ?? ''}
+            className='h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none dark:bg-input/30'
+          >
+            <option value=''>未记录</option>
+            {CAMERA_TYPES.map((entry) => (
+              <option key={entry.value} value={entry.value}>
+                {entry.label}
+              </option>
+            ))}
+          </select>
+        </div>
         <p className='text-xs text-muted-foreground md:col-span-2'>
           超过配额时按最旧优先删除本通道可安全清理的录像；受保护、导出中、等待归档的片段不会被删除。配额是逻辑上限，不是文件系统硬配额。
         </p>
         <div className='flex flex-wrap items-center justify-between gap-3 border-t pt-4 md:col-span-2'>
           <span className='text-xs text-muted-foreground'>
-            改名与分组不会重建媒体流
+            名称、分组与摄像头型号不会重建媒体流
           </span>
           <div className='flex gap-2'>
             <Button

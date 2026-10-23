@@ -233,3 +233,63 @@ func TestChannelAttributesAreIndependentOfMedia(t *testing.T) {
 		t.Fatal("group lost", kept, err)
 	}
 }
+
+// Editing the camera's identity must not create a source revision.
+//
+// A revision is what triggers a re-test and a stream switch, so storing the
+// brand there meant that correcting "海康威视" interrupted the picture. Identity
+// lives on the channel now: the update is an ordinary PATCH with its own version
+// check and audit row, and the revision count is untouched.
+func TestIdentityUpdateCreatesNoRevision(t *testing.T) {
+	db, accounts, sites, admin := authFixture(t)
+	sites.Auth = accounts
+	ctx := context.Background()
+	slots := &channel.Service{DB: db, Auth: accounts}
+	all, err := slots.List(ctx, admin.Principal, "", 100)
+	if err != nil || len(all.Items) == 0 {
+		t.Fatalf("list: %v", err)
+	}
+	target := all.Items[0]
+
+	revisionCount := func() int {
+		var n int
+		if err := db.Pool.QueryRow(ctx, `SELECT count(*) FROM source_revisions WHERE channel_id=$1`, target.ID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	revisionsBefore := revisionCount()
+
+	updated, err := slots.Update(ctx, admin.Principal, target.ID, target.Version, channel.UpdateInput{
+		Brand:      strPtr("大华"),
+		Model:      strPtr("IPC-HFW2431"),
+		CameraType: strPtr("bullet"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Brand != "大华" || updated.Model != "IPC-HFW2431" || updated.CameraType != "bullet" {
+		t.Fatalf("identity must be stored on the channel, got %+v", updated)
+	}
+	if got := revisionCount(); got != revisionsBefore {
+		t.Fatalf("an identity edit must not create a revision: %d -> %d", revisionsBefore, got)
+	}
+	// The version advanced, so a concurrent editor still gets a 409 rather than
+	// silently overwriting the name they were looking at.
+	if updated.Version != target.Version+1 {
+		t.Fatalf("version must advance, got %d from %d", updated.Version, target.Version)
+	}
+	// Clearing is expressible, and is not the same as "leave unchanged".
+	cleared, err := slots.Update(ctx, admin.Principal, target.ID, updated.Version, channel.UpdateInput{
+		Model: strPtr(""),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.Model != "" {
+		t.Fatalf("an explicit empty value must clear the field, got %q", cleared.Model)
+	}
+	if cleared.Brand != "大华" {
+		t.Fatalf("fields absent from the input must be left alone, got %q", cleared.Brand)
+	}
+}

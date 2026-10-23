@@ -149,7 +149,7 @@ func (s *SourceService) Summaries(ctx context.Context, p auth.Principal) (Summar
 		// Both enrichment passes join the grant table instead of taking an id
 		// array, so no array encoding is involved and a channel outside the
 		// caller's grants can never contribute a row.
-		source, err := tx.Query(ctx, `SELECT c.id,host(r.ip),r.main_path,r.sub_path,r.onvif_port,r.brand,r.model,r.camera_type FROM channels c JOIN channel_grants g ON g.channel_id=c.id AND g.user_id=$1 JOIN source_revisions r ON r.id=c.current_revision_id`, p.UserID)
+		source, err := tx.Query(ctx, `SELECT c.id,host(r.ip),r.main_path,r.sub_path,r.onvif_port,c.brand,c.model,c.camera_type FROM channels c JOIN channel_grants g ON g.channel_id=c.id AND g.user_id=$1 JOIN source_revisions r ON r.id=c.current_revision_id`, p.UserID)
 		if err != nil {
 			return err
 		}
