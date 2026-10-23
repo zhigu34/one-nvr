@@ -291,6 +291,10 @@ func (s *Service) List(ctx context.Context, p auth.Principal, q ListQuery) (Even
 		// rule is about having nothing to show, not about being brief.
 		rows, err := tx.Query(ctx, `SELECT `+eventColumns+` FROM events e
 			WHERE e.started_at < $1 AND e.started_at >= $2
+			-- Excluded rows stay in the table as the audit trail of what a rule
+			-- suppressed, and they never appear here: the operator asked not to
+			-- be told about them, so listing them would defeat the rule.
+			AND e.excluded_reason IS NULL
 			AND NOT (
 				-- A running event is never a sliver: it has not finished, so its
 				-- duration is unknown, and hiding something that is happening right

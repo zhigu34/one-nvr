@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils'
 import { RulePanel } from './rules'
 
 type Zone = Schema<'DetectionZone'>
-type Point = Schema<'ZonePoint'>
+export type Point = Schema<'ZonePoint'>
 
 // The detector renders every camera at a fixed size and stretches the source
 // into it, so a drawing survives any resolution change; what it cannot survive

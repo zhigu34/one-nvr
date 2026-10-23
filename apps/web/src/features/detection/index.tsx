@@ -24,6 +24,7 @@ import { cn } from '@/lib/utils'
 import { DetectionConfigBar } from './config-bar'
 import { SENSITIVITY_TEXT, STREAM_TEXT, configSummary } from './draft'
 import { ZoneWorkbench } from './zones'
+import { ExclusionEditor } from './exclusions'
 
 type Config = Schema<'DetectionConfig'>
 type Runtime = Schema<'DetectionRuntime'>
@@ -607,11 +608,62 @@ function ChannelRow({
       {workbenchOpen && (
         <TableRow>
           <TableCell colSpan={9} className='bg-muted/20 p-0'>
-            <ZoneWorkbench channelID={channel.id ?? ''} detectionEnabled={enabled} />
+            <WorkbenchTabs channelID={channel.id ?? ''} detectionEnabled={enabled} />
           </TableCell>
         </TableRow>
       )}
     </>
+  )
+}
+
+/**
+ * The workbench, split into what it answers.
+ *
+ * Zones and exclusions are drawn on the same frame and edited by the same person
+ * in the same sitting, so they belong together — but stacking two canvases made
+ * the expanded row twice the viewport for a choice the operator makes once.
+ * The tabs say which question is on screen: where to look, or where to stay
+ * quiet.
+ */
+function WorkbenchTabs({
+  channelID,
+  detectionEnabled,
+}: {
+  channelID: string
+  detectionEnabled: boolean
+}) {
+  const [tab, setTab] = useState<'zones' | 'exclusions'>('zones')
+  return (
+    <div>
+      <div className='flex items-center gap-1 border-b border-border/60 px-3 pt-2'>
+        {(
+          [
+            { value: 'zones', label: '区域与规则' },
+            { value: 'exclusions', label: '时段排除' },
+          ] as const
+        ).map((entry) => (
+          <button
+            key={entry.value}
+            type='button'
+            aria-pressed={tab === entry.value}
+            onClick={() => setTab(entry.value)}
+            className={cn(
+              'inline-flex h-8 items-center rounded-t-md px-3 text-xs transition-colors',
+              tab === entry.value
+                ? 'border-x border-t border-border bg-card font-medium text-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            {entry.label}
+          </button>
+        ))}
+      </div>
+      {tab === 'zones' ? (
+        <ZoneWorkbench channelID={channelID} detectionEnabled={detectionEnabled} />
+      ) : (
+        <ExclusionEditor channelID={channelID} detectionEnabled={detectionEnabled} />
+      )}
+    </div>
   )
 }
 

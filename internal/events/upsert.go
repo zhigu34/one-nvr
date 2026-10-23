@@ -101,6 +101,27 @@ func (s *Service) eventUpsert(ctx context.Context, in upsertInput) error {
 		if err != nil {
 			return err
 		}
+		// An exclusion is decided before anything downstream acts on the event.
+		//
+		// Order matters: the row is already written (so the suppression is
+		// auditable), but no rule is evaluated, no notification is queued and no
+		// clip is assembled. Running the rules first and then filtering would
+		// still have told whoever subscribed — an excluded event that pages
+		// someone at 3 a.m. has not been excluded.
+		if stored.ChannelID != nil {
+			excluded, ruleID, reason, exclErr := s.exclusionFor(ctx, tx, *stored.ChannelID, stored)
+			if exclErr != nil {
+				return exclErr
+			}
+			if excluded {
+				_, err := tx.Exec(ctx, `UPDATE events SET excluded_reason=$2,excluded_rule_id=$3,updated_at=clock_timestamp()
+					WHERE id=$1 AND excluded_reason IS DISTINCT FROM $2`, stored.ID, reason, ruleID)
+				if err != nil {
+					return err
+				}
+				return nil
+			}
+		}
 		// Link the footage in the same transaction as the event itself. The
 		// segment query is a single indexed range read, and doing it here means
 		// an event is never briefly stored as "no footage" when the footage was

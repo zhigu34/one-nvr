@@ -194,3 +194,78 @@ func (r *router) markRuleHitFalsePositive(w http.ResponseWriter, q *http.Request
 	}
 	respond(w, q, 200, struct{}{})
 }
+
+// Detection exclusions: time-of-day windows in which a region stops reporting.
+//
+// Their own endpoints rather than a flag on channel_zones: a zone says where to
+// look, an exclusion says where to stay quiet, and the two are edited for
+// different reasons and by different people.
+func (r *router) listDetectionExclusions(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Events == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
+	channelID, err := id.Parse(q.URL.Query().Get("channel_id"))
+	if err != nil {
+		fail(w, q, auth.ErrInvalid)
+		return
+	}
+	items, err := r.d.Events.ListExclusions(q.Context(), p, channelID)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, struct {
+		Items []events.ExclusionView `json:"items"`
+	}{items})
+}
+
+func (r *router) saveDetectionExclusion(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Events == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
+	channelID, err := id.Parse(q.URL.Query().Get("channel_id"))
+	if err != nil {
+		fail(w, q, auth.ErrInvalid)
+		return
+	}
+	var in events.ExclusionInput
+	if err := decode(w, q, &in); err != nil {
+		fail(w, q, err)
+		return
+	}
+	view, err := r.d.Events.SaveExclusion(q.Context(), p, channelID, in)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 200, view)
+}
+
+func (r *router) deleteDetectionExclusion(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	if r.d.Events == nil {
+		fail(w, q, auth.ErrNotFound)
+		return
+	}
+	channelID, err := id.Parse(q.URL.Query().Get("channel_id"))
+	if err != nil {
+		fail(w, q, auth.ErrInvalid)
+		return
+	}
+	ruleID, err := pathID(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	expected, err := expectedVersion(q)
+	if err != nil {
+		fail(w, q, err)
+		return
+	}
+	if err := r.d.Events.DeleteExclusion(q.Context(), p, channelID, ruleID, expected); err != nil {
+		fail(w, q, err)
+		return
+	}
+	respond(w, q, 204, nil)
+}

@@ -4446,6 +4446,131 @@
         }
       }
     },
+    "/api/v1/detection/exclusions": {
+      "get": {
+        "operationId": "detectionExclusions",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "channel_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "This channel's exclusion rules, each with how many events it suppressed in the last 24 hours. That count is the only way to tell a narrow rule from one that is suppressing everything.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DetectionExclusion"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "saveDetectionExclusion",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "channel_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DetectionExclusionInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The saved rule.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectionExclusion"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The drawing or the window cannot be evaluated."
+          }
+        }
+      }
+    },
+    "/api/v1/detection/exclusions/{id}": {
+      "delete": {
+        "operationId": "deleteDetectionExclusion",
+        "x-one-nvr-implementation": "implemented",
+        "x-one-nvr-permission": "configure",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          },
+          {
+            "name": "channel_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed. Events it already suppressed keep their recorded reason."
+          },
+          "409": {
+            "description": "Version conflict: the rule changed since it was read."
+          }
+        }
+      }
+    },
     "/api/v1/detection/zones": {
       "get": {
         "operationId": "detectionZones",
@@ -10033,6 +10158,105 @@
             "items": {
               "$ref": "#/components/schemas/RuleHit"
             }
+          }
+        }
+      },
+      "DetectionExclusionInput": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "coordinates": {
+            "type": "array",
+            "description": "Polygon in normalized frame coordinates (0..1), at least three vertices. Matched against the detection box's centre.",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          },
+          "categories": {
+            "type": "array",
+            "description": "Detector labels this exclusion covers. Empty covers every category.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "from_clock": {
+            "type": "string",
+            "description": "Site-local HH:MM, both ends required. A window whose end is not after its start crosses midnight. Empty means always."
+          },
+          "to_clock": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "Shown to whoever reads an event this rule suppressed."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "integer",
+            "description": "Expected current version; 0 creates."
+          }
+        },
+        "required": [
+          "name",
+          "coordinates"
+        ]
+      },
+      "DetectionExclusion": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "channel_id": {
+            "$ref": "m1a.openapi.yaml#/components/schemas/UUID"
+          },
+          "name": {
+            "type": "string"
+          },
+          "coordinates": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
+            }
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "from_clock": {
+            "type": "string"
+          },
+          "to_clock": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "suppressed_24h": {
+            "type": "integer",
+            "description": "Events this rule excluded in the last 24 hours. Without it an over-wide rule is indistinguishable from a quiet site."
           }
         }
       },

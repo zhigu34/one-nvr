@@ -35,6 +35,149 @@ func frigatePayload(eventType, id, camera, label string, start float64, end *flo
 	return raw
 }
 
+// frigatePayloadWithBox mirrors the same envelope with the detector's geometry,
+// which is what an exclusion is evaluated against.
+func frigatePayloadWithBox(eventType, id, camera, label string, start float64, box []float64) []byte {
+	body := map[string]any{
+		"type": eventType,
+		"after": map[string]any{
+			"id": id, "camera": camera, "label": label, "score": 0.8, "top_score": 0.9,
+			"zones": []string{}, "entered_zones": []string{}, "start_time": start,
+			"has_snapshot": false,
+			"data":         map[string]any{"box": box},
+		},
+		"before": map[string]any{"id": id, "camera": camera},
+	}
+	raw, _ := json.Marshal(body)
+	return raw
+}
+
+// An exclusion suppresses the event without deleting it.
+//
+// The row keeps `excluded_reason` and the rule id, so an operator can see how
+// much a rule is eating — a rule that silently deleted rows would be
+// indistinguishable from a working one, and a rule set too wide would look
+// exactly like a site with nothing happening.
+func TestExclusionSuppressesWithoutDeleting(t *testing.T) {
+	fixture, service := newEventsFixture(t)
+	ctx := context.Background()
+	if err := service.SetMappings(ctx, fixture.Admin, map[id.ID]string{fixture.Channel: "front-door"}); err != nil {
+		t.Fatal(err)
+	}
+	// A region covering the left half of the frame, quiet around the clock so the
+	// window cannot be what makes this pass.
+	view, err := service.SaveExclusion(ctx, fixture.Admin, fixture.Channel, events.ExclusionInput{
+		Name:        "门前停车位",
+		Coordinates: [][2]float64{{0, 0}, {0.5, 0}, {0.5, 1}, {0, 1}},
+		Categories:  []string{"person"},
+		Reason:      "夜间误判电动车",
+		Enabled:     true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Suppressed24h != 0 {
+		t.Fatalf("a fresh rule has suppressed nothing yet, got %d", view.Suppressed24h)
+	}
+
+	started := float64(time.Now().UTC().Add(-time.Minute).Unix())
+	// Inside the region: excluded.
+	if err := service.Ingest(ctx, frigatePayloadWithBox("new", "evt-inside", "front-door", "person", started, []float64{0.1, 0.1, 0.2, 0.2})); err != nil {
+		t.Fatal(err)
+	}
+	// Outside the region: reported.
+	if err := service.Ingest(ctx, frigatePayloadWithBox("new", "evt-outside", "front-door", "person", started, []float64{0.7, 0.1, 0.1, 0.2})); err != nil {
+		t.Fatal(err)
+	}
+	// Inside the region but a category the rule does not name: reported.
+	if err := service.Ingest(ctx, frigatePayloadWithBox("new", "evt-car", "front-door", "car", started, []float64{0.1, 0.1, 0.2, 0.2})); err != nil {
+		t.Fatal(err)
+	}
+
+	// The excluded row still exists, with its reason.
+	var reason string
+	var ruleID *id.ID
+	if err := fixture.DB.Pool.QueryRow(ctx,
+		`SELECT COALESCE(excluded_reason,''),excluded_rule_id FROM events WHERE source_id='evt-inside'`).Scan(&reason, &ruleID); err != nil {
+		t.Fatal(err)
+	}
+	if reason == "" || ruleID == nil {
+		t.Fatalf("the excluded event must keep its reason and rule, got %q %v", reason, ruleID)
+	}
+	// The others were not excluded.
+	var visible int
+	if err := fixture.DB.Pool.QueryRow(ctx,
+		`SELECT count(*) FROM events WHERE source_id IN ('evt-outside','evt-car') AND excluded_reason IS NULL`).Scan(&visible); err != nil {
+		t.Fatal(err)
+	}
+	if visible != 2 {
+		t.Fatalf("outside the region or outside the category must still be recorded, got %d", visible)
+	}
+	// And the list does not show the excluded one.
+	page, err := service.List(ctx, fixture.Admin, events.ListQuery{
+		Start: time.Now().Add(-time.Hour), End: time.Now().Add(time.Hour), Limit: 50,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range page.Items {
+		if item.SourceID == "evt-inside" {
+			t.Fatal("an excluded event must not appear in the list")
+		}
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("the list holds the two reportable events, got %d", len(page.Items))
+	}
+	// The rule reports what it suppressed.
+	list, err := service.ListExclusions(ctx, fixture.Admin, fixture.Channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].Suppressed24h != 1 {
+		t.Fatalf("the rule must count its suppressions, got %+v", list)
+	}
+}
+
+// An excluded event must not trip a rule either: an exclusion that still pages
+// someone at 3 a.m. has not excluded anything.
+func TestExcludedEventTripsNoRule(t *testing.T) {
+	fixture, service := newEventsFixture(t)
+	ctx := context.Background()
+	if err := service.SetMappings(ctx, fixture.Admin, map[id.ID]string{fixture.Channel: "front-door"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.UpsertRule(ctx, fixture.Admin, events.Rule{
+		ChannelID:  fixture.Channel,
+		Name:       "任何出现",
+		Kind:       "appear",
+		Categories: []string{"person"},
+		Severity:   "high",
+		Enabled:    true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.SaveExclusion(ctx, fixture.Admin, fixture.Channel, events.ExclusionInput{
+		Name:        "整帧",
+		Coordinates: [][2]float64{{0, 0}, {1, 0}, {1, 1}, {0, 1}},
+		Categories:  []string{"person"},
+		Enabled:     true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	started := float64(time.Now().UTC().Add(-time.Minute).Unix())
+	if err := service.Ingest(ctx, frigatePayloadWithBox("new", "evt-silent", "front-door", "person", started, []float64{0.4, 0.4, 0.1, 0.1})); err != nil {
+		t.Fatal(err)
+	}
+	var hits int
+	if err := fixture.DB.Pool.QueryRow(ctx,
+		`SELECT count(*) FROM event_rule_hits h JOIN events e ON e.id=h.event_id WHERE e.source_id='evt-silent'`).Scan(&hits); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 0 {
+		t.Fatalf("an excluded event must not record rule hits, got %d", hits)
+	}
+}
+
 func TestEventIngestLifecycle(t *testing.T) {
 	fixture, service := newEventsFixture(t)
 	ctx := context.Background()

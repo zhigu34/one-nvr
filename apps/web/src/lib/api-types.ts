@@ -1221,6 +1221,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/detection/exclusions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["detectionExclusions"];
+        put?: never;
+        post: operations["saveDetectionExclusion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/detection/exclusions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteDetectionExclusion"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/detection/zones": {
         parameters: {
             query?: never;
@@ -2902,6 +2934,35 @@ export interface components {
             expires_at?: string | null;
             /** @description The rules this event tripped, on the detail response. Absent from list rows. */
             hits?: components["schemas"]["RuleHit"][];
+        };
+        DetectionExclusionInput: {
+            name: string;
+            /** @description Polygon in normalized frame coordinates (0..1), at least three vertices. Matched against the detection box's centre. */
+            coordinates: number[][];
+            /** @description Detector labels this exclusion covers. Empty covers every category. */
+            categories?: string[];
+            /** @description Site-local HH:MM, both ends required. A window whose end is not after its start crosses midnight. Empty means always. */
+            from_clock?: string;
+            to_clock?: string;
+            /** @description Shown to whoever reads an event this rule suppressed. */
+            reason?: string;
+            enabled?: boolean;
+            /** @description Expected current version; 0 creates. */
+            version?: number;
+        };
+        DetectionExclusion: {
+            id?: components["schemas"]["UUID"];
+            channel_id?: components["schemas"]["UUID"];
+            name?: string;
+            coordinates?: number[][];
+            categories?: string[];
+            from_clock?: string;
+            to_clock?: string;
+            reason?: string;
+            enabled?: boolean;
+            version?: number;
+            /** @description Events this rule excluded in the last 24 hours. Without it an over-wide rule is indistinguishable from a quiet site. */
+            suppressed_24h?: number;
         };
         EventPage: {
             items?: components["schemas"]["Event"][];
@@ -7743,6 +7804,92 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ArchivePolicy"];
                 };
+            };
+        };
+    };
+    detectionExclusions: {
+        parameters: {
+            query: {
+                channel_id: components["schemas"]["UUID"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description This channel's exclusion rules, each with how many events it suppressed in the last 24 hours. That count is the only way to tell a narrow rule from one that is suppressing everything. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items?: components["schemas"]["DetectionExclusion"][];
+                    };
+                };
+            };
+        };
+    };
+    saveDetectionExclusion: {
+        parameters: {
+            query: {
+                channel_id: components["schemas"]["UUID"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DetectionExclusionInput"];
+            };
+        };
+        responses: {
+            /** @description The saved rule. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DetectionExclusion"];
+                };
+            };
+            /** @description The drawing or the window cannot be evaluated. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    deleteDetectionExclusion: {
+        parameters: {
+            query: {
+                channel_id: components["schemas"]["UUID"];
+            };
+            header?: never;
+            path: {
+                id: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. Events it already suppressed keep their recorded reason. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Version conflict: the rule changed since it was read. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
