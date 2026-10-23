@@ -706,6 +706,130 @@ func TestReconciliationRecoversASnapshotAnnouncedAfterTheEnd(t *testing.T) {
 	}
 }
 
+// Reconciliation answers the whole batch with ONE list request.
+//
+// It used to cost one GET per candidate, which is 50 round trips for a batch of
+// 50. The list route carries the same facts, so one request answers all of them.
+//
+// The asymmetry matters as much as the saving: the list is only believed when it
+// CONTAINS the event. A row missing from a bounded response does not mean the
+// detector forgot the event, so absence still costs a per-event confirm.
+func TestReconciliationAnswersTheBatchWithOneListRequest(t *testing.T) {
+	f := newNotifyFixture(t)
+	f.mapCamera(t, "front-door")
+	ctx := context.Background()
+	started := float64(time.Now().UTC().Add(-20 * time.Minute).Unix())
+	ended := started + 60
+	// Two closed events whose snapshots never arrived.
+	for _, sourceID := range []string{"evt-a", "evt-b"} {
+		if err := f.service.Ingest(ctx,
+			frigatePayload("new", sourceID, "front-door", "person", started, nil, nil, false)); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.service.Ingest(ctx,
+			frigatePayload("end", sourceID, "front-door", "person", started, &ended, nil, false)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var listCalls, perEventCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The image probe is a third kind of request; answer it as absent so the
+		// events settle and the test can assert on the counts alone.
+		if strings.HasSuffix(r.URL.Path, "/snapshot.jpg") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if r.URL.Path == "/api/events" {
+			listCalls++
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{"id": "evt-a", "camera": "front-door", "label": "person",
+					"start_time": started, "end_time": ended, "has_snapshot": true,
+					"data": map[string]any{"score": 0.8}},
+				{"id": "evt-b", "camera": "front-door", "label": "person",
+					"start_time": started, "end_time": ended, "has_snapshot": true,
+					"data": map[string]any{"score": 0.8}},
+			})
+			return
+		}
+		perEventCalls++
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+	f.service.Frigate = server.URL
+
+	f.service.ReconcileOpenEvents(ctx)
+
+	if listCalls != 1 {
+		t.Fatalf("the batch must be answered by exactly one list request, got %d", listCalls)
+	}
+	if perEventCalls != 0 {
+		t.Fatalf("rows present in the list must not be fetched again, got %d per-event calls", perEventCalls)
+	}
+	var ready int
+	if err := f.fixture.DB.Pool.QueryRow(ctx,
+		`SELECT count(*) FROM events WHERE source_id IN ('evt-a','evt-b') AND snapshot_state='ready'`).Scan(&ready); err != nil {
+		t.Fatal(err)
+	}
+	if ready != 2 {
+		t.Fatalf("both events must have their picture marked ready, got %d", ready)
+	}
+}
+
+// A row the list does not contain is not proof it is gone.
+//
+// The response is bounded by limit and by the window asked for, so absence must
+// be confirmed per event before anything is settled as abandoned.
+func TestAEventMissingFromTheListIsConfirmedBeforeBeingSettled(t *testing.T) {
+	f := newNotifyFixture(t)
+	f.mapCamera(t, "front-door")
+	ctx := context.Background()
+	started := float64(time.Now().UTC().Add(-20 * time.Minute).Unix())
+	if err := f.service.Ingest(ctx,
+		frigatePayload("new", "evt-absent", "front-door", "person", started, nil, nil, false)); err != nil {
+		t.Fatal(err)
+	}
+	ended := started + 60
+	if err := f.service.Ingest(ctx,
+		frigatePayload("end", "evt-absent", "front-door", "person", started, &ended, nil, false)); err != nil {
+		t.Fatal(err)
+	}
+
+	var perEventCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/events" {
+			// The list does not mention this event at all.
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+			return
+		}
+		perEventCalls++
+		// The per-event read still knows it: the list was simply bounded.
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "evt-absent", "camera": "front-door", "label": "person",
+			"start_time": started, "end_time": ended, "has_snapshot": true,
+			"data": map[string]any{"score": 0.9},
+		})
+	}))
+	defer server.Close()
+	f.service.Frigate = server.URL
+
+	f.service.ReconcileOpenEvents(ctx)
+
+	if perEventCalls != 1 {
+		t.Fatalf("absence must be confirmed with one per-event request, got %d", perEventCalls)
+	}
+	var state, ended2 string
+	var endedAt *time.Time
+	if err := f.fixture.DB.Pool.QueryRow(ctx,
+		`SELECT snapshot_state, ended_at::text FROM events WHERE source_id='evt-absent'`).Scan(&state, &ended2); err != nil {
+		t.Fatal(err)
+	}
+	_ = endedAt
+	if state != "ready" {
+		t.Fatalf("the confirmed read must set the picture ready, got %q", state)
+	}
+}
+
 // The other half of the same case: the detector confirms there is no picture
 // and the retry window has passed, so the row becomes an honest "none" the
 // operator can stop waiting on.

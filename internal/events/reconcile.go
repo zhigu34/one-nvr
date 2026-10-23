@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -73,9 +74,21 @@ const (
 	openEventMinAge = 2 * time.Minute
 )
 
-// reconcileBatch bounds one pass. Each candidate costs one HTTP call to the
-// detector, and an unbounded sweep on first enable would hammer it.
+// reconcileBatch bounds one pass. It used to mean "this many HTTP calls": each
+// candidate cost one GET of its own. The list route below answers the whole batch
+// in one request, so the bound is now about how much work one pass does, not how
+// hard it hits the detector.
 const reconcileBatch = 50
+
+// reconcileListLimit bounds the single list request. The response is compact
+// (thumbnails excluded), and a batch of 50 candidates needs at most that many
+// rows plus whatever else the detector recorded in the same window.
+const reconcileListLimit = 2000
+
+// reconcileLookupMargin widens the list window on the early side. The detector's
+// clock is not this process's clock, and an event that started a few seconds
+// before the oldest candidate must still come back in the same response.
+const reconcileLookupMargin = 5 * time.Minute
 
 // ReconcileOpenEvents asks the detector about the events this index cannot
 // finish on its own, and fills in what it reports. Two conditions qualify, and
@@ -89,6 +102,14 @@ const reconcileBatch = 50
 // `has_snapshot` as it stands when the event ends, then stops reporting on that
 // event entirely — so a picture written just after the end is never announced,
 // and the row sits at pending forever with no repair path looking at it.
+//
+// The batch is answered by ONE list request rather than one request per event.
+// That is an efficiency change with a deliberate asymmetry: the list is used as
+// POSITIVE evidence only. A row returned by it supplies the facts; a row missing
+// from it proves nothing, because the response is bounded by limit and by the
+// window asked for. Absence therefore still costs one per-event request to
+// confirm a 404 — that is the rare case, and it is the one where a wrong answer
+// (declaring a picture gone that the detector still has) is unrecoverable.
 func (s *Service) ReconcileOpenEvents(ctx context.Context) {
 	if s.Frigate == "" || s.DB == nil {
 		return
@@ -100,21 +121,38 @@ func (s *Service) ReconcileOpenEvents(ctx context.Context) {
 		}
 		return
 	}
+	if len(open) == 0 {
+		return
+	}
 	client := &http.Client{Timeout: 10 * time.Second}
+	// One pass, one list. `open` is newest-first, so the last row is the oldest
+	// candidate and its start bounds the window.
+	byID, listErr := s.listEventsSince(ctx, client, open[len(open)-1].Started.Add(-reconcileLookupMargin))
+	if listErr != nil {
+		// Fall back to per-event reads for this pass: the batch is small and a
+		// missing list must not turn into "nothing to do".
+		if ctx.Err() == nil {
+			slog.Warn("event reconciliation list unavailable", "error", listErr)
+		}
+	}
 	for _, candidate := range open {
 		if ctx.Err() != nil {
 			return
 		}
-		report, err := s.fetchEvent(ctx, client, candidate.SourceID)
-		if err != nil {
-			// A detector that cannot answer is not evidence that the event is
-			// over; leave it alone and try again next pass.
-			if !errors.Is(err, errEventGone) {
-				slog.Warn("event reconciliation fetch failed", "source_id", candidate.SourceID, "error", err)
-			} else {
-				s.settleAbandoned(ctx, candidate)
+		report, found := byID[candidate.SourceID]
+		if !found {
+			var err error
+			report, err = s.fetchEvent(ctx, client, candidate.SourceID)
+			if err != nil {
+				// A detector that cannot answer is not evidence that the event is
+				// over; leave it alone and try again next pass.
+				if !errors.Is(err, errEventGone) {
+					slog.Warn("event reconciliation fetch failed", "source_id", candidate.SourceID, "error", err)
+				} else {
+					s.settleAbandoned(ctx, candidate)
+				}
+				continue
 			}
-			continue
 		}
 		if err := s.applyReport(ctx, candidate, report); err != nil && ctx.Err() == nil {
 			slog.Warn("event reconciliation write failed", "source_id", candidate.SourceID, "error", err)
@@ -138,6 +176,38 @@ func (s *Service) ReconcileOpenEvents(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// listEventsSince fetches the detector's event index from `after` to now, keyed
+// by upstream id. Thumbnails are excluded: this call wants facts, and the image
+// is fetched separately through the archive path.
+func (s *Service) listEventsSince(ctx context.Context, client *http.Client, after time.Time) (map[string]eventReport, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("%s/api/events?after=%d&limit=%d&include_thumbnails=0",
+			s.Frigate, after.Unix(), reconcileListLimit), nil)
+	if err != nil {
+		return nil, err
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, errors.New("detector answered " + response.Status)
+	}
+	var rows []eventReport
+	if err := json.NewDecoder(response.Body).Decode(&rows); err != nil {
+		return nil, err
+	}
+	out := make(map[string]eventReport, len(rows))
+	for _, row := range rows {
+		if row.ID == "" {
+			continue
+		}
+		out[row.ID] = row
+	}
+	return out, nil
 }
 
 // openEvent is one event this index cannot finish, with what reconciliation
