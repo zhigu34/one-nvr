@@ -6,16 +6,19 @@ import (
 	"time"
 )
 
-// The detector reports boxes in pixels of the detect frame; an operator's
-// polygon is normalized to 0..1. The conversion belongs at the ingest boundary
-// and must happen exactly once.
+// The detector reports boxes as [x1,y1,x2,y2] corners in pixels of the detect
+// frame; an operator's polygon is normalized [x,y] to 0..1, and the polygon test
+// reads [x,y,w,h]. Both conversions belong at the ingest boundary.
 //
-// This is the defect that made region exclusion a no-op on the live site: the
-// MQTT envelope's box was never read at all (wrong JSON path). This test pins
-// the other half — once it is read, a pixel value written verbatim would sit
-// outside every polygon, which fails the same way and just as silently.
+// This test exists because the feature failed twice in exactly this place. First
+// the MQTT envelope's box was never read at all (wrong JSON path). Then, with the
+// path fixed, the corners were divided by the frame size but not subtracted:
+// "width" became the right edge, so a box near the bottom produced a centre below
+// the frame and exclusion still never fired. The second case below is a real box
+// from the live site, which is what exposed it.
 func TestDetectorBoxIsConvertedToFrameFractions(t *testing.T) {
-	got := boxAsFractions([]float64{64, 36, 128, 72})
+	// Corners in a 640x360 frame; the result is x=10%, y=10%, w=20%, h=20%.
+	got := boxAsFractions([]float64{64, 36, 192, 108})
 	want := []float64{0.1, 0.1, 0.2, 0.2}
 	if len(got) != 4 {
 		t.Fatalf("box = %v", got)
@@ -25,10 +28,26 @@ func TestDetectorBoxIsConvertedToFrameFractions(t *testing.T) {
 			t.Fatalf("box[%d] = %v, want %v (full: %v)", i, got[i], want[i], got)
 		}
 	}
-	// A box that is not four numbers cannot be located, and the caller must not
-	// receive a half-converted value that looks usable.
+	// A real production box: x 133..263, y 248..358 of 640x360.
+	live := boxAsFractions([]float64{133, 248, 263, 358})
+	if math.Abs(live[0]-0.2078) > 1e-3 || math.Abs(live[1]-0.6889) > 1e-3 ||
+		math.Abs(live[2]-0.2031) > 1e-3 || math.Abs(live[3]-0.3056) > 1e-3 {
+		t.Fatalf("live box converted to %v", live)
+	}
+	// Its centre must be inside the frame. Treating the corners as w/h put the
+	// centre at y=1.19, beyond the bottom edge, where no polygon can contain it.
+	if cy := live[1] + live[3]/2; cy >= 1 || cy <= 0 {
+		t.Fatalf("converted box centre y = %v; a box in the lower part of the frame "+
+			"must not fall outside it", cy)
+	}
+	// A box that is not four numbers, or whose corners are inverted, cannot be
+	// located, and the caller must not receive a half-converted value that looks
+	// usable.
 	if boxAsFractions([]float64{1, 2, 3}) != nil {
 		t.Fatal("a three-element box was accepted")
+	}
+	if boxAsFractions([]float64{200, 100, 100, 200}) != nil {
+		t.Fatal("an inverted corner box was accepted")
 	}
 	if boxAsFractions(nil) != nil {
 		t.Fatal("an absent box was accepted")

@@ -151,21 +151,29 @@ type frigateMessage struct {
 	} `json:"after"`
 }
 
-// boxAsFractions converts the detector's pixel box to frame fractions.
+// boxAsFractions converts the detector's box to frame fractions in the
+// [x, y, w, h] form the REST API publishes and the polygon test expects.
 //
-// The detector publishes pixels; the REST API publishes fractions; the event row
-// stores fractions because that is what an operator's polygon is drawn in. A box
-// that is not four numbers cannot be located, and an unlocatable detection is
-// deliberately NOT excluded — the safe direction is to keep reporting.
+// The MQTT envelope carries the raw detector box, which is [x1, y1, x2, y2]
+// corners. Frigate's own API runs to_relative_box over the same tuple, and that
+// function subtracts to get width and height. Dividing the corners by the frame
+// size without subtracting therefore produced a "width" that was really the
+// right edge: a box near the bottom of the frame computed a centre below the
+// frame, outside every polygon. That is the same silent failure as the wrong
+// JSON path, one unit further along.
+//
+// A box that is not four numbers, or whose corners are inverted, cannot be
+// located, and an unlocatable detection is deliberately NOT excluded — the safe
+// direction is to keep reporting.
 func boxAsFractions(box []float64) []float64 {
-	if len(box) != 4 {
+	if len(box) != 4 || box[2] < box[0] || box[3] < box[1] {
 		return nil
 	}
 	return []float64{
 		box[0] / detection.DetectWidth,
 		box[1] / detection.DetectHeight,
-		box[2] / detection.DetectWidth,
-		box[3] / detection.DetectHeight,
+		(box[2] - box[0]) / detection.DetectWidth,
+		(box[3] - box[1]) / detection.DetectHeight,
 	}
 }
 

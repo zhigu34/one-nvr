@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"testing"
 	"time"
 
@@ -43,19 +44,18 @@ func frigatePayload(eventType, id, camera, label string, start float64, end *flo
 //
 //   - `box` is a TOP-LEVEL field of `after`. There is no `data` nesting in the
 //     MQTT payload; that shape belongs to the REST API.
-//   - `box` is in detect-frame PIXELS, not fractions. The API normalizes, the
-//     stream does not.
+//   - `box` is in detect-frame PIXELS, not fractions, and it is CORNERS
+//     [x1,y1,x2,y2], not [x,y,w,h]. The API normalizes and subtracts; the stream
+//     does neither.
 //
-// The helper takes fractions so the tests can talk about frame regions, and
-// converts them here the way the detector does.
+// The helper takes [x,y,w,h] fractions so the tests can talk about frame regions,
+// and writes what the detector writes: corner pixels.
 func frigatePayloadWithBox(eventType, id, camera, label string, start float64, box []float64) []byte {
-	pixels := make([]float64, 4)
-	for i, value := range box {
-		if i%2 == 0 {
-			pixels[i] = value * detection.DetectWidth
-		} else {
-			pixels[i] = value * detection.DetectHeight
-		}
+	pixels := []float64{
+		box[0] * detection.DetectWidth,
+		box[1] * detection.DetectHeight,
+		(box[0] + box[2]) * detection.DetectWidth,
+		(box[1] + box[3]) * detection.DetectHeight,
 	}
 	body := map[string]any{
 		"type": eventType,
@@ -123,9 +123,9 @@ func TestExclusionSuppressesWithoutDeleting(t *testing.T) {
 	if reason == "" || ruleID == nil {
 		t.Fatalf("the excluded event must keep its reason and rule, got %q %v", reason, ruleID)
 	}
-	// The stored box is in frame fractions, whatever unit the wire used. A pixel
-	// box written verbatim would sit far outside a 0..1 polygon and quietly
-	// exclude nothing — the failure mode this test now pins.
+	// The stored box is [x,y,w,h] in frame fractions, whatever the wire used. A
+	// pixel box or an unconverted corner box sits outside every 0..1 polygon and
+	// quietly excludes nothing — the failure modes this test now pins.
 	var rawJSON []byte
 	if err := fixture.DB.Pool.QueryRow(ctx,
 		`SELECT raw FROM events WHERE source_id='evt-inside'`).Scan(&rawJSON); err != nil {
@@ -140,8 +140,11 @@ func TestExclusionSuppressesWithoutDeleting(t *testing.T) {
 	if len(stored.Box) != 4 {
 		t.Fatalf("the detector's box was not stored: %s", rawJSON)
 	}
-	if stored.Box[0] > 1 || stored.Box[1] > 1 || stored.Box[2] > 1 || stored.Box[3] > 1 {
-		t.Fatalf("box stored in pixels %v; every exclusion polygon is normalized to 0..1", stored.Box)
+	wantBox := []float64{0.1, 0.1, 0.2, 0.2}
+	for i := range wantBox {
+		if math.Abs(stored.Box[i]-wantBox[i]) > 1e-6 {
+			t.Fatalf("stored box %v, want [x,y,w,h] fractions %v", stored.Box, wantBox)
+		}
 	}
 	// The others were not excluded.
 	var visible int
