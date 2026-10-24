@@ -16,6 +16,7 @@ import (
 	"github.com/zhigu34/one-nvr/internal/audit"
 	"github.com/zhigu34/one-nvr/internal/auth"
 	"github.com/zhigu34/one-nvr/internal/database"
+	"github.com/zhigu34/one-nvr/internal/detection"
 	"github.com/zhigu34/one-nvr/internal/fault"
 	"github.com/zhigu34/one-nvr/internal/id"
 	"github.com/zhigu34/one-nvr/internal/notify"
@@ -120,43 +121,52 @@ func scanEvent(row pgx.Row) (Event, error) {
 // frigateMessage is the subset of Frigate's event JSON one-nvr consumes. The
 // upstream schema is versioned by the locked image; unknown fields are ignored
 // on purpose (forward compatibility), missing required fields are rejected.
+//
+// The field paths here are the ones the detector actually publishes, which is
+// not the same shape as its REST API. In the MQTT envelope `box` sits at the top
+// level of `after` and is measured in **detect-frame pixels**; the API's
+// `data.box` is normalized. Reading `after.data.box` therefore always produced a
+// nil box — the parse succeeded, the field was simply never there — and every
+// region exclusion silently evaluated to "not excluded". The two units are kept
+// apart by normalizing at this boundary: everything downstream stores and reads
+// frame fractions only.
 type frigateMessage struct {
-	Type   string `json:"type"`
-	Before struct {
-		ID           string   `json:"id"`
-		Camera       string   `json:"camera"`
-		Label        string   `json:"label"`
-		Score        float64  `json:"score"`
-		TopScore     float64  `json:"top_score"`
-		Zones        []string `json:"zones"`
-		EnteredZones []string `json:"entered_zones"`
-		StartTime    float64  `json:"start_time"`
-		EndTime      *float64 `json:"end_time"`
-		HasSnapshot  bool     `json:"has_snapshot"`
-		Data         struct {
-			Box []float64 `json:"box"`
-		} `json:"data"`
-	} `json:"before"`
+	Type  string `json:"type"`
 	After struct {
 		ID           string   `json:"id"`
 		Camera       string   `json:"camera"`
 		Label        string   `json:"label"`
 		Score        float64  `json:"score"`
 		TopScore     float64  `json:"top_score"`
-		Zones        []string `json:"zones"`
+		Zones        []string `json:"current_zones"`
 		EnteredZones []string `json:"entered_zones"`
 		StartTime    float64  `json:"start_time"`
 		EndTime      *float64 `json:"end_time"`
 		HasSnapshot  bool     `json:"has_snapshot"`
-		// Data carries the detector's own geometry. box is [x, y, w, h] in
-		// fractions of the frame, and it is the only signal that separates "the
-		// same person was re-identified" (nearly the same place) from "two people
-		// were in frame at once" (different places). Without it, folding
-		// overlapping events would merge two real detections into one.
-		Data struct {
-			Box []float64 `json:"box"`
-		} `json:"data"`
+		// Box is [x, y, w, h] in detect-frame pixels. It is the only signal that
+		// separates "the same person was re-identified" (nearly the same place)
+		// from "two people in frame at once", and the only thing a region
+		// exclusion can be tested against.
+		Box []float64 `json:"box"`
 	} `json:"after"`
+}
+
+// boxAsFractions converts the detector's pixel box to frame fractions.
+//
+// The detector publishes pixels; the REST API publishes fractions; the event row
+// stores fractions because that is what an operator's polygon is drawn in. A box
+// that is not four numbers cannot be located, and an unlocatable detection is
+// deliberately NOT excluded — the safe direction is to keep reporting.
+func boxAsFractions(box []float64) []float64 {
+	if len(box) != 4 {
+		return nil
+	}
+	return []float64{
+		box[0] / detection.DetectWidth,
+		box[1] / detection.DetectHeight,
+		box[2] / detection.DetectWidth,
+		box[3] / detection.DetectHeight,
+	}
 }
 
 // Ingest normalizes one MQTT payload into the event index.
@@ -179,6 +189,9 @@ func (s *Service) Ingest(ctx context.Context, payload []byte) error {
 	}
 	zones := after.EnteredZones
 	if len(zones) == 0 {
+		// current_zones is where the object is now; entered_zones is every zone
+		// it has been in, which is what the rules are written against. Both are
+		// in the envelope, and neither is called "zones".
 		zones = after.Zones
 	}
 	var endTime *time.Time
@@ -191,8 +204,8 @@ func (s *Service) Ingest(ctx context.Context, payload []byte) error {
 		snapshotState = "ready"
 	}
 	rawFields := map[string]any{"type": message.Type, "label": after.Label, "camera": after.Camera}
-	if len(after.Data.Box) == 4 {
-		rawFields["box"] = after.Data.Box
+	if box := boxAsFractions(after.Box); box != nil {
+		rawFields["box"] = box
 	}
 	raw, _ := json.Marshal(rawFields)
 	err := s.eventUpsert(ctx, upsertInput{

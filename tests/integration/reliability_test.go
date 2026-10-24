@@ -208,6 +208,83 @@ func TestStartupClosesOpenIntervalsAndRecordsTheGap(t *testing.T) {
 	}
 }
 
+// A sampling stall while the process keeps running must be recorded as unknown
+// time.
+//
+// `NoteMonitoringGap` existed from the first batch with no caller, so an interval
+// whose observations stopped simply stayed open: the last state was carried
+// forward across every minute nobody looked, and availability improved exactly
+// when the evidence was missing. The monitor loop now calls it before sampling,
+// because folding a new observation first would extend the interval across the
+// stall and erase the gap.
+func TestSamplingStallRecordsAMonitoringGap(t *testing.T) {
+	fixture, service := newReliabilityFixture(t)
+	ctx := context.Background()
+	stalledAt := time.Now().UTC().Add(-5 * time.Minute)
+	if err := service.Fold(ctx, reliability.Observation{
+		ChannelID: fixture.Channel, Kind: "main", State: "healthy", Reason: "frame_progress_observed",
+		ObservedAt: stalledAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.NoteMonitoringGap(ctx, 90*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	var endedAt *time.Time
+	var reason string
+	if err := fixture.DB.Pool.QueryRow(ctx,
+		`SELECT ended_at,reason_code FROM reliability_intervals WHERE channel_id=$1 AND kind='main' AND state='healthy'`, fixture.Channel).
+		Scan(&endedAt, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if endedAt == nil || !endedAt.Equal(stalledAt) {
+		t.Fatalf("the stalled interval must end at the last real observation %v, got %v", stalledAt, endedAt)
+	}
+	if got := countIntervals(t, fixture, `SELECT count(*) FROM reliability_intervals
+		WHERE channel_id=$1 AND state='unknown' AND reason_code='monitoring_gap' AND started_at=$2`, fixture.Channel, stalledAt); got != 1 {
+		t.Fatalf("the unobserved time must be recorded as a monitoring gap starting at the stall, got %d", got)
+	}
+	// The pass runs on every monitor tick, so a gap must not be re-created each
+	// time: an unsampled channel would accumulate one row per pass forever.
+	if err := service.NoteMonitoringGap(ctx, 90*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if got := countIntervals(t, fixture, `SELECT count(*) FROM reliability_intervals
+		WHERE channel_id=$1 AND reason_code='monitoring_gap'`, fixture.Channel); got != 1 {
+		t.Fatalf("re-running the pass duplicated the gap (%d rows)", got)
+	}
+	// "Not required to be up" is not "nobody looked". A disabled or unconfigured
+	// channel stops producing observations by design, and its excluded time must
+	// not move into the availability denominator.
+	if err := service.Fold(ctx, reliability.Observation{
+		ChannelID: fixture.Channel, Kind: "recording", State: "disabled", Exclusion: "disabled",
+		Reason: "recording_disabled", ObservedAt: stalledAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.NoteMonitoringGap(ctx, 90*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if got := countIntervals(t, fixture, `SELECT count(*) FROM reliability_intervals
+		WHERE channel_id=$1 AND kind='recording' AND reason_code='monitoring_gap'`, fixture.Channel); got != 0 {
+		t.Fatalf("excluded time was turned into a monitoring gap (%d rows)", got)
+	}
+	// A live sampler is not a gap: the next observation arrives inside the window.
+	if err := service.Fold(ctx, reliability.Observation{
+		ChannelID: fixture.Channel, Kind: "sub", State: "healthy", Reason: "frame_progress_observed",
+		ObservedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.NoteMonitoringGap(ctx, 90*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if got := countIntervals(t, fixture, `SELECT count(*) FROM reliability_intervals
+		WHERE channel_id=$1 AND kind='sub' AND reason_code='monitoring_gap'`, fixture.Channel); got != 0 {
+		t.Fatalf("a current observation was turned into a gap (%d)", got)
+	}
+}
+
 // A restart with no downtime must not invent a zero-length gap: that would add
 // noise to every clean restart and make "monitoring unknown" meaningless.
 func TestStartupWithoutDowntimeRecordsNoGap(t *testing.T) {

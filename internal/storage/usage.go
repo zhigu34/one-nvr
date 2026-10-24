@@ -3,111 +3,30 @@ package storage
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"syscall"
-	"time"
-
-	"github.com/zhigu34/one-nvr/internal/id"
 )
 
-// verifiedUsage measures indexed ready locations only. Native working files and
-// unrelated mounted content have unknown usage; no mount-wide recursive scan.
-func (s *Service) verifiedUsage(ctx context.Context, pool Pool) (*int64, error) {
-	root, _, err := s.OpenMediaRoot(ctx, pool.ID)
-	if err != nil {
-		return nil, nil
-	}
-	defer root.Close()
-	bounded, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	type location struct {
-		ID       id.ID
-		Path     string
-		Size     int64
-		Identity []byte
-	}
-	var after any
+// indexedUsage is the size of the pool's ready index entries.
+//
+// It deliberately does not touch the filesystem. Verifying that every file is
+// still on disk is the background reconciler's job (see reconcile.go), because a
+// page load cannot do it honestly: the old implementation walked the pool with a
+// three-second budget, ordered by segment id, and restarted from the first row on
+// every request. A pool too large for the budget re-checked the same first rows
+// forever and never reached the rest, so the file that had gone missing was
+// exactly the one it never looked at. Worse, the number it reported was a
+// side effect of how far it got, and the same page could answer differently
+// depending on how busy the disk was.
+//
+// The index's own total is cheap, stable, and is what the page actually shows:
+// how much recorded material the system believes it has. The reconciler is what
+// corrects the index when the files disagree.
+func (s *Service) indexedUsage(ctx context.Context, pool Pool) (*int64, error) {
 	var total int64
-	for {
-		if bounded.Err() != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			return nil, nil
-		}
-		rows, err := s.DB.Pool.Query(bounded, `SELECT l.segment_id,l.relative_path,l.size_bytes,s.file_identity FROM recording_locations l JOIN recording_segments s ON s.id=l.segment_id WHERE l.pool_id=$1 AND l.state='ready' AND s.state='ready' AND ($2::uuid IS NULL OR l.segment_id>$2::uuid) ORDER BY l.segment_id LIMIT 256`, pool.ID, after)
-		if err != nil {
-			if bounded.Err() != nil && ctx.Err() == nil {
-				return nil, nil
-			}
-			return nil, err
-		}
-		var locations []location
-		for rows.Next() {
-			var l location
-			if err := rows.Scan(&l.ID, &l.Path, &l.Size, &l.Identity); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			locations = append(locations, l)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			if bounded.Err() != nil && ctx.Err() == nil {
-				return nil, nil
-			}
-			return nil, err
-		}
-		for _, location := range locations {
-			if bounded.Err() != nil {
-				if ctx.Err() != nil {
-					return nil, ctx.Err()
-				}
-				return nil, nil
-			}
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			file, err := OpenMediaFile(root, location.Path)
-			if err != nil {
-				if _, statErr := root.Lstat(location.Path); !os.IsNotExist(statErr) {
-					return nil, nil
-				}
-				// The state guard matters: this pass runs every ten seconds in BOTH the
-				// api and the worker, while the deletion core unlinks the file and only
-				// then commits `deleted`. Without `state='ready'` a stat landing in that
-				// window - or any later pass - would overwrite a deliberate deletion
-				// with 'missing', and the two are required to stay distinguishable
-				// (PRD FILE-04).
-				if _, err := s.DB.Pool.Exec(ctx, `UPDATE recording_locations SET state='missing',verified_at=clock_timestamp() WHERE segment_id=$1 AND pool_id=$2 AND state='ready'`, location.ID, pool.ID); err != nil {
-					return nil, err
-				}
-				if _, err := s.DB.Pool.Exec(ctx, `UPDATE recording_segments SET state='missing',error_code='missing' WHERE id=$1 AND state='ready'`, location.ID); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			info, statErr := file.Stat()
-			file.Close()
-			if statErr != nil {
-				return nil, nil
-			}
-			stat, ok := info.Sys().(*syscall.Stat_t)
-			if !ok || fileDamage(location.Identity, location.Size, uint64(stat.Dev), uint64(stat.Ino), info.Size(), info.ModTime().UnixNano()) {
-				if _, err := s.DB.Pool.Exec(ctx, `UPDATE recording_locations SET state='damaged',verified_at=clock_timestamp() WHERE segment_id=$1 AND pool_id=$2 AND state='ready'`, location.ID, pool.ID); err != nil {
-					return nil, err
-				}
-				if _, err := s.DB.Pool.Exec(ctx, `UPDATE recording_segments SET state='damaged',error_code='damaged' WHERE id=$1 AND state='ready'`, location.ID); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			total = saturatingAdd(total, location.Size)
-		}
-		if len(locations) < 256 {
-			break
-		}
-		after = locations[len(locations)-1].ID
+	err := s.DB.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(l.size_bytes),0)
+		FROM recording_locations l JOIN recording_segments s ON s.id=l.segment_id
+		WHERE l.pool_id=$1 AND l.state='ready' AND s.state='ready'`, pool.ID).Scan(&total)
+	if err != nil {
+		return nil, err
 	}
 	return &total, nil
 }

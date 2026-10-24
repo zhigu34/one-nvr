@@ -345,6 +345,7 @@ func (r *router) reliabilitySummary(w http.ResponseWriter, q *http.Request, p au
 // comes from the site, matching how every other timestamp in the product is
 // interpreted.
 func (r *router) reliabilityComplianceCSV(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	w = streamWriter(w)
 	if r.d.Reliability == nil {
 		fail(w, q, auth.ErrNotFound)
 		return

@@ -390,9 +390,27 @@ func TestRecordingPublishPoolUsageCountsVerifiedLocalOnly(t *testing.T) {
 	if err := os.Remove(filepath.Join(fixture.Pool.Path, target)); err != nil {
 		t.Fatal(err)
 	}
+	// Opening the page reports the index; it does not verify the disk. Making a
+	// page load the verifier tied the verdict to how far a three-second scan got,
+	// which is how pools larger than the budget never reached the missing file.
+	page, err = pools.List(ctx, fixture.Admin)
+	if err != nil || page.Items[0].UsedBytes == nil || *page.Items[0].UsedBytes != fixture.Info.Size() {
+		t.Fatal("the storage page verified the disk instead of reporting the index", page, err)
+	}
+	// The worker's reconciler is what turns a vanished file into 'missing'.
+	if _, err := pools.VerifyBatch(ctx, page.Items[0], 10); err != nil {
+		t.Fatal(err)
+	}
 	page, err = pools.List(ctx, fixture.Admin)
 	if err != nil || page.Items[0].UsedBytes == nil || *page.Items[0].UsedBytes != 0 {
-		t.Fatal("missing media counted as present local footage", page, err)
+		t.Fatal("missing media counted as present local footage after reconciliation", page, err)
+	}
+	var segmentState string
+	if err := fixture.DB.Pool.QueryRow(ctx, "SELECT state FROM recording_segments WHERE run_id=$1", fixture.Run).Scan(&segmentState); err != nil {
+		t.Fatal(err)
+	}
+	if segmentState != "missing" {
+		t.Fatalf("reconciler left the vanished file as %q", segmentState)
 	}
 }
 

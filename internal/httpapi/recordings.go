@@ -82,6 +82,7 @@ func recordingQuery(q *http.Request) (recording.Query, error) {
 // instead emit multipart/byteranges and a text/plain 416, and would let an
 // unrecoverable audit failure happen after bytes had already left.
 func (r *router) recordingContent(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	w = streamWriter(w)
 	recordingID, err := pathID(q)
 	if err != nil {
 		fail(w, q, err)
@@ -240,6 +241,7 @@ func localFailureSupportsCloud(err error) bool {
 // range semantics, ETag discipline and audit-before-bytes rule are the same as
 // the local path, so a client cannot tell which copy answered.
 func (r *router) serveCloudContent(w http.ResponseWriter, q *http.Request, p auth.Principal, recordingID id.ID, cloud *archive.CloudSegment) {
+	w = streamWriter(w)
 	plan, err := recording.PlanByteRange(q.Header.Get("Range"), q.Header.Get("If-Range"), cloud.Size, cloud.ETag(), cloud.Modified)
 	if err != nil {
 		var unsatisfiable *fault.Error

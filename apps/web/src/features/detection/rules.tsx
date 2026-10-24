@@ -88,11 +88,17 @@ export function RulePanel({ channelID, onChanged }: { channelID: string; onChang
   // draft because the binding is a separate resource: the rule says what to
   // watch, the binding says who hears about it.
   const [binding, setBinding] = useState<string[]>([])
+  // Whether `binding` reflects the stored rule. Saving is a full replacement,
+  // so "not loaded yet" and "tell nobody" must not be the same value: the first
+  // would erase the rule's destinations when the operator only meant to rename
+  // it.
+  const [bindingLoaded, setBindingLoaded] = useState(true)
   const items = rules.data?.items || []
   const zoneItems = zones.data?.items || []
 
   function startNew() {
     setBinding([])
+    setBindingLoaded(true)
     setEditing({
       channel_id: channelID,
       name: '',
@@ -109,6 +115,10 @@ export function RulePanel({ channelID, onChanged }: { channelID: string; onChang
   }
 
   async function save(rule: Rule) {
+    if (!bindingLoaded) {
+      setError('尚未读取到该规则的通知通道，保存会清空它；请重新打开规则再试。')
+      return
+    }
     setPending(true)
     setError('')
     try {
@@ -134,10 +144,23 @@ export function RulePanel({ channelID, onChanged }: { channelID: string; onChang
   function openRule(rule: Rule) {
     setEditing(rule)
     setBinding([])
-    if (!rule.id) return
+    setBindingLoaded(false)
+    // A failed load may have left a message behind; reopening retries the read.
+    setError('')
+    if (!rule.id) {
+      // Nothing stored to preserve.
+      setBindingLoaded(true)
+      return
+    }
     void apiRequest<{ channel_ids?: string[] }>(`/api/v1/detection/rules/${rule.id}/channels`)
-      .then((result) => setBinding(result?.channel_ids ?? []))
-      .catch(() => setBinding([]))
+      .then((result) => {
+        setBinding(result?.channel_ids ?? [])
+        setBindingLoaded(true)
+      })
+      // A failed read must not look like "this rule tells nobody". Leave the
+      // binding unloaded and say so; save() refuses rather than writing an empty
+      // list over destinations the operator never saw.
+      .catch(() => setError('无法读取该规则的通知通道；为避免清空，保存已禁用，请重试。'))
   }
 
   async function remove(rule: Rule) {

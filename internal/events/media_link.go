@@ -181,22 +181,31 @@ func (s *Service) ReconcileEventMedia(ctx context.Context) {
 	if s.DB == nil {
 		return
 	}
-	// Two kinds of pending share this column and need different treatment:
+	// Every message rewrites the verdict, and the last message of an event is
+	// the one most likely to be wrong: the segment covering the event's tail is
+	// published after the detection ends, so "end" almost always finds nothing
+	// and writes "unavailable". Re-checking only `pending` never touched those
+	// rows — the state the upsert writes is never `pending`, it is the answer it
+	// computed — so a covered event stayed "本机无录像" for good.
 	//
-	//   - recent: the segment covering the event has not been published yet.
-	//     Leave it pending and look again next pass.
-	//   - old: footage will never appear (the channel was not recording, or it
-	//     was deleted by retention). Only a positive answer used to be written,
-	//     so these rows stayed pending forever and the page said "录像待归档"
-	//     about events from a week ago.
+	// The window is therefore the *event's age*, not its state:
 	//
-	// The old ones are settled below rather than filtered out here, so one query
-	// keeps both cases in view.
+	//   - pending: legacy rows, settled below once they are old enough;
+	//   - partial/unavailable within two hours of the event ending: the missing
+	//     footage may still be published, so look again;
+	//   - anything older: the answer is final and re-examining it would only
+	//     burn the same query every five minutes.
+	//
+	// A partial event is included because later segments extend the covered
+	// span; it is not merely an absence.
 	rows, err := s.DB.Pool.Query(ctx, `SELECT id,channel_id,started_at,ended_at,
-			started_at < clock_timestamp() - interval '2 hours' AS settled
+			COALESCE(ended_at,started_at) < clock_timestamp() - interval '2 hours' AS settled
 		FROM events
-		WHERE media_state='pending' AND channel_id IS NOT NULL
-		ORDER BY (started_at < clock_timestamp() - interval '2 hours') DESC, started_at DESC
+		WHERE channel_id IS NOT NULL AND (
+			media_state='pending'
+			OR (media_state IN ('partial','unavailable')
+				AND COALESCE(ended_at,started_at) > clock_timestamp() - interval '2 hours'))
+		ORDER BY (media_state='pending') DESC, COALESCE(ended_at,started_at) DESC
 		LIMIT 200`)
 	if err != nil {
 		if ctx.Err() == nil {

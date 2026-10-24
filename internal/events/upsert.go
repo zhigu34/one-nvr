@@ -79,10 +79,10 @@ func (s *Service) eventUpsert(ctx context.Context, in upsertInput) error {
 				ended_at=COALESCE(EXCLUDED.ended_at,events.ended_at),
 				snapshot_state=CASE WHEN EXCLUDED.snapshot_state='ready' THEN 'ready' ELSE events.snapshot_state END,
 				expires_at=COALESCE(EXCLUDED.expires_at,events.expires_at),
-				-- The box only ever moves from absent to present. MQTT does not carry
-				-- the detector's geometry, so the row is first written without it and
-				-- the reconciliation read fills it in later; that update must not be
-				-- undone by a later MQTT message that has no box.
+				-- The box only ever moves from absent to present. Both sources carry
+				-- geometry, but a row can first be written without it (a message
+				-- from a detector that omitted it, or an event type that has none),
+				-- and that absence must not overwrite a box already known.
 				raw=CASE WHEN EXCLUDED.raw ? 'box' AND NOT (events.raw ? 'box')
 					THEN EXCLUDED.raw ELSE events.raw END,
 				updated_at=clock_timestamp()

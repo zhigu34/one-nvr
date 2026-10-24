@@ -3,13 +3,16 @@ package integration
 import (
 	"context"
 	"errors"
-	"github.com/zhigu34/one-nvr/internal/auth"
-	"github.com/zhigu34/one-nvr/internal/jobs"
-	"github.com/zhigu34/one-nvr/internal/storage"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/zhigu34/one-nvr/internal/auth"
+	"github.com/zhigu34/one-nvr/internal/id"
+	"github.com/zhigu34/one-nvr/internal/jobs"
+	"github.com/zhigu34/one-nvr/internal/storage"
 )
 
 func TestPoolRootAndNestedConcurrency(t *testing.T) {
@@ -101,6 +104,74 @@ func TestPoolCheckQueueStoresIndependentEvidence(t *testing.T) {
 	page, err = svc.List(ctx, admin.Principal)
 	if err != nil || page.Capacity.FilesystemCount != 0 || page.Items[0].Checks[0].State != "expired" {
 		t.Fatal("stale checks accepted", err)
+	}
+}
+
+// A file the reconciler cannot examine must not stop it from examining the rest.
+//
+// The previous pass returned on the first error, so one unreadable file froze
+// verification for every recording on the pool — and because it restarted from
+// the first row on each request, it hit the same file forever. "Cannot read" is
+// not a verdict: the row is left alone and retried, while the next file is still
+// checked.
+func TestStorageReconcileContinuesPastAnUnreadableFile(t *testing.T) {
+	fixture := newPublicationFixture(t)
+	ctx := context.Background()
+	pools := storage.New(fixture.DB, fixture.Auth, []string{filepath.Dir(fixture.Pool.Path)})
+	seed := func(relative string, verifiedAgo time.Duration) id.ID {
+		t.Helper()
+		segment, err := id.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		now := time.Now().UTC()
+		if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_segments(
+			id,channel_id,source_revision_id,run_id,pool_id,original_relative_path,target_relative_path,
+			original_start,naming_timezone,utc_offset_seconds,start_at,end_at,size_bytes,state,ready_at)
+			VALUES($1,$2,$3,$4,$5,$6,$6,$7,'UTC',0,$7,$8,1024,'ready',clock_timestamp())`,
+			segment, fixture.Channel, fixture.Revision, fixture.Run, fixture.Pool.ID,
+			relative, now.Add(-time.Minute), now); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO recording_locations(
+			segment_id,pool_id,relative_path,size_bytes,state,verified_at)
+			VALUES($1,$2,$3,1024,'ready',clock_timestamp()-$4::interval)`,
+			segment, fixture.Pool.ID, relative, verifiedAgo.String()); err != nil {
+			t.Fatal(err)
+		}
+		return segment
+	}
+	// A directory where a file is expected is unreadable but definitely present:
+	// exactly the shape that used to abort the pool scan.
+	dirPath := "recordings/not-a-file.mp4"
+	if err := os.MkdirAll(filepath.Join(fixture.Pool.Path, filepath.Dir(dirPath)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(fixture.Pool.Path, dirPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The unreadable row sorts first, so the missing one is only reached if the
+	// error did not end the pass.
+	unreadable := seed(dirPath, 2*time.Hour)
+	vanished := seed("recordings/gone.mp4", time.Hour)
+
+	if _, err := pools.VerifyBatch(ctx, fixture.Pool, 10); err != nil {
+		t.Fatal(err)
+	}
+	var unreadableState, vanishedState string
+	if err := fixture.DB.Pool.QueryRow(ctx,
+		`SELECT state FROM recording_segments WHERE id=$1`, unreadable).Scan(&unreadableState); err != nil {
+		t.Fatal(err)
+	}
+	if unreadableState != "ready" {
+		t.Fatalf("an unreadable file was given a verdict (%q); the evidence does not support one", unreadableState)
+	}
+	if err := fixture.DB.Pool.QueryRow(ctx,
+		`SELECT state FROM recording_segments WHERE id=$1`, vanished).Scan(&vanishedState); err != nil {
+		t.Fatal(err)
+	}
+	if vanishedState != "missing" {
+		t.Fatalf("a file after the unreadable one was never checked (state %q); one bad file froze the pool", vanishedState)
 	}
 }
 

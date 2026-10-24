@@ -281,9 +281,9 @@ type eventReport struct {
 		Score    *float64 `json:"score"`
 		TopScore *float64 `json:"top_score"`
 		Zones    []string `json:"zones"`
-		// Box is [x, y, w, h] in fractions of the frame. The API reports it; the
-		// MQTT envelope does not carry it, which is why this path is the one that
-		// captures geometry for folding duplicate detections.
+		// Box is [x, y, w, h] in fractions of the frame. The REST API reports it
+		// normalized, while the MQTT envelope reports pixels; Ingest converts at
+		// its boundary so both paths store the same unit.
 		Box []float64 `json:"box"`
 	} `json:"data"`
 }

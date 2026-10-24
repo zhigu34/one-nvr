@@ -13,6 +13,17 @@ import (
 func (s *Service) Monitor(ctx context.Context) error {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
+	// monitoringGapAfter is how long an interval may go without a new observation
+	// before the missing time is recorded as unknown rather than as the previous
+	// state.
+	//
+	// The sampler ticks every ten seconds, but a channel can wait behind the four
+	// workers or a slow reconcile, so the threshold covers several cycles: a brief
+	// delay must not manufacture an "unknown" stretch on a healthy site. What it
+	// has to catch is a sampler that stopped writing (the database is refusing
+	// writes, the loop is wedged). Without it the last state stands indefinitely
+	// and availability figures improve for time nobody observed.
+	const monitoringGapAfter = 90 * time.Second
 	work, cancel := context.WithCancel(ctx)
 	var running sync.WaitGroup
 	defer func() { cancel(); running.Wait() }()
@@ -46,6 +57,15 @@ func (s *Service) Monitor(ctx context.Context) error {
 		}()
 	}
 	for ctx.Err() == nil {
+		// Close the record where observation actually stopped before sampling
+		// resumes. Ordering matters after an outage: a new observation extends the
+		// open interval, so running this second would fold the unobserved time
+		// into the previous state and the gap would never be visible at all.
+		if s.Reliability != nil {
+			if err := s.Reliability.NoteMonitoringGap(ctx, monitoringGapAfter); err != nil && ctx.Err() == nil {
+				slog.Warn("monitoring gap check unavailable", "error", err)
+			}
+		}
 		// Empty permanent slots have no media to observe. Keep cleanup candidates
 		// even when their channel is disabled/cleared, until its sessions close.
 		rows, err := s.DB.Pool.Query(ctx, `SELECT c.id FROM channels c WHERE (c.enabled AND c.current_revision_id IS NOT NULL) OR EXISTS(SELECT 1 FROM stream_sessions ss WHERE ss.channel_id=c.id AND ss.purpose IN ('main','sub') AND ss.state NOT IN ('closed','failed')) ORDER BY c.channel_no`)

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -101,6 +102,7 @@ func (r *router) getRecordingExport(w http.ResponseWriter, q *http.Request, p au
 // artifact, zipped on the fly. The manifest is derived, never stored, so the
 // package can never disagree with its own hashes.
 func (r *router) downloadRecordingExport(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	w = streamWriter(w)
 	exportID, err := pathID(q)
 	if err != nil {
 		fail(w, q, err)
@@ -127,11 +129,18 @@ func (r *router) downloadRecordingExport(w http.ResponseWriter, q *http.Request,
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", export.FileName()+".zip"))
 	w.Header().Set("Cache-Control", "private, no-store")
-	_ = recording.WriteExportZip(w, manifest, files)
+	// The headers are already committed, so a failure can only end the stream.
+	// It is still logged: a browser-facing "failed to fetch" says nothing about
+	// which artifact could not be read, and "the zip is short" is the operator's
+	// only other clue.
+	if err := recording.WriteExportZip(w, manifest, files); err != nil && q.Context().Err() == nil {
+		slog.Warn("recording export download incomplete", "export", export.ID, "error", err)
+	}
 }
 
 // recordingExportArtifactContent streams one artifact MP4 as a download.
 func (r *router) recordingExportArtifactContent(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {
+	w = streamWriter(w)
 	exportID, err := pathID(q)
 	if err != nil {
 		fail(w, q, err)
@@ -158,8 +167,11 @@ func (r *router) recordingExportArtifactContent(w http.ResponseWriter, q *http.R
 	w.Header().Set("Cache-Control", "private, no-store")
 	w.WriteHeader(http.StatusOK)
 	// The audit row precedes the first byte; an interrupted copy after that is
-	// an operator-visible download failure, not an index problem.
-	_, _ = io.Copy(w, file)
+	// an operator-visible download failure, not an index problem. Logging it is
+	// the only trace that survives: the response is already committed.
+	if _, err := io.Copy(w, file); err != nil && q.Context().Err() == nil {
+		slog.Warn("export artifact download interrupted", "export", exportID, "artifact", artifact.ID, "error", err)
+	}
 }
 
 func (r *router) setExportArtifactProtection(w http.ResponseWriter, q *http.Request, p auth.Principal, _ string) {

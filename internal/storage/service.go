@@ -26,7 +26,9 @@ type Pool struct {
 	Version   int64   `json:"version"`
 	Checks    []Check `json:"checks"`
 	State     string  `json:"state"`
-	// Verified indexed local usage; raw working/unpublished media usage is unknown.
+	// Indexed local usage: the sum of ready recording_locations for this pool.
+	// The background reconciler maintains those states; raw working or
+	// unpublished media usage is unknown and is not counted.
 	UsedBytes *int64 `json:"used_bytes"`
 	// Watermark thresholds in percent. Warning only reports, pressure starts
 	// deleting until the target is met, critical keeps deleting. They live on
@@ -346,7 +348,7 @@ func (s *Service) withChecks(ctx context.Context, p Pool, usageContexts ...conte
 	if len(usageContexts) == 1 {
 		usageCtx = usageContexts[0]
 	}
-	usage, err := s.verifiedUsage(usageCtx, p)
+	usage, err := s.indexedUsage(usageCtx, p)
 	if err != nil && usageCtx.Err() != nil && ctx.Err() == nil {
 		err = nil
 		usage = nil

@@ -348,6 +348,11 @@ func Run(name string) error {
 	if name == "worker" {
 		background.Add(1)
 		go func() { defer background.Done(); pools.RunJobs(ctx) }()
+		// FILE-04: the index is verified against disk on its own cadence. Running
+		// this from the storage page meant it only happened when someone looked —
+		// and then only as far as a three-second budget reached.
+		background.Add(1)
+		go func() { defer background.Done(); pools.RunReconcile(ctx) }()
 	}
 	if name == "worker" {
 		background.Add(3)

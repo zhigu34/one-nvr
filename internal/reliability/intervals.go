@@ -320,25 +320,66 @@ func (s *Service) CloseOpenOnStart(ctx context.Context) error {
 // Without this, the last state would stand indefinitely: PRD REL-01 requires
 // that after two missed sampling periods the uncovered time is recorded as
 // unknown rather than carried forward as though the stream were still healthy.
+//
+// Two kinds of open interval are deliberately left alone:
+//
+//   - an interval that is already a monitoring gap. It is the ongoing unknown
+//     stretch; closing and re-inserting it on every pass would add one zero-length
+//     row per pass forever on a channel that is not being sampled at all. A real
+//     observation closes it the normal way, through Fold.
+//   - an excluded interval. "Not required to be up" is not "nobody looked": a
+//     disabled or unconfigured channel stops producing observations by design, and
+//     turning that silence into unknown time would move deliberately excluded
+//     minutes into the availability denominator from the wrong side.
 func (s *Service) NoteMonitoringGap(ctx context.Context, maxAge time.Duration) error {
 	if s.DB == nil {
 		return nil
 	}
 	cutoff := time.Now().UTC().Add(-maxAge)
-	_, err := s.DB.Pool.Exec(ctx, `
-		WITH stale AS (
-			SELECT id,channel_id,source_revision_id,session_id,kind,last_observed_at
-			FROM reliability_intervals
+	// Two statements in one transaction, not one statement with a data-modifying
+	// CTE. The CTE version looked equivalent and could never work: the INSERT's
+	// uniqueness check runs against a snapshot that still shows the old interval
+	// open, so it violates reliability_intervals_one_open before the UPDATE in the
+	// same statement is visible. Nothing caught it because the method had no
+	// caller for its whole life.
+	return s.DB.WithinTx(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `UPDATE reliability_intervals
+			SET ended_at=last_observed_at,updated_at=clock_timestamp()
 			WHERE ended_at IS NULL AND last_observed_at < $1
-		), closed AS (
-			UPDATE reliability_intervals i SET ended_at=s.last_observed_at,updated_at=clock_timestamp()
-			FROM stale s WHERE i.id=s.id
-			RETURNING i.id
-		)
-		INSERT INTO reliability_intervals
-			(id,channel_id,source_revision_id,session_id,kind,state,reason_code,started_at,observed_count,last_observed_at,first_observed_at)
-		SELECT gen_random_uuid(),s.channel_id,s.source_revision_id,s.session_id,s.kind,'unknown','monitoring_gap',
-			s.last_observed_at,1,s.last_observed_at,s.last_observed_at
-		FROM stale s`, cutoff)
-	return err
+				AND NOT (state='unknown' AND reason_code='monitoring_gap')
+				AND exclusion IS NULL
+			RETURNING channel_id,source_revision_id,session_id,kind,last_observed_at`, cutoff)
+		if err != nil {
+			return err
+		}
+		type gap struct {
+			channelID  id.ID
+			revisionID *id.ID
+			sessionID  *id.ID
+			kind       string
+			stalledAt  time.Time
+		}
+		var gaps []gap
+		for rows.Next() {
+			var item gap
+			if err := rows.Scan(&item.channelID, &item.revisionID, &item.sessionID, &item.kind, &item.stalledAt); err != nil {
+				rows.Close()
+				return err
+			}
+			gaps = append(gaps, item)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, item := range gaps {
+			if _, err := tx.Exec(ctx, `INSERT INTO reliability_intervals
+				(id,channel_id,source_revision_id,session_id,kind,state,reason_code,started_at,observed_count,last_observed_at,first_observed_at)
+				VALUES(gen_random_uuid(),$1,$2,$3,$4,'unknown','monitoring_gap',$5,1,$5,$5)`,
+				item.channelID, item.revisionID, item.sessionID, item.kind, item.stalledAt); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }

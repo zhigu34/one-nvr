@@ -292,3 +292,38 @@ test('a rule can be bound to notification channels, and none means record only',
   expect(JSON.parse(String(binding?.init.body))).toEqual({ channel_ids: ['chan-1'] })
   client.clear()
 })
+
+test('a rule whose destinations failed to load cannot be saved over them', async () => {
+  useAuthStore.getState().setUser({
+    id: 'admin',
+    username: 'admin',
+    role: 'admin',
+    enabled: true,
+    version: 1,
+  })
+  const mutations: { path: string; init: RequestInit }[] = []
+  calls.request.mockImplementation(async (path: string, init?: RequestInit) => {
+    const method = init?.method && init.method !== 'GET' ? init.method : 'GET'
+    if (method !== 'GET') mutations.push({ path, init: init as RequestInit })
+    if (path.startsWith('/api/v1/detection/rules?'))
+      return { items: [{ id: 'rule-1', channel_id: channelID, name: '门口进入', kind: 'appear', categories: ['person'] }] }
+    if (path.startsWith('/api/v1/detection/zones?')) return { items: [] }
+    if (path.startsWith('/api/v1/channels?'))
+      return { items: [{ id: channelID, channel_no: 1, channel_name: '大门', channel_group: '', enabled: true, version: 1, permissions: ['configure'], configured: true }], next_cursor: null }
+    if (path === '/api/v1/notification-channels') return { items: [], kinds: [] }
+    // The binding read fails. Treating that as "no destinations" and saving
+    // would replace a real binding with an empty list the operator never saw —
+    // a silent loss of the alert path, not a visible error.
+    if (path.endsWith('/channels')) throw new Error('bindings unavailable')
+    if (path === '/api/v1/detection/rules') return { id: 'rule-1' }
+    throw new Error('unexpected path ' + path)
+  })
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const screen = await render(view(client))
+  await screen.getByRole('button', { name: '编辑' }).click()
+  await expect.element(screen.getByRole('alert')).toHaveTextContent(/无法读取该规则的通知通道/)
+  await screen.getByRole('button', { name: '保存规则' }).click()
+  // No write at all: neither the rule nor the empty binding reached the server.
+  expect(mutations).toHaveLength(0)
+  client.clear()
+})

@@ -1,9 +1,39 @@
 package events
 
 import (
+	"math"
 	"testing"
 	"time"
 )
+
+// The detector reports boxes in pixels of the detect frame; an operator's
+// polygon is normalized to 0..1. The conversion belongs at the ingest boundary
+// and must happen exactly once.
+//
+// This is the defect that made region exclusion a no-op on the live site: the
+// MQTT envelope's box was never read at all (wrong JSON path). This test pins
+// the other half — once it is read, a pixel value written verbatim would sit
+// outside every polygon, which fails the same way and just as silently.
+func TestDetectorBoxIsConvertedToFrameFractions(t *testing.T) {
+	got := boxAsFractions([]float64{64, 36, 128, 72})
+	want := []float64{0.1, 0.1, 0.2, 0.2}
+	if len(got) != 4 {
+		t.Fatalf("box = %v", got)
+	}
+	for i := range want {
+		if math.Abs(got[i]-want[i]) > 1e-9 {
+			t.Fatalf("box[%d] = %v, want %v (full: %v)", i, got[i], want[i], got)
+		}
+	}
+	// A box that is not four numbers cannot be located, and the caller must not
+	// receive a half-converted value that looks usable.
+	if boxAsFractions([]float64{1, 2, 3}) != nil {
+		t.Fatal("a three-element box was accepted")
+	}
+	if boxAsFractions(nil) != nil {
+		t.Fatal("an absent box was accepted")
+	}
+}
 
 // A window that crosses midnight is the case this feature exists for: the
 // scooter misreads happen at night, and "22:00–07:00" has to mean one continuous

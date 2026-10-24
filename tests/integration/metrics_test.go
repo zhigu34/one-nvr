@@ -453,6 +453,72 @@ func TestDailyRollupDerivesFromMinutes(t *testing.T) {
 	}
 }
 
+// A daily row must not be re-derived after its minutes start being swept.
+//
+// The minute tier is swept continuously once it is 30 days old. Recomputing a
+// day from "the minutes that still exist" therefore re-reads a shrinking set:
+// the first pass after the sweep reaches the day shrinks it a little, and every
+// pass after that shrinks it again. The row still looks like a rollup — nothing
+// errors — it simply reports less and less of a day that was fully observed,
+// until the trend says the site was barely monitored. Freezing a day once a row
+// computed after its end exists is what makes the daily tier an actual record
+// rather than a moving projection of whatever retention has not deleted yet.
+func TestFinalizeDailyDoesNotShrinkASweptDay(t *testing.T) {
+	fixture := newPublicationFixture(t)
+	service := reliability.New(fixture.DB, fixture.Auth)
+	ctx := context.Background()
+	// A day old enough to be neither "recent" nor today, anchored in the
+	// database's own calendar because FinalizeDaily truncates there.
+	var dayStart time.Time
+	if err := fixture.DB.Pool.QueryRow(ctx,
+		`SELECT date_trunc('day', clock_timestamp() - interval '10 days')`).Scan(&dayStart); err != nil {
+		t.Fatal(err)
+	}
+	insertMinute := func(minute time.Time) {
+		t.Helper()
+		if _, err := fixture.DB.Pool.Exec(ctx, `INSERT INTO reliability_minutes(
+			channel_id,kind,minute,healthy_ms,input_watermark,metric_version)
+			VALUES($1,'main',$2,60000,$2,$3)`, fixture.Channel, minute, reliability.MetricVersion); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const minutes = 60
+	for i := 0; i < minutes; i++ {
+		insertMinute(dayStart.Add(time.Duration(i) * time.Minute))
+	}
+	if err := service.FinalizeDaily(ctx); err != nil {
+		t.Fatal(err)
+	}
+	readDaily := func() int64 {
+		t.Helper()
+		var healthy int64
+		if err := fixture.DB.Pool.QueryRow(ctx, `SELECT healthy_ms FROM reliability_daily
+			WHERE channel_id=$1 AND kind='main' AND day=date_trunc('day',$2::timestamptz)::date`,
+			fixture.Channel, dayStart).Scan(&healthy); err != nil {
+			t.Fatal(err)
+		}
+		return healthy
+	}
+	before := readDaily()
+	if before != minutes*60000 {
+		t.Fatalf("daily healthy = %d, want %d from the minutes", before, minutes*60000)
+	}
+	// Simulate the retention sweep removing the oldest half of the day.
+	if _, err := fixture.DB.Pool.Exec(ctx, `DELETE FROM reliability_minutes
+		WHERE channel_id=$1 AND kind='main' AND minute < $2`,
+		fixture.Channel, dayStart.Add(30*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.FinalizeDaily(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if after := readDaily(); after != before {
+		t.Fatalf("daily healthy shrank from %d to %d after its minutes were swept; "+
+			"the daily tier is being rewritten by retention instead of recording what happened",
+			before, after)
+	}
+}
+
 // A closed outage is reported with its attribution and the mean recovery, and
 // an open one is listed apart.
 func TestInterruptionMetricsFromRealFaults(t *testing.T) {

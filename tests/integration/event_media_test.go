@@ -122,9 +122,13 @@ func TestEventWithoutFootageReportsUnavailable(t *testing.T) {
 	}
 }
 
-// The segment containing the event is published after the event is stored, so
-// the first verdict is "pending". The reconcile pass is what turns it into
-// linked without waiting for the event to change again.
+// A segment published after the event closed must upgrade the verdict.
+//
+// This is the normal order on a real site: the detection ends, the "end" message
+// is written, and only then does the recorder publish the segment covering its
+// tail. The verdict written at ingestion is therefore "unavailable", and it must
+// not be treated as final. The old reconcile only re-read rows in 'pending' — a
+// state the upsert never writes — so a covered event stayed "本机无录像" for good.
 func TestEventMediaReconcileLinksLateFootage(t *testing.T) {
 	fixture, service := newEventsFixture(t)
 	ctx := context.Background()
@@ -141,11 +145,8 @@ func TestEventMediaReconcileLinksLateFootage(t *testing.T) {
 	if state, _ := eventMediaState(t, fixture, "evt-late"); state != "unavailable" {
 		t.Fatalf("before any segment exists the verdict is unavailable, got %q", state)
 	}
-	// Force the row back to pending the way a mid-segment event would be, then
-	// publish footage and reconcile.
-	if _, err := fixture.DB.Pool.Exec(ctx, "UPDATE events SET media_state='pending' WHERE source_id='evt-late'"); err != nil {
-		t.Fatal(err)
-	}
+	// The segment arrives after the event was stored. No state is doctored here:
+	// the row is exactly what the ingest path writes.
 	seedSegment(t, fixture, started.Add(-time.Minute), ended.Add(time.Minute))
 	service.ReconcileEventMedia(ctx)
 	state, mediaStart := eventMediaState(t, fixture, "evt-late")

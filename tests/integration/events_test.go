@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/zhigu34/one-nvr/internal/auth"
+	"github.com/zhigu34/one-nvr/internal/detection"
 	"github.com/zhigu34/one-nvr/internal/events"
 	"github.com/zhigu34/one-nvr/internal/id"
 )
@@ -35,16 +36,34 @@ func frigatePayload(eventType, id, camera, label string, start float64, end *flo
 	return raw
 }
 
-// frigatePayloadWithBox mirrors the same envelope with the detector's geometry,
-// which is what an exclusion is evaluated against.
+// frigatePayloadWithBox mirrors the envelope the detector actually publishes.
+//
+// Two details are deliberately faithful because getting either wrong is how the
+// exclusion feature came to be untested in the only mode production uses:
+//
+//   - `box` is a TOP-LEVEL field of `after`. There is no `data` nesting in the
+//     MQTT payload; that shape belongs to the REST API.
+//   - `box` is in detect-frame PIXELS, not fractions. The API normalizes, the
+//     stream does not.
+//
+// The helper takes fractions so the tests can talk about frame regions, and
+// converts them here the way the detector does.
 func frigatePayloadWithBox(eventType, id, camera, label string, start float64, box []float64) []byte {
+	pixels := make([]float64, 4)
+	for i, value := range box {
+		if i%2 == 0 {
+			pixels[i] = value * detection.DetectWidth
+		} else {
+			pixels[i] = value * detection.DetectHeight
+		}
+	}
 	body := map[string]any{
 		"type": eventType,
 		"after": map[string]any{
 			"id": id, "camera": camera, "label": label, "score": 0.8, "top_score": 0.9,
-			"zones": []string{}, "entered_zones": []string{}, "start_time": start,
-			"has_snapshot": false,
-			"data":         map[string]any{"box": box},
+			"zones": []string{}, "current_zones": []string{}, "entered_zones": []string{},
+			"start_time": start, "has_snapshot": false,
+			"box": pixels,
 		},
 		"before": map[string]any{"id": id, "camera": camera},
 	}
@@ -103,6 +122,26 @@ func TestExclusionSuppressesWithoutDeleting(t *testing.T) {
 	}
 	if reason == "" || ruleID == nil {
 		t.Fatalf("the excluded event must keep its reason and rule, got %q %v", reason, ruleID)
+	}
+	// The stored box is in frame fractions, whatever unit the wire used. A pixel
+	// box written verbatim would sit far outside a 0..1 polygon and quietly
+	// exclude nothing — the failure mode this test now pins.
+	var rawJSON []byte
+	if err := fixture.DB.Pool.QueryRow(ctx,
+		`SELECT raw FROM events WHERE source_id='evt-inside'`).Scan(&rawJSON); err != nil {
+		t.Fatal(err)
+	}
+	var stored struct {
+		Box []float64 `json:"box"`
+	}
+	if err := json.Unmarshal(rawJSON, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Box) != 4 {
+		t.Fatalf("the detector's box was not stored: %s", rawJSON)
+	}
+	if stored.Box[0] > 1 || stored.Box[1] > 1 || stored.Box[2] > 1 || stored.Box[3] > 1 {
+		t.Fatalf("box stored in pixels %v; every exclusion polygon is normalized to 0..1", stored.Box)
 	}
 	// The others were not excluded.
 	var visible int

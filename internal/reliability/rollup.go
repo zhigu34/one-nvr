@@ -274,32 +274,64 @@ func (s *Service) RollupPending(ctx context.Context, now time.Time) error {
 // disagree about the same day, and so the daily tier keeps working after the
 // minute tier has been swept.
 //
-// No age filter. An earlier version folded only minutes older than the minute
-// retention window, on the reasoning that "a day is finalised once it is about
-// to be swept" — which had it backwards: it meant recent days produced no daily
-// rows at all, so the trend and cross-channel endpoints were empty on a healthy
-// site. The correct picture is that the daily row is *maintained* while its
-// minutes still exist and simply stops changing once they are swept, having
-// already accumulated everything.
+// The recompute set is bounded in both directions, and both bounds matter:
 //
-// A day still in progress is included for the same reason: a trend chart has to
-// show today. It is recomputed on every pass, and its watermark says so.
+//   - **Recent days** (the last two) are always recomputed: a trend chart has to
+//     show today, and the minutes keep arriving until midnight plus the rollup's
+//     own one-minute lag.
+//   - **Older days** are recomputed only until a *complete* row exists. Complete
+//     means the row was computed after the day ended, so it saw every minute that
+//     was ever written. Once that is true the day is frozen.
+//
+// The freeze is not an optimisation. Without it every pass re-derives the whole
+// retained window from the minute rows that still exist, and the retention sweep
+// is deleting the oldest of them continuously: the sum shrinks a little on every
+// pass, so a day that was fully observed slowly turns into a day of mostly
+// unknown time. The damage is silent — the row still looks like a rollup, it is
+// simply no longer about the evidence it claims to summarise. Freezing on
+// "computed after the day ended" also repairs the other direction: a worker that
+// died at 18:00 leaves an incomplete row whose computed_at is before midnight,
+// so the day is recomputed once the worker returns (as long as its minutes are
+// still inside the retention window).
+//
+// Days with no minutes at all never get a row and are retried on each pass; that
+// is cheap (no join produces rows) and is the correct state for a day the site
+// was not running.
 func (s *Service) FinalizeDaily(ctx context.Context) error {
 	if s.DB == nil {
 		return nil
 	}
 	if _, err := s.DB.Pool.Exec(ctx, `
-		WITH daily AS (
-			SELECT channel_id,kind,
-				date_trunc('day',minute)::date AS day,
-				date_trunc('day',minute) AS day_start,
-				SUM(healthy_ms) AS healthy_ms, SUM(unavailable_ms) AS unavailable_ms,
-				SUM(unknown_ms) AS unknown_ms, SUM(excluded_ms) AS excluded_ms,
-				SUM(owed_ms) AS owed_ms, SUM(covered_ms) AS covered_ms,
-				SUM(unverified_ms) AS unverified_ms, SUM(fault_count) AS fault_count,
-				MAX(input_watermark) AS input_watermark
-			FROM reliability_minutes
-			GROUP BY channel_id,kind,date_trunc('day',minute)
+		WITH bounds AS (
+			SELECT date_trunc('day',clock_timestamp()) - interval '2 days' AS recent_from
+		), span AS (
+			-- Start from the oldest minute that still exists rather than from the
+			-- retention window: on a fresh install the two are the same, and after
+			-- a restore the minutes may reach further back than the sweep expects.
+			SELECT COALESCE(
+				date_trunc('day',(SELECT MIN(minute) FROM reliability_minutes)),
+				date_trunc('day',clock_timestamp())) AS from_day
+		), wanted AS (
+			SELECT day_start
+			FROM span, LATERAL generate_series(span.from_day, date_trunc('day',clock_timestamp()), interval '1 day') AS day_start
+			WHERE day_start >= (SELECT recent_from FROM bounds)
+				OR NOT EXISTS (
+					SELECT 1 FROM reliability_daily d
+					WHERE d.day=day_start::date
+						AND d.metric_version=$1
+						AND d.computed_at >= day_start + interval '1 day')
+		), daily AS (
+			SELECT m.channel_id,m.kind,
+				date_trunc('day',m.minute)::date AS day,
+				date_trunc('day',m.minute) AS day_start,
+				SUM(m.healthy_ms) AS healthy_ms, SUM(m.unavailable_ms) AS unavailable_ms,
+				SUM(m.unknown_ms) AS unknown_ms, SUM(m.excluded_ms) AS excluded_ms,
+				SUM(m.owed_ms) AS owed_ms, SUM(m.covered_ms) AS covered_ms,
+				SUM(m.unverified_ms) AS unverified_ms, SUM(m.fault_count) AS fault_count,
+				MAX(m.input_watermark) AS input_watermark
+			FROM reliability_minutes m
+			JOIN wanted w ON m.minute >= w.day_start AND m.minute < w.day_start + interval '1 day'
+			GROUP BY m.channel_id,m.kind,date_trunc('day',m.minute)
 		), worst AS (
 			-- The worst single outage that touched each day, clipped to the day.
 			-- Clipping matters: a fault spanning midnight is two days' problem, and
